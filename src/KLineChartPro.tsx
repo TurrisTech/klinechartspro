@@ -33,6 +33,8 @@ const Logo = (
 )
 
 export default class KLineChartPro implements ChartPro {
+  private _dispose: () => void
+
   constructor (options: ChartProOptions) {
     if (utils.isString(options.container)) {
       this._container = document.getElementById(options.container as string)
@@ -45,7 +47,7 @@ export default class KLineChartPro implements ChartPro {
     this._container.classList.add('klinecharts-pro')
     this._container.setAttribute('data-theme', options.theme ?? 'light')
 
-    render(
+    this._dispose = render(
       () => (
         <ChartProComponent
           ref={(chart: ChartPro) => { this._chartApi = chart }}
@@ -131,5 +133,9 @@ export default class KLineChartPro implements ChartPro {
 
   getPeriod (): Period {
     return this._chartApi!.getPeriod()
+  }
+  
+  remove (): void {
+    this._dispose?.()
   }
 }

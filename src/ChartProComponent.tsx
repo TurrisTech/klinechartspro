@@ -12,11 +12,11 @@
  * limitations under the License.
  */
 
-import { createSignal, createEffect, onMount, Show, onCleanup, startTransition, Component, untrack } from 'solid-js'
+import { createSignal, createEffect, onMount, Show, onCleanup, startTransition, Component } from 'solid-js'
 
 import {
   init, dispose, utils, Nullable, Chart, OverlayMode, Styles,
-  TooltipIconPosition, ActionType, PaneOptions, Indicator, DomPosition, FormatDateType, DeepPartial
+  TooltipIconPosition, ActionType, PaneOptions, Indicator, DomPosition, FormatDateType
 } from 'klinecharts'
 
 import lodashSet from 'lodash/set'
@@ -113,7 +113,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
     setSymbol,
     getSymbol: () => symbol(),
     setPeriod,
-    getPeriod: () => period()
+    getPeriod: () => period(),
   })
 
   const documentResize = () => {
@@ -345,7 +345,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
               id: 'visible',
               position: TooltipIconPosition.Middle,
               marginLeft: 8,
-              marginTop: 7,
+              marginTop: 3,
               marginRight: 0,
               marginBottom: 0,
               paddingLeft: 0,
@@ -364,7 +364,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
               id: 'invisible',
               position: TooltipIconPosition.Middle,
               marginLeft: 8,
-              marginTop: 7,
+              marginTop: 3,
               marginRight: 0,
               marginBottom: 0,
               paddingLeft: 0,
@@ -383,7 +383,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
               id: 'setting',
               position: TooltipIconPosition.Middle,
               marginLeft: 6,
-              marginTop: 7,
+              marginTop: 3,
               marginBottom: 0,
               marginRight: 0,
               paddingLeft: 0,
@@ -402,7 +402,7 @@ const ChartProComponent: Component<ChartProComponentProps> = props => {
               id: 'close',
               position: TooltipIconPosition.Middle,
               marginLeft: 6,
-              marginTop: 7,
+              marginTop: 3,
               marginRight: 0,
               marginBottom: 0,
               paddingLeft: 0,
