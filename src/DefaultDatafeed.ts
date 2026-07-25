@@ -12,10 +12,32 @@
  * limitations under the License.
  */
 
-import { KLineData } from 'klinecharts'
+import type { KLineData } from 'klinecharts'
 
-import { Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback } from './types'
+import type { Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback } from './types'
 
+interface PolygonSymbol {
+  ticker: string
+  name: string
+  market?: string
+  primary_exchange?: string
+  currency_name?: string
+  type?: string
+}
+
+interface PolygonAggregate {
+  t: number
+  o: number
+  h: number
+  l: number
+  c: number
+  v: number
+  vw?: number
+}
+
+interface PolygonResponse<T> {
+  results?: T[]
+}
 
 export default class DefaultDatafeed implements Datafeed {
   constructor (apiKey: string) {
@@ -30,8 +52,8 @@ export default class DefaultDatafeed implements Datafeed {
 
   async searchSymbols (search?: string): Promise<SymbolInfo[]> {
     const response = await fetch(`https://api.polygon.io/v3/reference/tickers?apiKey=${this._apiKey}&active=true&search=${search ?? ''}`)
-    const result = await response.json()
-    return await (result.results || []).map((data: any) => ({
+    const result = await response.json() as PolygonResponse<PolygonSymbol>
+    return (result.results ?? []).map((data) => ({
       ticker: data.ticker,
       name: data.name,
       shortName: data.ticker,
@@ -45,8 +67,8 @@ export default class DefaultDatafeed implements Datafeed {
 
   async getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]> {
     const response = await fetch(`https://api.polygon.io/v2/aggs/ticker/${symbol.ticker}/range/${period.multiplier}/${period.timespan}/${from}/${to}?apiKey=${this._apiKey}`)
-    const result = await response.json()
-    return await (result.results || []).map((data: any) => ({
+    const result = await response.json() as PolygonResponse<PolygonAggregate>
+    return (result.results ?? []).map((data) => ({
       timestamp: data.t,
       open: data.o,
       high: data.h,
@@ -57,7 +79,7 @@ export default class DefaultDatafeed implements Datafeed {
     }))
   }
 
-  subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void {
+  subscribe (symbol: SymbolInfo, _period: Period, callback: DatafeedSubscribeCallback): void {
     if (this._prevSymbolMarket !== symbol.market) {
       this._ws?.close()
       this._ws = new WebSocket(`wss://delayed.polygon.io/${symbol.market}`)
@@ -90,6 +112,6 @@ export default class DefaultDatafeed implements Datafeed {
     this._prevSymbolMarket = symbol.market
   }
 
-  unsubscribe(symbol: SymbolInfo, period: Period): void {
+  unsubscribe(_symbol: SymbolInfo, _period: Period): void {
   }
 }

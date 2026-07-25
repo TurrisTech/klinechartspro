@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import { OverlayTemplate, PolygonAttrs, LineAttrs } from 'klinecharts'
+import type { OverlayTemplate, PolygonAttrs, LineAttrs } from 'klinecharts'
 
 const xabcd: OverlayTemplate = {
   name: 'xabcd',
@@ -25,7 +25,7 @@ const xabcd: OverlayTemplate = {
       color: 'rgba(22, 119, 255, 0.15)'
     }
   },
-  createPointFigures: ({ coordinates, overlay }) => {
+  createPointFigures: ({ coordinates }) => {
     const dashedLines: LineAttrs[] = []
     const polygons: PolygonAttrs[] = []
     const tags = ['X', 'A', 'B', 'C', 'D']

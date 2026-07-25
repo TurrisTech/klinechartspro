@@ -1,12 +1,8 @@
 # 快速开始
 ## 安装
-通过 npm 或 yarn 命令安装 
+通过 Bun 安装：
 ```bash
-# npm
-npm install klinecharts @klinecharts/pro
-
-# yarn
-yarn install klinecharts @klinecharts/pro
+bun add klinecharts @klinecharts/pro
 ```
 如果是直接通过 script 标签引入，可以使用下面两个 CDN 中的任意一个即可
 ::: warning 注意
@@ -27,7 +23,7 @@ yarn install klinecharts @klinecharts/pro
 <div id="container"></div>
 ```
 ### 第二步，创建实例
-在使用npm, yarn等包管理器中项目中
+在使用 Bun 的项目中
 ```javascript
 // 引入js
 import { KLineChartPro, DefaultDatafeed } from '@klinecharts/pro'

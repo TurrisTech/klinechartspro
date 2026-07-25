@@ -1,13 +1,9 @@
 # Getting started
 
 ## Installing
-Use npm or yarn
+Install with Bun:
 ```bash
-# npm
-npm install klinecharts @klinecharts/pro
-
-# yarn
-yarn install klinecharts @klinecharts/pro
+bun add klinecharts @klinecharts/pro
 ```
 If it is imported directly through a script tag, you can use either of the following two CDNs
 ::: warning Note
@@ -28,7 +24,7 @@ For production environments, it is recommended to use a clear version number to 
 <div id="container"></div>
 ```
 ### Step 2: Create an instance
-In projects using package managers such as npm and yarn
+In projects using Bun
 ```javascript
 // Import js
 import { KLineChartPro, DefaultDatafeed } from '@klinecharts/pro'

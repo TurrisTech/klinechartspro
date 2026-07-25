@@ -4,3 +4,5 @@
 /docs/.vitepress/cache
 
 .npmrc
+skills-lock.json
+.agents

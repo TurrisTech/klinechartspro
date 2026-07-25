@@ -11,13 +11,9 @@
 </div>
 
 ## Install
-### Using npm or yarn
+### Using Bun
 ```bash
-# using npm
-npm install @klinecharts/pro --save
-
-# using yarn
-yarn add @klinecharts/pro
+bun add klinecharts @klinecharts/pro
 ```
 
 ### Using unpkg or jsDelivr

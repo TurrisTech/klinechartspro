@@ -1,0 +1,69 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
+  "files": {
+    "includes": [
+      "src/**",
+      "examples/**",
+      "package.json",
+      "components.json",
+      "vite.config.ts",
+      "svelte.config.js",
+      "tsconfig.json",
+      "tsconfig.node.json"
+    ]
+  },
+  "formatter": {
+    "enabled": false,
+    "indentStyle": "space",
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "assist": {
+    "enabled": false
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "asNeeded"
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/lib/components/ui/**"],
+      "linter": {
+        "enabled": false
+      }
+    },
+    {
+      "includes": ["src/**/*.svelte"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedImports": "off",
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/lib/utils.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "off"
+          }
+        }
+      }
+    }
+  ]
+}

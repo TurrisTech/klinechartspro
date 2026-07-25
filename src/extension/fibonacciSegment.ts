@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import { OverlayTemplate, LineAttrs, TextAttrs } from 'klinecharts'
+import type { OverlayTemplate, LineAttrs, TextAttrs } from 'klinecharts'
 
 const fibonacciSegment: OverlayTemplate = {
   name: 'fibonacciSegment',
@@ -20,7 +20,7 @@ const fibonacciSegment: OverlayTemplate = {
   needDefaultPointFigure: true,
   needDefaultXAxisFigure: true,
   needDefaultYAxisFigure: true,
-  createPointFigures: ({ coordinates, overlay, precision }) => {
+  createPointFigures: ({ chart, coordinates, overlay }) => {
     const lines: LineAttrs[] = []
     const texts: TextAttrs[] = []
     if (coordinates.length > 1) {
@@ -28,12 +28,11 @@ const fibonacciSegment: OverlayTemplate = {
       const percents = [1, 0.786, 0.618, 0.5, 0.382, 0.236, 0]
       const yDif = coordinates[0].y - coordinates[1].y
       const points = overlay.points
-      // @ts-expect-error
-      const valueDif = points[0].value - points[1].value
+      const valueDif = Number(points[0].value) - Number(points[1].value)
       percents.forEach(percent => {
         const y = coordinates[1].y + yDif * percent
-        // @ts-expect-error
-        const price = (points[1].value + valueDif * percent).toFixed(precision.price)
+        const precision = chart.getSymbol()?.pricePrecision ?? 2
+        const price = (Number(points[1].value) + valueDif * percent).toFixed(precision)
         lines.push({ coordinates: [{ x: coordinates[0].x, y }, { x: coordinates[1].x, y }] })
         texts.push({
           x: textX,

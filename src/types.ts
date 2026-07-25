@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import { KLineData, Styles, DeepPartial } from 'klinecharts'
+import type { KLineData, Styles, DeepPartial } from 'klinecharts'
 
 export interface SymbolInfo {
   ticker: string

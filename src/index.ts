@@ -21,9 +21,9 @@ import KLineChartPro from './KLineChartPro'
 
 import { load } from './i18n'
 
-import { Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback, ChartProOptions, ChartPro } from './types'
+import type { Datafeed, SymbolInfo, Period, DatafeedSubscribeCallback, ChartProOptions, ChartPro } from './types'
 
-import './index.less'
+import './app.css'
 
 overlays.forEach(o => { registerOverlay(o) })
 

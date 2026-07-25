@@ -90,6 +90,13 @@
 
   "weak_magnet": "弱磁模式",
   "strong_magnet": "强磁模式",
+  "drawing_tools": "绘图工具",
+  "no_data": "暂无结果",
+  "remove": "移除绘图",
+  "lock": "锁定绘图",
+  "unlock": "解锁绘图",
+  "visible": "显示绘图",
+  "invisible": "隐藏绘图",
 
   "symbol_search": "商品搜索",
   "symbol_code": "商品代码",
