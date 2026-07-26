@@ -1,9 +1,13 @@
 import type { KLineData } from 'klinecharts'
 
-import KLineChartPro from '../src/KLineChartPro'
-import type { Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../src/types'
+import {
+  KLineChartPro,
+  type Datafeed,
+  type DatafeedSubscribeCallback,
+  type Period,
+  type SymbolInfo
+} from '../src'
 
-import '../src/app.css'
 import './style.css'
 
 const symbols: SymbolInfo[] = [

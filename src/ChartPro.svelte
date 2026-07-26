@@ -18,9 +18,6 @@
     type SymbolInfo as ChartSymbolInfo,
     type TooltipFeatureStyle
   } from 'klinecharts'
-  import cloneDeep from 'lodash/cloneDeep'
-  import set from 'lodash/set'
-
   import MenuIcon from '@lucide/svelte/icons/menu'
   import SearchIcon from '@lucide/svelte/icons/search'
   import ChartIcon from '@lucide/svelte/icons/chart-no-axes-combined'
@@ -212,6 +209,27 @@
   const settingOptions = $derived(getOptions(locale))
 
   const iconButtonClass = (active = false) => `kc-button kc-icon-button${active ? ' is-active' : ''}`
+
+  function clone<T>(value: T): T {
+    if (Array.isArray(value)) return value.map(clone) as T
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, child]) => [key, clone(child)])
+      ) as T
+    }
+    return value
+  }
+
+  function setByPath(target: object, path: string, value: unknown): void {
+    const keys = path.split('.')
+    let current = target as Record<string, unknown>
+    for (const key of keys.slice(0, -1)) {
+      const child = current[key]
+      if (!child || typeof child !== 'object' || Array.isArray(child)) current[key] = {}
+      current = current[key] as Record<string, unknown>
+    }
+    current[keys.at(-1) as string] = value
+  }
 
   function createIndicator(
     indicatorName: string,
@@ -421,7 +439,7 @@
 
   function openSettings() {
     if (!widget) return
-    settingsStyles = cloneDeep(widget.getStyles())
+    settingsStyles = clone(widget.getStyles())
     settingsDialogOpen = true
   }
 
@@ -454,9 +472,9 @@
       return
     }
     const patch = {}
-    set(patch, key, value)
-    const next = cloneDeep(settingsStyles)
-    set(next, key, value)
+    setByPath(patch, key, value)
+    const next = clone(settingsStyles)
+    setByPath(next, key, value)
     settingsStyles = next
     widget?.setStyles(patch)
   }
@@ -466,13 +484,13 @@
     const patch = {}
     for (const option of settingOptions) {
       if (option.key.startsWith('yAxis.')) continue
-      set(patch, option.key, utils.formatValue(defaultStyles, option.key))
+      setByPath(patch, option.key, utils.formatValue(defaultStyles, option.key))
     }
     widget?.setStyles(patch)
     yAxisType = 'normal'
     yAxisReverse = false
     applyYAxisSettings()
-    settingsStyles = cloneDeep(widget?.getStyles() ?? defaultStyles)
+    settingsStyles = clone(widget?.getStyles() ?? defaultStyles)
   }
 
   function createOverlay(tool: DrawingTool) {
@@ -618,7 +636,7 @@
         indicatorSettings = {
           indicatorName: indicator.name,
           paneId: data.paneId,
-          calcParams: cloneDeep(indicator.calcParams)
+          calcParams: clone(indicator.calcParams)
         }
         indicatorSettingsOpen = true
       } else if (featureId === 'close') {
@@ -631,7 +649,7 @@
     widget.setLocale(locale)
     widget.setTimezone(timezone)
     applyIndicatorIcons()
-    defaultStyles = cloneDeep(widget.getStyles())
+    defaultStyles = clone(widget.getStyles())
     mounted = true
 
     return () => {

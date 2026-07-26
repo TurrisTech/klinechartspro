@@ -49,16 +49,13 @@ const parallelogram: OverlayTemplate = {
   },
   performEventPressedMove: ({ points, performPointIndex, performPoint }) => {
     if (performPointIndex < 2) {
-      // @ts-expect-error
-      points[0].price = performPoint.price
-      // @ts-expect-error
-      points[1].price = performPoint.price
+      points[0].value = performPoint.value
+      points[1].value = performPoint.value
     }
   },
   performEventMoveForDrawing: ({ currentStep, points, performPoint }) => {
     if (currentStep === 2) {
-      // @ts-expect-error
-      points[0].price = performPoint.price
+      points[0].value = performPoint.value
     }
   }
 }

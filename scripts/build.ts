@@ -17,6 +17,7 @@ async function bundle(format: 'cjs' | 'esm'): Promise<BundleFiles> {
     target: 'browser',
     format,
     external: ['klinecharts'],
+    minify: true,
     sourcemap: 'external',
     plugins: [SveltePlugin({ development: false })]
   })

@@ -16,15 +16,6 @@
 bun add klinecharts @klinecharts/pro
 ```
 
-### Using unpkg or jsDelivr
-```html
-<!-- using unpkg -->
-<script src="https://unpkg.com/@klinecharts/pro/dist/klinecharts-pro.umd.js"></script>
-
-<!-- using jsdelivr -->
-<script src="https://cdn.jsdelivr.net/npm/@klinecharts/pro/dist/klinecharts-pro.umd.js"></script>
-```
-
 ## Docs
 + [中文](https://pro.klinecharts.com)
 + [English](https://pro.klinecharts.com/en-US)

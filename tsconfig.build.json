@@ -10,6 +10,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "include": ["src/public.ts"],
+  "include": ["src/index.ts"],
   "exclude": ["src/**/*.svelte"]
 }
