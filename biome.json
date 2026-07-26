@@ -4,12 +4,10 @@
     "includes": [
       "src/**",
       "examples/**",
+      "scripts/**",
       "package.json",
-      "components.json",
-      "vite.config.ts",
-      "svelte.config.js",
       "tsconfig.json",
-      "tsconfig.node.json"
+      "tsconfig.build.json"
     ]
   },
   "formatter": {
@@ -32,18 +30,7 @@
       "semicolons": "asNeeded"
     }
   },
-  "css": {
-    "parser": {
-      "tailwindDirectives": true
-    }
-  },
   "overrides": [
-    {
-      "includes": ["src/lib/components/ui/**"],
-      "linter": {
-        "enabled": false
-      }
-    },
     {
       "includes": ["src/**/*.svelte"],
       "linter": {
@@ -51,16 +38,6 @@
           "correctness": {
             "noUnusedImports": "off",
             "noUnusedVariables": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["src/lib/utils.ts"],
-      "linter": {
-        "rules": {
-          "suspicious": {
-            "noExplicitAny": "off"
           }
         }
       }

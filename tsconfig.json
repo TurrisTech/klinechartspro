@@ -19,13 +19,6 @@
       "$lib/*": ["./src/lib/*"]
     }
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.svelte",
-    "examples/**/*.ts",
-    "vite.config.ts",
-    "svelte.config.js"
-  ],
-  "exclude": [],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "examples/**/*.ts", "scripts/**/*.ts"],
+  "exclude": []
 }

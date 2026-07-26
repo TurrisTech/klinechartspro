@@ -4,7 +4,7 @@
   "description": "Financial chart built out of the box based on KLineChart.",
   "type": "module",
   "packageManager": "bun@1.3.14",
-  "main": "./dist/klinecharts-pro.umd.js",
+  "main": "./dist/klinecharts-pro.cjs",
   "module": "./dist/klinecharts-pro.js",
   "types": "./dist/public.d.ts",
   "style": "./dist/klinecharts-pro.css",
@@ -12,6 +12,7 @@
     ".": {
       "types": "./dist/public.d.ts",
       "import": "./dist/klinecharts-pro.js",
+      "require": "./dist/klinecharts-pro.cjs",
       "default": "./dist/klinecharts-pro.js"
     },
     "./style.css": "./dist/klinecharts-pro.css"
@@ -38,12 +39,12 @@
   "license": "Apache-2.0",
   "private": false,
   "scripts": {
-    "dev": "vite",
+    "dev": "bun --hot examples/index.html",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "build-core": "svelte-check --tsconfig ./tsconfig.json && vite build",
-    "build-dts": "tsc -p tsconfig.build.json",
+    "build-core": "bun run check && bun run scripts/build.ts",
+    "build-dts": "bunx tsc -p tsconfig.build.json",
     "build": "bun run build-core && bun run build-dts",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
@@ -53,25 +54,19 @@
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",
     "@internationalized/date": "^3.12.0",
-    "@sveltejs/vite-plugin-svelte": "^6.0.0",
-    "@tailwindcss/vite": "^4.1.0",
+    "@types/bun": "^1.3.14",
     "@types/lodash": "^4.14.191",
+    "bun-plugin-svelte": "^0.0.6",
     "gh-pages": "^6.3.0",
-    "shadcn-svelte": "^1.4.2",
     "svelte-check": "^4.3.0",
-    "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.0",
-    "vite": "^7.1.0",
     "vitepress": "^1.6.0"
   },
   "dependencies": {
     "@lucide/svelte": "^1.26.0",
     "bits-ui": "^2.16.3",
-    "clsx": "^2.1.1",
     "lodash": "^4.17.21",
-    "svelte": "^5.39.0",
-    "tailwind-merge": "^3.5.0",
-    "tailwind-variants": "^3.2.2"
+    "svelte": "^5.39.0"
   },
   "peerDependencies": {
     "klinecharts": "^10.0.0"

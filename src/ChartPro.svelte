@@ -46,23 +46,21 @@
   import ArrowUpRightIcon from '@lucide/svelte/icons/arrow-up-right'
   import MinusIcon from '@lucide/svelte/icons/minus'
   import GitBranchIcon from '@lucide/svelte/icons/git-branch'
-
-  import { Button, buttonVariants } from '$lib/components/ui/button'
-  import * as Dialog from '$lib/components/ui/dialog'
-  import * as Field from '$lib/components/ui/field'
-  import { Input } from '$lib/components/ui/input'
-  import * as Select from '$lib/components/ui/select'
-  import { Switch } from '$lib/components/ui/switch'
-  import { Checkbox } from '$lib/components/ui/checkbox'
-  import * as Command from '$lib/components/ui/command'
-  import * as Popover from '$lib/components/ui/popover'
-  import * as Tooltip from '$lib/components/ui/tooltip'
-  import * as ToggleGroup from '$lib/components/ui/toggle-group'
-  import * as ScrollArea from '$lib/components/ui/scroll-area'
-  import * as Avatar from '$lib/components/ui/avatar'
-  import { Spinner } from '$lib/components/ui/spinner'
-  import { Separator } from '$lib/components/ui/separator'
-  import * as Empty from '$lib/components/ui/empty'
+  import CheckIcon from '@lucide/svelte/icons/check'
+  import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle'
+  import XIcon from '@lucide/svelte/icons/x'
+  import {
+    Avatar,
+    Checkbox,
+    Command,
+    Dialog,
+    Popover,
+    ScrollArea,
+    Separator,
+    Switch,
+    ToggleGroup,
+    Tooltip
+  } from 'bits-ui'
 
   import i18n from './i18n'
   import type { ChartProOptions, Period, SymbolInfo } from './types'
@@ -212,6 +210,8 @@
   const portalProps = $derived(rootElement ? { to: rootElement } : undefined)
   const timezoneOptions = $derived(createTimezoneSelectOptions(locale))
   const settingOptions = $derived(getOptions(locale))
+
+  const iconButtonClass = (active = false) => `kc-button kc-icon-button${active ? ' is-active' : ''}`
 
   function createIndicator(
     indicatorName: string,
@@ -645,38 +645,40 @@
 
 <div bind:this={rootElement} class="klinecharts-pro-shell">
   <Tooltip.Provider delayDuration={250}>
-    <header class="flex h-12 shrink-0 items-center gap-1 border-b px-2">
+    <header class="kc-toolbar">
       <Tooltip.Root>
-        <Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon-sm' })} onclick={() => {
+        <Tooltip.Trigger class={iconButtonClass()} onclick={() => {
           drawingBarVisible = !drawingBarVisible
           requestAnimationFrame(() => widget?.resize())
         }} aria-label="Toggle drawing toolbar">
           <MenuIcon />
         </Tooltip.Trigger>
-        <Tooltip.Content portalProps={portalProps}>{i18n('drawing_tools', locale)}</Tooltip.Content>
+        <Tooltip.Portal {...portalProps}>
+          <Tooltip.Content class="kc-tooltip">{i18n('drawing_tools', locale)}</Tooltip.Content>
+        </Tooltip.Portal>
       </Tooltip.Root>
 
-      <Button variant="ghost" size="sm" class="max-w-52" onclick={() => { symbolDialogOpen = true }}>
-        <Avatar.Root class="size-5">
-          {#if symbol.logo}<Avatar.Image src={symbol.logo} alt={symbol.ticker} />{/if}
-          <Avatar.Fallback>{symbol.ticker.slice(0, 2).toUpperCase()}</Avatar.Fallback>
+      <button class="kc-button kc-symbol-button" onclick={() => { symbolDialogOpen = true }}>
+        <Avatar.Root class="kc-avatar kc-avatar-sm">
+          {#if symbol.logo}<Avatar.Image class="kc-avatar-image" src={symbol.logo} alt={symbol.ticker} />{/if}
+          <Avatar.Fallback class="kc-avatar-fallback">{symbol.ticker.slice(0, 2).toUpperCase()}</Avatar.Fallback>
         </Avatar.Root>
-        <span class="truncate">{symbol.shortName ?? symbol.name ?? symbol.ticker}</span>
-        <SearchIcon data-icon="inline-end" />
-      </Button>
+        <span class="kc-truncate">{symbol.shortName ?? symbol.name ?? symbol.ticker}</span>
+        <SearchIcon />
+      </button>
 
-      <Separator orientation="vertical" class="mx-1 h-6" />
-      <div class="min-w-0 flex-1 overflow-x-auto">
-        <ToggleGroup.Root type="single" variant="outline" size="sm" bind:value={selectedPeriodText}>
+      <Separator.Root orientation="vertical" class="kc-separator kc-separator-vertical" />
+      <div class="kc-period-scroller">
+        <ToggleGroup.Root type="single" class="kc-toggle-group" bind:value={selectedPeriodText}>
           {#each periods as item (item.text)}
-            <ToggleGroup.Item value={item.text} onclick={() => { period = item }}>
+            <ToggleGroup.Item class="kc-toggle-item" value={item.text} onclick={() => { period = item }}>
               {item.text}
             </ToggleGroup.Item>
           {/each}
         </ToggleGroup.Root>
       </div>
 
-      <div class="flex shrink-0 items-center gap-1">
+      <div class="kc-toolbar-actions">
         {#each [
           { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
           { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
@@ -685,273 +687,311 @@
         ] as action (action.label)}
           {@const ActionIcon = action.icon}
           <Tooltip.Root>
-            <Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon-sm' })} onclick={action.action} aria-label={action.label}>
+            <Tooltip.Trigger class={iconButtonClass()} onclick={action.action} aria-label={action.label}>
               <ActionIcon />
             </Tooltip.Trigger>
-            <Tooltip.Content portalProps={portalProps}>{action.label}</Tooltip.Content>
+            <Tooltip.Portal {...portalProps}>
+              <Tooltip.Content class="kc-tooltip">{action.label}</Tooltip.Content>
+            </Tooltip.Portal>
           </Tooltip.Root>
         {/each}
         <Tooltip.Root>
-          <Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon-sm' })} onclick={toggleFullscreen} aria-label={i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}>
+          <Tooltip.Trigger class={iconButtonClass()} onclick={toggleFullscreen} aria-label={i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}>
             {#if fullscreen}<MinimizeIcon />{:else}<MaximizeIcon />{/if}
           </Tooltip.Trigger>
-          <Tooltip.Content portalProps={portalProps}>{i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}</Tooltip.Content>
+          <Tooltip.Portal {...portalProps}>
+            <Tooltip.Content class="kc-tooltip">{i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}</Tooltip.Content>
+          </Tooltip.Portal>
         </Tooltip.Root>
       </div>
     </header>
 
     <div class="klinecharts-pro-chart-area">
       {#if drawingBarVisible}
-        <aside class="flex w-12 shrink-0 flex-col items-center gap-1 border-r py-2">
+        <aside class="kc-drawing-toolbar">
           {#each drawingGroups as group (group.labelKey)}
             {@const GroupIcon = group.icon}
             <Popover.Root>
               <Tooltip.Root>
                 <Tooltip.Trigger>
                   {#snippet child({ props })}
-                    <Popover.Trigger {...props} class={buttonVariants({ variant: 'ghost', size: 'icon-sm' })} aria-label={i18n(group.labelKey, locale)}>
+                    <Popover.Trigger {...props} class={iconButtonClass()} aria-label={i18n(group.labelKey, locale)}>
                       <GroupIcon />
                     </Popover.Trigger>
                   {/snippet}
                 </Tooltip.Trigger>
-                <Tooltip.Content portalProps={portalProps} side="right">{i18n(group.labelKey, locale)}</Tooltip.Content>
+                <Tooltip.Portal {...portalProps}>
+                  <Tooltip.Content class="kc-tooltip" side="right">{i18n(group.labelKey, locale)}</Tooltip.Content>
+                </Tooltip.Portal>
               </Tooltip.Root>
-              <Popover.Content portalProps={portalProps} side="right" align="start" class="w-64 p-2">
-                <Popover.Header class="px-2 py-1">
-                  <Popover.Title>{i18n(group.labelKey, locale)}</Popover.Title>
-                </Popover.Header>
-                <ScrollArea.Root class="max-h-72">
-                  <div class="flex flex-col gap-1">
-                    {#each group.tools as tool (tool.name)}
-                      {@const ToolIcon = tool.icon}
-                      <Popover.Close class={buttonVariants({ variant: 'ghost', size: 'sm' })} onclick={() => createOverlay(tool)}>
-                        <ToolIcon data-icon="inline-start" />
-                        <span class="flex-1 text-left">{i18n(tool.labelKey, locale)}</span>
-                      </Popover.Close>
-                    {/each}
-                  </div>
-                </ScrollArea.Root>
-              </Popover.Content>
+              <Popover.Portal {...portalProps}>
+                <Popover.Content side="right" align="start" sideOffset={4} class="kc-popover">
+                  <div class="kc-popover-header">{i18n(group.labelKey, locale)}</div>
+                  <ScrollArea.Root class="kc-tool-scroll-area">
+                    <ScrollArea.Viewport class="kc-scroll-viewport">
+                      <div class="kc-tool-list">
+                        {#each group.tools as tool (tool.name)}
+                          {@const ToolIcon = tool.icon}
+                          <Popover.Close class="kc-button kc-tool-button" onclick={() => createOverlay(tool)}>
+                            <ToolIcon />
+                            <span>{i18n(tool.labelKey, locale)}</span>
+                          </Popover.Close>
+                        {/each}
+                      </div>
+                    </ScrollArea.Viewport>
+                    <ScrollArea.Scrollbar orientation="vertical" class="kc-scrollbar">
+                      <ScrollArea.Thumb class="kc-scroll-thumb" />
+                    </ScrollArea.Scrollbar>
+                  </ScrollArea.Root>
+                </Popover.Content>
+              </Popover.Portal>
             </Popover.Root>
           {/each}
 
-          <Separator class="my-1" />
+          <Separator.Root class="kc-separator kc-separator-horizontal" />
           <Tooltip.Root>
-            <Tooltip.Trigger class={buttonVariants({ variant: overlayMode === 'normal' ? 'ghost' : 'secondary', size: 'icon-sm' })} onclick={() => {
+            <Tooltip.Trigger class={iconButtonClass(overlayMode !== 'normal')} onclick={() => {
               overlayMode = overlayMode === 'normal' ? 'weak_magnet' : 'normal'
               widget?.overrideOverlay({ mode: overlayMode })
             }} aria-label={i18n('weak_magnet', locale)}><MagnetIcon /></Tooltip.Trigger>
-            <Tooltip.Content portalProps={portalProps} side="right">{i18n('weak_magnet', locale)}</Tooltip.Content>
+            <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n('weak_magnet', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
           <Tooltip.Root>
-            <Tooltip.Trigger class={buttonVariants({ variant: overlaysLocked ? 'secondary' : 'ghost', size: 'icon-sm' })} onclick={() => {
+            <Tooltip.Trigger class={iconButtonClass(overlaysLocked)} onclick={() => {
               overlaysLocked = !overlaysLocked
               widget?.overrideOverlay({ lock: overlaysLocked })
             }} aria-label={i18n(overlaysLocked ? 'unlock' : 'lock', locale)}>
               {#if overlaysLocked}<LockIcon />{:else}<UnlockIcon />{/if}
             </Tooltip.Trigger>
-            <Tooltip.Content portalProps={portalProps} side="right">{i18n(overlaysLocked ? 'unlock' : 'lock', locale)}</Tooltip.Content>
+            <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n(overlaysLocked ? 'unlock' : 'lock', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
           <Tooltip.Root>
-            <Tooltip.Trigger class={buttonVariants({ variant: overlaysVisible ? 'ghost' : 'secondary', size: 'icon-sm' })} onclick={() => {
+            <Tooltip.Trigger class={iconButtonClass(!overlaysVisible)} onclick={() => {
               overlaysVisible = !overlaysVisible
               widget?.overrideOverlay({ visible: overlaysVisible })
             }} aria-label={i18n(overlaysVisible ? 'invisible' : 'visible', locale)}>
               {#if overlaysVisible}<EyeIcon />{:else}<EyeOffIcon />{/if}
             </Tooltip.Trigger>
-            <Tooltip.Content portalProps={portalProps} side="right">{i18n(overlaysVisible ? 'invisible' : 'visible', locale)}</Tooltip.Content>
+            <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n(overlaysVisible ? 'invisible' : 'visible', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
           <Tooltip.Root>
-            <Tooltip.Trigger class={buttonVariants({ variant: 'ghost', size: 'icon-sm' })} onclick={() => widget?.removeOverlay({ groupId: 'drawing_tools' })} aria-label={i18n('remove', locale)}><TrashIcon /></Tooltip.Trigger>
-            <Tooltip.Content portalProps={portalProps} side="right">{i18n('remove', locale)}</Tooltip.Content>
+            <Tooltip.Trigger class={iconButtonClass()} onclick={() => widget?.removeOverlay({ groupId: 'drawing_tools' })} aria-label={i18n('remove', locale)}><TrashIcon /></Tooltip.Trigger>
+            <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n('remove', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
         </aside>
       {/if}
 
       <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
       {#if loading}
-        <div class="klinecharts-pro-loading"><Spinner class="size-6" aria-label="Loading chart data" /></div>
+        <div class="klinecharts-pro-loading"><LoaderCircleIcon class="kc-spinner" aria-label="Loading chart data" /></div>
       {/if}
     </div>
 
     <Dialog.Root bind:open={symbolDialogOpen}>
-      <Dialog.Content portalProps={portalProps} class="sm:max-w-lg">
-        <Dialog.Header>
+      <Dialog.Portal {...portalProps}>
+        <Dialog.Overlay class="kc-dialog-overlay" />
+        <Dialog.Content class="kc-dialog-content kc-dialog-lg">
+          <div class="kc-dialog-header">
           <Dialog.Title>{i18n('symbol_search', locale)}</Dialog.Title>
           <Dialog.Description>{i18n('symbol_code', locale)}</Dialog.Description>
-        </Dialog.Header>
-        <Command.Root shouldFilter={false} class="border">
-          <Command.Input bind:value={symbolQuery} placeholder={i18n('symbol_code', locale)} />
-          <Command.List class="max-h-80">
-            {#if symbolSearching}<Command.Loading><Spinner /></Command.Loading>{/if}
+          </div>
+          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
+        <Command.Root shouldFilter={false} class="kc-command">
+          <div class="kc-command-input-wrap"><SearchIcon /><Command.Input class="kc-command-input" bind:value={symbolQuery} placeholder={i18n('symbol_code', locale)} /></div>
+          <Command.List class="kc-command-list">
+            {#if symbolSearching}<Command.Loading class="kc-command-loading"><LoaderCircleIcon class="kc-spinner" /></Command.Loading>{/if}
             {#if !symbolSearching && symbolResults.length === 0}
-              <Command.Empty>{i18n('no_data', locale)}</Command.Empty>
+              <Command.Empty class="kc-command-empty">{i18n('no_data', locale)}</Command.Empty>
             {/if}
-            <Command.Group heading={i18n('symbol_search', locale)}>
-              {#each symbolResults as item (item.ticker)}
-                <Command.Item value={item.ticker} onclick={() => {
-                  symbol = item
-                  symbolDialogOpen = false
-                }}>
-                  <Avatar.Root class="size-7">
-                    {#if item.logo}<Avatar.Image src={item.logo} alt={item.ticker} />{/if}
-                    <Avatar.Fallback>{item.ticker.slice(0, 2)}</Avatar.Fallback>
-                  </Avatar.Root>
-                  <div class="min-w-0 flex-1">
-                    <div class="truncate font-medium">{item.shortName ?? item.ticker}</div>
-                    {#if item.name}<div class="truncate text-xs text-muted-foreground">{item.name}</div>{/if}
-                  </div>
-                  <span class="text-xs text-muted-foreground">{item.exchange ?? ''}</span>
-                </Command.Item>
-              {/each}
+            <Command.Group class="kc-command-group" value={i18n('symbol_search', locale)}>
+              <Command.GroupHeading class="kc-command-heading">{i18n('symbol_search', locale)}</Command.GroupHeading>
+              <Command.GroupItems>
+                {#each symbolResults as item (item.ticker)}
+                  <Command.Item class="kc-command-item" value={item.ticker} onclick={() => {
+                    symbol = item
+                    symbolDialogOpen = false
+                  }}>
+                    <Avatar.Root class="kc-avatar">
+                      {#if item.logo}<Avatar.Image class="kc-avatar-image" src={item.logo} alt={item.ticker} />{/if}
+                      <Avatar.Fallback class="kc-avatar-fallback">{item.ticker.slice(0, 2)}</Avatar.Fallback>
+                    </Avatar.Root>
+                    <div class="kc-symbol-result">
+                      <div class="kc-truncate kc-font-medium">{item.shortName ?? item.ticker}</div>
+                      {#if item.name}<div class="kc-truncate kc-muted-text">{item.name}</div>{/if}
+                    </div>
+                    <span class="kc-muted-text">{item.exchange ?? ''}</span>
+                  </Command.Item>
+                {/each}
+              </Command.GroupItems>
             </Command.Group>
           </Command.List>
         </Command.Root>
-      </Dialog.Content>
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
 
     <Dialog.Root bind:open={indicatorDialogOpen}>
-      <Dialog.Content portalProps={portalProps} class="sm:max-w-xl">
-        <Dialog.Header>
+      <Dialog.Portal {...portalProps}>
+        <Dialog.Overlay class="kc-dialog-overlay" />
+        <Dialog.Content class="kc-dialog-content kc-dialog-xl">
+          <div class="kc-dialog-header">
           <Dialog.Title>{i18n('indicator', locale)}</Dialog.Title>
           <Dialog.Description>{i18n('main_indicator', locale)} / {i18n('sub_indicator', locale)}</Dialog.Description>
-        </Dialog.Header>
-        <ScrollArea.Root class="h-[min(60vh,30rem)] pr-4">
-          <Field.Set>
-            <Field.Legend>{i18n('main_indicator', locale)}</Field.Legend>
-            <Field.Group class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          </div>
+          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
+        <ScrollArea.Root class="kc-indicator-scroll-area">
+          <ScrollArea.Viewport class="kc-scroll-viewport">
+          <fieldset class="kc-fieldset">
+            <legend>{i18n('main_indicator', locale)}</legend>
+            <div class="kc-checkbox-grid">
               {#each mainIndicatorNames as name (name)}
-                <Field.Field orientation="horizontal">
-                  <Checkbox id={`main-${name}`} checked={mainIndicators.includes(name)} onCheckedChange={(checked) => changeIndicator(name, true, checked === true)} />
-                  <Field.Label for={`main-${name}`} class="font-normal">{i18n(name.toLowerCase(), locale)}</Field.Label>
-                </Field.Field>
+                <div class="kc-checkbox-field">
+                  <Checkbox.Root class="kc-checkbox" id={`main-${name}`} checked={mainIndicators.includes(name)} onCheckedChange={(checked) => changeIndicator(name, true, checked === true)}>
+                    {#snippet children({ checked })}{#if checked}<CheckIcon />{/if}{/snippet}
+                  </Checkbox.Root>
+                  <label for={`main-${name}`}>{i18n(name.toLowerCase(), locale)}</label>
+                </div>
               {/each}
-            </Field.Group>
-          </Field.Set>
-          <Separator class="my-5" />
-          <Field.Set>
-            <Field.Legend>{i18n('sub_indicator', locale)}</Field.Legend>
-            <Field.Group class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            </div>
+          </fieldset>
+          <Separator.Root class="kc-separator kc-dialog-separator" />
+          <fieldset class="kc-fieldset">
+            <legend>{i18n('sub_indicator', locale)}</legend>
+            <div class="kc-checkbox-grid">
               {#each subIndicatorNames as name (name)}
-                <Field.Field orientation="horizontal">
-                  <Checkbox id={`sub-${name}`} checked={name in subIndicators} onCheckedChange={(checked) => changeIndicator(name, false, checked === true)} />
-                  <Field.Label for={`sub-${name}`} class="font-normal">{i18n(name.toLowerCase(), locale)}</Field.Label>
-                </Field.Field>
+                <div class="kc-checkbox-field">
+                  <Checkbox.Root class="kc-checkbox" id={`sub-${name}`} checked={name in subIndicators} onCheckedChange={(checked) => changeIndicator(name, false, checked === true)}>
+                    {#snippet children({ checked })}{#if checked}<CheckIcon />{/if}{/snippet}
+                  </Checkbox.Root>
+                  <label for={`sub-${name}`}>{i18n(name.toLowerCase(), locale)}</label>
+                </div>
               {/each}
-            </Field.Group>
-          </Field.Set>
+            </div>
+          </fieldset>
+          </ScrollArea.Viewport>
+          <ScrollArea.Scrollbar orientation="vertical" class="kc-scrollbar"><ScrollArea.Thumb class="kc-scroll-thumb" /></ScrollArea.Scrollbar>
         </ScrollArea.Root>
-      </Dialog.Content>
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
 
     <Dialog.Root bind:open={timezoneDialogOpen}>
-      <Dialog.Content portalProps={portalProps} class="sm:max-w-sm">
-        <Dialog.Header>
+      <Dialog.Portal {...portalProps}>
+        <Dialog.Overlay class="kc-dialog-overlay" />
+        <Dialog.Content class="kc-dialog-content kc-dialog-sm">
+          <div class="kc-dialog-header">
           <Dialog.Title>{i18n('timezone', locale)}</Dialog.Title>
           <Dialog.Description>{translateTimezone(timezone, locale)}</Dialog.Description>
-        </Dialog.Header>
-        <Field.Group>
-          <Field.Field>
-            <Field.Label for="chart-timezone">{i18n('timezone', locale)}</Field.Label>
-            <Select.Root type="single" bind:value={timezone}>
-              <Select.Trigger id="chart-timezone">{translateTimezone(timezone, locale)}</Select.Trigger>
-              <Select.Content portalProps={portalProps} class="max-h-72">
-                <Select.Group>
-                  {#each timezoneOptions as item (item.key)}
-                    <Select.Item value={item.key} label={item.text}>{item.text}</Select.Item>
-                  {/each}
-                </Select.Group>
-              </Select.Content>
-            </Select.Root>
-          </Field.Field>
-        </Field.Group>
-      </Dialog.Content>
+          </div>
+          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
+        <div class="kc-field-group">
+          <div class="kc-field">
+            <label for="chart-timezone">{i18n('timezone', locale)}</label>
+            <select class="kc-select-trigger" id="chart-timezone" bind:value={timezone}>
+              {#each timezoneOptions as item (item.key)}
+                <option value={item.key}>{item.text}</option>
+              {/each}
+            </select>
+          </div>
+        </div>
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
 
     <Dialog.Root bind:open={settingsDialogOpen}>
-      <Dialog.Content portalProps={portalProps} class="sm:max-w-xl">
-        <Dialog.Header>
+      <Dialog.Portal {...portalProps}>
+        <Dialog.Overlay class="kc-dialog-overlay" />
+        <Dialog.Content class="kc-dialog-content kc-dialog-xl">
+          <div class="kc-dialog-header">
           <Dialog.Title>{i18n('setting', locale)}</Dialog.Title>
           <Dialog.Description>{i18n('setting', locale)}</Dialog.Description>
-        </Dialog.Header>
+          </div>
+          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
         {#if settingsStyles}
-          <Field.Group>
+          <div class="kc-field-group">
             {#each settingOptions as option (option.key)}
-              <Field.Field orientation="horizontal">
-                <Field.Label for={`setting-${option.key}`} class="flex-1">{option.text}</Field.Label>
+              <div class="kc-field kc-field-horizontal">
+                <label for={`setting-${option.key}`}>{option.text}</label>
                 {#if option.component === 'switch'}
-                  <Switch id={`setting-${option.key}`} checked={Boolean(getSettingValue(option.key))} onCheckedChange={(checked) => updateStyle(option.key, checked)} />
+                  <Switch.Root class="kc-switch" id={`setting-${option.key}`} checked={Boolean(getSettingValue(option.key))} onCheckedChange={(checked) => updateStyle(option.key, checked)}>
+                    <Switch.Thumb class="kc-switch-thumb" />
+                  </Switch.Root>
                 {:else}
-                  <Select.Root type="single" value={String(getSettingValue(option.key))} onValueChange={(value) => updateStyle(option.key, value)}>
-                    <Select.Trigger id={`setting-${option.key}`} class="w-40">
-                      {i18n(String(getSettingValue(option.key)), locale)}
-                    </Select.Trigger>
-                    <Select.Content portalProps={portalProps}>
-                      <Select.Group>
-                        {#each option.dataSource ?? [] as item (item.key)}
-                          <Select.Item value={item.key} label={item.text}>{item.text}</Select.Item>
-                        {/each}
-                      </Select.Group>
-                    </Select.Content>
-                  </Select.Root>
+                  <select
+                    id={`setting-${option.key}`}
+                    class="kc-select-trigger kc-setting-select"
+                    value={String(getSettingValue(option.key))}
+                    onchange={(event) => updateStyle(option.key, event.currentTarget.value)}
+                  >
+                    {#each option.dataSource ?? [] as item (item.key)}
+                      <option value={item.key}>{item.text}</option>
+                    {/each}
+                  </select>
                 {/if}
-              </Field.Field>
+              </div>
             {/each}
-          </Field.Group>
+          </div>
         {/if}
-        <Dialog.Footer>
-          <Button variant="outline" onclick={restoreStyles}>{i18n('restore_default', locale)}</Button>
-          <Dialog.Close class={buttonVariants()}>{i18n('confirm', locale)}</Dialog.Close>
-        </Dialog.Footer>
-      </Dialog.Content>
+        <div class="kc-dialog-footer">
+          <button class="kc-button kc-button-outline" onclick={restoreStyles}>{i18n('restore_default', locale)}</button>
+          <Dialog.Close class="kc-button kc-button-primary">{i18n('confirm', locale)}</Dialog.Close>
+        </div>
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
 
     <Dialog.Root bind:open={indicatorSettingsOpen}>
-      <Dialog.Content portalProps={portalProps} class="sm:max-w-sm">
-        <Dialog.Header>
+      <Dialog.Portal {...portalProps}>
+        <Dialog.Overlay class="kc-dialog-overlay" />
+        <Dialog.Content class="kc-dialog-content kc-dialog-sm">
+          <div class="kc-dialog-header">
           <Dialog.Title>{indicatorSettings.indicatorName}</Dialog.Title>
           <Dialog.Description>{i18n('indicator', locale)}</Dialog.Description>
-        </Dialog.Header>
-        <Field.Group>
+          </div>
+          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
+        <div class="kc-field-group">
           {#each (indicatorConfig as Record<string, Array<{ paramNameKey: string; precision: number; min: number; default?: number }>>)[indicatorSettings.indicatorName] ?? [] as config, index (config.paramNameKey)}
-            <Field.Field>
-              <Field.Label for={`indicator-param-${index}`}>{i18n(config.paramNameKey, locale)}</Field.Label>
-              <Input id={`indicator-param-${index}`} type="number" min={config.min} step={10 ** -config.precision} value={String(indicatorSettings.calcParams[index] ?? '')} oninput={(event) => {
+            <div class="kc-field">
+              <label for={`indicator-param-${index}`}>{i18n(config.paramNameKey, locale)}</label>
+              <input class="kc-input" id={`indicator-param-${index}`} type="number" min={config.min} step={10 ** -config.precision} value={String(indicatorSettings.calcParams[index] ?? '')} oninput={(event) => {
                 const next = [...indicatorSettings.calcParams]
                 next[index] = event.currentTarget.value === '' ? '' : Number(event.currentTarget.value)
                 indicatorSettings = { ...indicatorSettings, calcParams: next }
               }} />
-            </Field.Field>
+            </div>
           {/each}
-        </Field.Group>
-        <Dialog.Footer>
-          <Button onclick={() => {
+        </div>
+        <div class="kc-dialog-footer">
+          <button class="kc-button kc-button-primary" onclick={() => {
             const config = (indicatorConfig as Record<string, Array<{ default?: number }>>)[indicatorSettings.indicatorName] ?? []
             const params = indicatorSettings.calcParams.map((value, index) => value === '' || value == null ? config[index]?.default : value)
             widget?.overrideIndicator({ name: indicatorSettings.indicatorName, paneId: indicatorSettings.paneId, calcParams: params })
             indicatorSettingsOpen = false
-          }}>{i18n('confirm', locale)}</Button>
-        </Dialog.Footer>
-      </Dialog.Content>
+          }}>{i18n('confirm', locale)}</button>
+        </div>
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
 
     <Dialog.Root bind:open={screenshotDialogOpen}>
-      <Dialog.Content portalProps={portalProps} class="sm:max-w-2xl">
-        <Dialog.Header>
+      <Dialog.Portal {...portalProps}>
+        <Dialog.Overlay class="kc-dialog-overlay" />
+        <Dialog.Content class="kc-dialog-content kc-dialog-2xl">
+          <div class="kc-dialog-header">
           <Dialog.Title>{i18n('screenshot', locale)}</Dialog.Title>
           <Dialog.Description>{symbol.ticker} · {period.text}</Dialog.Description>
-        </Dialog.Header>
+          </div>
+          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
         {#if screenshotUrl}
-          <img class="w-full rounded-md border" src={screenshotUrl} alt={`${symbol.ticker} chart screenshot`} />
+          <img class="kc-screenshot" src={screenshotUrl} alt={`${symbol.ticker} chart screenshot`} />
         {:else}
-          <Empty.Root>
-            <Empty.Header><Empty.Title>{i18n('no_data', locale)}</Empty.Title></Empty.Header>
-          </Empty.Root>
+          <div class="kc-empty">{i18n('no_data', locale)}</div>
         {/if}
-        <Dialog.Footer>
-          <Button disabled={!screenshotUrl} onclick={saveScreenshot}>{i18n('save', locale)}</Button>
-        </Dialog.Footer>
-      </Dialog.Content>
+        <div class="kc-dialog-footer">
+          <button class="kc-button kc-button-primary" disabled={!screenshotUrl} onclick={saveScreenshot}>{i18n('save', locale)}</button>
+        </div>
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
   </Tooltip.Provider>
 </div>
