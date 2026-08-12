@@ -48,16 +48,27 @@
 	outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
 }
 
-.klinecharts-pro button,
-.klinecharts-pro input,
-.klinecharts-pro select,
-.klinecharts-pro textarea {
+/*
+  The element resets below are wrapped in `:where()`, which contributes no specificity,
+  so they weigh (0,0,1) — element-level.
+
+  Written as a bare `.klinecharts-pro button` they weigh (0,1,1) and beat every single-class
+  component rule in this file regardless of source order. `.kc-toggle-item` (0,1,0) lost its
+  `padding` and `border-left` that way, which collapsed the period selector into one run of
+  unseparated text: `1m3m5m15m30m1h2h4h8h1D3D1W2W1M3M1Y`.
+
+  A reset must be the weakest thing that matches, never the strongest.
+*/
+:where(.klinecharts-pro) button,
+:where(.klinecharts-pro) input,
+:where(.klinecharts-pro) select,
+:where(.klinecharts-pro) textarea {
 	margin: 0;
 	font: inherit;
 	color: inherit;
 }
 
-.klinecharts-pro button {
+:where(.klinecharts-pro) button {
 	appearance: none;
 	border: 0;
 	background: transparent;
