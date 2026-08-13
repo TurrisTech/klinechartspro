@@ -526,6 +526,7 @@
     else await document.exitFullscreen()
   }
 
+  export function getChart() { return widget }
   export function setTheme(value: string) { theme = value }
   export function getTheme() { return theme }
   export function setStyles(value: DeepPartial<Styles>) { styles = value }
