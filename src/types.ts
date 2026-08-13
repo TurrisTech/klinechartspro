@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import type { KLineData, Styles, DeepPartial } from 'klinecharts'
+import type { Chart, KLineData, Nullable, Styles, DeepPartial } from 'klinecharts'
 
 export interface SymbolInfo {
   ticker: string
@@ -59,6 +59,15 @@ export interface ChartProOptions {
 }
 
 export interface ChartPro {
+  /**
+   * The underlying KLineChart instance, or null before the component has mounted.
+   *
+   * The escape hatch for anything this wrapper does not model itself — overlays,
+   * indicators registered at runtime, direct style overrides. Callers own what they add and
+   * should scope it (e.g. an overlay `groupId`) so it can be removed again without
+   * disturbing chart state this component manages.
+   */
+  getChart(): Nullable<Chart>
   setTheme(theme: string): void
   getTheme(): string
   setStyles(styles: DeepPartial<Styles>): void

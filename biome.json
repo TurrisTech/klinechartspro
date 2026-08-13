@@ -5,6 +5,7 @@
       "src/**",
       "examples/**",
       "scripts/**",
+      "client/**",
       "package.json",
       "tsconfig.json",
       "tsconfig.build.json"

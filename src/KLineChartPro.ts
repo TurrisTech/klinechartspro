@@ -3,7 +3,7 @@
  */
 
 import { mount, unmount } from 'svelte'
-import { utils, type DeepPartial, type Styles } from 'klinecharts'
+import { utils, type Chart, type DeepPartial, type Nullable, type Styles } from 'klinecharts'
 
 import ChartProComponent from './ChartPro.svelte'
 import type { ChartPro, ChartProOptions, Period, SymbolInfo } from './types'
@@ -62,6 +62,10 @@ export default class KLineChartPro implements ChartPro {
         datafeed: options.datafeed
       }
     }) as ChartPro
+  }
+
+  getChart(): Nullable<Chart> {
+    return this.component.getChart()
   }
 
   setTheme(theme: string): void {
