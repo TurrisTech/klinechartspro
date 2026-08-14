@@ -47,6 +47,12 @@ async function bootstrap(): Promise<void> {
 }
 
 async function mountChart(container: HTMLElement): Promise<void> {
+  // Svelte's mount() appends to its target rather than replacing its contents, so a prior
+  // renderLogin() left in place would sit visually on top of (or behind) the chart forever
+  // — the chart mounts and works underneath, but the page reads as permanently stuck on
+  // "Signing in…" since nothing ever tears the login form down.
+  container.innerHTML = ''
+
   // The initial instrument's configuration and this account's starred timeframes both
   // have to resolve before the chart mounts — price precision and the starred set are
   // both construction-time properties of the library component (src/types.ts:
