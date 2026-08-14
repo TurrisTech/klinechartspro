@@ -11,6 +11,14 @@ export type Feature =
   | 'levels.dates'
   | 'stream.ping'
   | 'stream.backfill'
+  // GET /instrument, and a `config` block on each /search result.
+  | 'instrument.config'
+  // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
+  // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
+  // ungated experience rather than a login form nothing can ever satisfy.
+  | 'auth'
+  // GET/PUT /preferences — dev only, requires 'auth'.
+  | 'preferences'
 
 export interface CapabilityLimits {
   maxBarsPerRequest: number

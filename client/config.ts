@@ -69,3 +69,38 @@ export async function apiGet<T>(
   }
   return body as T
 }
+
+export interface ApiSendResult<T> {
+  data: T
+  response: Response
+}
+
+// The auth + preferences counterpart to apiGet (auth.ts, index.ts) — the one part of this
+// client that sends an Authorization header or writes. Includes 'GET' alongside the writing
+// methods (unlike apiGet, which has no way to pass a header) because /auth/session and
+// GET /preferences both require Authorization, and PUT /preferences' caller wants the
+// response's `ETag` header, which apiGet's plain-`T` return does not expose.
+export async function apiSend<T>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  options?: { body?: unknown; headers?: Record<string, string> }
+): Promise<ApiSendResult<T>> {
+  const url = apiUrl(path)
+  const response = await fetch(url, {
+    method,
+    headers: {
+      ...(options?.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...options?.headers
+    },
+    body: options?.body !== undefined ? JSON.stringify(options.body) : undefined
+  })
+  // 204 (No Content, e.g. logout) has no body to parse.
+  const body: unknown = response.status === 204 ? null : await response.json().catch(() => null)
+  if (!response.ok) {
+    if (isErrorBody(body)) {
+      throw new OhlcvApiError(response.status, body.code, body.detail, body.field)
+    }
+    throw new OhlcvApiError(response.status, 'internal', `${response.status} from ${path}`)
+  }
+  return { data: body as T, response }
+}

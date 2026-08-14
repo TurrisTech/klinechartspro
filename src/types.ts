@@ -52,6 +52,12 @@ export interface ChartProOptions {
   symbol: SymbolInfo
   period: Period
   periods?: Period[]
+  /** `Period.text` values shown as chips on the top-rail timeframe rail; the rest live
+   * behind the dropdown. Construction-time only, like `periods` — change it via
+   * `onStarredPeriodsChange`, not by remounting. */
+  starredPeriods?: string[]
+  /** Fired on every star/unstar so the caller can persist the new set. */
+  onStarredPeriodsChange?: (starredPeriods: string[]) => void
   timezone?: string
   mainIndicators?: string[]
   subIndicators?: string[]
@@ -80,4 +86,11 @@ export interface ChartPro {
   getSymbol(): SymbolInfo
   setPeriod(period: Period): void
   getPeriod(): Period
+  /**
+   * An empty anchor element inside the chart shell that a consuming app can mount its own
+   * controls into — the top-rail toolbar (after the timeframe rail) or the bottom of the
+   * left drawing rail. Returns null before mount, and null for 'rail-footer' whenever the
+   * drawing rail is hidden (drawingBarVisible: false), since that footer lives inside it.
+   */
+  getSlot(name: 'toolbar' | 'rail-footer'): Nullable<HTMLElement>
 }

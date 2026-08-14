@@ -215,8 +215,14 @@
 }
 
 .kc-period-scroller {
+	/* Was `flex: 1`, absorbing all leftover toolbar width for a 16-chip strip. Now the
+	   rail only ever holds the starred handful plus maybe one transient chip, so it
+	   should size to content — `flex: 1` would stretch the toggle-group's border oddly
+	   with mostly empty space. overflow-x stays as a safety net if someone stars most
+	   of the 16 supported intervals. */
 	min-width: 0;
-	flex: 1;
+	flex-shrink: 0;
+	max-width: 60%;
 	overflow-x: auto;
 }
 
@@ -251,6 +257,98 @@
 	background: var(--muted);
 }
 
+/* The active timeframe when it isn't starred: shown on the rail anyway so the current
+   selection is never hidden, but visually marked as "not one of yours" so it reads
+   differently from the chips the user actually chose. A dashed *border* doesn't work here
+   -- .kc-toggle-item only ever draws a border-left (the group's own outer border supplies
+   top/right/bottom, at computed width 0 on the item itself), so `border-style: dashed`
+   would apply to a 0-width edge and render as nothing. An inset dashed ring sidesteps that
+   entirely: it isn't a border participating in the toggle-group's layout at all. */
+.kc-toggle-item.is-transient {
+	color: var(--muted-foreground);
+	font-style: italic;
+	outline: 1px dashed var(--muted-foreground);
+	outline-offset: -3px;
+}
+
+.kc-timeframe-trigger {
+	flex-shrink: 0;
+	gap: 0.25rem;
+	padding: 0 0.5rem;
+}
+
+.kc-timeframe-trigger svg {
+	width: 0.875rem;
+	height: 0.875rem;
+}
+
+.kc-timeframe-popover {
+	width: 14rem;
+	max-height: 24rem;
+	overflow-y: auto;
+}
+
+.kc-timeframe-grid {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	margin-bottom: 0.5rem;
+}
+
+.kc-timeframe-row {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+}
+
+.kc-star-toggle {
+	display: inline-flex;
+	width: 1.75rem;
+	height: 1.75rem;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+}
+
+.kc-star-toggle:hover {
+	background: var(--muted);
+}
+
+.kc-star-icon {
+	width: 0.875rem;
+	height: 0.875rem;
+	color: var(--muted-foreground);
+}
+
+.kc-star-icon.is-filled {
+	color: var(--primary);
+	fill: currentColor;
+}
+
+.kc-timeframe-item {
+	display: flex;
+	flex: 1;
+	height: 1.75rem;
+	align-items: center;
+	border-radius: var(--radius-sm);
+	padding: 0 0.5rem;
+	font-size: 0.875rem;
+	cursor: pointer;
+}
+
+.kc-timeframe-item:hover {
+	background: var(--muted);
+}
+
+.kc-toolbar-slot {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 0.25rem;
+}
+
 .kc-toolbar-actions {
 	display: flex;
 	flex-shrink: 0;
@@ -267,6 +365,19 @@
 	gap: 0.25rem;
 	border-right: 1px solid var(--border);
 	padding: 0.5rem 0;
+}
+
+.kc-rail-footer {
+	display: flex;
+	width: 100%;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.375rem;
+	margin-top: auto;
+	padding-top: 0.5rem;
+	color: var(--muted-foreground);
+	font-size: 0.625rem;
+	text-align: center;
 }
 
 .kc-tooltip {

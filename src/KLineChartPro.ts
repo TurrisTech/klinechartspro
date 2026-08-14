@@ -56,6 +56,8 @@ export default class KLineChartPro implements ChartPro {
         symbol: options.symbol,
         period: options.period,
         periods: options.periods ?? DEFAULT_PERIODS,
+        starredPeriods: options.starredPeriods ?? [],
+        onStarredPeriodsChange: options.onStarredPeriodsChange ?? (() => {}),
         timezone: options.timezone ?? 'Asia/Shanghai',
         mainIndicators: options.mainIndicators ?? ['MA'],
         subIndicators: options.subIndicators ?? ['VOL'],
@@ -116,6 +118,10 @@ export default class KLineChartPro implements ChartPro {
 
   getPeriod(): Period {
     return this.component.getPeriod()
+  }
+
+  getSlot(name: 'toolbar' | 'rail-footer'): Nullable<HTMLElement> {
+    return this.component.getSlot(name)
   }
 
   remove(): void {

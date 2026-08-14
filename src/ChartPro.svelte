@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, type Component } from 'svelte'
+  import { onMount, untrack, type Component } from 'svelte'
   import {
     dispose,
     init,
@@ -46,6 +46,8 @@
   import CheckIcon from '@lucide/svelte/icons/check'
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle'
   import XIcon from '@lucide/svelte/icons/x'
+  import StarIcon from '@lucide/svelte/icons/star'
+  import ChevronDownIcon from '@lucide/svelte/icons/chevron-down'
   import {
     Avatar,
     Checkbox,
@@ -94,6 +96,8 @@
     symbol,
     period,
     periods,
+    starredPeriods,
+    onStarredPeriodsChange,
     timezone,
     mainIndicators,
     subIndicators: initialSubIndicators,
@@ -105,11 +109,18 @@
   let widget: Nullable<Chart> = null
   let priceUnitElement: HTMLElement | null = null
   let mounted = $state(false)
+  let toolbarSlot = $state<HTMLDivElement>()
+  let railFooterSlot = $state<HTMLDivElement>()
 
   let subIndicators = $state<Record<string, string>>({})
   let defaultStyles: Styles | null = null
   let loading = $state(false)
   let selectedPeriodText = $state('')
+  // Construction-time-seeded, like `period` itself: the app supplies the initial set and
+  // hears about every change via onStarredPeriodsChange, rather than this reading a
+  // reactive prop — mirrors how `periods` and `period` both work. `untrack` makes that
+  // one-time read explicit rather than triggering Svelte's "did you mean $derived" warning.
+  let starred = $state<Set<string>>(untrack(() => new Set(starredPeriods)))
 
   let symbolDialogOpen = $state(false)
   let indicatorDialogOpen = $state(false)
@@ -209,6 +220,42 @@
   const settingOptions = $derived(getOptions(locale))
 
   const iconButtonClass = (active = false) => `kc-button kc-icon-button${active ? ' is-active' : ''}`
+
+  // The top-rail chips: every starred period, in `periods`' own (shortest-first) order,
+  // plus the active period appended as a transient chip when it isn't starred — so the
+  // rail always shows what's playing even if the user never starred it.
+  const railPeriods = $derived.by(() => {
+    const list = periods.filter((item) => starred.has(item.text))
+    if (!starred.has(period.text)) list.push(period)
+    return list
+  })
+
+  // The dropdown's three sections. Days/weeks/months/years share one "Days & above"
+  // group — the 16-interval server contract KLineChart Pro clients are built against
+  // (client/periods.ts) has too few long periods to need day/week/month split further.
+  const timeframeGroups = $derived.by(() => {
+    const minutes: Period[] = []
+    const hours: Period[] = []
+    const daysAndAbove: Period[] = []
+    for (const item of periods) {
+      if (item.timespan === 'minute') minutes.push(item)
+      else if (item.timespan === 'hour') hours.push(item)
+      else daysAndAbove.push(item)
+    }
+    return [
+      { key: 'minutes', labelKey: 'minutes', items: minutes },
+      { key: 'hours', labelKey: 'hours', items: hours },
+      { key: 'days', labelKey: 'days', items: daysAndAbove }
+    ].filter((group) => group.items.length > 0)
+  })
+
+  function toggleStarred(text: string) {
+    const next = new Set(starred)
+    if (next.has(text)) next.delete(text)
+    else next.add(text)
+    starred = next
+    onStarredPeriodsChange(Array.from(starred))
+  }
 
   function clone<T>(value: T): T {
     if (Array.isArray(value)) return value.map(clone) as T
@@ -539,6 +586,9 @@
   export function getSymbol() { return symbol }
   export function setPeriod(value: Period) { period = value }
   export function getPeriod() { return period }
+  export function getSlot(name: 'toolbar' | 'rail-footer') {
+    return (name === 'toolbar' ? toolbarSlot : railFooterSlot) ?? null
+  }
 
   $effect(() => {
     selectedPeriodText = period.text
@@ -689,13 +739,60 @@
       <Separator.Root orientation="vertical" class="kc-separator kc-separator-vertical" />
       <div class="kc-period-scroller">
         <ToggleGroup.Root type="single" class="kc-toggle-group" bind:value={selectedPeriodText}>
-          {#each periods as item (item.text)}
-            <ToggleGroup.Item class="kc-toggle-item" value={item.text} onclick={() => { period = item }}>
+          {#each railPeriods as item (item.text)}
+            <ToggleGroup.Item
+              class={`kc-toggle-item${starred.has(item.text) ? '' : ' is-transient'}`}
+              value={item.text}
+              onclick={() => { period = item }}
+            >
               {item.text}
             </ToggleGroup.Item>
           {/each}
         </ToggleGroup.Root>
       </div>
+
+      <Popover.Root>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <Popover.Trigger {...props} class="kc-button kc-timeframe-trigger" aria-label={i18n('timeframes', locale)}>
+                <span class="kc-truncate">{period.text}</span>
+                <ChevronDownIcon />
+              </Popover.Trigger>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Portal {...portalProps}>
+            <Tooltip.Content class="kc-tooltip">{i18n('timeframes', locale)}</Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        <Popover.Portal {...portalProps}>
+          <Popover.Content align="start" sideOffset={4} class="kc-popover kc-timeframe-popover">
+            {#each timeframeGroups as group (group.key)}
+              <div class="kc-popover-header">{i18n(group.labelKey, locale)}</div>
+              <div class="kc-timeframe-grid">
+                {#each group.items as item (item.text)}
+                  <div class="kc-timeframe-row">
+                    <button
+                      type="button"
+                      class="kc-star-toggle"
+                      aria-pressed={starred.has(item.text)}
+                      aria-label={i18n(starred.has(item.text) ? 'unstar_timeframe' : 'star_timeframe', locale)}
+                      onclick={() => toggleStarred(item.text)}
+                    >
+                      <StarIcon class={`kc-star-icon${starred.has(item.text) ? ' is-filled' : ''}`} />
+                    </button>
+                    <Popover.Close class="kc-timeframe-item" onclick={() => { period = item }}>
+                      {item.text}
+                    </Popover.Close>
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+
+      <div class="kc-toolbar-slot" bind:this={toolbarSlot}></div>
 
       <div class="kc-toolbar-actions">
         {#each [
@@ -797,6 +894,8 @@
             <Tooltip.Trigger class={iconButtonClass()} onclick={() => widget?.removeOverlay({ groupId: 'drawing_tools' })} aria-label={i18n('remove', locale)}><TrashIcon /></Tooltip.Trigger>
             <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n('remove', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
+
+          <div class="kc-rail-footer" bind:this={railFooterSlot}></div>
         </aside>
       {/if}
 

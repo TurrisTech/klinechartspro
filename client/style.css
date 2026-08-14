@@ -16,78 +16,138 @@ body {
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* Floated over the chart rather than given its own row: the chart sizes itself to #app, so
-   a status strip in the normal flow would push it past the viewport and clip the axis. */
-.wd-statusbar {
-  position: fixed;
-  right: 12px;
-  bottom: 10px;
-  z-index: 20;
+/* live/version/logout used to float in their own fixed corner widget, overlapping the
+   canvas and the price axis. They now mount into the library's own slots
+   (src/types.ts ChartPro.getSlot) — the top-rail toolbar for Levels, the bottom of the
+   left drawing rail for the rest — so this file only styles their content, not their
+   position; `.kc-toolbar-slot` / `.kc-rail-footer` (src/app.css) own the layout. Custom
+   properties like --primary/--muted-foreground resolve here because these elements are
+   DOM children of `.klinecharts-pro.dark`, which is where src/app.css defines them. */
+
+.wd-rail-footer-content {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 5px 10px;
-  border: 1px solid rgb(255 255 255 / 8%);
-  border-radius: 6px;
-  background: rgb(19 23 34 / 82%);
-  backdrop-filter: blur(6px);
-  color: #b2b5be;
-  font-size: 11px;
-  line-height: 1;
-  user-select: none;
+  gap: 0.375rem;
 }
 
 .wd-status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.25rem;
   text-transform: lowercase;
 }
 
 .wd-status-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
   border-radius: 50%;
   background: #787b86;
 }
 
-.wd-statusbar[data-stream='connected'] .wd-status-dot {
+.wd-status[data-stream='connected'] .wd-status-dot {
   background: #26a69a;
 }
 
-.wd-statusbar[data-stream='connecting'] .wd-status-dot {
+.wd-status[data-stream='connecting'] .wd-status-dot {
   background: #f0b90b;
 }
 
-.wd-statusbar[data-stream='offline'] .wd-status-dot {
+.wd-status[data-stream='offline'] .wd-status-dot {
   background: #ef5350;
 }
 
-.wd-levels-toggle {
-  padding: 3px 8px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 4px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+.wd-version {
+  color: var(--muted-foreground);
+}
+
+.wd-logout {
+  color: var(--muted-foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
 
-.wd-levels-toggle:hover {
-  border-color: rgb(255 255 255 / 28%);
-  color: #d1d4dc;
+.wd-logout:hover {
+  color: var(--foreground);
 }
 
+/* Levels sits among the library's own kc-button icon actions in the top rail (see
+   src/app.css .kc-button); only the "on" accent is custom here. */
 .wd-levels-toggle.is-on {
-  border-color: rgb(41 98 255 / 60%);
-  background: rgb(41 98 255 / 18%);
-  color: #d1d4dc;
+  border: 1px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
 }
 
 .wd-levels-toggle[hidden] {
   display: none;
 }
 
-.wd-version {
-  color: #5d606b;
+/* --- Login form --------------------------------------------------------------------- */
+
+.wd-login {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.wd-login-heading {
+  margin: 0 0 0.5rem;
+  color: #d1d4dc;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.wd-login-input {
+  width: 100%;
+  max-width: 20rem;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 6px;
+  background: rgb(255 255 255 / 4%);
+  padding: 0.625rem 0.75rem;
+  color: #d1d4dc;
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
+.wd-login-input:focus-visible {
+  border-color: #2962ff;
+  outline: none;
+}
+
+.wd-login-error {
+  max-width: 20rem;
+  margin: 0;
+  color: #ef5350;
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.wd-login-submit {
+  width: 100%;
+  max-width: 20rem;
+  border: 0;
+  border-radius: 6px;
+  background: #2962ff;
+  padding: 0.625rem 0.75rem;
+  color: #fff;
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.wd-login-submit:hover {
+  background: #2f6bff;
+}
+
+.wd-login-submit:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
