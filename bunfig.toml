@@ -1,2 +1,4 @@
 [serve.static]
-plugins = ["bun-plugin-svelte"]
+# Not plain "bun-plugin-svelte": see scripts/svelte-plugin.ts for why the dev server needs
+# Svelte's preserveWhitespace forced off (bits-ui Popover renders nothing without it).
+plugins = ["./scripts/svelte-plugin.ts"]
