@@ -7,5 +7,4 @@
 .npmrc
 skills-lock.json
 .agents
-.dev-client.pid
 .dev-client.log
