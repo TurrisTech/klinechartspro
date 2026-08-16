@@ -301,56 +301,49 @@
     return createdPaneId
   }
 
+  // The history window handed to the datafeed for one page of `count` bars ending at
+  // `toTimestamp`. Only a bound: the datafeed/server assigns bars to candles and clips the
+  // range itself, so nothing here aligns `to` to a calendar edge -- the old
+  // browser-local flooring to midnight / Monday / the 1st assumed candles open at local
+  // midnight, which FX candles do not (they open 17:00 America/New_York; a week opens
+  // Sunday 17:00), and it dropped a bar at every page boundary for viewers east of the
+  // market. `from` is a generous nominal reach; the server keeps the last `count`.
   function adjustFromTo(currentPeriod: Period, toTimestamp: number, count: number) {
     const minute = 60 * 1000
     const hour = 60 * minute
     const day = 24 * hour
-    let to = toTimestamp
-    let from = to
-
-    switch (currentPeriod.timespan) {
-      case 'minute':
-        to -= to % minute
-        from = to - count * currentPeriod.multiplier * minute
-        break
-      case 'hour':
-        to -= to % hour
-        from = to - count * currentPeriod.multiplier * hour
-        break
-      case 'day':
-        to -= to % day
-        from = to - count * currentPeriod.multiplier * day
-        break
-      case 'week': {
-        const date = new Date(to)
-        const offset = date.getDay() === 0 ? 6 : date.getDay() - 1
-        date.setHours(0, 0, 0, 0)
-        date.setDate(date.getDate() - offset)
-        to = date.getTime()
-        from = to - count * currentPeriod.multiplier * 7 * day
-        break
-      }
-      case 'month': {
-        const date = new Date(to)
-        date.setHours(0, 0, 0, 0)
-        date.setDate(1)
-        to = date.getTime()
-        date.setMonth(date.getMonth() - count * currentPeriod.multiplier)
-        from = date.getTime()
-        break
-      }
-      case 'year': {
-        const date = new Date(to)
-        date.setHours(0, 0, 0, 0)
-        date.setMonth(0, 1)
-        to = date.getTime()
-        date.setFullYear(date.getFullYear() - count * currentPeriod.multiplier)
-        from = date.getTime()
-        break
-      }
+    const unitMs: Record<string, number> = {
+      minute,
+      hour,
+      day,
+      week: 7 * day,
+      month: 31 * day,
+      year: 366 * day
     }
+    const unit = unitMs[currentPeriod.timespan]
+    if (unit === undefined) throw new Error(`Unsupported period timespan: ${currentPeriod.timespan}`)
+    const to = toTimestamp
+    const from = to - count * currentPeriod.multiplier * unit
     return [from, to] as const
   }
+
+  // Daily and coarser candles are labelled by their market SESSION date, not the wall-clock
+  // date of their open: an FX daily candle opens 17:00 New York the evening before its
+  // session, a weekly Sunday 17:00, a monthly/yearly 17:00 before the first market day --
+  // so December can open on Sunday 30 November and 2024 on Sunday 31 December 2023. The
+  // session date is the New York date of `open + 7h` (wmarkettypes' canonical_date), and it
+  // is New York regardless of the display timezone, because that is the market's calendar.
+  const sessionDateFormat = new Intl.DateTimeFormat('en', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+  const SESSION_DATE_SHIFT_MS = 7 * 60 * 60 * 1000
 
   function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
     if (period.timespan === 'minute') {
@@ -361,15 +354,16 @@
       return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
         ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm')
     }
+    const sessionTimestamp = timestamp + SESSION_DATE_SHIFT_MS
     if (period.timespan === 'month') {
-      return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
+      return utils.formatDate(sessionDateFormat, sessionTimestamp, type === 'xAxis'
         ? 'YYYY-MM' : 'YYYY-MM-DD')
     }
     if (period.timespan === 'year') {
-      return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
+      return utils.formatDate(sessionDateFormat, sessionTimestamp, type === 'xAxis'
         ? 'YYYY' : 'YYYY-MM-DD')
     }
-    return utils.formatDate(dateTimeFormat, timestamp, 'YYYY-MM-DD')
+    return utils.formatDate(sessionDateFormat, sessionTimestamp, 'YYYY-MM-DD')
   }
 
   function applyIndicatorIcons() {
