@@ -26,6 +26,7 @@ export function translateTimezone (timezone: string, locale: string): string {
     case 'America/Juneau': return i18n('juneau', locale)
     case 'America/Los_Angeles': return i18n('los_angeles', locale)
     case 'America/Chicago': return i18n('chicago', locale)
+    case 'America/New_York': return i18n('new_york', locale)
     case'America/Toronto': return i18n('toronto', locale)
     case 'America/Sao_Paulo': return i18n('sao_paulo', locale)
     case 'Europe/London': return i18n('london', locale)
@@ -50,6 +51,7 @@ export function createTimezoneSelectOptions (locale: string): SelectDataSourceIt
     { key: 'America/Juneau', text: i18n('juneau', locale) },
     { key: 'America/Los_Angeles', text: i18n('los_angeles', locale) },
     { key: 'America/Chicago', text: i18n('chicago', locale) },
+    { key: 'America/New_York', text: i18n('new_york', locale) },
     { key: 'America/Toronto', text: i18n('toronto', locale) },
     { key: 'America/Sao_Paulo', text: i18n('sao_paulo', locale) },
     { key: 'Europe/London', text: i18n('london', locale) },

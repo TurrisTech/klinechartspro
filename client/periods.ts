@@ -10,7 +10,8 @@ const TIMESPAN_UNIT: Record<string, string> = {
   hour: 'h',
   day: 'D',
   week: 'W',
-  month: 'M'
+  month: 'M',
+  year: 'Y'
 }
 
 const UNIT_TIMESPAN: Record<string, string> = {
@@ -18,20 +19,25 @@ const UNIT_TIMESPAN: Record<string, string> = {
   h: 'hour',
   D: 'day',
   W: 'week',
-  M: 'month'
+  M: 'month',
+  Y: 'year'
 }
 
 // Nominal duration of one unit, for ordering the period picker only. Months are the mean
-// Gregorian month; nothing here is used for bar arithmetic.
-const UNIT_MS: Record<string, number> = {
+// Gregorian month, years the mean Gregorian year; nothing here is used for bar arithmetic —
+// every candle boundary (weekly Sunday 17:00 -> Friday 17:00 New York, monthly/yearly from
+// the evening before the first market day) is computed by the server, which also derives
+// any interval it does not store from the nearest one it does. The client never buckets.
+export const UNIT_MS: Record<string, number> = {
   m: 60_000,
   h: 3_600_000,
   D: 86_400_000,
   W: 604_800_000,
-  M: 2_629_800_000
+  M: 2_629_800_000,
+  Y: 31_557_600_000
 }
 
-const INTERVAL_PATTERN = /^(\d+)([mhDWM])$/
+const INTERVAL_PATTERN = /^(\d+)([mhDWMY])$/
 
 export function periodToResolution(period: Period): string {
   const unit = TIMESPAN_UNIT[period.timespan]

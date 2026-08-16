@@ -66,7 +66,8 @@ const FALLBACK: Capabilities = {
     '2W',
     '1M',
     '3M',
-    '12M'
+    '12M',
+    '1Y'
   ],
   features: [],
   limits: {
