@@ -37,7 +37,8 @@ export class WdashboardDatafeed implements Datafeed {
     symbol: SymbolInfo,
     period: Period,
     from: number,
-    to: number
+    to: number,
+    direction: 'older' | 'newer' = 'older'
   ): Promise<KLineData[]> {
     const vendor = symbolVendor(symbol)
     const interval = periodToResolution(period)
@@ -47,7 +48,11 @@ export class WdashboardDatafeed implements Datafeed {
         interval,
         from,
         to,
-        HISTORY_WINDOW_BARS
+        // 'newer' (ChartPane's backward-paging branch) already bounds [from, to] to one
+        // narrow nominal page -- passing a limit here would let the server's tail(limit)
+        // trim the wrong (near) edge on the rare widened-and-dense case; see history.ts.
+        direction === 'older' ? HISTORY_WINDOW_BARS : null,
+        direction
       )
       const newest = bars.at(-1)?.timestamp
       if (newest !== undefined) {

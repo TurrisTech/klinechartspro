@@ -38,7 +38,16 @@ export type DatafeedSubscribeCallback = (data: KLineData) => void
 
 export interface Datafeed {
   searchSymbols (search?: string): Promise<SymbolInfo[]>
-  getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number): Promise<KLineData[]>
+  /**
+   * `direction` hints which end of [from, to] is the anchor a caller cares about landing
+   * bars nearest to, for implementations (like the client's WdashboardDatafeed) whose
+   * upstream range query can only cheaply guarantee one end exactly. 'older' (the default)
+   * anchors on `to` -- ChartPane's normal usage, including a seek reload's own newest edge.
+   * 'newer' anchors on `from` -- ChartPane's backward-paging branch, walking a seek-parked
+   * pane back up towards the present. Safe to ignore for an implementation that always
+   * returns the whole range.
+   */
+  getHistoryKLineData (symbol: SymbolInfo, period: Period, from: number, to: number, direction?: 'older' | 'newer'): Promise<KLineData[]>
   subscribe (symbol: SymbolInfo, period: Period, callback: DatafeedSubscribeCallback): void
   unsubscribe (symbol: SymbolInfo, period: Period): void
 }

@@ -15,12 +15,26 @@
 import type { Chart, Nullable } from 'klinecharts'
 
 import { applyCrosshairAt, clearCrosshair, type CrosshairPoint } from './crosshair'
-import { isTimestampVisible, seekToTimestamp } from './seek'
+import { isTimestampVisible, resolveSeekTarget, seekToTimestamp } from './seek'
 
 export interface SyncPane {
   id: string
   getChart(): Nullable<Chart>
+  // Nominal period length, in ms. Used to classify a seek's direction (lower timeframe ->
+  // higher, or the reverse) against the SOURCE pane's own period -- see resolveSeekTarget
+  // (src/sync/seek.ts).
   getPeriodMs(): number
+  // Reloads this pane's data anchored on `timestamp` instead of "now" -- see
+  // ChartPane.svelte's seekTo. What seekPane calls when the target is outside this pane's
+  // own loaded history, replacing the old scroll-and-page walk (see git history on this
+  // file for that approach and why it fell short at distance). `timestamp`/`fraction` are
+  // where the VIEW lands (resolveSeekTarget's span-centring case computes these as a span's
+  // midpoint, which is not necessarily an instant that exists); `crosshair` is what to mark
+  // once landed -- usually the same instant, but not always, so kept separate rather than
+  // assumed equal. Carried through so the implementation can apply it once its own reload
+  // lands -- resetData() wipes klinecharts' internal crosshair state, so without this the
+  // target pane would jump to the right place but show no crosshair marking it.
+  seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint): void
 }
 
 export interface SyncOptions {
@@ -28,14 +42,6 @@ export interface SyncOptions {
   time: boolean
 }
 
-// Klinecharts pages 500 bars per forward-load touch (ChartPane's own history window,
-// mirrored on the server side by wdashboard-server's default page size). A seek target more
-// than this many pages away is clamped instead of paged toward -- see seekPane below.
-const PAGE_BARS = 500
-const MAX_SEEK_PAGES = 3
-// Comfortably longer than a slow /getbars round trip; if the page never lands (fetch failed,
-// pane disposed mid-retry), this is what stops the retry subscription from living forever.
-const SEEK_RETRY_DEADLINE_MS = 3_000
 // Jump, don't pan: an animated scrollByDistance drives onVisibleRangeChange on every frame,
 // which multiplies into a lot of redundant work (e.g. the client's levels redraw) across
 // every OTHER pane's own debounce. Instantaneous is also the more honest affordance for
@@ -58,7 +64,6 @@ export class SyncBus {
   private dispatchingCrosshair = false
 
   private seekRaf = 0
-  private readonly seekRetryCleanup = new Map<string, () => void>()
 
   register(pane: SyncPane): void {
     this.panes.set(pane.id, pane)
@@ -66,7 +71,6 @@ export class SyncBus {
 
   unregister(id: string): void {
     this.panes.delete(id)
-    this.cancelSeekRetry(id)
     if (this.pendingCrosshair?.sourceId === id) this.pendingCrosshair = null
     // A pane being torn down while it was the crosshair source would otherwise leave every
     // other pane showing a line with no owner left to move or clear it.
@@ -126,8 +130,9 @@ export class SyncBus {
   // --- Click to scroll -------------------------------------------------------------------
 
   // Coalesced to one rAF per animation frame, same as broadcastCrosshair: a rapid run of
-  // calls collapses to the latest target instead of seeking every pane once per call.
-  broadcastSeek(sourceId: string, timestamp: number, fraction: number): void {
+  // calls collapses to the latest target instead of seeking every pane once per call. `point`
+  // (not a bare timestamp) so a reload can restore the crosshair afterwards -- see seekPane.
+  broadcastSeek(sourceId: string, point: CrosshairPoint, fraction: number): void {
     if (!this.options.time) {
       console.debug('[sync] seek skipped: time sync is off')
       return
@@ -135,12 +140,19 @@ export class SyncBus {
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
     this.seekRaf = requestAnimationFrame(() => {
       this.seekRaf = 0
+      // Looked up once per dispatch, not per target: every target in this broadcast is
+      // judged against the SAME source pane and instant. A source that's since unregistered
+      // (torn down mid-rAF) falls back to every target reproducing the click's own on-screen
+      // fraction, exactly as if this cross-timeframe positioning didn't exist.
+      const source = this.panes.get(sourceId)
+      const sourceChart = source?.getChart() ?? null
+      const sourcePeriodMs = source?.getPeriodMs() ?? null
       console.debug('[sync] seek dispatch', { sourceId, targets: [...this.panes.keys()].filter((id) => id !== sourceId) })
       for (const [id, pane] of this.panes) {
         if (id === sourceId) continue
         const chart = pane.getChart()
         if (!chart) continue
-        this.seekPane(chart, pane, timestamp, fraction, 0)
+        this.seekPane(chart, pane, point, fraction, sourceChart, sourcePeriodMs)
       }
     })
   }
@@ -148,9 +160,10 @@ export class SyncBus {
   private seekPane(
     chart: Chart,
     pane: SyncPane,
-    timestamp: number,
+    point: CrosshairPoint,
     fraction: number,
-    attempt: number
+    sourceChart: Nullable<Chart>,
+    sourcePeriodMs: number | null
   ): void {
     const dataList = chart.getDataList()
     if (dataList.length === 0) {
@@ -158,75 +171,54 @@ export class SyncBus {
       return
     }
 
-    // Skips a pane that already shows the target instead of re-centring it on every click.
-    // Re-checked on each paging retry too: a page landing can bring the target into view
-    // without the final scroll ever running.
-    if (isTimestampVisible(chart, timestamp)) {
-      console.debug('[sync] seekPane skipped: target already visible', { pane: pane.id, timestamp })
+    // Cross-timeframe positioning (centre / align-span / anchor-near-left -- see
+    // resolveSeekTarget) needs the source's own chart and period; without them (source
+    // unregistered) this degrades to reproducing the click's own on-screen fraction.
+    const target =
+      sourceChart && sourcePeriodMs !== null
+        ? resolveSeekTarget(chart, sourceChart, point, sourcePeriodMs, pane.getPeriodMs(), fraction)
+        : { timestamp: point.timestamp, fraction, crosshairTimestamp: point.timestamp }
+    // Same price, wherever resolveSeekTarget decided to mark the crosshair -- applyCrosshairAt
+    // already re-derives the on-screen position on THIS pane's own scale from the raw value.
+    // Deliberately NOT target.timestamp: the span-centring case scrolls to a midpoint but the
+    // crosshair still marks the instant that was actually clicked (crosshairTimestamp).
+    const crosshairTarget: CrosshairPoint = { timestamp: target.crosshairTimestamp, value: point.value }
+
+    // Skips the SCROLL for a pane that already shows the resolved target instead of
+    // re-centring it on every click -- but the crosshair still needs to land there: the
+    // ordinary hover-driven sync (broadcastCrosshair, from the mousemove that preceded this
+    // click) last placed this pane's crosshair at the RAW click point, which resolveSeekTarget
+    // may have deliberately moved away from (centred/aligned). Skipping this would leave a
+    // stale, wrong crosshair sitting here until the next unrelated mouse move happened to
+    // paper over it -- not something to skip.
+    if (isTimestampVisible(chart, target.timestamp)) {
+      console.debug('[sync] seekPane: target already visible, re-applying crosshair only', { pane: pane.id, target })
+      applyCrosshairAt(chart, crosshairTarget)
       return
     }
 
     const oldest = dataList[0].timestamp
-    const periodMs = pane.getPeriodMs()
+    const newest = dataList[dataList.length - 1].timestamp
 
-    // Already within (or newer than) this pane's loaded history -- a direct seek reaches it.
-    // (Seeking to something NEWER than what's loaded isn't specially handled: klinecharts
-    // never backward-pages here, live streaming keeps every pane current instead, so a click
-    // timestamp is realistically always at or before "now".)
-    if (periodMs <= 0 || timestamp >= oldest) {
-      console.debug('[sync] seekPane: direct seek (within loaded history)', { pane: pane.id, timestamp, fraction })
-      seekToTimestamp(chart, timestamp, fraction, SEEK_ANIMATION_MS)
+    // Inside this pane's own loaded history -- a direct seek reaches it exactly, no fetch.
+    if (target.timestamp >= oldest && target.timestamp <= newest) {
+      console.debug('[sync] seekPane: direct seek (within loaded history)', { pane: pane.id, target })
+      seekToTimestamp(chart, target.timestamp, target.fraction, SEEK_ANIMATION_MS)
+      applyCrosshairAt(chart, crosshairTarget)
       return
     }
 
-    const barsAway = (oldest - timestamp) / periodMs
-    if (barsAway > MAX_SEEK_PAGES * PAGE_BARS || attempt >= MAX_SEEK_PAGES) {
-      // Too far, or the retry budget is spent -- land on the oldest bar this pane actually
-      // has rather than triggering an unbounded string of forward-page fetches.
-      console.debug('[sync] seekPane: target too far, clamping to oldest loaded bar', { pane: pane.id, oldest, barsAway, attempt })
-      seekToTimestamp(chart, oldest, fraction, SEEK_ANIMATION_MS)
-      return
-    }
-
-    // Scroll toward the (still out of reach) target. convertToPixel extrapolates past the
-    // loaded range using this chart's own period, so the distance genuinely points at the
-    // older data -- which touches the left (oldest) edge and triggers klinecharts' own
-    // forward-page fetch. Retry once that page lands.
-    console.debug('[sync] seekPane: seeking toward target, scheduling paging retry', { pane: pane.id, timestamp, attempt })
-    seekToTimestamp(chart, timestamp, fraction, SEEK_ANIMATION_MS)
-    this.scheduleSeekRetry(chart, pane, timestamp, fraction, attempt)
-  }
-
-  private scheduleSeekRetry(
-    chart: Chart,
-    pane: SyncPane,
-    timestamp: number,
-    fraction: number,
-    attempt: number
-  ): void {
-    this.cancelSeekRetry(pane.id)
-    const onRangeChange = () => {
-      this.cancelSeekRetry(pane.id)
-      this.seekPane(chart, pane, timestamp, fraction, attempt + 1)
-    }
-    chart.subscribeAction('onVisibleRangeChange', onRangeChange)
-    const timer = setTimeout(() => this.cancelSeekRetry(pane.id), SEEK_RETRY_DEADLINE_MS)
-    this.seekRetryCleanup.set(pane.id, () => {
-      chart.unsubscribeAction('onVisibleRangeChange', onRangeChange)
-      clearTimeout(timer)
-    })
-  }
-
-  private cancelSeekRetry(paneId: string): void {
-    this.seekRetryCleanup.get(paneId)?.()
-    this.seekRetryCleanup.delete(paneId)
+    // Outside the loaded range in either direction -- reload this pane's data anchored on
+    // the target instead of trying to scroll/page there. seekToTimestamp for the actual
+    // on-screen placement, and re-applying the crosshair, both happen inside that reload once
+    // the target is loaded (resetData() wipes any crosshair this pane had).
+    console.debug('[sync] seekPane: reloading pane at target', { pane: pane.id, target })
+    pane.seekTo(target.timestamp, target.fraction, crosshairTarget)
   }
 
   dispose(): void {
     if (this.crosshairRaf !== 0) cancelAnimationFrame(this.crosshairRaf)
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
-    for (const cleanup of this.seekRetryCleanup.values()) cleanup()
-    this.seekRetryCleanup.clear()
     this.panes.clear()
   }
 }

@@ -10,11 +10,11 @@
     type FormatDateParams,
     type Indicator,
     type IndicatorTooltipData,
+    type KLineData,
     type Nullable,
     type OverlayCreate,
     type OverlayMode,
     type Period as ChartPeriod,
-    type Point,
     type Styles,
     type SymbolInfo as ChartSymbolInfo,
     type TooltipFeatureStyle
@@ -27,7 +27,8 @@
   import { clone, setByPath } from './utils/object'
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
-  import { crosshairPoint } from './sync/crosshair'
+  import { applyCrosshairAt, crosshairPoint, type CrosshairPoint } from './sync/crosshair'
+  import { seekToTimestamp } from './sync/seek'
 
   type IndicatorFeatureClick = {
     paneId: string
@@ -123,6 +124,20 @@
     const from = to - count * periodDurationMs(currentPeriod)
     return [from, to] as const
   }
+
+  // The bracketing window a seek reload (see seekTo below) hands the datafeed: nominal reach
+  // worth `count` bars on EACH side of `target`, unlike adjustFromTo's "ending at" window --
+  // the target must land inside the loaded data regardless of what on-screen fraction the
+  // source pane clicked at (src/sync/bus.ts's seekPane picks whichever pane this fires in).
+  const SEEK_WINDOW_BARS = 500
+  function seekWindow(currentPeriod: Period, target: number, count: number) {
+    const span = count * periodDurationMs(currentPeriod)
+    return [target - span, target + span] as const
+  }
+
+  // One page of newer-in-time bars once a seek has parked this pane's data mid-history --
+  // see chartDataLoader.getBars' 'backward' branch. Matches adjustFromTo's own page size.
+  const BACKWARD_PAGE_BARS = 500
 
   // Daily and coarser candles are labelled by their market SESSION date, not the wall-clock
   // date of their open: an FX daily candle opens 17:00 New York the evening before its
@@ -222,15 +237,106 @@
     }
   }
 
+  // Set by seekTo below, consumed the moment chartDataLoader.getBars next sees `type ===
+  // 'init'`. Distinguishes a click-driven reload from every other init (initial mount,
+  // symbol/period change): only a seek anchors on ITS OWN target instead of "now", and only
+  // a seek opens backward paging (see the 'backward' branch and the init branch's
+  // `more.backward`).
+  let pendingSeek: { timestamp: number; fraction: number; crosshair: CrosshairPoint } | null = null
+  // Bumped on every 'init' load this loader starts, so a load whose result lands after a
+  // NEWER 'init' has already started (two seeks fired in quick succession, or a seek racing
+  // a symbol/period change) can tell it was superseded and drop its result instead of
+  // clobbering the chart with stale data. klinecharts' own single-flight `_loading` guard
+  // does not cover this: resetData() unconditionally clears that flag before starting the
+  // new load, leaving the old load's promise free to still resolve later.
+  let loadGeneration = 0
+
+  // Requested by the sync bus (src/sync/bus.ts) when a click lands outside this pane's own
+  // loaded data. Reloads the dataset anchored on `timestamp` instead of scrolling/paging
+  // toward it, so the target is reached in one round trip at any distance -- see
+  // chartDataLoader's 'init' branch, which reads `pendingSeek` the moment klinecharts asks
+  // for the reset dataset, and re-applies `crosshair` once that reload lands. `crosshair` is
+  // not necessarily at `timestamp`: resolveSeekTarget's span-centring case reloads/scrolls to
+  // a span's midpoint but still marks the instant that was actually clicked.
+  function seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint): void {
+    if (!widget) return
+    pendingSeek = { timestamp, fraction, crosshair }
+    widget.resetData()
+  }
+
   const chartDataLoader: DataLoader = {
     async getBars({ type, timestamp, symbol: chartSymbol, period: chartPeriod, callback }) {
+      const currentPeriod = fromChartPeriod(chartPeriod)
+
       if (type === 'backward') {
-        callback([], { backward: false })
+        // The newer-in-time page after a seek landed mid-history (see the 'init' branch
+        // below). A plain (non-seek) load never opens this direction, so klinecharts never
+        // asks for it outside a seek.
+        if (timestamp === null) {
+          callback([], { backward: false })
+          return
+        }
+        pane.loading = true
+        const from = timestamp + 1
+        const to = timestamp + BACKWARD_PAGE_BARS * periodDurationMs(currentPeriod)
+        try {
+          const data = await pane.datafeed.getHistoryKLineData(
+            chartSymbol as SymbolInfo,
+            currentPeriod,
+            from,
+            to,
+            'newer'
+          )
+          // Belt-and-braces against the server ever answering with a bar at or before the
+          // seam: _addData's 'backward' branch is a plain concat, so anything <= timestamp
+          // here would duplicate or misorder the bar the chart already holds at that edge.
+          const fresh = data.filter((bar) => bar.timestamp > timestamp)
+          callback(fresh, { backward: fresh.length > 0 })
+        } finally {
+          pane.loading = false
+        }
         return
       }
+
+      if (type === 'init') {
+        const generation = ++loadGeneration
+        const seek = pendingSeek
+        pendingSeek = null
+        pane.loading = true
+        const [from, to] = seek
+          ? seekWindow(currentPeriod, seek.timestamp, SEEK_WINDOW_BARS)
+          : adjustFromTo(currentPeriod, Date.now(), 500)
+        try {
+          const data = await pane.datafeed.getHistoryKLineData(
+            chartSymbol as SymbolInfo,
+            currentPeriod,
+            from,
+            to
+          )
+          if (generation !== loadGeneration) {
+            console.debug('[sync] seek reload dropped: superseded by a newer load', { pane: pane.id })
+            return
+          }
+          // A plain init has nothing newer to page toward (backward: false, as before); only
+          // a seek reload opens that direction, closed again by the 'backward' branch above
+          // once it runs dry.
+          callback(data, { forward: data.length > 0, backward: Boolean(seek) })
+          if (seek && data.length > 0 && widget) {
+            seekToTimestamp(widget, seek.timestamp, seek.fraction, 0)
+            // resetData() cleared this pane's crosshair along with its data (see
+            // _clearData in klinecharts) -- without this, the pane lands in the right
+            // place but shows no crosshair marking where every other pane just aligned to.
+            applyCrosshairAt(widget, seek.crosshair)
+          }
+        } finally {
+          pane.loading = false
+        }
+        return
+      }
+
+      // type === 'forward'
       pane.loading = true
-      const currentPeriod = fromChartPeriod(chartPeriod)
-      const toTimestamp = type === 'forward' && timestamp ? timestamp - 1 : Date.now()
+      const toTimestamp = timestamp ? timestamp - 1 : Date.now()
       const [from, to] = adjustFromTo(currentPeriod, toTimestamp, 500)
       try {
         const data = await pane.datafeed.getHistoryKLineData(
@@ -245,7 +351,22 @@
       }
     },
     subscribeBar({ symbol: chartSymbol, period: chartPeriod, callback }) {
-      pane.datafeed.subscribe(chartSymbol as SymbolInfo, fromChartPeriod(chartPeriod), callback)
+      const currentPeriod = fromChartPeriod(chartPeriod)
+      const periodMs = periodDurationMs(currentPeriod)
+      pane.datafeed.subscribe(chartSymbol as SymbolInfo, currentPeriod, (bar: KLineData) => {
+        // Once a seek has parked this pane's data in the past, the live stream must not push
+        // a bar at "now" onto the tail -- _addData's single-bar path accepts anything newer
+        // than the last loaded bar unconditionally, which would strand one candle far to the
+        // right with a dead zone in between. Self-healing: once backward paging (the
+        // 'backward' branch above) walks the dataset back up to the present, this stops
+        // dropping anything on its own -- there is no mode flag to clear.
+        const last = widget?.getDataList().at(-1)?.timestamp
+        if (last !== undefined && bar.timestamp > last + periodMs) {
+          console.debug('[sync] live bar dropped: pane is parked in history', { pane: pane.id })
+          return
+        }
+        callback(bar)
+      })
     },
     unsubscribeBar({ symbol: chartSymbol, period: chartPeriod }) {
       pane.datafeed.unsubscribe(chartSymbol as SymbolInfo, fromChartPeriod(chartPeriod))
@@ -495,15 +616,19 @@
         console.debug('[sync] click ignored: candle_pane has no measured width yet', { pane: pane.id })
         return
       }
-      const x = event.clientX - candleMain.getBoundingClientRect().left
-      const points = chart.convertFromPixel([{ x }], { paneId: 'candle_pane' }) as Array<Partial<Point>>
-      const timestamp = points[0]?.timestamp
-      if (typeof timestamp !== 'number') {
+      const rect = candleMain.getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+      // Same resolver the hover-driven crosshair sync uses (onCrosshairChange above), so a
+      // click carries a price too -- reused to re-show a crosshair on any pane this seek
+      // reloads, since reloading wipes klinecharts' own crosshair state (see bus.seekPane).
+      const point = crosshairPoint(chart, { x, y, paneId: 'candle_pane' })
+      if (!point) {
         console.debug('[sync] click ignored: could not resolve a date for this position', { pane: pane.id, x })
         return
       }
-      console.debug('[sync] broadcasting seek', { pane: pane.id, timestamp, fraction: x / main.width })
-      bus.broadcastSeek(pane.id, timestamp, x / main.width)
+      console.debug('[sync] broadcasting seek', { pane: pane.id, point, fraction: x / main.width })
+      bus.broadcastSeek(pane.id, point, x / main.width)
     }
     candleMain?.addEventListener('pointerdown', onCandleMainPointerDown)
     candleMain?.addEventListener('click', onCandleMainClick)
@@ -519,7 +644,8 @@
     bus.register({
       id: pane.id,
       getChart: () => widget,
-      getPeriodMs: () => periodDurationMs(pane.period)
+      getPeriodMs: () => periodDurationMs(pane.period),
+      seekTo
     })
 
     widget.setStyles(theme)
