@@ -14,12 +14,10 @@
 
 import type { Period } from '../types'
 
-// Nominal duration of one Period unit in milliseconds. Shared by ChartPane's own history
-// window sizing (adjustFromTo) and the sync bus's bounded seek-paging (src/sync/bus.ts) --
-// both only need this as a bound, never as exact bar arithmetic, which is why months/years
-// use a mean-calendar approximation rather than the market-calendar-aware canonical duration.
-// `src/` never imports from `client/`, so this cannot reuse client/periods.ts's own twin,
-// `resolutionDurationMs`.
+// Nominal duration of one Period unit in milliseconds, used by ChartPane's history window
+// sizing (adjustFromTo) and the sync bus's bounded seek-paging (src/sync/bus.ts) as an
+// approximate bound, not exact bar arithmetic -- months and years use a mean-calendar length.
+// Defined locally because `src/` cannot import from `client/`.
 const UNIT_MS: Record<string, number> = {
   minute: 60 * 1000,
   hour: 60 * 60 * 1000,

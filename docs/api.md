@@ -62,7 +62,7 @@ new KLineChartPro(
 + `syncCrosshair` / `syncTime` 两个联动开关（工具栏的 Sync 弹出面板）的初始状态，均默认 `true`
 + `onPaneLayoutChange` 布局预设改变时触发，携带当前可见的每个子图的标的/周期/指标——如需让多图布局在刷新后保留，持久化的就是这份数据
 + `onActivePaneChange` 激活子图改变时触发
-+ `onPanesChange` 当前存活的子图集合发生变化时触发——某个子图的图表刚创建或刚销毁（包括每一次布局的增减）。这是轮询 `getChart()` 的最终替代方案；任何依赖单个子图的外部逻辑（如价格关键位叠加层）都应完全依据此回调的参数重新绑定，而不是自行比对差异
++ `onPanesChange` 当前存活的子图集合发生变化时触发——某个子图的图表刚创建或刚销毁（包括每一次布局的增减）。任何依赖单个子图的外部逻辑（如价格关键位叠加层）都应完全依据此回调的参数重新绑定
 + `onSymbolChange` / `onPeriodChange` 某个具体子图的标的/周期改变时触发，不一定是当前激活的子图（例如通过 `ChartProPane.setSymbol` 触发）
 + `onSyncChange` 任一联动开关改变时触发
 

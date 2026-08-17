@@ -5,19 +5,17 @@ import { openSettingsPanel, type SettingsPanelHandle } from './settings'
 import { loadLayerConfig, saveLayerConfig } from './store'
 import type { ChartLayer, LayerContext } from './types'
 
-// Generic MULTI-PANE lifecycle for a ChartLayer (types.ts): one shared toolbar button that
+// Generic multi-pane lifecycle for a ChartLayer (types.ts): one shared toolbar button that
 // opens a settings panel (enable/disable is that panel's first row, not a separate click
 // target — see settings.ts), applied independently to every currently-live pane of the wall
 // (src/state/wall.svelte.ts) — coverage-gated visibility, debounced redraw on pan/zoom/
 // symbol/period change, and a data cache so a style-only config change restyles without
-// refetching, all scoped per pane. One call per layer — client/levels/layer.ts is mounted
-// with `createLayerController(levelsLayer)`, and a second server-derived layer is mounted
-// the same way.
+// refetching, all scoped per pane.
 //
-// Split into `attach`/`sync` rather than one `mountLayer(chartPro, layer)` call: `sync` has
-// to exist BEFORE a `KLineChartPro` does, so it can be supplied as that constructor's own
-// `onPanesChange` option (client/index.ts) — the wall reports which panes are live from the
-// moment the first one mounts, which is earlier than the constructor call returns.
+// `attach` and `sync` are separate calls because `sync` must exist before a `KLineChartPro`
+// does, so it can be supplied as that constructor's own `onPanesChange` option
+// (client/index.ts) — the wall reports which panes are live from the moment the first one
+// mounts, earlier than the constructor call returns.
 
 const DEFAULT_DEBOUNCE_MS = 400
 
@@ -33,7 +31,7 @@ const PRICE_WINDOW_FRACTION = 0.06
 // `{#if drawingBarVisible}`. Re-parent into whichever instance of the slot currently exists,
 // on every relevant DOM change, rather than attaching once: otherwise an attached control
 // would vanish for good the first time someone hides the drawing tools instead of merely
-// hiding with it. Both slots stay wall-global, not per-pane — unaffected by the wall feature.
+// hiding with it. Both slots stay wall-global, not per-pane.
 export function attachToSlot(
   chartPro: KLineChartPro,
   slotName: 'toolbar' | 'rail-footer',
@@ -54,6 +52,7 @@ export function attachToSlot(
   }
   tryAttach()
 }
+
 
 // The price band and time window every price-anchored layer fetches against, scoped to
 // what is actually on screen rather than every bar paginated in so far.
@@ -111,8 +110,8 @@ export function createLayerController<TDatum, TConfig extends object>(
   const wired = new Map<string, WiredPane<TDatum>>()
 
   // One button for both "is this layer on" (the is-on accent, kept live even while the
-  // panel is closed) and "configure it" (click opens the panel below) — the enable/disable
-  // switch that used to be this button's own click handler is now the panel's first row.
+  // panel is closed) and "configure it" (click opens the panel below); the enable/disable
+  // switch is the panel's first row, not this button's own click handler.
   const layerButton = document.createElement('button')
   layerButton.type = 'button'
   layerButton.className = 'kc-button wd-layer-toggle'

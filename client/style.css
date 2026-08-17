@@ -2,13 +2,12 @@
   box-sizing: border-box;
 }
 
-/* #app IS the library's own root -- KLineChartPro.ts adds the `klinecharts-pro` class to
+/* #app is the library's own root -- KLineChartPro.ts adds the `klinecharts-pro` class to
    the exact element it was constructed with (client/index.ts passes `container` straight
-   through). src/app.css's `.klinecharts-pro { height: 80vh }` is deliberately a fallback for
-   consumers who never size their container; here the id selector's higher specificity
-   already wins over that class rule, so `#app`'s `height: 100%` is what actually governs the
-   wall's height. Needed more than ever with a multi-pane grid, where 80vh split across 12
-   panes leaves each row unusably short -- don't "fix" this by removing it. */
+   through). The id selector's higher specificity wins over src/app.css's
+   `.klinecharts-pro { height: 80vh }` fallback, so `#app`'s `height: 100%` is what actually
+   governs the wall's height -- at a 12-pane grid, 80vh split across panes would leave each
+   row unusably short. */
 html,
 body,
 #app {
@@ -23,13 +22,12 @@ body {
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-/* live/version/logout used to float in their own fixed corner widget, overlapping the
-   canvas and the price axis. They now mount into the library's own slots
-   (src/types.ts ChartPro.getSlot) — the top-rail toolbar for Levels, the bottom of the
-   left drawing rail for the rest — so this file only styles their content, not their
-   position; `.kc-toolbar-slot` / `.kc-rail-footer` (src/app.css) own the layout. Custom
-   properties like --primary/--muted-foreground resolve here because these elements are
-   DOM children of `.klinecharts-pro.dark`, which is where src/app.css defines them. */
+/* live/version/logout mount into the library's own slots (src/types.ts ChartPro.getSlot) --
+   the top-rail toolbar for Levels, the bottom of the left drawing rail for the rest -- so this
+   file only styles their content, not their position; `.kc-toolbar-slot` / `.kc-rail-footer`
+   (src/app.css) own the layout. Custom properties like --primary/--muted-foreground resolve
+   here because these elements are DOM children of `.klinecharts-pro.dark`, which is where
+   src/app.css defines them. */
 
 .wd-rail-footer-content {
   display: flex;

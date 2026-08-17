@@ -14,11 +14,9 @@
 
 import type { Chart, Coordinate } from 'klinecharts'
 
-// Whether `timestamp` currently falls within the main pane's own visible width -- the gate
-// for the sync bus's "scroll only when off screen" rule (src/sync/bus.ts): a click landing on
-// a date every other pane can already see should leave those viewports alone rather than
-// re-centring them on every click. Converts through this chart's OWN scale, exactly like
-// seekToTimestamp below, so it agrees with what that function would actually do.
+// Whether `timestamp` currently falls within the main pane's own visible width. The sync bus
+// (src/sync/bus.ts) uses this to skip re-centring a pane that already shows the click target.
+// Converts through this chart's own scale, matching seekToTimestamp below, so the two agree.
 export function isTimestampVisible(chart: Chart, timestamp: number): boolean {
   const main = chart.getSize('candle_pane', 'main')
   if (!main) return false
@@ -27,12 +25,9 @@ export function isTimestampVisible(chart: Chart, timestamp: number): boolean {
 }
 
 // Scrolls `chart` so `timestamp` lands at the given horizontal FRACTION of the main pane's
-// width (0 = left edge, 1 = right edge, 0.5 = centre) -- not `chart.scrollToTimestamp`, which
-// always right-aligns the target bar (it is built on scrollToDataIndex, whose distance
-// calculation drives the target to the right edge by construction). `scrollByDistance` moves
-// the viewport by exactly the given number of pixels, so the source pane's own on-screen
-// fraction can be reproduced on every other pane regardless of how many bars each has loaded
-// or what interval it's on.
+// width (0 = left edge, 1 = right edge, 0.5 = centre), via `scrollByDistance` -- moving the
+// viewport by an exact pixel distance reproduces the source pane's on-screen fraction on every
+// other pane, regardless of how many bars each has loaded or what interval it's on.
 export function seekToTimestamp(
   chart: Chart,
   timestamp: number,

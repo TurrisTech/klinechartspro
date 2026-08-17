@@ -115,8 +115,8 @@
   // The history window handed to the datafeed for one page of `count` bars ending at
   // `toTimestamp`. Only a bound: the datafeed/server assigns bars to candles and clips the
   // range itself, so nothing here aligns `to` to a calendar edge -- FX candles do not open at
-  // local midnight (they open 17:00 America/New_York; a week opens Sunday 17:00), and
-  // flooring dropped a bar at every page boundary for viewers east of the market. `from` is a
+  // local midnight (they open 17:00 America/New_York; a week opens Sunday 17:00), and flooring
+  // to one would drop a bar at every page boundary for viewers east of the market. `from` is a
   // generous nominal reach; the server keeps the last `count`.
   function adjustFromTo(currentPeriod: Period, toTimestamp: number, count: number) {
     const to = toTimestamp
@@ -331,11 +331,10 @@
       visible: drawing.visible,
       lock: drawing.lock,
       mode: drawing.mode,
-      // A click that selects or starts dragging an EXISTING drawing must not also seek. The
-      // isDrawing() guard in the click handler below covers PLACING a new drawing (its
-      // currentStep stays !== -1 through the final point); this flag covers interacting with
-      // one that's already finished -- see `overlayInteracted`'s own comment for why setting a
-      // flag here, read by our own later-firing native click listener, is what's race-free.
+      // A click that selects or starts dragging an existing drawing must not also seek. The
+      // `currentStep !== -1` guard in the click handler below covers placing a new drawing;
+      // this flag covers interacting with one that's already finished -- see
+      // `overlayInteracted`'s own comment for the ordering this relies on.
       onClick: () => { overlayInteracted = true },
       onPressedMoveStart: () => { overlayInteracted = true }
     } as OverlayCreate)
@@ -455,25 +454,21 @@
     }
     widget.subscribeAction('onCrosshairChange', onCrosshairChange)
 
-    // Click-to-scroll source. Deliberately a native DOM click on candle_pane's own main
-    // widget, not klinecharts' `onCandleBarClick` action -- that action only fires when a
-    // candle FIGURE is actually under the pointer, which at any real zoom level is a target a
-    // couple of pixels wide at best. A click on the gap between candles, or past the newest/
-    // oldest loaded bar, must translate to a date too. `convertFromPixel` extrapolates
-    // linearly outside the loaded range using this chart's own period (the exact mechanism
-    // seekToTimestamp's reverse direction relies on), so any x inside the pane -- not just one
-    // over a bar -- resolves to a real timestamp.
+    // Click-to-scroll source: a native DOM click on candle_pane's own main widget. Any
+    // position in the pane -- not just a candle figure -- resolves to a date via
+    // `convertFromPixel`, which extrapolates linearly outside the loaded range using this
+    // chart's own period.
     //
-    // Two guards a bar-scoped click never needed:
-    // - Drag distance: `onCandleBarClick` never fired past klinecharts' own 5px
-    //   (`ManhattanDistance.CancelClick`) pointer-move threshold; a native 'click' has no such
-    //   built-in cancellation (it fires on any mousedown+mouseup pair regardless of the pan in
-    //   between), so it's reproduced here against the same threshold.
-    // - Ordering vs. overlay clicks: klinecharts resolves the WHOLE click (candle hit-test,
-    //   then every overlay's hit-test) synchronously inside its own mouseup handling, which
-    //   always finishes before the browser dispatches the separate native 'click' event this
-    //   listens for -- so `overlayInteracted` (set by createOverlay()'s onClick/
-    //   onPressedMoveStart above) is already current by the time this runs.
+    // Three guards:
+    // - A pan-drag ending on the same element still fires a native 'click', so mousedown/click
+    //   positions are compared against a 5px Manhattan-distance threshold, matching
+    //   klinecharts' own `ManhattanDistance.CancelClick`.
+    // - `overlayInteracted` (set by createOverlay()'s onClick/onPressedMoveStart above) rules
+    //   out a click that selected or started dragging an existing drawing. klinecharts
+    //   resolves the whole click -- including every overlay's hit-test -- synchronously inside
+    //   its own mouseup handling, which always finishes before this native 'click' event
+    //   fires, so the flag is already current by the time this runs.
+    // - `currentStep !== -1` rules out a click that is placing a new drawing's point.
     const candleMain = widget.getDom('candle_pane', 'main')
     let clickDownX = 0
     let clickDownY = 0

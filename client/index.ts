@@ -51,8 +51,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
   container.innerHTML = ''
 
   // A `?symbol=` link is a deliberate deep link to one instrument -- it wins outright over
-  // any saved wall, the same way it already overrode the single chart before this feature
-  // existed, rather than silently landing on some other pane's saved symbol.
+  // any saved wall, rather than silently landing on some other pane's saved symbol.
   const requestedSymbol = params.get('symbol')
 
   // The initial instrument's configuration, this account's starred timeframes, and any saved
@@ -66,9 +65,8 @@ async function mountChart(container: HTMLElement): Promise<void> {
   ])
   const hydrated = persistedLayout ? await hydrateLayout(persistedLayout) : null
 
-  // Every chart layer (today: just Levels; a second server-derived layer mounts the same
-  // way) is built BEFORE the chart exists: its `sync` becomes the wall's onPanesChange, and
-  // that has to be a constructor argument rather than something wired on afterward.
+  // Every chart layer (today: just Levels) is built before the chart exists: its `sync`
+  // becomes the wall's onPanesChange, which is a constructor argument.
   const levelsController = createLayerController(levelsLayer)
 
   const periods = availablePeriods()
@@ -101,9 +99,9 @@ async function mountChart(container: HTMLElement): Promise<void> {
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
-    // A factory, not a shared instance: WdashboardDatafeed keys its `listeners`/`latest`
-    // watermark maps by `vendor symbol interval`, so two panes on the same symbol+interval
-    // sharing one instance would silently clobber each other's stream subscription.
+    // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
+    // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
+    // symbol+interval sharing one would clobber each other's stream subscription.
     datafeed: () => new WdashboardDatafeed(),
     ...(hydrated
       ? { paneLayout: hydrated.preset, panes: hydrated.panes.map(toPaneOptions) }
@@ -132,9 +130,8 @@ async function mountChart(container: HTMLElement): Promise<void> {
 // Populates the two slots the library exposes (src/types.ts ChartPro.getSlot): the top-rail
 // toolbar gets each mounted chart layer's toggle (today just Levels), the bottom of the left
 // drawing rail gets the stream-liveness dot, server version, and (when logged in) a sign-out
-// control. The rail-footer trio answers questions the chart itself cannot — a chart with a
-// dead socket looks exactly like a quiet market — which is why they used to float over the
-// canvas in their own corner widget; they now live in the chrome instead.
+// control. The rail-footer trio lives in the chrome because it answers questions the chart
+// itself cannot — a chart with a dead socket looks exactly like a quiet market.
 function mountChartExtras(
   chartPro: KLineChartPro,
   levelsController: ReturnType<typeof createLayerController>

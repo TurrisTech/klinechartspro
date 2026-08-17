@@ -30,7 +30,7 @@ export interface SyncOptions {
 
 // Klinecharts pages 500 bars per forward-load touch (ChartPane's own history window,
 // mirrored on the server side by wdashboard-server's default page size). A seek target more
-// than this many pages away is deliberately clamped rather than chased -- see seekPane below.
+// than this many pages away is clamped instead of paged toward -- see seekPane below.
 const PAGE_BARS = 500
 const MAX_SEEK_PAGES = 3
 // Comfortably longer than a slow /getbars round trip; if the page never lands (fetch failed,
@@ -52,10 +52,9 @@ export class SyncBus {
 
   private crosshairRaf = 0
   private pendingCrosshair: { sourceId: string; point: CrosshairPoint } | null = null
-  // Re-entrancy guard: applyCrosshairAt/clearCrosshair on a target never re-fires that
-  // target's own onCrosshairChange subscribers (klinecharts dispatches with
-  // notExecuteAction: true), so this can never actually be triggered today -- kept as cheap
-  // insurance for the day another action (onScroll, say) is wired through this bus too.
+  // Guards against re-entrant dispatch: applyCrosshairAt/clearCrosshair on a target never
+  // re-fires that target's own onCrosshairChange subscribers (klinecharts dispatches with
+  // notExecuteAction: true).
   private dispatchingCrosshair = false
 
   private seekRaf = 0
@@ -126,9 +125,8 @@ export class SyncBus {
 
   // --- Click to scroll -------------------------------------------------------------------
 
-  // Coalesced to one rAF per animation frame, same rationale as broadcastCrosshair -- a rapid
-  // run of calls (there isn't one in practice today, one click is one call) collapses to the
-  // latest target rather than seeking every pane once per call.
+  // Coalesced to one rAF per animation frame, same as broadcastCrosshair: a rapid run of
+  // calls collapses to the latest target instead of seeking every pane once per call.
   broadcastSeek(sourceId: string, timestamp: number, fraction: number): void {
     if (!this.options.time) {
       console.debug('[sync] seek skipped: time sync is off')
@@ -160,9 +158,9 @@ export class SyncBus {
       return
     }
 
-    // Already on screen -- leave this pane's viewport alone rather than re-centring it on
-    // every click. Re-checked on each paging retry below too: a page landing can bring the
-    // target into view without the final scroll ever needing to run.
+    // Skips a pane that already shows the target instead of re-centring it on every click.
+    // Re-checked on each paging retry too: a page landing can bring the target into view
+    // without the final scroll ever running.
     if (isTimestampVisible(chart, timestamp)) {
       console.debug('[sync] seekPane skipped: target already visible', { pane: pane.id, timestamp })
       return

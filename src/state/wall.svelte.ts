@@ -31,8 +31,7 @@ export interface PaneApi {
   chart: Chart
   // No resize() -- klinecharts installs its own ResizeObserver on the container passed to
   // init() and resizes itself whenever that element's size changes (window resize, a CSS
-  // Grid layout change, the drawing rail toggling, fullscreen). Nothing here needs to drive
-  // it manually; see the write-up in the plan for the verification.
+  // Grid layout change, the drawing rail toggling, fullscreen).
   changeIndicator(name: string, main: boolean, added: boolean): void
   applyYAxisSettings(chartPaneId?: string): void
   getStyles(): Styles
@@ -180,8 +179,7 @@ export class Wall {
 
   // Always a real pane -- `activeId` is clamped into range on every layout change (see
   // setLayout below), so the `.find` miss this falls back on should be unreachable in
-  // practice. The fallback exists so every call site in the shell can treat `wall.active` as
-  // non-optional rather than threading `?.` through every dialog and toolbar control.
+  // practice. Every call site in the shell treats `wall.active` as non-optional.
   get active(): PaneState {
     return this.panes.find((pane) => pane.id === this.activeId) ?? this.panes[0]
   }

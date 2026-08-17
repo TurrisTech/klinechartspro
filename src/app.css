@@ -23,8 +23,8 @@
 	--radius-md: calc(var(--radius) * 0.8);
 	--radius-lg: var(--radius);
 	--radius: 0.625rem;
-	/* The active-pane ring on a multi-chart wall. A real accent color, not --primary/--border
-	   (both near-greyscale) -- the active pane needs to read as "selected", not just "framed". */
+	/* The active-pane ring color on a multi-chart wall -- a distinct accent so the active
+	   pane reads as selected. */
 	--kc-active-pane: oklch(0.62 0.19 255);
 }
 
@@ -853,10 +853,9 @@
 	flex: 1;
 }
 
-/* The wall: one CSS Grid replacing the single .klinecharts-pro-widget. Its
-   grid-template-areas/-columns/-rows are set inline from the active layout preset
-   (src/config/layouts.ts); each .klinecharts-pro-pane's own `grid-area` inline style is that
-   pane's token ('p1'..'p12'). */
+/* The wall: one CSS Grid holding every pane. Its grid-template-areas/-columns/-rows are set
+   inline from the active layout preset (src/config/layouts.ts); each .klinecharts-pro-pane's
+   own `grid-area` inline style is that pane's token ('p1'..'p12'). */
 .klinecharts-pro-grid {
 	display: grid;
 	min-width: 0;
@@ -894,7 +893,7 @@
 	box-shadow: inset 0 0 0 2px var(--kc-active-pane);
 }
 
-/* A single-pane wall has nothing to disambiguate -- pixel-identical to the pre-wall shell. */
+/* A single-pane wall has nothing to disambiguate. */
 .klinecharts-pro-grid[data-pane-count='1'] .klinecharts-pro-pane::after {
 	display: none;
 }

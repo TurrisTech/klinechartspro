@@ -56,9 +56,9 @@ function isPersistedPane(value: unknown): value is PersistedPane {
   return true
 }
 
-// Deliberately tolerant, not a strict schema check: an older or newer client's document
-// (extra keys, a bumped `version`) should degrade to "no persisted layout" rather than throw,
-// since the alternative is a client that can never boot again until the field is cleared.
+// Tolerant: an older or newer client's document (extra keys, a bumped `version`) degrades to
+// "no persisted layout" instead of throwing, so a schema change can't leave a client stuck
+// unable to boot until the field is cleared.
 function isPersistedLayout(value: unknown): value is PersistedLayout {
   if (!value || typeof value !== 'object') return false
   const layout = value as Record<string, unknown>

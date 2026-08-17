@@ -76,9 +76,8 @@ compatible: omitting every option below still yields the original single chart.
   reload.
 + `onActivePaneChange` Fired when the active pane changes.
 + `onPanesChange` Fired whenever the LIVE pane set changes -- a pane's chart was just created
-  or just destroyed (including every layout grow/shrink). The definitive replacement for
-  polling `getChart()`; resync any per-pane external behaviour (e.g. price-level overlays)
-  entirely from this callback's argument.
+  or just destroyed (including every layout grow/shrink). Resync any per-pane external
+  behaviour (e.g. price-level overlays) entirely from this callback's argument.
 + `onSymbolChange` / `onPeriodChange` Fired when a specific pane's symbol/period changes,
   whichever pane it was (not necessarily the active one, e.g. via `ChartProPane.setSymbol`).
 + `onSyncChange` Fired when either sync toggle changes.

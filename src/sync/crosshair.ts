@@ -16,13 +16,11 @@ import type { Chart, Coordinate, Crosshair, Point } from 'klinecharts'
 
 // A synthetic paneId that names no real klinecharts sub-pane. Dispatched for a time-only sync
 // (the source hover was over an indicator sub-pane, whose value has no meaning on another
-// pane's price axis) so the crosshair draws its VERTICAL line and x-axis time label (both
-// gated on `isString(crosshair.paneId)`) without also drawing a horizontal line or y-axis
-// price label (both gated on `paneId === pane.getId()`, which this can never match). Every
-// consumer of `crosshair.paneId` in klinecharts 10.0.0 is one of those two gate shapes -- none
-// index a map by it unguarded -- so this is a deliberate, verified choice, not a placeholder.
-// `ChartImp.executeAction` only backfills a MISSING paneId (`crosshair.paneId ??=
-// 'candle_pane'`), so an explicit value here is never overwritten.
+// pane's price axis) so the crosshair draws its vertical line and x-axis time label (gated on
+// `isString(crosshair.paneId)`) without a horizontal line or y-axis price label (gated on
+// `paneId === pane.getId()`, which this never matches). `ChartImp.executeAction` only
+// backfills a missing paneId (`crosshair.paneId ??= 'candle_pane'`), so this explicit value is
+// never overwritten.
 export const SYNC_PANE_ID = '__sync__'
 
 // The instant, and -- only when the hover was over the main price pane -- the price, under
@@ -56,22 +54,19 @@ export function crosshairPoint(
     : { timestamp: point.timestamp }
 }
 
-// Moves a TARGET pane's crosshair to `point`. `setCrosshair` (which
-// `executeAction('onCrosshairChange', ...)` calls into) derives its position from
-// `cr.x`/`cr.y` -- PIXEL coordinates -- never from timestamp/value fields, so both must first
-// be converted to THIS pane's own pixel space via `convertToPixel`, which extrapolates
-// outside the loaded range/price scale using this chart's own period and y-axis. A pane with
-// nothing loaded yet is skipped: its x would be meaningless.
+// Moves a TARGET pane's crosshair to `point`. `setCrosshair` derives its position from pixel
+// coordinates (`cr.x`/`cr.y`), never from timestamp/value fields, so both are first converted
+// to this pane's own pixel space via `convertToPixel`, which extrapolates outside the loaded
+// range/price scale using this chart's own period and y-axis. A pane with nothing loaded yet
+// is skipped: its x would be meaningless.
 //
 // With a price (`point.value` set): dispatches with the real `'candle_pane'` id, so the
-// horizontal line, the y-axis price label and the tooltip all draw too, at wherever that
-// price falls on THIS pane's own scale -- which may be far outside the visible range for two
-// panes on very different instruments, and is not clamped, by design: the line should track
-// the source's actual price, not a screen-relative approximation of it.
+// horizontal line, the y-axis price label and the tooltip all draw too, at wherever that price
+// falls on this pane's own scale -- unclamped, so it may sit outside the visible range for two
+// panes on very different instruments.
 //
-// Without a price (source hover was over an indicator sub-pane): falls back to the
-// synthetic SYNC_PANE_ID, vertical line only -- there is no price to place a horizontal line
-// at.
+// Without a price (source hover was over an indicator sub-pane): dispatches with the
+// synthetic SYNC_PANE_ID, drawing the vertical line only.
 export function applyCrosshairAt(chart: Chart, point: CrosshairPoint): void {
   if (chart.getDataList().length === 0) return
   const target: Partial<Point> =
@@ -91,11 +86,8 @@ export function applyCrosshairAt(chart: Chart, point: CrosshairPoint): void {
   }
 }
 
-// Clears a target pane's synced crosshair. MUST dispatch `undefined`, not `{}` --
-// `setCrosshair`'s `isValid(undefined)` is false, so the stored crosshair loses x/y/paneId
-// and nothing draws; `isValid({})` is true, so an empty object instead defaults `paneId` to
-// 'candle_pane' and falls back `dataIndex` to the chart's LAST bar (no `x` given), pinning
-// the crosshair to the newest candle instead of clearing it.
+// Clears a target pane's synced crosshair by dispatching `undefined`: `setCrosshair`'s
+// `isValid(undefined)` is false, so the stored crosshair loses x/y/paneId and nothing draws.
 export function clearCrosshair(chart: Chart): void {
   chart.executeAction('onCrosshairChange', undefined as unknown as Crosshair)
 }

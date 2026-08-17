@@ -435,7 +435,7 @@
 
   // The definitive "which panes are actually live" signal for a consuming app -- fires only
   // once each pane's chart exists (mount) or has been torn down (unmount / layout shrink),
-  // via ChartPane publishing/clearing `pane.api`. Replaces polling getChart().
+  // via ChartPane publishing/clearing `pane.api`.
   $effect(() => {
     const live = wall.visiblePanes.filter((pane) => pane.api !== null).map(toChartProPane)
     onPanesChange(live)

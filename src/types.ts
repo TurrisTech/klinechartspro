@@ -106,8 +106,7 @@ export interface ChartProOptions {
   subIndicators?: string[]
   datafeed: Datafeed | DatafeedFactory
 
-  /** Layout preset id (see src/config/layouts.ts). Defaults to '1' -- a single chart,
-   * pixel-identical to the pre-wall behaviour. */
+  /** Layout preset id (see src/config/layouts.ts). Defaults to '1', a single chart. */
   paneLayout?: string
   /** Per-pane seeds. When omitted, every pane beyond the first (as implied by `paneLayout`)
    * is cloned from `symbol`/`period`/`mainIndicators`/`subIndicators`. */
