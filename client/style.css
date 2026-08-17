@@ -73,15 +73,59 @@ body {
   color: var(--foreground);
 }
 
-/* Levels sits among the library's own kc-button icon actions in the top rail (see
-   src/app.css .kc-button); only the "on" accent is custom here. */
-.wd-levels-toggle.is-on {
+/* A layer's single toolbar button (client/chartlayers/controller.ts's mountLayer) sits
+   among the library's own kc-button icon actions in the top rail (see src/app.css
+   .kc-button); only the "on" accent and the hidden override are custom here. Any mounted
+   layer gets this for free — Levels is the only one today, but the class isn't
+   Levels-specific. */
+.wd-layer-toggle.is-on {
   border: 1px solid color-mix(in oklab, var(--primary) 55%, transparent);
   background: color-mix(in oklab, var(--primary) 16%, transparent);
 }
 
-.wd-levels-toggle[hidden] {
+.wd-layer-toggle[hidden] {
   display: none;
+}
+
+/* client/chartlayers/settings.ts's settings panel. Wider than the library's default
+   `.kc-popover` (16rem) — a layer's field list runs several groups deep — and scrolls
+   internally rather than growing past the viewport. */
+.wd-layer-panel {
+  width: 20rem;
+  max-height: min(70vh, 32rem);
+  overflow-y: auto;
+}
+
+.wd-layer-panel-footer {
+  margin-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+/* The library has no color-input styling of its own (`grep kc-color src/app.css` is
+   empty) — a native <input type="color"> is the only new control kind this panel needs. */
+.wd-color-input {
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  padding: 2px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.wd-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.wd-color-input::-webkit-color-swatch {
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
+}
+
+.wd-color-input::-moz-color-swatch {
+  border: none;
+  border-radius: calc(var(--radius-md) - 2px);
 }
 
 /* --- Login form --------------------------------------------------------------------- */
