@@ -131,5 +131,8 @@ new KLineChartPro({
   theme: new URLSearchParams(window.location.search).get('theme') ?? 'light',
   symbol: symbols[0],
   period: { multiplier: 1, timespan: 'day', text: 'D' },
-  datafeed: new DemoDatafeed()
+  // A factory, not a shared instance: DemoDatafeed's `timer` field is exactly the hazard a
+  // multi-pane wall exposes -- one shared instance would mean every pane's subscription
+  // clobbers the last one's interval. See src/types.ts DatafeedFactory.
+  datafeed: () => new DemoDatafeed()
 })

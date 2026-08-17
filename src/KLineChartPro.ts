@@ -6,7 +6,15 @@ import { mount, unmount } from 'svelte'
 import { utils, type Chart, type DeepPartial, type Nullable, type Styles } from 'klinecharts'
 
 import ChartProComponent from './ChartPro.svelte'
-import type { ChartPro, ChartProOptions, Period, SymbolInfo } from './types'
+import { MAX_PANES, smallestLayoutFor } from './config/layouts'
+import type { LayoutPreset } from './config/layouts'
+import type {
+  ChartPro,
+  ChartProOptions,
+  ChartProPane,
+  Period,
+  SymbolInfo
+} from './types'
 
 const DEFAULT_PERIODS: Period[] = [
   { multiplier: 1, timespan: 'minute', text: '1m' },
@@ -45,6 +53,12 @@ export default class KLineChartPro implements ChartPro {
     this.container.classList.toggle('dark', theme === 'dark')
     this.container.dataset.theme = theme
 
+    // The one place the "panes given but no explicit layout" ambiguity is resolved: below
+    // this point `paneLayout` is always a concrete preset id, so ChartPro.svelte never has to
+    // ask "did the caller mean it, or is this just the default?".
+    const paneLayout = options.paneLayout
+      ?? (options.panes ? smallestLayoutFor(options.panes.length).id : '1')
+
     this.component = mount(ChartProComponent, {
       target: this.container,
       props: {
@@ -61,7 +75,19 @@ export default class KLineChartPro implements ChartPro {
         timezone: options.timezone ?? 'Asia/Shanghai',
         mainIndicators: options.mainIndicators ?? ['MA'],
         subIndicators: options.subIndicators ?? ['VOL'],
-        datafeed: options.datafeed
+        datafeed: options.datafeed,
+        paneLayout,
+        panes: options.panes ?? [],
+        maxPanes: options.maxPanes ?? MAX_PANES,
+        activePane: options.activePane ?? 'p1',
+        syncCrosshair: options.syncCrosshair ?? true,
+        syncTime: options.syncTime ?? true,
+        onPaneLayoutChange: options.onPaneLayoutChange ?? (() => {}),
+        onActivePaneChange: options.onActivePaneChange ?? (() => {}),
+        onPanesChange: options.onPanesChange ?? (() => {}),
+        onSymbolChange: options.onSymbolChange ?? (() => {}),
+        onPeriodChange: options.onPeriodChange ?? (() => {}),
+        onSyncChange: options.onSyncChange ?? (() => {})
       }
     }) as ChartPro
   }
@@ -122,6 +148,38 @@ export default class KLineChartPro implements ChartPro {
 
   getSlot(name: 'toolbar' | 'rail-footer'): Nullable<HTMLElement> {
     return this.component.getSlot(name)
+  }
+
+  getPanes(): ChartProPane[] {
+    return this.component.getPanes()
+  }
+
+  getPaneSnapshots() {
+    return this.component.getPaneSnapshots()
+  }
+
+  getPane(id: string): ChartProPane | null {
+    return this.component.getPane(id)
+  }
+
+  getActivePaneId(): string {
+    return this.component.getActivePaneId()
+  }
+
+  setActivePane(id: string): void {
+    this.component.setActivePane(id)
+  }
+
+  setPaneLayout(id: string): void {
+    this.component.setPaneLayout(id)
+  }
+
+  getPaneLayout(): string {
+    return this.component.getPaneLayout()
+  }
+
+  getPaneLayouts(): LayoutPreset[] {
+    return this.component.getPaneLayouts()
   }
 
   remove(): void {

@@ -1,16 +1,23 @@
 import type { Chart } from 'klinecharts'
-import type { KLineChartPro, SymbolInfo } from '../../src'
+import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { symbolVendor } from '../symbols'
 import { openSettingsPanel, type SettingsPanelHandle } from './settings'
 import { loadLayerConfig, saveLayerConfig } from './store'
 import type { ChartLayer, LayerContext } from './types'
 
-// Generic lifecycle for a ChartLayer (types.ts): one toolbar button that opens a settings
-// panel (enable/disable is that panel's first row, not a separate click target — see
-// settings.ts), coverage-gated visibility, debounced redraw on pan/zoom/symbol/period
-// change, and a data cache so a style-only config change restyles without refetching. One
-// call per layer — client/levels/layer.ts is mounted with `mountLayer(chartPro, levelsLayer)`,
-// and a second server-derived layer is mounted the same way.
+// Generic MULTI-PANE lifecycle for a ChartLayer (types.ts): one shared toolbar button that
+// opens a settings panel (enable/disable is that panel's first row, not a separate click
+// target — see settings.ts), applied independently to every currently-live pane of the wall
+// (src/state/wall.svelte.ts) — coverage-gated visibility, debounced redraw on pan/zoom/
+// symbol/period change, and a data cache so a style-only config change restyles without
+// refetching, all scoped per pane. One call per layer — client/levels/layer.ts is mounted
+// with `createLayerController(levelsLayer)`, and a second server-derived layer is mounted
+// the same way.
+//
+// Split into `attach`/`sync` rather than one `mountLayer(chartPro, layer)` call: `sync` has
+// to exist BEFORE a `KLineChartPro` does, so it can be supplied as that constructor's own
+// `onPanesChange` option (client/index.ts) — the wall reports which panes are live from the
+// moment the first one mounts, which is earlier than the constructor call returns.
 
 const DEFAULT_DEBOUNCE_MS = 400
 
@@ -20,30 +27,13 @@ const DEFAULT_DEBOUNCE_MS = 400
 // is about how much of the chart is on screen, not about what any one layer computes.
 const PRICE_WINDOW_FRACTION = 0.06
 
-// Svelte 5's `mount()` does not flush the component's onMount synchronously, so the
-// KLineChart instance does not exist yet when the KLineChartPro constructor returns —
-// getChart() is null for the first few frames. Poll rather than reach into Svelte's
-// scheduler, and give up rather than spin forever if the chart genuinely failed to build.
-export function whenChartReady(chartPro: KLineChartPro, timeoutMs = 5_000): Promise<Chart | null> {
-  return new Promise((resolve) => {
-    const deadline = performance.now() + timeoutMs
-    const poll = (): void => {
-      const chart = chartPro.getChart()
-      if (chart) resolve(chart)
-      else if (performance.now() > deadline) resolve(null)
-      else requestAnimationFrame(poll)
-    }
-    poll()
-  })
-}
-
 // The library's slots only exist once ChartPro.svelte has mounted (getSlot() is null before
 // then), and 'rail-footer''s own element is additionally destroyed and recreated every time
 // the drawing toolbar toggles off and back on — it lives inside ChartPro.svelte's
 // `{#if drawingBarVisible}`. Re-parent into whichever instance of the slot currently exists,
 // on every relevant DOM change, rather than attaching once: otherwise an attached control
 // would vanish for good the first time someone hides the drawing tools instead of merely
-// hiding with it.
+// hiding with it. Both slots stay wall-global, not per-pane — unaffected by the wall feature.
 export function attachToSlot(
   chartPro: KLineChartPro,
   slotName: 'toolbar' | 'rail-footer',
@@ -93,26 +83,32 @@ function buildContext(chart: Chart, symbol: SymbolInfo): LayerContext | null {
   }
 }
 
-export async function mountLayer<TDatum, TConfig extends object>(
-  chartPro: KLineChartPro,
-  layer: ChartLayer<TDatum, TConfig>
-): Promise<void> {
-  const chart = await whenChartReady(chartPro)
-  if (!chart) {
-    console.warn(`[chartlayers] chart unavailable, ${layer.id} disabled`)
-    return
-  }
+export interface LayerController {
+  /** Attaches the layer's single toolbar button once a KLineChartPro instance exists. Call
+   * once, right after construction. */
+  attach(chartPro: KLineChartPro): void
+  /** Reconciles this layer's per-pane wiring against the wall's currently-live panes. Pass
+   * straight through as `ChartProOptions.onPanesChange` — built before the chart exists so
+   * its `sync` can be supplied at construction time. */
+  sync(panes: ChartProPane[]): void
+}
 
-  // `as TConfig`: awaiting a call whose return type depends on an unresolved generic infers
-  // `Awaited<TConfig>`, not `TConfig` (TS can't rule out TConfig itself being Promise-shaped
-  // for some future instantiation) — which then rejects every later `config = next` where
-  // `next: TConfig`. loadLayerConfig<T>(id, defaults: T): Promise<T> is instantiated with
-  // T = TConfig here, so the two are the same type; the cast just says so.
-  let config = (await loadLayerConfig(layer.id, layer.defaults)) as TConfig
-  let cache: { key: string; data: TDatum[] } | null = null
+interface WiredPane<TDatum> {
+  pane: ChartProPane
+  chart: Chart
+  cache: { key: string; data: TDatum[] } | null
+  timer: ReturnType<typeof setTimeout> | null
+  onRangeChange: () => void
+}
+
+export function createLayerController<TDatum, TConfig extends object>(
+  layer: ChartLayer<TDatum, TConfig>
+): LayerController {
+  let config: TConfig = layer.defaults
+  let configLoaded = false
   let enabled = new URLSearchParams(window.location.search).get(layer.id) !== 'off'
   let panel: SettingsPanelHandle | null = null
-  let timer: ReturnType<typeof setTimeout> | null = null
+  const wired = new Map<string, WiredPane<TDatum>>()
 
   // One button for both "is this layer on" (the is-on accent, kept live even while the
   // panel is closed) and "configure it" (click opens the panel below) — the enable/disable
@@ -129,87 +125,97 @@ export async function mountLayer<TDatum, TConfig extends object>(
     layerButton.classList.toggle('is-on', enabled)
   }
 
-  // `chart` is narrowed to non-null above, but that narrowing only survives into a closure
-  // for a `const` (arrow) function — a hoisted `function` declaration is treated as
-  // reachable from anywhere in scope, including hypothetically before the guard ran, so TS
-  // widens `chart` back to `Chart | null` inside one. Every helper below is a `const`
-  // precisely to keep the narrowing.
   const closePanel = (): void => {
     panel?.close()
     panel = null
   }
 
-  const clearOverlays = (): void => {
-    chart.removeOverlay({ groupId: layer.id })
+  // Visible unless NONE of the currently-live panes have coverage — a wall with even one
+  // eligible pane keeps the control reachable, rather than hiding it whenever the ACTIVE
+  // pane happens to be on an ineligible symbol.
+  const updateVisibility = (): void => {
+    layerButton.hidden = ![...wired.values()].some((entry) => {
+      const symbol = entry.pane.getSymbol()
+      return layer.available(symbol, symbolVendor(symbol))
+    })
   }
 
-  const paint = (data: TDatum[], ctx: LayerContext): void => {
-    clearOverlays()
+  const clearOverlays = (entry: WiredPane<TDatum>): void => {
+    entry.chart.removeOverlay({ groupId: layer.id })
+  }
+
+  const paint = (entry: WiredPane<TDatum>, data: TDatum[], ctx: LayerContext): void => {
+    clearOverlays(entry)
     if (data.length === 0) return
     const overlays = layer.toOverlays(data, ctx, config).map((overlay) => ({
       ...overlay,
       groupId: layer.id
     }))
-    chart.createOverlay(overlays)
+    entry.chart.createOverlay(overlays)
   }
 
-  const redraw = async (): Promise<void> => {
+  const redraw = async (entry: WiredPane<TDatum>): Promise<void> => {
     if (!enabled) return
-    const symbol = chartPro.getSymbol()
+    const symbol = entry.pane.getSymbol()
     const available = layer.available(symbol, symbolVendor(symbol))
-    layerButton.hidden = !available
+    updateVisibility()
     if (!available) {
       closePanel()
-      clearOverlays()
+      clearOverlays(entry)
       return
     }
-    const ctx = buildContext(chart, symbol)
+    const ctx = buildContext(entry.chart, symbol)
     if (!ctx) return
 
     const key = layer.queryKey(ctx, config)
-    if (cache && cache.key === key) {
-      paint(cache.data, ctx)
+    if (entry.cache && entry.cache.key === key) {
+      paint(entry, entry.cache.data, ctx)
       return
     }
     try {
       const data = await layer.fetch(ctx, config)
-      cache = { key, data }
-      paint(data, ctx)
+      entry.cache = { key, data }
+      paint(entry, data, ctx)
     } catch (err) {
-      console.error(`[chartlayers] ${layer.id} fetch failed`, err)
+      console.error(`[chartlayers] ${layer.id} fetch failed for pane ${entry.pane.id}`, err)
     }
   }
 
-  const scheduleRedraw = (): void => {
+  const scheduleRedraw = (entry: WiredPane<TDatum>): void => {
     if (!enabled) return
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      void redraw()
+    if (entry.timer) clearTimeout(entry.timer)
+    entry.timer = setTimeout(() => {
+      entry.timer = null
+      void redraw(entry)
     }, layer.debounceMs ?? DEFAULT_DEBOUNCE_MS)
   }
 
   // A style-only change (line width, color, pattern, an emphasis curve) restyles instantly
-  // from the cached fetch — no request. A change to a lever baked into queryKey (which
-  // intervals, whether to include spent levels) misses the cache and refetches.
+  // from each pane's own cached fetch — no request. A change to a lever baked into queryKey
+  // (which intervals, whether to include spent levels) misses the cache and refetches, per
+  // pane, since two panes on different symbols/intervals have independently distinct keys.
   const onConfigChange = (next: TConfig): void => {
     config = next
     saveLayerConfig(layer.id, config)
-    if (cache) {
-      const ctx = buildContext(chart, chartPro.getSymbol())
-      if (ctx && layer.queryKey(ctx, config) === cache.key) {
-        paint(cache.data, ctx)
-        return
+    for (const entry of wired.values()) {
+      if (entry.cache) {
+        const ctx = buildContext(entry.chart, entry.pane.getSymbol())
+        if (ctx && layer.queryKey(ctx, config) === entry.cache.key) {
+          paint(entry, entry.cache.data, ctx)
+          continue
+        }
       }
+      void redraw(entry)
     }
-    void redraw()
   }
 
   const onToggleEnabled = (next: boolean): void => {
     enabled = next
     applyToggleState()
-    if (enabled) void redraw()
-    else clearOverlays()
+    for (const entry of wired.values()) {
+      if (enabled) void redraw(entry)
+      else clearOverlays(entry)
+    }
   }
 
   layerButton.addEventListener('click', () => {
@@ -234,9 +240,46 @@ export async function mountLayer<TDatum, TConfig extends object>(
     })
   })
 
-  attachToSlot(chartPro, 'toolbar', layerButton)
-  chart.subscribeAction('onVisibleRangeChange', scheduleRedraw)
-
   applyToggleState()
-  scheduleRedraw()
+  // Never throws (loadLayerConfig's own contract). Applied to every pane already wired by
+  // the time this resolves; a pane that wires AFTER this resolves picks up `config` directly
+  // in `sync`'s own initial scheduleRedraw, since `configLoaded` is already true by then.
+  void (async () => {
+    config = (await loadLayerConfig(layer.id, layer.defaults)) as TConfig
+    configLoaded = true
+    for (const entry of wired.values()) scheduleRedraw(entry)
+  })()
+
+  return {
+    attach(chartPro: KLineChartPro): void {
+      attachToSlot(chartPro, 'toolbar', layerButton)
+    },
+    sync(panes: ChartProPane[]): void {
+      const live = new Set(panes.map((pane) => pane.id))
+      for (const [id, entry] of wired) {
+        if (live.has(id)) continue
+        if (entry.timer) clearTimeout(entry.timer)
+        entry.chart.unsubscribeAction('onVisibleRangeChange', entry.onRangeChange)
+        wired.delete(id)
+      }
+      for (const pane of panes) {
+        if (wired.has(pane.id)) continue
+        const chart = pane.getChart()
+        const entry: WiredPane<TDatum> = {
+          pane,
+          chart,
+          cache: null,
+          timer: null,
+          onRangeChange: () => {}
+        }
+        // Pan, zoom and every data load land here, which covers symbol and period
+        // switches too.
+        entry.onRangeChange = () => scheduleRedraw(entry)
+        chart.subscribeAction('onVisibleRangeChange', entry.onRangeChange)
+        wired.set(pane.id, entry)
+        if (configLoaded) scheduleRedraw(entry)
+      }
+      updateVisibility()
+    }
+  }
 }

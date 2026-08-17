@@ -27,8 +27,14 @@ export { load as loadLocales } from './i18n'
 export type {
   ChartPro,
   ChartProOptions,
+  ChartProPane,
   Datafeed,
+  DatafeedFactory,
   DatafeedSubscribeCallback,
+  PaneOptions,
+  PaneSnapshot,
   Period,
   SymbolInfo
 } from './types'
+export type { LayoutPreset } from './config/layouts'
+export { getLayouts as getPaneLayouts, MAX_PANES } from './config/layouts'

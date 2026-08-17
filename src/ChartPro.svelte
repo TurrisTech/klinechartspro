@@ -1,22 +1,11 @@
 <script lang="ts">
-  import { onMount, untrack, type Component } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import {
-    dispose,
-    init,
     utils,
     type Chart,
-    type DataLoader,
     type DeepPartial,
-    type FormatDateParams,
-    type Indicator,
-    type IndicatorTooltipData,
-    type Nullable,
-    type OverlayCreate,
     type OverlayMode,
-    type Period as ChartPeriod,
-    type Styles,
-    type SymbolInfo as ChartSymbolInfo,
-    type TooltipFeatureStyle
+    type Styles
   } from 'klinecharts'
   import MenuIcon from '@lucide/svelte/icons/menu'
   import SearchIcon from '@lucide/svelte/icons/search'
@@ -62,29 +51,45 @@
   } from 'bits-ui'
 
   import i18n from './i18n'
-  import type { ChartProOptions, Period, SymbolInfo } from './types'
+  import type {
+    ChartProOptions,
+    ChartProPane,
+    Datafeed,
+    DatafeedFactory,
+    PaneOptions,
+    PaneSnapshot,
+    Period,
+    SymbolInfo
+  } from './types'
   import indicatorConfig from './config/indicators'
   import { getOptions } from './config/settings'
   import {
     createTimezoneSelectOptions,
     translateTimezone
   } from './config/timezones'
+  import ChartPane from './ChartPane.svelte'
+  import LayoutPicker from './LayoutPicker.svelte'
+  import { Wall } from './state/wall.svelte'
+  import { clone } from './utils/object'
+  import { SyncBus } from './sync/bus'
+  import SyncToggle from './SyncToggle.svelte'
 
   type ChartProps = Required<Omit<ChartProOptions, 'container'>>
   type DrawingTool = {
     name: string
     labelKey: string
-    icon: Component
+    icon: typeof LineIcon
   }
   type DrawingGroup = {
     labelKey: string
-    icon: Component
+    icon: typeof LineIcon
     tools: DrawingTool[]
   }
-  type IndicatorFeatureClick = {
+  type IndicatorSettingsState = {
     paneId: string
-    feature: TooltipFeatureStyle
-    indicator: Indicator
+    chartPaneId: string
+    indicatorName: string
+    calcParams: unknown[]
   }
 
   let {
@@ -100,27 +105,34 @@
     onStarredPeriodsChange,
     timezone,
     mainIndicators,
-    subIndicators: initialSubIndicators,
-    datafeed
+    subIndicators,
+    datafeed,
+    paneLayout,
+    panes,
+    maxPanes,
+    activePane,
+    syncCrosshair,
+    syncTime,
+    onPaneLayoutChange,
+    onActivePaneChange,
+    onPanesChange,
+    onSymbolChange,
+    onPeriodChange,
+    onSyncChange
   }: ChartProps = $props()
 
   let rootElement = $state<HTMLDivElement>()
-  let widgetElement: HTMLDivElement
-  let widget: Nullable<Chart> = null
-  let priceUnitElement: HTMLElement | null = null
-  let mounted = $state(false)
   let toolbarSlot = $state<HTMLDivElement>()
   let railFooterSlot = $state<HTMLDivElement>()
 
-  let subIndicators = $state<Record<string, string>>({})
-  let defaultStyles: Styles | null = null
-  let loading = $state(false)
   let selectedPeriodText = $state('')
-  // Construction-time-seeded, like `period` itself: the app supplies the initial set and
+  // Construction-time-seeded, like `periods` itself: the app supplies the initial set and
   // hears about every change via onStarredPeriodsChange, rather than this reading a
-  // reactive prop — mirrors how `periods` and `period` both work. `untrack` makes that
-  // one-time read explicit rather than triggering Svelte's "did you mean $derived" warning.
+  // reactive prop. `untrack` makes that one-time read explicit rather than triggering
+  // Svelte's "did you mean $derived" warning.
   let starred = $state<Set<string>>(untrack(() => new Set(starredPeriods)))
+  let syncCrosshairEnabled = $state(untrack(() => syncCrosshair))
+  let syncTimeEnabled = $state(untrack(() => syncTime))
 
   let symbolDialogOpen = $state(false)
   let indicatorDialogOpen = $state(false)
@@ -134,12 +146,11 @@
   let symbolResults = $state<SymbolInfo[]>([])
   let symbolSearching = $state(false)
   let settingsStyles = $state<Styles | null>(null)
-  let yAxisType = $state('normal')
-  let yAxisReverse = $state(false)
-  let indicatorSettings = $state({
-    indicatorName: '',
+  let indicatorSettings = $state<IndicatorSettingsState>({
     paneId: '',
-    calcParams: [] as unknown[]
+    chartPaneId: '',
+    indicatorName: '',
+    calcParams: []
   })
   let fullscreen = $state(false)
 
@@ -215,23 +226,82 @@
     }
   ]
 
+  // `datafeed`/`symbol`/`period`/`mainIndicators`/`subIndicators`/`panes`/`paneLayout`/
+  // `maxPanes` are all construction-time-only, like `periods`/`starredPeriods` already are --
+  // read once here (inside `untrack`, to avoid Svelte's "did you mean $derived" warning) and
+  // never again. Every pane needs its OWN Datafeed instance whenever that datafeed keeps
+  // per-subscription state (the common case -- see src/types.ts DatafeedFactory); a plain
+  // object is still accepted for back-compat (every pane then shares it), with a one-time
+  // warning if the initial layout already holds more than one pane, since only the
+  // datafeed's author knows whether sharing is actually safe.
+  const wall = untrack(() => {
+    const datafeedFactory: DatafeedFactory = typeof datafeed === 'function'
+      ? (datafeed as DatafeedFactory)
+      : () => datafeed as Datafeed
+    const seeds: PaneOptions[] = panes.length > 0
+      ? panes
+      : [{ symbol, period, mainIndicators, subIndicators }]
+    const built = new Wall({
+      maxPanes,
+      initialLayoutId: paneLayout,
+      initialActiveId: activePane,
+      datafeedFactory,
+      seeds,
+      onPaneLayoutChange,
+      onActivePaneChange
+    })
+    if (typeof datafeed !== 'function' && built.layout.paneCount > 1) {
+      console.warn(
+        '[KLineChartPro] a single Datafeed instance is shared by every pane in a multi-pane ' +
+        'layout. If it keeps any per-subscription state (most real datafeeds do), panes on ' +
+        'the same symbol/interval will interfere with each other -- pass a factory ' +
+        '`(paneId) => Datafeed` instead.'
+      )
+    }
+    return built
+  })
+
+  // One registry per shell instance -- crosshair sync and click-to-scroll, threaded down to
+  // every ChartPane as a prop. Never at module scope: that would share sync state across two
+  // `new KLineChartPro()` instances mounted on the same page.
+  const bus = new SyncBus()
+
+  function toChartProPane(pane: (typeof wall.panes)[number]): ChartProPane {
+    return {
+      id: pane.id,
+      getChart: () => pane.api?.chart as Chart,
+      getSymbol: () => pane.symbol,
+      setSymbol: (value: SymbolInfo) => {
+        pane.symbol = value
+        onSymbolChange(pane.id, value)
+      },
+      getPeriod: () => pane.period,
+      setPeriod: (value: Period) => {
+        pane.period = value
+        onPeriodChange(pane.id, value)
+      },
+      getDatafeed: () => pane.datafeed,
+      isActive: () => pane.id === wall.activeId
+    }
+  }
+
   const portalProps = $derived(rootElement ? { to: rootElement } : undefined)
   const timezoneOptions = $derived(createTimezoneSelectOptions(locale))
   const settingOptions = $derived(getOptions(locale))
 
   const iconButtonClass = (active = false) => `kc-button kc-icon-button${active ? ' is-active' : ''}`
 
-  // The top-rail chips: every starred period, in `periods`' own (shortest-first) order,
-  // plus the active period appended as a transient chip when it isn't starred — so the
-  // rail always shows what's playing even if the user never starred it.
+  // The top-rail chips: every starred period, in `periods`' own (shortest-first) order, plus
+  // the ACTIVE PANE's current period appended as a transient chip when it isn't starred -- so
+  // the rail always shows what's playing on the active chart even if the user never starred it.
   const railPeriods = $derived.by(() => {
     const list = periods.filter((item) => starred.has(item.text))
-    if (!starred.has(period.text)) list.push(period)
+    if (!starred.has(wall.active.period.text)) list.push(wall.active.period)
     return list
   })
 
-  // The dropdown's three sections. Days/weeks/months/years share one "Days & above"
-  // group — the 16-interval server contract KLineChart Pro clients are built against
+  // The dropdown's three sections. Days/weeks/months/years share one "Days & above" group --
+  // the 16-interval server contract KLineChart Pro clients are built against
   // (client/periods.ts) has too few long periods to need day/week/month split further.
   const timeframeGroups = $derived.by(() => {
     const minutes: Period[] = []
@@ -257,300 +327,40 @@
     onStarredPeriodsChange(Array.from(starred))
   }
 
-  function clone<T>(value: T): T {
-    if (Array.isArray(value)) return value.map(clone) as T
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(
-        Object.entries(value).map(([key, child]) => [key, clone(child)])
-      ) as T
-    }
-    return value
-  }
-
-  function setByPath(target: object, path: string, value: unknown): void {
-    const keys = path.split('.')
-    let current = target as Record<string, unknown>
-    for (const key of keys.slice(0, -1)) {
-      const child = current[key]
-      if (!child || typeof child !== 'object' || Array.isArray(child)) current[key] = {}
-      current = current[key] as Record<string, unknown>
-    }
-    current[keys.at(-1) as string] = value
-  }
-
-  function createIndicator(
-    indicatorName: string,
-    isStack?: boolean,
-    paneId?: string
-  ): Nullable<string> {
-    if (!widget) return null
-    const indicatorId = widget.createIndicator({
-      name: indicatorName,
-      paneId,
-      createTooltipDataSource: ({ indicator }) => {
-        const defaultFeatures = widget?.getStyles().indicator.tooltip.features ?? []
-        const icons = indicator.visible
-          ? defaultFeatures.slice(1, 4)
-          : [defaultFeatures[0], ...defaultFeatures.slice(2, 4)].filter(Boolean)
-        return { features: icons } as IndicatorTooltipData
-      }
-    }, isStack)
-    if (!indicatorId) return null
-    const createdPaneId = widget.getIndicators({ id: indicatorId })[0]?.paneId ?? null
-    if (createdPaneId) applyYAxisSettings(createdPaneId)
-    return createdPaneId
-  }
-
-  // The history window handed to the datafeed for one page of `count` bars ending at
-  // `toTimestamp`. Only a bound: the datafeed/server assigns bars to candles and clips the
-  // range itself, so nothing here aligns `to` to a calendar edge -- the old
-  // browser-local flooring to midnight / Monday / the 1st assumed candles open at local
-  // midnight, which FX candles do not (they open 17:00 America/New_York; a week opens
-  // Sunday 17:00), and it dropped a bar at every page boundary for viewers east of the
-  // market. `from` is a generous nominal reach; the server keeps the last `count`.
-  function adjustFromTo(currentPeriod: Period, toTimestamp: number, count: number) {
-    const minute = 60 * 1000
-    const hour = 60 * minute
-    const day = 24 * hour
-    const unitMs: Record<string, number> = {
-      minute,
-      hour,
-      day,
-      week: 7 * day,
-      month: 31 * day,
-      year: 366 * day
-    }
-    const unit = unitMs[currentPeriod.timespan]
-    if (unit === undefined) throw new Error(`Unsupported period timespan: ${currentPeriod.timespan}`)
-    const to = toTimestamp
-    const from = to - count * currentPeriod.multiplier * unit
-    return [from, to] as const
-  }
-
-  // Daily and coarser candles are labelled by their market SESSION date, not the wall-clock
-  // date of their open: an FX daily candle opens 17:00 New York the evening before its
-  // session, a weekly Sunday 17:00, a monthly/yearly 17:00 before the first market day --
-  // so December can open on Sunday 30 November and 2024 on Sunday 31 December 2023. The
-  // session date is the New York date of `open + 7h` (wmarkettypes' canonical_date), and it
-  // is New York regardless of the display timezone, because that is the market's calendar.
-  const sessionDateFormat = new Intl.DateTimeFormat('en', {
-    timeZone: 'America/New_York',
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
-  const SESSION_DATE_SHIFT_MS = 7 * 60 * 60 * 1000
-
-  function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
-    if (period.timespan === 'minute') {
-      return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
-        ? 'HH:mm' : 'YYYY-MM-DD HH:mm')
-    }
-    if (period.timespan === 'hour') {
-      return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
-        ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm')
-    }
-    const sessionTimestamp = timestamp + SESSION_DATE_SHIFT_MS
-    if (period.timespan === 'month') {
-      return utils.formatDate(sessionDateFormat, sessionTimestamp, type === 'xAxis'
-        ? 'YYYY-MM' : 'YYYY-MM-DD')
-    }
-    if (period.timespan === 'year') {
-      return utils.formatDate(sessionDateFormat, sessionTimestamp, type === 'xAxis'
-        ? 'YYYY' : 'YYYY-MM-DD')
-    }
-    return utils.formatDate(sessionDateFormat, sessionTimestamp, 'YYYY-MM-DD')
-  }
-
-  function applyIndicatorIcons() {
-    if (!widget) return
-    const color = theme === 'dark' ? '#a3a3a3' : '#737373'
-    const icon = (id: string, glyph: string, marginLeft = 6) => ({
-      id,
-      position: 'middle' as const,
-      marginLeft,
-      marginTop: 3,
-      marginRight: 0,
-      marginBottom: 0,
-      paddingLeft: 0,
-      paddingTop: 0,
-      paddingRight: 0,
-      paddingBottom: 0,
-      type: 'icon_font' as const,
-      content: { code: glyph, family: 'icomoon' },
-      borderRadius: 0,
-      size: 14,
-      color,
-      activeColor: color,
-      backgroundColor: 'transparent',
-      activeBackgroundColor: 'color-mix(in srgb, currentColor 12%, transparent)'
-    })
-    widget.setStyles({
-      indicator: {
-        tooltip: {
-          features: [
-            icon('visible', '\ue903', 8),
-            icon('invisible', '\ue901', 8),
-            icon('setting', '\ue902'),
-            icon('close', '\ue900')
-          ]
-        }
-      }
-    })
-  }
-
-  const toChartSymbol = (value: SymbolInfo): ChartSymbolInfo => ({
-    ...value,
-    pricePrecision: value.pricePrecision ?? 2,
-    volumePrecision: value.volumePrecision ?? 0
-  })
-
-  const toChartPeriod = (value: Period): ChartPeriod => ({
-    span: value.multiplier,
-    type: value.timespan as ChartPeriod['type']
-  })
-
-  const fromChartPeriod = (value: ChartPeriod): Period => {
-    const configured = periods.find((item) =>
-      item.multiplier === value.span && item.timespan === value.type
-    )
-    return {
-      multiplier: value.span,
-      timespan: value.type,
-      text: configured?.text ?? `${value.span} ${value.type}`
-    }
-  }
-
-  const chartDataLoader: DataLoader = {
-    async getBars({ type, timestamp, symbol: chartSymbol, period: chartPeriod, callback }) {
-      if (type === 'backward') {
-        callback([], { backward: false })
-        return
-      }
-      loading = true
-      const currentPeriod = fromChartPeriod(chartPeriod)
-      const toTimestamp = type === 'forward' && timestamp ? timestamp - 1 : Date.now()
-      const [from, to] = adjustFromTo(currentPeriod, toTimestamp, 500)
-      try {
-        const data = await datafeed.getHistoryKLineData(
-          chartSymbol as SymbolInfo,
-          currentPeriod,
-          from,
-          to
-        )
-        callback(data, { forward: data.length > 0, backward: false })
-      } finally {
-        loading = false
-      }
-    },
-    subscribeBar({ symbol: chartSymbol, period: chartPeriod, callback }) {
-      datafeed.subscribe(chartSymbol as SymbolInfo, fromChartPeriod(chartPeriod), callback)
-    },
-    unsubscribeBar({ symbol: chartSymbol, period: chartPeriod }) {
-      datafeed.unsubscribe(chartSymbol as SymbolInfo, fromChartPeriod(chartPeriod))
-    }
-  }
-
-  function changeIndicator(name: string, main: boolean, added: boolean) {
-    if (main) {
-      if (added) {
-        createIndicator(name, true, 'candle_pane')
-        mainIndicators = [...mainIndicators, name]
-      } else {
-        widget?.removeIndicator({ paneId: 'candle_pane', name })
-        mainIndicators = mainIndicators.filter((item) => item !== name)
-      }
-      return
-    }
-
-    if (added) {
-      const paneId = createIndicator(name)
-      if (paneId) subIndicators = { ...subIndicators, [name]: paneId }
-    } else if (subIndicators[name]) {
-      widget?.removeIndicator({ paneId: subIndicators[name], name })
-      const next = { ...subIndicators }
-      delete next[name]
-      subIndicators = next
-    }
-  }
-
-  function openSettings() {
-    if (!widget) return
-    settingsStyles = clone(widget.getStyles())
-    settingsDialogOpen = true
-  }
-
   function getSettingValue(key: string): unknown {
-    if (key === 'yAxis.type') return yAxisType
-    if (key === 'yAxis.reverse') return yAxisReverse
+    if (key === 'yAxis.type') return wall.active.yAxisType
+    if (key === 'yAxis.reverse') return wall.active.yAxisReverse
     return utils.formatValue(settingsStyles, key)
-  }
-
-  function applyYAxisSettings(paneId?: string) {
-    if (!widget) return
-    const paneIds = paneId
-      ? [paneId]
-      : ['candle_pane', ...Object.values(subIndicators)]
-    for (const id of new Set(paneIds)) {
-      widget.overrideYAxis({ paneId: id, name: yAxisType, reverse: yAxisReverse })
-    }
   }
 
   function updateStyle(key: string, value: unknown) {
     if (!settingsStyles) return
-    if (key === 'yAxis.type') {
-      yAxisType = String(value)
-      applyYAxisSettings()
-      return
-    }
-    if (key === 'yAxis.reverse') {
-      yAxisReverse = Boolean(value)
-      applyYAxisSettings()
-      return
-    }
-    const patch = {}
-    setByPath(patch, key, value)
-    const next = clone(settingsStyles)
-    setByPath(next, key, value)
-    settingsStyles = next
-    widget?.setStyles(patch)
+    settingsStyles = wall.active.api?.setStyleValue(key, value) ?? settingsStyles
   }
 
   function restoreStyles() {
-    if (!defaultStyles) return
-    const patch = {}
-    for (const option of settingOptions) {
-      if (option.key.startsWith('yAxis.')) continue
-      setByPath(patch, option.key, utils.formatValue(defaultStyles, option.key))
-    }
-    widget?.setStyles(patch)
-    yAxisType = 'normal'
-    yAxisReverse = false
-    applyYAxisSettings()
-    settingsStyles = clone(widget?.getStyles() ?? defaultStyles)
+    settingsStyles = wall.active.api?.restoreStyles() ?? settingsStyles
+  }
+
+  function openSettings() {
+    const current = wall.active.api?.getStyles()
+    if (!current) return
+    settingsStyles = clone(current)
+    settingsDialogOpen = true
   }
 
   function createOverlay(tool: DrawingTool) {
-    widget?.createOverlay({
-      groupId: 'drawing_tools',
-      name: tool.name,
-      visible: overlaysVisible,
+    wall.active.api?.createOverlay(tool.name, {
+      mode: overlayMode,
       lock: overlaysLocked,
-      mode: overlayMode
-    } as OverlayCreate)
+      visible: overlaysVisible
+    })
   }
 
   function takeScreenshot() {
-    if (!widget) return
-    screenshotUrl = widget.getConvertPictureUrl(
-      true,
-      'jpeg',
-      theme === 'dark' ? '#171717' : '#ffffff'
-    )
+    const url = wall.active.api?.screenshot(theme === 'dark' ? '#171717' : '#ffffff')
+    if (!url) return
+    screenshotUrl = url
     screenshotDialogOpen = true
   }
 
@@ -567,58 +377,83 @@
     else await document.exitFullscreen()
   }
 
-  export function getChart() { return widget }
+  export function getChart() { return wall.active.api?.chart ?? null }
   export function setTheme(value: string) { theme = value }
   export function getTheme() { return theme }
   export function setStyles(value: DeepPartial<Styles>) { styles = value }
-  export function getStyles() { return widget?.getStyles() as Styles }
+  export function getStyles() { return wall.active.api?.getStyles() as Styles }
   export function setLocale(value: string) { locale = value }
   export function getLocale() { return locale }
   export function setTimezone(value: string) { timezone = value }
   export function getTimezone() { return timezone }
-  export function setSymbol(value: SymbolInfo) { symbol = value }
-  export function getSymbol() { return symbol }
-  export function setPeriod(value: Period) { period = value }
-  export function getPeriod() { return period }
+  export function setSymbol(value: SymbolInfo) {
+    wall.active.symbol = value
+    onSymbolChange(wall.active.id, value)
+  }
+  export function getSymbol() { return wall.active.symbol }
+  export function setPeriod(value: Period) {
+    wall.active.period = value
+    onPeriodChange(wall.active.id, value)
+  }
+  export function getPeriod() { return wall.active.period }
   export function getSlot(name: 'toolbar' | 'rail-footer') {
     return (name === 'toolbar' ? toolbarSlot : railFooterSlot) ?? null
   }
 
+  export function getPanes(): ChartProPane[] {
+    return wall.visiblePanes.filter((pane) => pane.api !== null).map(toChartProPane)
+  }
+  export function getPaneSnapshots(): PaneSnapshot[] {
+    return wall.visiblePanes.map((pane) => pane.snapshot())
+  }
+  export function getPane(id: string): ChartProPane | null {
+    const pane = wall.visiblePanes.find((item) => item.id === id && item.api !== null)
+    return pane ? toChartProPane(pane) : null
+  }
+  export function getActivePaneId() { return wall.activeId }
+  export function setActivePane(id: string) { wall.activate(id) }
+  export function setPaneLayout(id: string) { wall.setLayout(id) }
+  export function getPaneLayout() { return wall.layoutId }
+  export function getPaneLayouts() { return [...wall.layouts] }
+
   $effect(() => {
-    selectedPeriodText = period.text
+    selectedPeriodText = wall.active.period.text
+  })
+
+  // Broadcasts the drawing rail's tool-mode state to every visible pane, including one that
+  // has just mounted (a layout grow) -- this effect's own read of `pane.api` for each visible
+  // pane is what makes it re-run exactly when a pane's chart becomes available, not only when
+  // the mode/lock/visible toggles themselves change.
+  $effect(() => {
+    const mode = overlayMode
+    const lock = overlaysLocked
+    const visible = overlaysVisible
+    for (const pane of wall.visiblePanes) {
+      pane.api?.overrideOverlay({ mode, lock, visible })
+    }
+  })
+
+  // The definitive "which panes are actually live" signal for a consuming app -- fires only
+  // once each pane's chart exists (mount) or has been torn down (unmount / layout shrink),
+  // via ChartPane publishing/clearing `pane.api`. Replaces polling getChart().
+  $effect(() => {
+    const live = wall.visiblePanes.filter((pane) => pane.api !== null).map(toChartProPane)
+    onPanesChange(live)
+  })
+
+  onMount(() => {
+    const handleFullscreen = () => { fullscreen = Boolean(document.fullscreenElement) }
+    document.addEventListener('fullscreenchange', handleFullscreen)
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreen)
+      bus.dispose()
+    }
   })
 
   $effect(() => {
-    if (!mounted) return
-    widget?.setSymbol(toChartSymbol(symbol))
-  })
-
-  $effect(() => {
-    if (!mounted) return
-    widget?.setPeriod(toChartPeriod(period))
-  })
-
-  $effect(() => {
-    if (!mounted || !widget) return
-    widget.setStyles(theme)
-    applyIndicatorIcons()
-  })
-
-  $effect(() => {
-    if (!mounted || !widget) return
-    widget.setStyles(styles)
-  })
-
-  $effect(() => {
-    if (!mounted || !widget) return
-    widget.setLocale(locale)
-    widget.setTimezone(timezone)
-  })
-
-  $effect(() => {
-    if (!mounted || !widget || !priceUnitElement) return
-    priceUnitElement.textContent = symbol.priceCurrency?.toLocaleUpperCase() ?? ''
-    priceUnitElement.style.display = symbol.priceCurrency ? 'flex' : 'none'
+    bus.setOptions({ crosshair: syncCrosshairEnabled, time: syncTimeEnabled })
+    onSyncChange({ crosshair: syncCrosshairEnabled, time: syncTimeEnabled })
   })
 
   $effect(() => {
@@ -627,82 +462,12 @@
     const timer = window.setTimeout(async () => {
       symbolSearching = true
       try {
-        symbolResults = await datafeed.searchSymbols(query)
+        symbolResults = await wall.active.datafeed.searchSymbols(query)
       } finally {
         symbolSearching = false
       }
     }, 180)
     return () => window.clearTimeout(timer)
-  })
-
-  onMount(() => {
-    const handleResize = () => widget?.resize()
-    const handleFullscreen = () => { fullscreen = Boolean(document.fullscreenElement) }
-    window.addEventListener('resize', handleResize)
-    document.addEventListener('fullscreenchange', handleFullscreen)
-
-    const chart = init(widgetElement, { formatter: { formatDate } })
-    if (!chart) throw new Error('Unable to initialize KLineChart')
-    widget = chart
-
-    const watermarkContainer = widget.getDom('candle_pane', 'main')
-    if (watermarkContainer) {
-      const element = document.createElement('div')
-      element.className = 'klinecharts-pro-watermark'
-      if (typeof watermark === 'string') element.innerHTML = watermark.trim()
-      else element.appendChild(watermark as Node)
-      watermarkContainer.appendChild(element)
-    }
-
-    priceUnitElement = document.createElement('span')
-    priceUnitElement.className = 'klinecharts-pro-price-unit'
-    widget.getDom('candle_pane', 'yAxis')?.appendChild(priceUnitElement)
-
-    for (const name of mainIndicators) createIndicator(name, true, 'candle_pane')
-    const initialSubIndicatorMap: Record<string, string> = {}
-    for (const name of initialSubIndicators) {
-      const paneId = createIndicator(name, true)
-      if (paneId) initialSubIndicatorMap[name] = paneId
-    }
-    subIndicators = initialSubIndicatorMap
-
-    widget.setDataLoader(chartDataLoader)
-    widget.subscribeAction('onIndicatorTooltipFeatureClick', (value) => {
-      const data = value as IndicatorFeatureClick
-      const featureId = data.feature.id
-      const indicator = data.indicator
-      if (featureId === 'visible' || featureId === 'invisible') {
-        widget?.overrideIndicator({
-          name: indicator.name,
-          paneId: data.paneId,
-          visible: featureId === 'visible'
-        })
-      } else if (featureId === 'setting') {
-        indicatorSettings = {
-          indicatorName: indicator.name,
-          paneId: data.paneId,
-          calcParams: clone(indicator.calcParams)
-        }
-        indicatorSettingsOpen = true
-      } else if (featureId === 'close') {
-        changeIndicator(indicator.name, data.paneId === 'candle_pane', false)
-      }
-    })
-
-    widget.setStyles(theme)
-    widget.setStyles(styles)
-    widget.setLocale(locale)
-    widget.setTimezone(timezone)
-    applyIndicatorIcons()
-    defaultStyles = clone(widget.getStyles())
-    mounted = true
-
-    return () => {
-      window.removeEventListener('resize', handleResize)
-      document.removeEventListener('fullscreenchange', handleFullscreen)
-      dispose(chart)
-      widget = null
-    }
   })
 </script>
 
@@ -712,7 +477,6 @@
       <Tooltip.Root>
         <Tooltip.Trigger class={iconButtonClass()} onclick={() => {
           drawingBarVisible = !drawingBarVisible
-          requestAnimationFrame(() => widget?.resize())
         }} aria-label="Toggle drawing toolbar">
           <MenuIcon />
         </Tooltip.Trigger>
@@ -723,10 +487,10 @@
 
       <button class="kc-button kc-symbol-button" onclick={() => { symbolDialogOpen = true }}>
         <Avatar.Root class="kc-avatar kc-avatar-sm">
-          {#if symbol.logo}<Avatar.Image class="kc-avatar-image" src={symbol.logo} alt={symbol.ticker} />{/if}
-          <Avatar.Fallback class="kc-avatar-fallback">{symbol.ticker.slice(0, 2).toUpperCase()}</Avatar.Fallback>
+          {#if wall.active.symbol.logo}<Avatar.Image class="kc-avatar-image" src={wall.active.symbol.logo} alt={wall.active.symbol.ticker} />{/if}
+          <Avatar.Fallback class="kc-avatar-fallback">{wall.active.symbol.ticker.slice(0, 2).toUpperCase()}</Avatar.Fallback>
         </Avatar.Root>
-        <span class="kc-truncate">{symbol.shortName ?? symbol.name ?? symbol.ticker}</span>
+        <span class="kc-truncate">{wall.active.symbol.shortName ?? wall.active.symbol.name ?? wall.active.symbol.ticker}</span>
         <SearchIcon />
       </button>
 
@@ -737,7 +501,10 @@
             <ToggleGroup.Item
               class={`kc-toggle-item${starred.has(item.text) ? '' : ' is-transient'}`}
               value={item.text}
-              onclick={() => { period = item }}
+              onclick={() => {
+                wall.active.period = item
+                onPeriodChange(wall.active.id, item)
+              }}
             >
               {item.text}
             </ToggleGroup.Item>
@@ -750,7 +517,7 @@
           <Tooltip.Trigger>
             {#snippet child({ props })}
               <Popover.Trigger {...props} class="kc-button kc-timeframe-trigger" aria-label={i18n('timeframes', locale)}>
-                <span class="kc-truncate">{period.text}</span>
+                <span class="kc-truncate">{wall.active.period.text}</span>
                 <ChevronDownIcon />
               </Popover.Trigger>
             {/snippet}
@@ -775,7 +542,10 @@
                     >
                       <StarIcon class={`kc-star-icon${starred.has(item.text) ? ' is-filled' : ''}`} />
                     </button>
-                    <Popover.Close class="kc-timeframe-item" onclick={() => { period = item }}>
+                    <Popover.Close class="kc-timeframe-item" onclick={() => {
+                      wall.active.period = item
+                      onPeriodChange(wall.active.id, item)
+                    }}>
                       {item.text}
                     </Popover.Close>
                   </div>
@@ -789,6 +559,13 @@
       <div class="kc-toolbar-slot" bind:this={toolbarSlot}></div>
 
       <div class="kc-toolbar-actions">
+        <LayoutPicker {wall} {locale} {portalProps} />
+        <SyncToggle
+          bind:crosshair={syncCrosshairEnabled}
+          bind:time={syncTimeEnabled}
+          {locale}
+          {portalProps}
+        />
         {#each [
           { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
           { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
@@ -862,14 +639,12 @@
           <Tooltip.Root>
             <Tooltip.Trigger class={iconButtonClass(overlayMode !== 'normal')} onclick={() => {
               overlayMode = overlayMode === 'normal' ? 'weak_magnet' : 'normal'
-              widget?.overrideOverlay({ mode: overlayMode })
             }} aria-label={i18n('weak_magnet', locale)}><MagnetIcon /></Tooltip.Trigger>
             <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n('weak_magnet', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
           <Tooltip.Root>
             <Tooltip.Trigger class={iconButtonClass(overlaysLocked)} onclick={() => {
               overlaysLocked = !overlaysLocked
-              widget?.overrideOverlay({ lock: overlaysLocked })
             }} aria-label={i18n(overlaysLocked ? 'unlock' : 'lock', locale)}>
               {#if overlaysLocked}<LockIcon />{:else}<UnlockIcon />{/if}
             </Tooltip.Trigger>
@@ -878,14 +653,13 @@
           <Tooltip.Root>
             <Tooltip.Trigger class={iconButtonClass(!overlaysVisible)} onclick={() => {
               overlaysVisible = !overlaysVisible
-              widget?.overrideOverlay({ visible: overlaysVisible })
             }} aria-label={i18n(overlaysVisible ? 'invisible' : 'visible', locale)}>
               {#if overlaysVisible}<EyeIcon />{:else}<EyeOffIcon />{/if}
             </Tooltip.Trigger>
             <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n(overlaysVisible ? 'invisible' : 'visible', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
           <Tooltip.Root>
-            <Tooltip.Trigger class={iconButtonClass()} onclick={() => widget?.removeOverlay({ groupId: 'drawing_tools' })} aria-label={i18n('remove', locale)}><TrashIcon /></Tooltip.Trigger>
+            <Tooltip.Trigger class={iconButtonClass()} onclick={() => wall.active.api?.removeDrawings()} aria-label={i18n('remove', locale)}><TrashIcon /></Tooltip.Trigger>
             <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n('remove', locale)}</Tooltip.Content></Tooltip.Portal>
           </Tooltip.Root>
 
@@ -893,10 +667,35 @@
         </aside>
       {/if}
 
-      <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
-      {#if loading}
-        <div class="klinecharts-pro-loading"><LoaderCircleIcon class="kc-spinner" aria-label="Loading chart data" /></div>
-      {/if}
+      <div
+        class="klinecharts-pro-grid"
+        data-pane-count={wall.layout.paneCount}
+        style={`grid-template-areas: ${wall.layout.gridTemplateAreas}; grid-template-columns: ${wall.layout.gridTemplateColumns}; grid-template-rows: ${wall.layout.gridTemplateRows};`}
+      >
+        {#each wall.visiblePanes as pane (pane.id)}
+          <ChartPane
+            {pane}
+            active={pane.id === wall.activeId}
+            {theme}
+            {styles}
+            {locale}
+            {timezone}
+            {watermark}
+            {periods}
+            {bus}
+            onActivate={(id) => wall.activate(id)}
+            onIndicatorSettings={(payload) => {
+              indicatorSettings = {
+                paneId: payload.paneId,
+                chartPaneId: payload.chartPaneId,
+                indicatorName: payload.name,
+                calcParams: payload.calcParams
+              }
+              indicatorSettingsOpen = true
+            }}
+          />
+        {/each}
+      </div>
     </div>
 
     <Dialog.Root bind:open={symbolDialogOpen}>
@@ -920,7 +719,8 @@
               <Command.GroupItems>
                 {#each symbolResults as item (item.ticker)}
                   <Command.Item class="kc-command-item" value={item.ticker} onclick={() => {
-                    symbol = item
+                    wall.active.symbol = item
+                    onSymbolChange(wall.active.id, item)
                     symbolDialogOpen = false
                   }}>
                     <Avatar.Root class="kc-avatar">
@@ -958,7 +758,7 @@
             <div class="kc-checkbox-grid">
               {#each mainIndicatorNames as name (name)}
                 <div class="kc-checkbox-field">
-                  <Checkbox.Root class="kc-checkbox" id={`main-${name}`} checked={mainIndicators.includes(name)} onCheckedChange={(checked) => changeIndicator(name, true, checked === true)}>
+                  <Checkbox.Root class="kc-checkbox" id={`main-${name}`} checked={wall.active.mainIndicators.includes(name)} onCheckedChange={(checked) => wall.active.api?.changeIndicator(name, true, checked === true)}>
                     {#snippet children({ checked })}{#if checked}<CheckIcon />{/if}{/snippet}
                   </Checkbox.Root>
                   <label for={`main-${name}`}>{i18n(name.toLowerCase(), locale)}</label>
@@ -972,7 +772,7 @@
             <div class="kc-checkbox-grid">
               {#each subIndicatorNames as name (name)}
                 <div class="kc-checkbox-field">
-                  <Checkbox.Root class="kc-checkbox" id={`sub-${name}`} checked={name in subIndicators} onCheckedChange={(checked) => changeIndicator(name, false, checked === true)}>
+                  <Checkbox.Root class="kc-checkbox" id={`sub-${name}`} checked={wall.active.subIndicatorNames.includes(name)} onCheckedChange={(checked) => wall.active.api?.changeIndicator(name, false, checked === true)}>
                     {#snippet children({ checked })}{#if checked}<CheckIcon />{/if}{/snippet}
                   </Checkbox.Root>
                   <label for={`sub-${name}`}>{i18n(name.toLowerCase(), locale)}</label>
@@ -1077,7 +877,12 @@
           <button class="kc-button kc-button-primary" onclick={() => {
             const config = (indicatorConfig as Record<string, Array<{ default?: number }>>)[indicatorSettings.indicatorName] ?? []
             const params = indicatorSettings.calcParams.map((value, index) => value === '' || value == null ? config[index]?.default : value)
-            widget?.overrideIndicator({ name: indicatorSettings.indicatorName, paneId: indicatorSettings.paneId, calcParams: params })
+            const targetPane = wall.panes.find((item) => item.id === indicatorSettings.paneId)
+            targetPane?.api?.chart.overrideIndicator({
+              name: indicatorSettings.indicatorName,
+              paneId: indicatorSettings.chartPaneId,
+              calcParams: params
+            })
             indicatorSettingsOpen = false
           }}>{i18n('confirm', locale)}</button>
         </div>
@@ -1091,11 +896,11 @@
         <Dialog.Content class="kc-dialog-content kc-dialog-2xl">
           <div class="kc-dialog-header">
           <Dialog.Title>{i18n('screenshot', locale)}</Dialog.Title>
-          <Dialog.Description>{symbol.ticker} · {period.text}</Dialog.Description>
+          <Dialog.Description>{wall.active.symbol.ticker} · {wall.active.period.text}</Dialog.Description>
           </div>
           <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
         {#if screenshotUrl}
-          <img class="kc-screenshot" src={screenshotUrl} alt={`${symbol.ticker} chart screenshot`} />
+          <img class="kc-screenshot" src={screenshotUrl} alt={`${wall.active.symbol.ticker} chart screenshot`} />
         {:else}
           <div class="kc-empty">{i18n('no_data', locale)}</div>
         {/if}

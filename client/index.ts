@@ -1,8 +1,9 @@
 import { KLineChartPro } from '../src'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
-import { attachToSlot, mountLayer } from './chartlayers/controller'
+import { attachToSlot, createLayerController } from './chartlayers/controller'
 import { WdashboardDatafeed } from './datafeed'
+import { hydrateLayout, loadLayout, saveLayout, toPaneOptions } from './layout'
 import { levelsLayer } from './levels/layer'
 import { renderLogin } from './login'
 import { availablePeriods, defaultPeriod } from './periods'
@@ -49,17 +50,44 @@ async function mountChart(container: HTMLElement): Promise<void> {
   // "Signing in…" since nothing ever tears the login form down.
   container.innerHTML = ''
 
-  // The initial instrument's configuration and this account's starred timeframes both
-  // have to resolve before the chart mounts — price precision and the starred set are
-  // both construction-time properties of the library component (src/types.ts:
-  // ChartProOptions has no setSymbol-style setter for either).
-  const [symbol, starredTimeframes] = await Promise.all([
-    fetchSymbolInfo(params.get('symbol') ?? DEFAULT_SYMBOL_TICKER),
-    hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES)
+  // A `?symbol=` link is a deliberate deep link to one instrument -- it wins outright over
+  // any saved wall, the same way it already overrode the single chart before this feature
+  // existed, rather than silently landing on some other pane's saved symbol.
+  const requestedSymbol = params.get('symbol')
+
+  // The initial instrument's configuration, this account's starred timeframes, and any saved
+  // wall layout all have to resolve before the chart mounts — price precision, the starred
+  // set and the pane layout are all construction-time properties of the library component
+  // (src/types.ts: ChartProOptions has no setSymbol-style setter for any of them).
+  const [symbol, starredTimeframes, persistedLayout] = await Promise.all([
+    fetchSymbolInfo(requestedSymbol ?? DEFAULT_SYMBOL_TICKER),
+    hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES),
+    requestedSymbol ? Promise.resolve(null) : loadLayout()
   ])
+  const hydrated = persistedLayout ? await hydrateLayout(persistedLayout) : null
+
+  // Every chart layer (today: just Levels; a second server-derived layer mounts the same
+  // way) is built BEFORE the chart exists: its `sync` becomes the wall's onPanesChange, and
+  // that has to be a constructor argument rather than something wired on afterward.
+  const levelsController = createLayerController(levelsLayer)
 
   const periods = availablePeriods()
-  const chartPro = new KLineChartPro({
+
+  // Every one of these fires only after the chart exists (Svelte effects, never
+  // synchronously during the constructor below), so `chartPro` is always assigned by the
+  // time any of them runs.
+  let chartPro: KLineChartPro | null = null
+  const persist = (): void => {
+    const cp = chartPro
+    if (!cp) return
+    const panes = cp.getPaneSnapshots()
+    if (panes.length === 0) return
+    const activeIndex = Math.max(0, panes.findIndex((pane) => pane.id === cp.getActivePaneId()))
+    saveLayout(cp.getPaneLayout(), panes, activeIndex, latestSync)
+  }
+  let latestSync = { crosshair: hydrated?.sync.crosshair ?? true, time: hydrated?.sync.time ?? true }
+
+  chartPro = new KLineChartPro({
     container,
     locale: 'en-US',
     theme: params.get('theme') ?? 'dark',
@@ -73,20 +101,44 @@ async function mountChart(container: HTMLElement): Promise<void> {
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
-    datafeed: new WdashboardDatafeed()
+    // A factory, not a shared instance: WdashboardDatafeed keys its `listeners`/`latest`
+    // watermark maps by `vendor symbol interval`, so two panes on the same symbol+interval
+    // sharing one instance would silently clobber each other's stream subscription.
+    datafeed: () => new WdashboardDatafeed(),
+    ...(hydrated
+      ? { paneLayout: hydrated.preset, panes: hydrated.panes.map(toPaneOptions) }
+      : {}),
+    activePane: hydrated ? `p${hydrated.active + 1}` : 'p1',
+    syncCrosshair: latestSync.crosshair,
+    syncTime: latestSync.time,
+    // The definitive "which panes are actually live" signal -- fires once per pane mount and
+    // once per pane teardown (including every layout grow/shrink), never before a pane's
+    // chart exists. Every mounted chart layer resyncs from this directly; nothing here polls
+    // getChart().
+    onPanesChange: (panes) => levelsController.sync(panes),
+    onPaneLayoutChange: persist,
+    onActivePaneChange: persist,
+    onSymbolChange: persist,
+    onPeriodChange: persist,
+    onSyncChange: (options) => {
+      latestSync = options
+      persist()
+    }
   })
 
-  mountChartExtras(chartPro)
+  mountChartExtras(chartPro, levelsController)
 }
 
 // Populates the two slots the library exposes (src/types.ts ChartPro.getSlot): the top-rail
-// toolbar gets each mounted chart layer's toggle (mountLayer, chartlayers/controller.ts —
-// today just Levels), the bottom of the left drawing rail gets the stream-liveness dot,
-// server version, and (when logged in) a sign-out control. The rail-footer trio answers
-// questions the chart itself cannot — a chart with a dead socket looks exactly like a quiet
-// market — which is why they used to float over the canvas in their own corner widget; they
-// now live in the chrome instead.
-function mountChartExtras(chartPro: KLineChartPro): void {
+// toolbar gets each mounted chart layer's toggle (today just Levels), the bottom of the left
+// drawing rail gets the stream-liveness dot, server version, and (when logged in) a sign-out
+// control. The rail-footer trio answers questions the chart itself cannot — a chart with a
+// dead socket looks exactly like a quiet market — which is why they used to float over the
+// canvas in their own corner widget; they now live in the chrome instead.
+function mountChartExtras(
+  chartPro: KLineChartPro,
+  levelsController: ReturnType<typeof createLayerController>
+): void {
   const footer = document.createElement('div')
   footer.className = 'wd-rail-footer-content'
 
@@ -129,7 +181,7 @@ function mountChartExtras(chartPro: KLineChartPro): void {
   })
 
   attachToSlot(chartPro, 'rail-footer', footer)
-  void mountLayer(chartPro, levelsLayer)
+  levelsController.attach(chartPro)
 }
 
 void bootstrap()
