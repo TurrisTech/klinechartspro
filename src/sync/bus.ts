@@ -15,7 +15,7 @@
 import type { Chart, Nullable } from 'klinecharts'
 
 import { applyCrosshairAt, clearCrosshair, type CrosshairPoint } from './crosshair'
-import { seekToTimestamp } from './seek'
+import { isTimestampVisible, seekToTimestamp } from './seek'
 
 export interface SyncPane {
   id: string
@@ -59,7 +59,6 @@ export class SyncBus {
   private dispatchingCrosshair = false
 
   private seekRaf = 0
-  private seekCancelled = false
   private readonly seekRetryCleanup = new Map<string, () => void>()
 
   register(pane: SyncPane): void {
@@ -127,18 +126,18 @@ export class SyncBus {
 
   // --- Click to scroll -------------------------------------------------------------------
 
-  // Deferred one rAF so an overlay's own onClick/onPressedMoveStart -- which fire
-  // synchronously within the SAME click dispatch that produced this call, before the rAF
-  // runs -- get a chance to cancelPendingSeek() first. Both "placing a drawing point" and
-  // "clicking an existing drawing to select/drag it" fire onCandleBarClick too; the caller
-  // (ChartPane) is responsible for the placement-in-progress guard, this handles selection.
+  // Coalesced to one rAF per animation frame, same rationale as broadcastCrosshair -- a rapid
+  // run of calls (there isn't one in practice today, one click is one call) collapses to the
+  // latest target rather than seeking every pane once per call.
   broadcastSeek(sourceId: string, timestamp: number, fraction: number): void {
-    if (!this.options.time) return
-    this.seekCancelled = false
+    if (!this.options.time) {
+      console.debug('[sync] seek skipped: time sync is off')
+      return
+    }
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
     this.seekRaf = requestAnimationFrame(() => {
       this.seekRaf = 0
-      if (this.seekCancelled) return
+      console.debug('[sync] seek dispatch', { sourceId, targets: [...this.panes.keys()].filter((id) => id !== sourceId) })
       for (const [id, pane] of this.panes) {
         if (id === sourceId) continue
         const chart = pane.getChart()
@@ -146,14 +145,6 @@ export class SyncBus {
         this.seekPane(chart, pane, timestamp, fraction, 0)
       }
     })
-  }
-
-  cancelPendingSeek(): void {
-    this.seekCancelled = true
-    if (this.seekRaf !== 0) {
-      cancelAnimationFrame(this.seekRaf)
-      this.seekRaf = 0
-    }
   }
 
   private seekPane(
@@ -164,7 +155,19 @@ export class SyncBus {
     attempt: number
   ): void {
     const dataList = chart.getDataList()
-    if (dataList.length === 0) return
+    if (dataList.length === 0) {
+      console.debug('[sync] seekPane skipped: no data loaded yet', { pane: pane.id })
+      return
+    }
+
+    // Already on screen -- leave this pane's viewport alone rather than re-centring it on
+    // every click. Re-checked on each paging retry below too: a page landing can bring the
+    // target into view without the final scroll ever needing to run.
+    if (isTimestampVisible(chart, timestamp)) {
+      console.debug('[sync] seekPane skipped: target already visible', { pane: pane.id, timestamp })
+      return
+    }
+
     const oldest = dataList[0].timestamp
     const periodMs = pane.getPeriodMs()
 
@@ -173,6 +176,7 @@ export class SyncBus {
     // never backward-pages here, live streaming keeps every pane current instead, so a click
     // timestamp is realistically always at or before "now".)
     if (periodMs <= 0 || timestamp >= oldest) {
+      console.debug('[sync] seekPane: direct seek (within loaded history)', { pane: pane.id, timestamp, fraction })
       seekToTimestamp(chart, timestamp, fraction, SEEK_ANIMATION_MS)
       return
     }
@@ -181,6 +185,7 @@ export class SyncBus {
     if (barsAway > MAX_SEEK_PAGES * PAGE_BARS || attempt >= MAX_SEEK_PAGES) {
       // Too far, or the retry budget is spent -- land on the oldest bar this pane actually
       // has rather than triggering an unbounded string of forward-page fetches.
+      console.debug('[sync] seekPane: target too far, clamping to oldest loaded bar', { pane: pane.id, oldest, barsAway, attempt })
       seekToTimestamp(chart, oldest, fraction, SEEK_ANIMATION_MS)
       return
     }
@@ -189,6 +194,7 @@ export class SyncBus {
     // loaded range using this chart's own period, so the distance genuinely points at the
     // older data -- which touches the left (oldest) edge and triggers klinecharts' own
     // forward-page fetch. Retry once that page lands.
+    console.debug('[sync] seekPane: seeking toward target, scheduling paging retry', { pane: pane.id, timestamp, attempt })
     seekToTimestamp(chart, timestamp, fraction, SEEK_ANIMATION_MS)
     this.scheduleSeekRetry(chart, pane, timestamp, fraction, attempt)
   }

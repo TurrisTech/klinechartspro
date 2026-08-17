@@ -14,6 +14,7 @@
     type OverlayCreate,
     type OverlayMode,
     type Period as ChartPeriod,
+    type Point,
     type Styles,
     type SymbolInfo as ChartSymbolInfo,
     type TooltipFeatureStyle
@@ -72,6 +73,14 @@
   let priceUnitElement: HTMLElement | null = null
   let mounted = $state(false)
   let defaultStyles: Styles | null = null
+
+  // Set synchronously by an overlay's own onClick/onPressedMoveStart (below) when a click
+  // selects or starts dragging an EXISTING drawing -- klinecharts processes the whole click
+  // (candle figure hit-test, then every overlay's hit-test) inside its internal mouseup
+  // handler, which always completes before the browser's native 'click' event we listen for
+  // below fires. So by the time our click handler runs, this flag already reflects whether
+  // the same click also hit a drawing; read-and-clear there.
+  let overlayInteracted = false
 
   // Transient name -> klinecharts chartPaneId map for this pane's sub-indicators. Meaningless
   // once this chart is disposed, unlike `pane.subIndicatorNames` (the durable name list),
@@ -322,14 +331,13 @@
       visible: drawing.visible,
       lock: drawing.lock,
       mode: drawing.mode,
-      // onCandleBarClick fires on a placement click too (klinecharts dispatches its
-      // children last-to-first, so the candle figure sees the click before the overlay
-      // does) and on a click that selects/drags an EXISTING drawing. The isDrawing() guard
-      // in the onCandleBarClick handler below covers the first; these two, which run
-      // synchronously within the same click dispatch -- before the sync bus's deferred
-      // rAF seek fires -- cover the second.
-      onClick: () => { bus.cancelPendingSeek() },
-      onPressedMoveStart: () => { bus.cancelPendingSeek() }
+      // A click that selects or starts dragging an EXISTING drawing must not also seek. The
+      // isDrawing() guard in the click handler below covers PLACING a new drawing (its
+      // currentStep stays !== -1 through the final point); this flag covers interacting with
+      // one that's already finished -- see `overlayInteracted`'s own comment for why setting a
+      // flag here, read by our own later-firing native click listener, is what's race-free.
+      onClick: () => { overlayInteracted = true },
+      onPressedMoveStart: () => { overlayInteracted = true }
     } as OverlayCreate)
   }
 
@@ -447,23 +455,63 @@
     }
     widget.subscribeAction('onCrosshairChange', onCrosshairChange)
 
-    // Click-to-scroll source. onCandleBarClick already never fires after a pan-drag
-    // (klinecharts cancels its own click dispatch past a 5px pointer-move threshold), so no
-    // drag-distance guard is needed here -- only the drawing-in-progress guard, since placing
-    // an overlay point dispatches this same action (candleBarView is notified before
-    // overlayView on every click). Selecting/dragging an EXISTING overlay also fires this;
-    // that case is guarded from the overlay's own onClick/onPressedMoveStart in
-    // createOverlay() above, which cancel the bus's deferred seek before it runs.
-    const onCandleBarClick = (value?: unknown) => {
-      const payload = value as { x?: number; data?: { current?: { timestamp?: number } } } | undefined
-      const timestamp = payload?.data?.current?.timestamp
-      if (typeof payload?.x !== 'number' || typeof timestamp !== 'number') return
-      if (chart.getOverlays().some((overlay) => overlay.currentStep !== -1)) return
-      const main = chart.getSize('candle_pane', 'main')
-      if (!main || main.width === 0) return
-      bus.broadcastSeek(pane.id, timestamp, payload.x / main.width)
+    // Click-to-scroll source. Deliberately a native DOM click on candle_pane's own main
+    // widget, not klinecharts' `onCandleBarClick` action -- that action only fires when a
+    // candle FIGURE is actually under the pointer, which at any real zoom level is a target a
+    // couple of pixels wide at best. A click on the gap between candles, or past the newest/
+    // oldest loaded bar, must translate to a date too. `convertFromPixel` extrapolates
+    // linearly outside the loaded range using this chart's own period (the exact mechanism
+    // seekToTimestamp's reverse direction relies on), so any x inside the pane -- not just one
+    // over a bar -- resolves to a real timestamp.
+    //
+    // Two guards a bar-scoped click never needed:
+    // - Drag distance: `onCandleBarClick` never fired past klinecharts' own 5px
+    //   (`ManhattanDistance.CancelClick`) pointer-move threshold; a native 'click' has no such
+    //   built-in cancellation (it fires on any mousedown+mouseup pair regardless of the pan in
+    //   between), so it's reproduced here against the same threshold.
+    // - Ordering vs. overlay clicks: klinecharts resolves the WHOLE click (candle hit-test,
+    //   then every overlay's hit-test) synchronously inside its own mouseup handling, which
+    //   always finishes before the browser dispatches the separate native 'click' event this
+    //   listens for -- so `overlayInteracted` (set by createOverlay()'s onClick/
+    //   onPressedMoveStart above) is already current by the time this runs.
+    const candleMain = widget.getDom('candle_pane', 'main')
+    let clickDownX = 0
+    let clickDownY = 0
+    const onCandleMainPointerDown = (event: PointerEvent) => {
+      clickDownX = event.clientX
+      clickDownY = event.clientY
     }
-    widget.subscribeAction('onCandleBarClick', onCandleBarClick)
+    const onCandleMainClick = (event: MouseEvent) => {
+      if (Math.abs(event.clientX - clickDownX) + Math.abs(event.clientY - clickDownY) >= 5) {
+        console.debug('[sync] click ignored: exceeded drag threshold', { pane: pane.id })
+        return
+      }
+      if (overlayInteracted) {
+        overlayInteracted = false
+        console.debug('[sync] click ignored: hit an existing drawing', { pane: pane.id })
+        return
+      }
+      if (chart.getOverlays().some((overlay) => overlay.currentStep !== -1)) {
+        console.debug('[sync] click ignored: a drawing is in progress', { pane: pane.id })
+        return
+      }
+      const main = chart.getSize('candle_pane', 'main')
+      if (!main || main.width === 0 || !candleMain) {
+        console.debug('[sync] click ignored: candle_pane has no measured width yet', { pane: pane.id })
+        return
+      }
+      const x = event.clientX - candleMain.getBoundingClientRect().left
+      const points = chart.convertFromPixel([{ x }], { paneId: 'candle_pane' }) as Array<Partial<Point>>
+      const timestamp = points[0]?.timestamp
+      if (typeof timestamp !== 'number') {
+        console.debug('[sync] click ignored: could not resolve a date for this position', { pane: pane.id, x })
+        return
+      }
+      console.debug('[sync] broadcasting seek', { pane: pane.id, timestamp, fraction: x / main.width })
+      bus.broadcastSeek(pane.id, timestamp, x / main.width)
+    }
+    candleMain?.addEventListener('pointerdown', onCandleMainPointerDown)
+    candleMain?.addEventListener('click', onCandleMainClick)
 
     // There is no klinecharts action for "crosshair cleared" -- on pointer leave it clears
     // its own internal state directly, with no observable dispatch. `chart.getDom()` with no
@@ -508,9 +556,10 @@
       // rather than leaving it stale with no owner.
       bus.unregister(pane.id)
       chartDom.removeEventListener('pointerleave', onPointerLeave)
+      candleMain?.removeEventListener('pointerdown', onCandleMainPointerDown)
+      candleMain?.removeEventListener('click', onCandleMainClick)
       widget?.unsubscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
       widget?.unsubscribeAction('onCrosshairChange', onCrosshairChange)
-      widget?.unsubscribeAction('onCandleBarClick', onCandleBarClick)
       pane.api = null
       // dispose()/destroy() calls the store's _clearData(), never _processDataUnsubscribe() --
       // only an in-place setSymbol/setPeriod (resetData) does that. Without this explicit
