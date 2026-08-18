@@ -109,8 +109,10 @@ async function mountChart(container: HTMLElement): Promise<void> {
     container,
     locale: 'en-US',
     theme: params.get('theme') ?? 'dark',
-    // wdashboard-server aligns bar timestamps to America/New_York — 1D bars open at 17:00
-    // NY, the FX daily boundary — so any other display timezone splits days mid-bar.
+    // wdashboard-server states every bar timestamp on the market's clock: intraday bars
+    // open on the America/New_York session grid, and daily-and-coarser ones are dated by
+    // their canonical date, 00:00 New York of the session. Any other display timezone
+    // splits those days mid-bar and shifts the date a daily candle reads as.
     timezone: 'America/New_York',
     symbol,
     period: defaultPeriod(periods),
