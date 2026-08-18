@@ -83,6 +83,8 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
     const s = b.store
     if (!s) return `${base} · loading`
     switch (s.phase) {
+      case 'queued':
+        return `${base} · queued`
       case 'replaying':
         return `${base} · computing${s.progress != null ? ` ${Math.round(s.progress * 100)}%` : '…'}`
       case 'loading':
@@ -131,7 +133,7 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
         const store = b.store
         if (!store) return
         if (result.s === 'replaying') {
-          store.setPhase('replaying', result.progress ?? null)
+          store.setPhase(result.phase === 'queued' ? 'queued' : 'replaying', result.progress ?? null)
           apply(entry, b)
           if (b.retryTimer) clearTimeout(b.retryTimer)
           b.retryTimer = setTimeout(() => {
@@ -202,8 +204,8 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
           void ensureCoverage(entry, b)
         } else if (phase === 'error') {
           store.setPhase('error', null, error)
-        } else if (phase === 'replaying') {
-          store.setPhase('replaying', store.progress)
+        } else if (phase === 'replaying' || phase === 'queued') {
+          store.setPhase(phase, store.progress)
         }
         apply(entry, b)
       }

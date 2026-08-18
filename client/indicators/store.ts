@@ -10,7 +10,7 @@ export interface Range {
   to: number
 }
 
-export type SeriesPhase = 'idle' | 'loading' | 'replaying' | 'ready' | 'error'
+export type SeriesPhase = 'idle' | 'loading' | 'queued' | 'replaying' | 'ready' | 'error'
 
 export class SeriesStore {
   readonly values = new Map<number, number | null>()

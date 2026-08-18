@@ -53,7 +53,7 @@ export interface DiscoveryResponse {
 export type ValuesResult =
   | { s: 'ok'; seriesKey: string; points: IndicatorPoint[] }
   | { s: 'no_data'; seriesKey: string }
-  | { s: 'replaying'; seriesKey: string; progress: number | null; retryAfterMs: number }
+  | { s: 'replaying'; seriesKey: string; phase?: string; progress: number | null; retryAfterMs: number }
 
 let discovery: Promise<DiscoveryResponse> | null = null
 
