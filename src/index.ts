@@ -31,6 +31,7 @@ export type {
   Datafeed,
   DatafeedFactory,
   DatafeedSubscribeCallback,
+  IndicatorGroup,
   PaneOptions,
   PaneSnapshot,
   Period,
@@ -38,3 +39,4 @@ export type {
 } from './types'
 export type { LayoutPreset } from './config/layouts'
 export { getLayouts as getPaneLayouts, MAX_PANES } from './config/layouts'
+export { registerIndicatorSettings, type IndicatorParamSetting } from './config/indicators'

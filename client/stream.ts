@@ -1,5 +1,6 @@
 import { capabilities, hasFeature } from './capabilities'
 import { STREAM_URL } from './config'
+import type { IndicatorPoint, SeriesDoc } from './indicators/api'
 import type { OHLCVBar, StreamClientMessage, StreamServerMessage } from './ohlcv'
 
 // Reconnect backoff. A dropped stream is usually a proxy idle-timeout or a server rollout,
@@ -37,6 +38,18 @@ export interface StreamListener {
   onBar(bar: OHLCVBar, closed: boolean): void
 }
 
+// A server-computed indicator series' live values -- same socket, its own frame family
+// (indicator_subscribed / indicator_backfill / indicator / indicator_status). One shape
+// whether the server computes it in process or relays the indicator feed.
+export interface IndicatorListener {
+  onBackfill?(points: IndicatorPoint[]): void
+  onPoint(point: IndicatorPoint): void
+  onStatus?(phase: string, error: string | null): void
+}
+
+// Values requested on an indicator subscribe to bridge history and live (server default 200).
+const INDICATOR_BACKFILL_COUNT = 200
+
 export type StreamStatus = 'connected' | 'connecting' | 'offline'
 export type StatusListener = (status: StreamStatus) => void
 
@@ -52,12 +65,24 @@ interface Subscription {
   formingSupported: boolean
 }
 
+interface IndicatorSubscription {
+  vendor: string
+  symbol: string
+  interval: string
+  series: SeriesDoc
+  listeners: Set<IndicatorListener>
+}
+
 // One shared `WS /stream` connection for the page, multiplexing every active subscription.
 // Requests "all" mode so a forming bar updates live and finalizes on close, rather than the
 // chart's right edge jumping only once per interval.
 class StreamClient {
   private ws: WebSocket | null = null
   private readonly subscriptions = new Map<string, Subscription>()
+  // Keyed by the server's seriesKey (SeriesIdentity.key()), which every indicator frame
+  // carries; the controller learns it from its first history read before subscribing.
+  private readonly indicatorSubscriptions = new Map<string, IndicatorSubscription>()
+  private readonly indicatorLingering = new Map<string, ReturnType<typeof setTimeout>>()
   // Keys whose last listener just left: still present in `subscriptions` (so a stray
   // in-flight message for them is a harmless no-op iteration over an empty listener set),
   // but scheduled to actually leave -- and to send the real `unsubscribe` frame -- only if
@@ -132,6 +157,60 @@ class StreamClient {
       this.send({ action: 'unsubscribe', vendor, symbol, interval })
     }, UNSUBSCRIBE_LINGER_MS)
     this.lingering.set(key, timer)
+  }
+
+  subscribeIndicator(
+    vendor: string,
+    symbol: string,
+    interval: string,
+    series: SeriesDoc,
+    seriesKey: string,
+    listener: IndicatorListener
+  ): void {
+    const existing = this.indicatorSubscriptions.get(seriesKey)
+    if (existing) {
+      existing.listeners.add(listener)
+      const timer = this.indicatorLingering.get(seriesKey)
+      if (timer) {
+        clearTimeout(timer)
+        this.indicatorLingering.delete(seriesKey)
+      }
+      return
+    }
+    const max = capabilities().limits.maxSubscriptionsPerConnection
+    if (this.subscriptions.size + this.indicatorSubscriptions.size >= max) {
+      console.error(`[stream] refusing indicator ${seriesKey} — at the server's limit of ${max} subscriptions per connection`)
+      return
+    }
+    this.indicatorSubscriptions.set(seriesKey, { vendor, symbol, interval, series, listeners: new Set([listener]) })
+    this.send(this.indicatorSubscribeFrame(vendor, symbol, interval, series))
+    this.connect()
+  }
+
+  unsubscribeIndicator(seriesKey: string, listener: IndicatorListener): void {
+    const sub = this.indicatorSubscriptions.get(seriesKey)
+    if (!sub) return
+    sub.listeners.delete(listener)
+    if (sub.listeners.size > 0) return
+    const existing = this.indicatorLingering.get(seriesKey)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      this.indicatorLingering.delete(seriesKey)
+      this.indicatorSubscriptions.delete(seriesKey)
+      this.send({ action: 'unsubscribe', vendor: sub.vendor, symbol: sub.symbol, interval: sub.interval, indicator: sub.series })
+    }, UNSUBSCRIBE_LINGER_MS)
+    this.indicatorLingering.set(seriesKey, timer)
+  }
+
+  private indicatorSubscribeFrame(vendor: string, symbol: string, interval: string, series: SeriesDoc): StreamClientMessage {
+    return {
+      action: 'subscribe',
+      vendor,
+      symbol,
+      interval,
+      indicator: series,
+      backfill: INDICATOR_BACKFILL_COUNT
+    }
   }
 
   private reviveLingering(key: string): void {
@@ -236,10 +315,14 @@ class StreamClient {
         )
       )
     }
+    for (const [key, sub] of this.indicatorSubscriptions) {
+      if (this.indicatorLingering.has(key)) continue
+      this.ws?.send(JSON.stringify(this.indicatorSubscribeFrame(sub.vendor, sub.symbol, sub.interval, sub.series)))
+    }
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer || this.subscriptions.size === 0) return
+    if (this.reconnectTimer || (this.subscriptions.size === 0 && this.indicatorSubscriptions.size === 0)) return
     const delay = Math.min(
       RECONNECT_MAX_MS,
       RECONNECT_BASE_MS * 2 ** Math.min(this.reconnectAttempts, 5)
@@ -313,6 +396,30 @@ class StreamClient {
         )
         if (!subscription) return
         for (const listener of subscription.listeners) listener.onBar(message.bar, message.closed)
+        return
+      }
+      case 'indicator_subscribed': {
+        const sub = this.indicatorSubscriptions.get(message.seriesKey)
+        if (!sub) return
+        for (const listener of sub.listeners) listener.onStatus?.(message.phase, null)
+        return
+      }
+      case 'indicator_backfill': {
+        const sub = this.indicatorSubscriptions.get(message.seriesKey)
+        if (!sub) return
+        for (const listener of sub.listeners) listener.onBackfill?.(message.points)
+        return
+      }
+      case 'indicator': {
+        const sub = this.indicatorSubscriptions.get(message.seriesKey)
+        if (!sub) return
+        for (const listener of sub.listeners) listener.onPoint(message.point)
+        return
+      }
+      case 'indicator_status': {
+        const sub = this.indicatorSubscriptions.get(message.seriesKey)
+        if (!sub) return
+        for (const listener of sub.listeners) listener.onStatus?.(message.phase, message.error ?? null)
         return
       }
       default:

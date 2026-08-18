@@ -94,6 +94,17 @@ export interface ChartProPane {
   isActive(): boolean
 }
 
+// One extra group of indicator choices for the picker dialog, beyond klinecharts' built-ins:
+// an app registers its own indicator templates (klinecharts' registerIndicator) and lists
+// them here so they appear beside the built-in ones. `label` is shown as-is (no i18n key --
+// the app owns the naming); `main` says whether the group's items go on the candle pane
+// (stacked) or each into their own sub-pane. Names must be the registered template names.
+export interface IndicatorGroup {
+  label: string
+  main: boolean
+  items: Array<{ name: string; label: string; description?: string }>
+}
+
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>
@@ -113,6 +124,8 @@ export interface ChartProOptions {
   timezone?: string
   mainIndicators?: string[]
   subIndicators?: string[]
+  /** Extra indicator groups for the picker dialog (see IndicatorGroup). */
+  indicatorGroups?: IndicatorGroup[]
   datafeed: Datafeed | DatafeedFactory
 
   /** Layout preset id (see src/config/layouts.ts). Defaults to '1', a single chart. */

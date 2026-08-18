@@ -13,6 +13,11 @@ export type Feature =
   | 'stream.backfill'
   // GET /instrument, and a `config` block on each /search result.
   | 'instrument.config'
+  // Server-computed indicators: GET /indicators, /indicators/values and `indicator`
+  // subscriptions on WS /stream (wdashboard-server services/indicators.py).
+  | 'indicators'
+  // The persisted half (config table + algo DB); informational for the client.
+  | 'indicators.persisted'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.

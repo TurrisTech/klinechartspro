@@ -61,7 +61,7 @@
     Period,
     SymbolInfo
   } from './types'
-  import indicatorConfig from './config/indicators'
+  import { indicatorSettingsFor } from './config/indicators'
   import { getOptions } from './config/settings'
   import {
     createTimezoneSelectOptions,
@@ -106,6 +106,7 @@
     timezone,
     mainIndicators,
     subIndicators,
+    indicatorGroups,
     datafeed,
     paneLayout,
     panes,
@@ -780,6 +781,22 @@
               {/each}
             </div>
           </fieldset>
+          {#each indicatorGroups as group, groupIndex (group.label)}
+          <Separator.Root class="kc-separator kc-dialog-separator" />
+          <fieldset class="kc-fieldset">
+            <legend>{group.label}</legend>
+            <div class="kc-checkbox-grid">
+              {#each group.items as item (item.name)}
+                <div class="kc-checkbox-field" title={item.description ?? ''}>
+                  <Checkbox.Root class="kc-checkbox" id={`grp${groupIndex}-${item.name}`} checked={(group.main ? wall.active.mainIndicators : wall.active.subIndicatorNames).includes(item.name)} onCheckedChange={(checked) => wall.active.api?.changeIndicator(item.name, group.main, checked === true)}>
+                    {#snippet children({ checked })}{#if checked}<CheckIcon />{/if}{/snippet}
+                  </Checkbox.Root>
+                  <label for={`grp${groupIndex}-${item.name}`}>{item.label}</label>
+                </div>
+              {/each}
+            </div>
+          </fieldset>
+          {/each}
           </ScrollArea.Viewport>
           <ScrollArea.Scrollbar orientation="vertical" class="kc-scrollbar"><ScrollArea.Thumb class="kc-scroll-thumb" /></ScrollArea.Scrollbar>
         </ScrollArea.Root>
@@ -862,7 +879,7 @@
           </div>
           <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
         <div class="kc-field-group">
-          {#each (indicatorConfig as Record<string, Array<{ paramNameKey: string; precision: number; min: number; default?: number }>>)[indicatorSettings.indicatorName] ?? [] as config, index (config.paramNameKey)}
+          {#each indicatorSettingsFor(indicatorSettings.indicatorName) as config, index (config.paramNameKey)}
             <div class="kc-field">
               <label for={`indicator-param-${index}`}>{i18n(config.paramNameKey, locale)}</label>
               <input class="kc-input" id={`indicator-param-${index}`} type="number" min={config.min} step={10 ** -config.precision} value={String(indicatorSettings.calcParams[index] ?? '')} oninput={(event) => {
@@ -875,7 +892,7 @@
         </div>
         <div class="kc-dialog-footer">
           <button class="kc-button kc-button-primary" onclick={() => {
-            const config = (indicatorConfig as Record<string, Array<{ default?: number }>>)[indicatorSettings.indicatorName] ?? []
+            const config = indicatorSettingsFor(indicatorSettings.indicatorName)
             const params = indicatorSettings.calcParams.map((value, index) => value === '' || value == null ? config[index]?.default : value)
             const targetPane = wall.panes.find((item) => item.id === indicatorSettings.paneId)
             targetPane?.api?.chart.overrideIndicator({
