@@ -84,6 +84,7 @@ export interface StreamBackfill {
   symbol: string
   interval: string
   bars: OHLCVBar[]
+  serverTime: number
 }
 
 export interface StreamBar {
@@ -93,6 +94,10 @@ export interface StreamBar {
   interval: string
   closed: boolean
   bar: OHLCVBar
+  // `bar.date` is WHICH BUCKET this is, on the vendor's event clock; `serverTime` is when
+  // the server sent the frame, on its own. The gap between them is how stale the bar is —
+  // the only way to tell a fresh forming bar from one that sat in a slow connection's queue.
+  serverTime: number
 }
 
 export interface StreamPong {
