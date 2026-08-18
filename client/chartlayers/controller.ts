@@ -8,7 +8,7 @@ import type { ChartLayer, LayerContext, LayerWindow } from './types'
 // Generic multi-pane lifecycle for a ChartLayer (types.ts): one shared toolbar button that
 // opens a settings panel (enable/disable is that panel's first row, not a separate click
 // target — see settings.ts), applied independently to every currently-live pane of the wall
-// (src/state/wall.svelte.ts) — coverage-gated visibility, debounced redraw on pan/zoom/
+// (src/state/wall.svelte.ts) — coverage-gated enablement, debounced redraw on pan/zoom/
 // symbol/period/price-axis change, and a per-pane record of which price/time window has
 // been fetched so a wider view loads only the part it is missing, all scoped per pane.
 //
@@ -268,14 +268,21 @@ export function createLayerController<TDatum, TConfig extends object>(
     panel = null
   }
 
-  // Visible unless NONE of the currently-live panes have coverage — a wall with even one
-  // eligible pane keeps the control reachable, rather than hiding it whenever the ACTIVE
-  // pane happens to be on an ineligible symbol.
-  const updateVisibility = (): void => {
-    layerButton.hidden = ![...wired.values()].some((entry) => {
+  // Disabled — never hidden — unless NONE of the currently-live panes have coverage: the
+  // control keeps its place in the toolbar so the wall's layout doesn't shift as symbols
+  // change, and the greyed-out button says "not here" rather than leaving the user to
+  // wonder where it went. A wall with even one eligible pane stays enabled, rather than
+  // going dead whenever the ACTIVE pane happens to be on an ineligible symbol.
+  const updateAvailability = (): void => {
+    const available = [...wired.values()].some((entry) => {
       const symbol = entry.pane.getSymbol()
       return layer.available(symbol, symbolVendor(symbol))
     })
+    layerButton.disabled = !available
+    layerButton.title = available ? '' : `${layer.label}: not available for this symbol`
+    // A panel left open over a pane that has just switched to an ineligible symbol would
+    // otherwise outlive the button that owns it.
+    if (!available) closePanel()
   }
 
   const clearOverlays = (entry: WiredPane<TDatum>): void => {
@@ -307,12 +314,14 @@ export function createLayerController<TDatum, TConfig extends object>(
   }
 
   const redraw = async (entry: WiredPane<TDatum>): Promise<void> => {
+    // Ahead of the enabled check: whether the button is reachable follows the wall's
+    // symbols, not whether the layer is currently drawing. Panel closing lives there too,
+    // so a pane on an ineligible symbol no longer closes a panel the rest of the wall
+    // still has a live button for.
+    updateAvailability()
     if (!enabled) return
     const symbol = entry.pane.getSymbol()
-    const available = layer.available(symbol, symbolVendor(symbol))
-    updateVisibility()
-    if (!available) {
-      closePanel()
+    if (!layer.available(symbol, symbolVendor(symbol))) {
       clearOverlays(entry)
       return
     }
@@ -485,7 +494,7 @@ export function createLayerController<TDatum, TConfig extends object>(
         wired.set(pane.id, entry)
         if (configLoaded) scheduleRedraw(entry)
       }
-      updateVisibility()
+      updateAvailability()
       if (wired.size > 0) startAxisWatch()
       else stopAxisWatch()
     }

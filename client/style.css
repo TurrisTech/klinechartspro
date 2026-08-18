@@ -80,16 +80,13 @@ body {
 
 /* A layer's single toolbar button (client/chartlayers/controller.ts's mountLayer) sits
    among the library's own kc-button icon actions in the top rail (see src/app.css
-   .kc-button); only the "on" accent and the hidden override are custom here. Any mounted
-   layer gets this for free — Levels is the only one today, but the class isn't
-   Levels-specific. */
+   .kc-button); only the "on" accent is custom here. A layer with no eligible pane
+   disables its button rather than hiding it, and `.kc-button:disabled` (dimmed, no
+   pointer events) already covers that. Any mounted layer gets this for free — Levels is
+   the only one today, but the class isn't Levels-specific. */
 .wd-layer-toggle.is-on {
   border: 1px solid color-mix(in oklab, var(--primary) 55%, transparent);
   background: color-mix(in oklab, var(--primary) 16%, transparent);
-}
-
-.wd-layer-toggle[hidden] {
-  display: none;
 }
 
 /* client/chartlayers/settings.ts's settings panel. Wider than the library's default
