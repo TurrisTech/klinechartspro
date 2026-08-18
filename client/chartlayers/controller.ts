@@ -3,14 +3,14 @@ import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { symbolVendor } from '../symbols'
 import { openSettingsPanel, type SettingsPanelHandle } from './settings'
 import { loadLayerConfig, saveLayerConfig } from './store'
-import type { ChartLayer, LayerContext } from './types'
+import type { ChartLayer, LayerContext, LayerWindow } from './types'
 
 // Generic multi-pane lifecycle for a ChartLayer (types.ts): one shared toolbar button that
 // opens a settings panel (enable/disable is that panel's first row, not a separate click
 // target — see settings.ts), applied independently to every currently-live pane of the wall
 // (src/state/wall.svelte.ts) — coverage-gated visibility, debounced redraw on pan/zoom/
-// symbol/period change, and a data cache so a style-only config change restyles without
-// refetching, all scoped per pane.
+// symbol/period/price-axis change, and a per-pane record of which price/time window has
+// been fetched so a wider view loads only the part it is missing, all scoped per pane.
 //
 // `attach` and `sync` are separate calls because `sync` must exist before a `KLineChartPro`
 // does, so it can be supplied as that constructor's own `onPanesChange` option
@@ -19,11 +19,38 @@ import type { ChartLayer, LayerContext } from './types'
 
 const DEFAULT_DEBOUNCE_MS = 400
 
+// The pane overlays are anchored to, and so the one whose price axis defines the band a
+// price-anchored layer has to cover. klinecharts' own PaneIdConstants.CANDLE, which the
+// package does not export.
+const CANDLE_PANE_ID = 'candle_pane'
+
 // The server computes over the full price history, so an unbounded query returns bands
 // nowhere near the current price. Every price-anchored layer needs a window around the
 // visible range, not the whole loaded history — kept here rather than per-layer because it
 // is about how much of the chart is on screen, not about what any one layer computes.
 const PRICE_WINDOW_FRACTION = 0.06
+
+// How far past the window it actually needs a fetch reaches, as a fraction of the visible
+// span on each side. Bought once and kept: the next small pan or rescale then lands inside
+// what the pane already holds and repaints without a request. Half a screen in both axes
+// keeps the held rectangle at ~2x the view per axis rather than unbounded, and measuring it
+// against the VISIBLE span rather than the accumulated one means a long session of panning
+// grows the window a screen at a time instead of doubling it per fetch.
+//
+// This bounds WHICH DATA a pane has, and is deliberately not the same number as how far off
+// screen a layer draws what it has (levels/layer.ts's DRAW_MARGIN_SPANS): a level whose life
+// crosses the view was fetched by that crossing, and its line then has to run well past the
+// pane or the drawing's own edge shows up as a wall when the view moves.
+const PREFETCH_FRACTION = 0.5
+
+// How often a pane's price axis is sampled — see startAxisWatch on why sampling, rather
+// than a subscription, is what notices a rescale.
+const AXIS_POLL_MS = 200
+
+// A pane's accumulated data is a snapshot of a server-side computation that keeps running:
+// levels are recomputed as new candles close, so what a pane holds has to expire even while
+// the user stays inside the window it was fetched for.
+const CACHE_TTL_MS = 5 * 60_000
 
 // The library's slots only exist once ChartPro.svelte has mounted (getSlot() is null before
 // then), and 'rail-footer''s own element is additionally destroyed and recreated every time
@@ -53,33 +80,111 @@ export function attachToSlot(
   tryAttach()
 }
 
+// The price band on screen, which is NOT the price range of the visible bars: rescaling the
+// price axis (dragging it, or dragging the chart body once it has stopped auto-fitting)
+// moves the two apart, and it is exactly that case where the bars say nothing about which
+// prices a layer now has to cover.
+function visiblePriceBand(chart: Chart): { low: number; high: number } | null {
+  // The pane's default axis is the one overlays without an explicit yAxisId are drawn
+  // against, and it is the first the pane hands back (DrawPane keeps the first axis created
+  // as its default).
+  const yAxis = chart.getYAxes({ paneId: CANDLE_PANE_ID })[0]
+  if (!yAxis) return null
+  const range = yAxis.getRange()
+  // `from`/`to` are prices whatever the axis type is: a percentage or logarithm axis keeps
+  // its own transformed coordinates in realFrom/realTo, so this stays right when the user
+  // switches the axis to % or log.
+  const low = Math.min(range.from, range.to)
+  const high = Math.max(range.from, range.to)
+  if (!Number.isFinite(low) || !Number.isFinite(high) || high <= low) return null
+  return { low, high }
+}
 
-// The price band and time window every price-anchored layer fetches against, scoped to
-// what is actually on screen rather than every bar paginated in so far.
+// Fallback for the window between a pane mounting and its axis having a range — the
+// original behaviour, and still a sane band whenever the axis cannot be read.
+function visibleBarBand(chart: Chart): { low: number; high: number } | null {
+  const data = chart.getDataList()
+  const range = chart.getVisibleRange()
+  let low = Number.POSITIVE_INFINITY
+  let high = Number.NEGATIVE_INFINITY
+  for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
+    const bar = data[i]
+    if (bar.low < low) low = bar.low
+    if (bar.high > high) high = bar.high
+  }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null
+  return { low, high }
+}
+
+// The price band and time window every price-anchored layer needs covered, scoped to what
+// is actually on screen rather than every bar paginated in so far.
 function buildContext(chart: Chart, symbol: SymbolInfo): LayerContext | null {
   const data = chart.getDataList()
   const range = chart.getVisibleRange()
   const visible = data.slice(Math.max(0, range.realFrom), Math.max(0, range.realTo) + 1)
   if (visible.length === 0) return null
 
-  let low = Number.POSITIVE_INFINITY
-  let high = Number.NEGATIVE_INFINITY
-  for (const bar of visible) {
-    if (bar.low < low) low = bar.low
-    if (bar.high > high) high = bar.high
-  }
-  if (!Number.isFinite(low) || !Number.isFinite(high)) return null
+  const band = visiblePriceBand(chart) ?? visibleBarBand(chart)
+  if (!band) return null
 
-  const pad = Math.max((high - low) * PRICE_WINDOW_FRACTION, high * 1e-4)
+  const pad = Math.max((band.high - band.low) * PRICE_WINDOW_FRACTION, band.high * 1e-4)
   return {
     chart,
     symbol,
     vendor: symbolVendor(symbol),
-    priceMin: low - pad,
-    priceMax: high + pad,
+    priceMin: band.low - pad,
+    priceMax: band.high + pad,
     from: visible[0].timestamp,
     to: visible[visible.length - 1].timestamp
   }
+}
+
+function windowOf(ctx: LayerContext): LayerWindow {
+  return { priceMin: ctx.priceMin, priceMax: ctx.priceMax, from: ctx.from, to: ctx.to }
+}
+
+function contains(outer: LayerWindow, inner: LayerWindow): boolean {
+  return (
+    outer.priceMin <= inner.priceMin &&
+    outer.priceMax >= inner.priceMax &&
+    outer.from <= inner.from &&
+    outer.to >= inner.to
+  )
+}
+
+function union(a: LayerWindow, b: LayerWindow): LayerWindow {
+  return {
+    priceMin: Math.min(a.priceMin, b.priceMin),
+    priceMax: Math.max(a.priceMax, b.priceMax),
+    from: Math.min(a.from, b.from),
+    to: Math.max(a.to, b.to)
+  }
+}
+
+function withPrefetchMargin(target: LayerWindow, visible: LayerWindow): LayerWindow {
+  const pricePad = (visible.priceMax - visible.priceMin) * PREFETCH_FRACTION
+  const timePad = (visible.to - visible.from) * PREFETCH_FRACTION
+  return {
+    priceMin: target.priceMin - pricePad,
+    priceMax: target.priceMax + pricePad,
+    from: target.from - timePad,
+    to: target.to + timePad
+  }
+}
+
+// `target` minus `loaded` as up to four rectangles: the price bands above and below what is
+// held (each spanning target's full time span) plus, within the held band, the time spans
+// before and after it. They tile the difference exactly, so fetching them and merging is
+// equivalent to refetching `target` whole — and the caller only pays for the new ground.
+// Requires `target` to contain `loaded`, which is what withPrefetchMargin(union(...)) gives.
+function missingWindows(loaded: LayerWindow, target: LayerWindow): LayerWindow[] {
+  const windows: LayerWindow[] = []
+  if (target.priceMin < loaded.priceMin) windows.push({ ...target, priceMax: loaded.priceMin })
+  if (target.priceMax > loaded.priceMax) windows.push({ ...target, priceMin: loaded.priceMax })
+  const heldBand = { priceMin: loaded.priceMin, priceMax: loaded.priceMax }
+  if (target.from < loaded.from) windows.push({ ...heldBand, from: target.from, to: loaded.from })
+  if (target.to > loaded.to) windows.push({ ...heldBand, from: loaded.to, to: target.to })
+  return windows
 }
 
 export interface LayerController {
@@ -92,12 +197,27 @@ export interface LayerController {
   sync(panes: ChartProPane[]): void
 }
 
+// What one pane has fetched so far: `data` is everything the layer returned for `window`,
+// which grows as the view moves and is thrown away whenever `key` changes or `fetchedAt`
+// ages out.
+interface LayerCache<TDatum> {
+  key: string
+  data: TDatum[]
+  window: LayerWindow
+  fetchedAt: number
+}
+
 interface WiredPane<TDatum> {
   pane: ChartProPane
   chart: Chart
-  cache: { key: string; data: TDatum[] } | null
+  cache: LayerCache<TDatum> | null
   timer: ReturnType<typeof setTimeout> | null
   onRangeChange: () => void
+  /** Last price band seen by the axis watcher, as a change-detection signature. */
+  axisSignature: string
+  /** Bumped per fetch so a redraw that resolves after a newer one started drops its result
+   * instead of overwriting a cache built from different state. */
+  generation: number
 }
 
 export function createLayerController<TDatum, TConfig extends object>(
@@ -150,7 +270,21 @@ export function createLayerController<TDatum, TConfig extends object>(
       ...overlay,
       groupId: layer.id
     }))
-    entry.chart.createOverlay(overlays)
+    if (overlays.length > 0) entry.chart.createOverlay(overlays)
+  }
+
+  // Adjacent windows share an edge, and a level sitting on one is returned by both, so a
+  // merge is a union by the layer's own datum identity rather than a concatenation.
+  const merge = (held: TDatum[], fetched: TDatum[]): TDatum[] => {
+    const seen = new Set(held.map((datum) => layer.datumKey(datum)))
+    const merged = held.slice()
+    for (const datum of fetched) {
+      const key = layer.datumKey(datum)
+      if (seen.has(key)) continue
+      seen.add(key)
+      merged.push(datum)
+    }
+    return merged
   }
 
   const redraw = async (entry: WiredPane<TDatum>): Promise<void> => {
@@ -166,14 +300,32 @@ export function createLayerController<TDatum, TConfig extends object>(
     const ctx = buildContext(entry.chart, symbol)
     if (!ctx) return
 
-    const key = layer.queryKey(ctx, config)
-    if (entry.cache && entry.cache.key === key) {
-      paint(entry, entry.cache.data, ctx)
+    const key = layer.cacheKey(ctx, config)
+    const needed = windowOf(ctx)
+    let held = entry.cache
+    if (held && (held.key !== key || Date.now() - held.fetchedAt > CACHE_TTL_MS)) held = null
+
+    // Everything on screen is already in hand: restyle from it, no request. This is the
+    // common case while panning and while rescaling the price axis within the band the
+    // pane fetched with its prefetch margin.
+    if (held && contains(held.window, needed)) {
+      paint(entry, held.data, ctx)
       return
     }
+
+    const target = withPrefetchMargin(held ? union(held.window, needed) : needed, needed)
+    const requests = held ? missingWindows(held.window, target) : [target]
+    const generation = ++entry.generation
     try {
-      const data = await layer.fetch(ctx, config)
-      entry.cache = { key, data }
+      const fetched = await Promise.all(requests.map((request) => layer.fetch(ctx, config, request)))
+      // A newer redraw started while this one was in flight — its own fetch is authoritative
+      // about both the data and the window it covers, so this result is dropped whole.
+      if (generation !== entry.generation) return
+      const data = merge(held?.data ?? [], fetched.flat())
+      // Dated by the OLDEST fetch it still contains, not by this one: a pane that keeps
+      // extending its window would otherwise renew the whole set on every extension and
+      // never expire the part that was fetched first.
+      entry.cache = { key, data, window: target, fetchedAt: held?.fetchedAt ?? Date.now() }
       paint(entry, data, ctx)
     } catch (err) {
       console.error(`[chartlayers] ${layer.id} fetch failed for pane ${entry.pane.id}`, err)
@@ -189,17 +341,51 @@ export function createLayerController<TDatum, TConfig extends object>(
     }, layer.debounceMs ?? DEFAULT_DEBOUNCE_MS)
   }
 
+  // Pan and zoom raise onVisibleRangeChange, but rescaling the PRICE axis raises nothing:
+  // klinecharts' ActionType has no y-axis member, and the drag calls YAxis.setRange
+  // directly. Sampling each pane's band is therefore the only way to notice that the view
+  // now reaches prices the pane never fetched. A sample that has not moved costs one
+  // getRange call and schedules nothing; one that has usually resolves to a repaint from
+  // what the pane already holds, and only reaches the network when the band grew past it.
+  let axisTimer: ReturnType<typeof setInterval> | null = null
+
+  const pollPriceAxes = (): void => {
+    if (!enabled) return
+    for (const entry of wired.values()) {
+      const band = visiblePriceBand(entry.chart)
+      const signature = band ? `${band.low}|${band.high}` : ''
+      if (signature === entry.axisSignature) continue
+      entry.axisSignature = signature
+      scheduleRedraw(entry)
+    }
+  }
+
+  const startAxisWatch = (): void => {
+    if (axisTimer === null) axisTimer = setInterval(pollPriceAxes, AXIS_POLL_MS)
+  }
+
+  const stopAxisWatch = (): void => {
+    if (axisTimer === null) return
+    clearInterval(axisTimer)
+    axisTimer = null
+  }
+
   // A style-only change (line width, color, pattern, an emphasis curve) restyles instantly
-  // from each pane's own cached fetch — no request. A change to a lever baked into queryKey
-  // (which intervals, whether to include spent levels) misses the cache and refetches, per
-  // pane, since two panes on different symbols/intervals have independently distinct keys.
+  // from each pane's own accumulated data — no request. A change to a lever baked into
+  // cacheKey (which intervals, whether to include spent levels) misses the cache and
+  // refetches, per pane, since two panes on different symbols/intervals have independently
+  // distinct keys.
   const onConfigChange = (next: TConfig): void => {
     config = next
     saveLayerConfig(layer.id, config)
     for (const entry of wired.values()) {
       if (entry.cache) {
         const ctx = buildContext(entry.chart, entry.pane.getSymbol())
-        if (ctx && layer.queryKey(ctx, config) === entry.cache.key) {
+        if (
+          ctx &&
+          layer.cacheKey(ctx, config) === entry.cache.key &&
+          contains(entry.cache.window, windowOf(ctx))
+        ) {
           paint(entry, entry.cache.data, ctx)
           continue
         }
@@ -269,16 +455,20 @@ export function createLayerController<TDatum, TConfig extends object>(
           chart,
           cache: null,
           timer: null,
-          onRangeChange: () => {}
+          onRangeChange: () => {},
+          axisSignature: '',
+          generation: 0
         }
         // Pan, zoom and every data load land here, which covers symbol and period
-        // switches too.
+        // switches too. The price axis has no equivalent — see pollPriceAxes.
         entry.onRangeChange = () => scheduleRedraw(entry)
         chart.subscribeAction('onVisibleRangeChange', entry.onRangeChange)
         wired.set(pane.id, entry)
         if (configLoaded) scheduleRedraw(entry)
       }
       updateVisibility()
+      if (wired.size > 0) startAxisWatch()
+      else stopAxisWatch()
     }
   }
 }

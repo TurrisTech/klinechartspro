@@ -1,5 +1,6 @@
 import type { OverlayCreate } from 'klinecharts'
 import { levelsCoverageFor, hasFeature } from '../capabilities'
+import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
 import { applyEncodings, toLineStyle, type LineAppearance } from '../chartlayers/encoding'
 import { fetchLevels, type Level } from './api'
@@ -12,6 +13,23 @@ import {
 } from './config'
 
 const ONE_DAY_MS = 86_400_000
+
+// Floor on how dark a stretch can get, in HSL lightness. A level may hold ten invalidations
+// (levels.py's LEVELS_MAX_INVALIDATIONS), and unbounded the later stretches of one would walk
+// all the way to black — invisible on a dark chart, which reads as "no level here" rather
+// than as "heavily tested". A floor on the RESULT rather than on the step is what keeps that
+// true for a color that is already dark, like the 1W green, as well as for a light one.
+const MIN_LIGHTNESS = 0.18
+
+// How far off screen a stretch is still drawn and still reaches, in whole visible spans per
+// side. It is NOT the controller's fetch margin, and must be much larger than it: a redraw is
+// debounced, so between a pan and the redraw that follows it the chart shows lines built for
+// where the view USED to be, and wherever those lines stop is a visible wall of ends. Four
+// spans is past what one drag can reveal — a drag pans at most a pane width, since the
+// pointer cannot leave the window — with room left for a few zoom-out notches on top. It
+// still bounds the longest stroke to about nine pane widths, which matters because a spent
+// level is dashed by default and a dash pattern is walked over the whole stroke.
+const DRAW_MARGIN_SPANS = 4
 
 // A level's raw metrics, computed once per redraw against the current view (ctx.to is the
 // visible range's right edge — see chartlayers/types.ts on why age is measured against
@@ -56,23 +74,106 @@ function baseAppearance(level: Level, config: LevelsConfig): LineAppearance {
   }
 }
 
-function levelToOverlay(level: Level, ctx: LayerContext, config: LevelsConfig): OverlayCreate {
-  const appearance = applyEncodings(baseAppearance(level, config), metricsFor(level, ctx), [
-    config.emphasis.invalidations,
-    config.emphasis.age
-  ])
-  return {
-    name: 'horizontalStraightLine',
+// One unbroken stretch of a level's life. It opens where the level was confirmed, and every
+// invalidation closes one stretch and opens the next; `to: null` marks the final stretch of a
+// level that is still live, which has no end and is therefore drawn as a ray rather than a
+// segment. `touches` is how many invalidations are already behind the stretch, which is both
+// its position in the chain and how many darkening steps it carries.
+interface LevelSpan {
+  from: number
+  to: number | null
+  touches: number
+}
+
+function spansFor(level: Level): LevelSpan[] {
+  const bounds = [level.effectiveAt, ...level.invalidations]
+  const spans: LevelSpan[] = level.invalidations.map((_, index) => ({
+    from: bounds[index],
+    to: bounds[index + 1],
+    touches: index
+  }))
+  if (level.active) {
+    spans.push({ from: bounds[bounds.length - 1], to: null, touches: level.invalidations.length })
+  }
+  // Unreachable against a real server — spent means at least LEVELS_MAX_INVALIDATIONS + 1 of
+  // them, and the wire list only ever drops the confirmation instant — but a spent level with
+  // an empty list would otherwise vanish silently instead of degrading to a single ray.
+  if (spans.length === 0) spans.push({ from: level.effectiveAt, to: null, touches: 0 })
+  return spans
+}
+
+// Each invalidation is a price interaction that leaves the level a little more worn, so each
+// successive stretch is drawn a step darker than the one before it. Lightness, not alpha:
+// alpha is already spoken for by the age encoding and by spent dimming, and stacking the two
+// on one channel would make "old" and "often tested" indistinguishable.
+function darkenedBy(appearance: LineAppearance, config: LevelsConfig, touches: number): LineAppearance {
+  const amount = config.base.darkenPerInvalidation * touches
+  if (amount <= 0) return appearance
+  return { ...appearance, color: darkenToward(appearance.color, amount, MIN_LIGHTNESS) }
+}
+
+// The span of time a stretch is drawn across: the visible range plus DRAW_MARGIN_SPANS of
+// slack on each side. Anything outside it is neither drawn nor reached into.
+function drawWindow(ctx: LayerContext): { from: number; to: number } {
+  const margin = (ctx.to - ctx.from) * DRAW_MARGIN_SPANS
+  return { from: ctx.from - margin, to: ctx.to + margin }
+}
+
+// klinecharts turns an overlay point's timestamp into an x coordinate by binary-searching the
+// loaded bars, and EXTRAPOLATES at a uniform bar cadence for any timestamp outside them
+// (StoreImp.timestampToDataIndex). Most stretches cross the first loaded bar — a level
+// confirmed in 2003 shown on a chart holding a few hundred 1h bars is the normal case, not
+// the edge case — and that one would be handed an x of about -1e6, or -7e7 on a 1m chart.
+// Canvas clips such a line correctly but still strokes it, and a dashed spent level walks its
+// dash pattern across every one of those pixels, which is enough to lock up the tab. Clamping
+// each end into the drawing window fixes that at no visual cost: the clamped end still sits
+// DRAW_MARGIN_SPANS screens off-pane, so the part anyone can see is identical, and no
+// coordinate is ever more than that margin outside the chart.
+function spanToOverlay(
+  level: Level,
+  span: LevelSpan,
+  appearance: LineAppearance,
+  window: { from: number; to: number }
+): OverlayCreate {
+  const shared = {
     paneId: 'candle_pane',
     // These are server-computed reference lines, not user drawings: dragging one would
     // imply it means something, and it would silently diverge from what the server says.
     lock: true,
-    points: [{ value: level.price }],
     // Stashes the source datum on the overlay so future code (a click handler, a tooltip)
     // can read it back without re-deriving it from the price/groupId alone.
     extendData: level,
     styles: { line: toLineStyle(appearance) }
   }
+  const from = Math.max(span.from, window.from)
+  if (span.to !== null) {
+    return {
+      ...shared,
+      name: 'horizontalSegment',
+      points: [
+        { timestamp: from, value: level.price },
+        { timestamp: Math.min(span.to, window.to), value: level.price }
+      ]
+    }
+  }
+  // horizontalRayLine draws from its first point to the edge of the pane, and reads its
+  // second point only for the direction — so that one just has to land strictly to the right,
+  // which a full window past the window's own end does even for a stretch starting at it.
+  return {
+    ...shared,
+    name: 'horizontalRayLine',
+    points: [
+      { timestamp: from, value: level.price },
+      { timestamp: window.to + (window.to - window.from), value: level.price }
+    ]
+  }
+}
+
+// A stretch that is entirely off one side of the drawing window contributes nothing, and on a
+// long history most of a level's stretches are exactly that.
+function spanInWindow(span: LevelSpan, window: { from: number; to: number }): boolean {
+  if (span.from > window.to) return false
+  return span.to === null || span.to >= window.from
 }
 
 // The 'intervals' request param only narrows what the server sends when it advertises
@@ -96,37 +197,53 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
     return Boolean(levelsCoverageFor(vendor, symbol.ticker))
   },
 
-  queryKey(ctx, config) {
+  // Deliberately window-free: the price band and date range a pane has fetched are the
+  // controller's business (it extends them rather than replacing them), so only the levers
+  // that change WHICH levels exist belong here.
+  cacheKey(ctx, config) {
     const requested = requestedIntervals(config)
     const intervalsKey = requested ? requested.slice().sort().join(',') : 'all'
-    return [
-      ctx.vendor,
-      ctx.symbol.ticker,
-      ctx.priceMin.toFixed(5),
-      ctx.priceMax.toFixed(5),
-      ctx.from,
-      ctx.to,
-      intervalsKey,
-      config.showSpent
-    ].join('|')
+    return [ctx.vendor, ctx.symbol.ticker, intervalsKey, config.showSpent].join('|')
   },
 
-  fetch(ctx, config) {
+  // A level is one entry of the server's per-interval price-keyed map (ohlcv.py's
+  // `levels_by_price.irange`), so interval + price identifies it within a computation;
+  // bornAt distinguishes the same price recomputed onto a different candle.
+  datumKey(level) {
+    return `${level.interval}|${level.price}|${level.bornAt}`
+  },
+
+  fetch(ctx, config, window) {
     return fetchLevels({
       vendor: ctx.vendor,
       symbol: ctx.symbol.ticker,
-      priceMin: ctx.priceMin,
-      priceMax: ctx.priceMax,
-      dateFrom: ctx.from,
-      dateTo: ctx.to,
+      priceMin: window.priceMin,
+      priceMax: window.priceMax,
+      dateFrom: window.from,
+      dateTo: window.to,
       intervals: requestedIntervals(config),
       includeInvalidated: config.showSpent
     })
   },
 
   toOverlays(data, ctx, config) {
-    return data
-      .filter((level) => config.intervals[level.interval] ?? true)
-      .map((level) => levelToOverlay(level, ctx, config))
+    const window = drawWindow(ctx)
+    const overlays: OverlayCreate[] = []
+    for (const level of data) {
+      if (!(config.intervals[level.interval] ?? true)) continue
+      // A pane holds every level it has fetched, which reaches past the current view — the
+      // whole point of keeping the window, since re-entering ground already covered then
+      // costs no request. Which of them this view actually contains is decided here instead.
+      if (level.price < ctx.priceMin || level.price > ctx.priceMax) continue
+      const appearance = applyEncodings(baseAppearance(level, config), metricsFor(level, ctx), [
+        config.emphasis.invalidations,
+        config.emphasis.age
+      ])
+      for (const span of spansFor(level)) {
+        if (!spanInWindow(span, window)) continue
+        overlays.push(spanToOverlay(level, span, darkenedBy(appearance, config, span.touches), window))
+      }
+    }
+    return overlays
   }
 }

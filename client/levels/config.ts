@@ -33,6 +33,10 @@ export interface LevelsConfig {
     colorMode: LevelsColorMode
     directionColors: { support: string; resistance: string }
     intervalColors: Record<string, string>
+    /** HSL lightness removed from a level's color per invalidation behind the stretch being
+     * drawn, so a level reads darker the further along its own life you look. 0 draws every
+     * stretch of a level in one color. Capped in layer.ts so it can never reach black. */
+    darkenPerInvalidation: number
   }
   spent: {
     pattern: LinePattern
@@ -57,7 +61,10 @@ export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
     opacity: 1,
     colorMode: 'server',
     directionColors: { support: '#089981', resistance: '#f23645' },
-    intervalColors: { '1D': '#00BCD4', '1W': '#089981', '1M': '#FFEB3B' }
+    intervalColors: { '1D': '#00BCD4', '1W': '#089981', '1M': '#FFEB3B' },
+    // Small enough that one touch is a shading rather than a different color, and that a
+    // level at the server's ten-invalidation ceiling still stops well short of the cap.
+    darkenPerInvalidation: 0.05
   },
   spent: {
     pattern: 'dashed',
@@ -156,6 +163,14 @@ export const LEVELS_FIELDS: SettingsField[] = [
           { value: 'direction', label: 'By support / resistance' },
           { value: 'interval', label: 'By timeframe' }
         ]
+      },
+      {
+        kind: 'number',
+        key: 'base.darkenPerInvalidation',
+        label: 'Darken per invalidation',
+        min: 0,
+        max: 0.15,
+        step: 0.01
       },
       { kind: 'color', key: 'base.directionColors.support', label: 'Support color' },
       { kind: 'color', key: 'base.directionColors.resistance', label: 'Resistance color' },

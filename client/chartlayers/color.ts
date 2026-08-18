@@ -54,6 +54,18 @@ export function withLightness(color: string, factor: number): string {
   return toCssRgba({ r: nr, g: ng, b: nb }, 1)
 }
 
+// Lowers perceived lightness by `amount`, stopping at `floor` rather than at black. This is
+// the shape a per-step gradient needs and `withLightness` is not: capping the SHIFT instead
+// of the RESULT bottoms out differently for every color it is given — the Levels 1W green
+// sits at lightness 0.32, so the same -0.3 that merely deepens a yellow erases it entirely.
+export function darkenToward(color: string, amount: number, floor: number): string {
+  const { r, g, b } = parseColor(color)
+  const [h, s, l] = rgbToHsl(r, g, b)
+  const nextL = Math.max(Math.min(l, floor), l - amount)
+  const [nr, ng, nb] = hslToRgb(h, s, nextL)
+  return toCssRgba({ r: nr, g: ng, b: nb }, 1)
+}
+
 function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   const rn = r / 255
   const gn = g / 255
