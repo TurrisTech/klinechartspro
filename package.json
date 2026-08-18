@@ -1,6 +1,6 @@
 {
   "name": "@klinecharts/pro",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Financial chart built out of the box based on KLineChart.",
   "type": "module",
   "packageManager": "bun@1.3.14",

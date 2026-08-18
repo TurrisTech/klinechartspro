@@ -139,12 +139,12 @@
   // see chartDataLoader.getBars' 'backward' branch. Matches adjustFromTo's own page size.
   const BACKWARD_PAGE_BARS = 500
 
-  // Daily and coarser candles are labelled by their market SESSION date, not the wall-clock
-  // date of their open: an FX daily candle opens 17:00 New York the evening before its
-  // session, a weekly Sunday 17:00, a monthly/yearly 17:00 before the first market day -- so
-  // December can open on Sunday 30 November and 2024 on Sunday 31 December 2023. The session
-  // date is the New York date of `open + 7h` (wmarkettypes' canonical_date), and it is New
-  // York regardless of the display timezone, because that is the market's calendar.
+  // Daily and coarser candles ARRIVE dated by their market session -- the server states
+  // them as canonical dates (00:00 New York of the session), not as the 17:00-the-evening-
+  // before opens the store keys them under, so there is nothing to shift here any more.
+  // What remains is which clock to READ them on: New York, regardless of the display
+  // timezone, because a session date is the market's calendar and not the viewer's. Read
+  // in a browser west of New York the same instant would fall on the previous date.
   const sessionDateFormat = new Intl.DateTimeFormat('en', {
     timeZone: 'America/New_York',
     hour12: false,
@@ -155,7 +155,6 @@
     minute: '2-digit',
     second: '2-digit'
   })
-  const SESSION_DATE_SHIFT_MS = 7 * 60 * 60 * 1000
 
   function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
     if (pane.period.timespan === 'minute') {
@@ -166,16 +165,15 @@
       return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
         ? 'MM-DD HH:mm' : 'YYYY-MM-DD HH:mm')
     }
-    const sessionTimestamp = timestamp + SESSION_DATE_SHIFT_MS
     if (pane.period.timespan === 'month') {
-      return utils.formatDate(sessionDateFormat, sessionTimestamp, type === 'xAxis'
+      return utils.formatDate(sessionDateFormat, timestamp, type === 'xAxis'
         ? 'YYYY-MM' : 'YYYY-MM-DD')
     }
     if (pane.period.timespan === 'year') {
-      return utils.formatDate(sessionDateFormat, sessionTimestamp, type === 'xAxis'
+      return utils.formatDate(sessionDateFormat, timestamp, type === 'xAxis'
         ? 'YYYY' : 'YYYY-MM-DD')
     }
-    return utils.formatDate(sessionDateFormat, sessionTimestamp, 'YYYY-MM-DD')
+    return utils.formatDate(sessionDateFormat, timestamp, 'YYYY-MM-DD')
   }
 
   function applyIndicatorIcons() {
@@ -250,6 +248,12 @@
   // does not cover this: resetData() unconditionally clears that flag before starting the
   // new load, leaving the old load's promise free to still resolve later.
   let loadGeneration = 0
+  // True while this pane's loaded data is parked in the past by a seek, and so cannot take
+  // a live bar onto its tail (see subscribeBar). Set by the seek reload itself, cleared as
+  // soon as the pane is back at the present -- either because backward paging ran dry, or
+  // because a live bar turns out to sit right at the tail after all. Nothing else parks a
+  // pane: a plain init loads a window ending at `now`.
+  let parkedInHistory = false
 
   // Requested by the sync bus (src/sync/bus.ts) when a click lands outside this pane's own
   // loaded data. Reloads the dataset anchored on `timestamp` instead of scrolling/paging
@@ -291,6 +295,10 @@
           // seam: _addData's 'backward' branch is a plain concat, so anything <= timestamp
           // here would duplicate or misorder the bar the chart already holds at that edge.
           const fresh = data.filter((bar) => bar.timestamp > timestamp)
+          // Nothing newer to page toward means the loaded data has caught up with the
+          // server's own latest bar: the pane is at the present again and may take live
+          // bars onto its tail.
+          if (fresh.length === 0) parkedInHistory = false
           callback(fresh, { backward: fresh.length > 0 })
         } finally {
           pane.loading = false
@@ -319,7 +327,10 @@
           }
           // A plain init has nothing newer to page toward (backward: false, as before); only
           // a seek reload opens that direction, closed again by the 'backward' branch above
-          // once it runs dry.
+          // once it runs dry. That is also exactly when this pane's data is parked in the
+          // past, and a plain init -- mount, symbol change, period change -- is exactly when
+          // it is not: the window it just loaded ends at `now`.
+          parkedInHistory = Boolean(seek)
           callback(data, { forward: data.length > 0, backward: Boolean(seek) })
           if (seek && data.length > 0 && widget) {
             seekToTimestamp(widget, seek.timestamp, seek.fraction, 0)
@@ -357,14 +368,22 @@
         // Once a seek has parked this pane's data in the past, the live stream must not push
         // a bar at "now" onto the tail -- _addData's single-bar path accepts anything newer
         // than the last loaded bar unconditionally, which would strand one candle far to the
-        // right with a dead zone in between. Self-healing: once backward paging (the
-        // 'backward' branch above) walks the dataset back up to the present, this stops
-        // dropping anything on its own -- there is no mode flag to clear.
+        // right with a dead zone in between.
+        //
+        // Both halves of this test are needed, and the flag is the load-bearing one. A gap
+        // wider than one period does NOT mean the pane is parked: the market closes. The bar
+        // after Thursday's daily candle opens Sunday 17:00, three periods later; the bar
+        // after Friday's last hourly one opens 49 hours later. A gap test alone dropped
+        // every one of those -- the whole first session of the week, at every period -- and
+        // dropped it silently. The period arithmetic is kept only for the parked case, where
+        // it is what lets a pane that has been paged back up to the tail take live bars
+        // again without waiting for a backward page to run dry.
         const last = widget?.getDataList().at(-1)?.timestamp
-        if (last !== undefined && bar.timestamp > last + periodMs) {
+        if (parkedInHistory && last !== undefined && bar.timestamp > last + periodMs) {
           console.debug('[sync] live bar dropped: pane is parked in history', { pane: pane.id })
           return
         }
+        parkedInHistory = false
         callback(bar)
       })
     },

@@ -62,8 +62,10 @@ export interface StreamSubscribed {
   symbol: string
   interval: string
   updates: UpdatesMode
-  // False => this interval can never emit a `closed: false` bar. Native intervals (1m) are
-  // stored only on close; only derived intervals aggregate a forming bar.
+  // False => this interval can emit no `closed: false` bar, so the candle for the period in
+  // progress will not appear until it closes. Where the server has a tick source (the
+  // `stream.forming` capability) every interval forms live, 1m to 1Y alike; without one, the
+  // intervals it stores natively (1m, 1D) can only be relayed on close.
   formingSupported: boolean
   serverTime: number
 }
