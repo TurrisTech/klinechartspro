@@ -1,4 +1,5 @@
 import type { KLineData } from 'klinecharts'
+import type { IndicatorPoint, SeriesDoc } from './indicators/api'
 
 // The wire contract of wdashboard-server's OHLCV app, mirroring the Pydantic models in
 // `wdashboard_server/services/schemas.py` field for field. Timestamps are always integer
@@ -108,6 +109,48 @@ export interface StreamError {
   interval?: string | null
 }
 
+// Server-computed indicator frames (wdashboard-server services/indicators.py). `seriesKey`
+// is the server's canonical series id, carried on every frame; `series` is the resolved
+// node document (versions filled in, params typed).
+export interface StreamIndicatorSubscribed {
+  type: 'indicator_subscribed'
+  vendor: string
+  symbol: string
+  interval: string
+  seriesKey: string
+  series: SeriesDoc
+  phase: string
+  serverTime: number
+}
+export interface StreamIndicatorBackfill {
+  type: 'indicator_backfill'
+  vendor: string
+  symbol: string
+  interval: string
+  seriesKey: string
+  points: IndicatorPoint[]
+}
+export interface StreamIndicatorPoint {
+  type: 'indicator'
+  vendor: string
+  symbol: string
+  interval: string
+  seriesKey: string
+  closed: boolean
+  point: IndicatorPoint
+}
+export interface StreamIndicatorStatus {
+  type: 'indicator_status'
+  seriesKey: string
+  phase: string
+  error?: string | null
+  mode?: string
+}
+export interface StreamIndicatorUnsubscribed {
+  type: 'indicator_unsubscribed'
+  seriesKey: string
+}
+
 export type StreamServerMessage =
   | StreamSubscribed
   | StreamUnsubscribed
@@ -115,6 +158,11 @@ export type StreamServerMessage =
   | StreamBar
   | StreamPong
   | StreamError
+  | StreamIndicatorSubscribed
+  | StreamIndicatorBackfill
+  | StreamIndicatorPoint
+  | StreamIndicatorStatus
+  | StreamIndicatorUnsubscribed
 
 export type StreamClientMessage =
   | {
@@ -125,7 +173,15 @@ export type StreamClientMessage =
       updates?: UpdatesMode
       backfill?: number
     }
-  | { action: 'unsubscribe'; vendor: string; symbol: string; interval: string }
+  | {
+      action: 'subscribe'
+      vendor: string
+      symbol: string
+      interval: string
+      indicator: SeriesDoc
+      backfill?: number
+    }
+  | { action: 'unsubscribe'; vendor: string; symbol: string; interval: string; indicator?: SeriesDoc }
   | { action: 'ping'; id?: string }
 
 export function barToKLineData(bar: OHLCVBar): KLineData {

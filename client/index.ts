@@ -3,6 +3,9 @@ import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
 import { WdashboardDatafeed } from './datafeed'
+import { loadDiscovery } from './indicators/api'
+import { createIndicatorController } from './indicators/controller'
+import { registerServerIndicators } from './indicators/templates'
 import { hydrateLayout, loadLayout, saveLayout, toPaneOptions } from './layout'
 import { levelsLayer } from './levels/layer'
 import { renderLogin } from './login'
@@ -58,12 +61,24 @@ async function mountChart(container: HTMLElement): Promise<void> {
   // wall layout all have to resolve before the chart mounts — price precision, the starred
   // set and the pane layout are all construction-time properties of the library component
   // (src/types.ts: ChartProOptions has no setSymbol-style setter for any of them).
-  const [symbol, starredTimeframes, persistedLayout] = await Promise.all([
+  const [symbol, starredTimeframes, persistedLayout, discovery] = await Promise.all([
     fetchSymbolInfo(requestedSymbol ?? DEFAULT_SYMBOL_TICKER),
     hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES),
-    requestedSymbol ? Promise.resolve(null) : loadLayout()
+    requestedSymbol ? Promise.resolve(null) : loadLayout(),
+    // Server-computed indicators: the whole library, registered as klinecharts templates
+    // before any pane can create one (a restored layout may name them). A server without
+    // the feature simply contributes no picker groups.
+    hasFeature('indicators')
+      ? loadDiscovery().catch((err) => {
+          console.error('[indicators] discovery failed', err)
+          return null
+        })
+      : Promise.resolve(null)
   ])
   const hydrated = persistedLayout ? await hydrateLayout(persistedLayout) : null
+  const serverSpecs = discovery?.indicators ?? []
+  const indicatorGroups = registerServerIndicators(serverSpecs)
+  const indicatorController = createIndicatorController(serverSpecs)
 
   // Every chart layer (today: just Levels) is built before the chart exists: its `sync`
   // becomes the wall's onPanesChange, which is a constructor argument.
@@ -99,6 +114,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
+    indicatorGroups,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
     // symbol+interval sharing one would clobber each other's stream subscription.
@@ -113,7 +129,10 @@ async function mountChart(container: HTMLElement): Promise<void> {
     // once per pane teardown (including every layout grow/shrink), never before a pane's
     // chart exists. Every mounted chart layer resyncs from this directly; nothing here polls
     // getChart().
-    onPanesChange: (panes) => levelsController.sync(panes),
+    onPanesChange: (panes) => {
+      levelsController.sync(panes)
+      indicatorController.sync(panes)
+    },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
     onSymbolChange: persist,

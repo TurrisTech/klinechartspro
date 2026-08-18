@@ -12,7 +12,30 @@
  * limitations under the License.
  */
 
-export default {
+export interface IndicatorParamSetting {
+  /** i18n key of the parameter's label -- or, for an app-registered indicator, the label
+   * itself (i18n() passes an unknown key through unchanged). */
+  paramNameKey: string
+  precision: number
+  min: number
+  default?: number
+  max?: number
+}
+
+// Settings for indicators an app registers at runtime (klinecharts' registerIndicator plus
+// ChartProOptions.indicatorGroups), keyed by template name. The built-in table below stays
+// static; `indicatorSettingsFor` consults both.
+const registered: Record<string, IndicatorParamSetting[]> = {}
+
+export function registerIndicatorSettings(name: string, settings: IndicatorParamSetting[]): void {
+  registered[name] = settings
+}
+
+export function indicatorSettingsFor(name: string): IndicatorParamSetting[] {
+  return registered[name] ?? (builtin as Record<string, IndicatorParamSetting[]>)[name] ?? []
+}
+
+const builtin = {
   AO: [
     { paramNameKey: 'params_1', precision: 0, min: 1, default: 5 },
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 34 }
@@ -139,3 +162,5 @@ export default {
     { paramNameKey: 'WR5', precision: 0, min: 1, styleKey: 'lines[4].color' },
   ]
 }
+
+export default builtin
