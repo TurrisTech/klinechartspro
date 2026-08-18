@@ -151,6 +151,14 @@ export default class KLineChartPro implements ChartPro {
     return this.component.getSlot(name)
   }
 
+  /** The element this chart was constructed with. Unlike getSlot(), it is valid from the
+   * moment the constructor returns — the slots inside it are `bind:this` targets and read
+   * null until Svelte flushes the mount effect — so it is what anything watching the chart's
+   * own DOM for changes has to observe. */
+  getContainer(): HTMLElement {
+    return this.container
+  }
+
   getPanes(): ChartProPane[] {
     return this.component.getPanes()
   }

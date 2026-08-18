@@ -52,32 +52,51 @@ const AXIS_POLL_MS = 200
 // the user stays inside the window it was fetched for.
 const CACHE_TTL_MS = 5 * 60_000
 
-// The library's slots only exist once ChartPro.svelte has mounted (getSlot() is null before
-// then), and 'rail-footer''s own element is additionally destroyed and recreated every time
-// the drawing toolbar toggles off and back on — it lives inside ChartPro.svelte's
-// `{#if drawingBarVisible}`. Re-parent into whichever instance of the slot currently exists,
-// on every relevant DOM change, rather than attaching once: otherwise an attached control
-// would vanish for good the first time someone hides the drawing tools instead of merely
-// hiding with it. Both slots stay wall-global, not per-pane.
+// Puts `element` in one of the library's two slots (src/types.ts ChartPro.getSlot) and
+// keeps it there. Both slots stay wall-global, not per-pane. There are two separate timing
+// problems here, and conflating them is what silently detaches a control for good.
+//
+// Getting it there the first time is a WAIT, not a mutation. Every caller runs in the same
+// tick as the KLineChartPro constructor, and at that point every slot is null: slots are
+// `bind:this` targets, and `mount()` inserts their elements into the DOM synchronously but
+// only SCHEDULES the effect that assigns them. So the first attempt always misses, and
+// there is no later mutation of that DOM to wait for — it is already built. Poll until
+// getSlot() resolves, the same answer whenChartReady gave the identical problem for
+// getChart(), and never make anything below conditional on that first attempt succeeding.
+//
+// Keeping it there is the mutation half: 'rail-footer''s own element is destroyed and
+// recreated every time the drawing toolbar toggles off and back on — it lives inside
+// ChartPro.svelte's `{#if drawingBarVisible}` — so re-parent into whichever instance of the
+// slot currently exists rather than attaching once, or the control vanishes for good the
+// first time someone hides the drawing tools instead of merely hiding with it.
 export function attachToSlot(
   chartPro: KLineChartPro,
   slotName: 'toolbar' | 'rail-footer',
   element: HTMLElement
 ): void {
-  let observer: MutationObserver | null = null
-  const tryAttach = (): void => {
+  const tryAttach = (): boolean => {
     const slot = chartPro.getSlot(slotName)
-    if (!slot) return
+    if (!slot) return false
     if (element.parentElement !== slot) slot.appendChild(element)
-    if (!observer) {
-      const root = slot.closest('.klinecharts-pro')
-      if (root) {
-        observer = new MutationObserver(tryAttach)
-        observer.observe(root, { childList: true, subtree: true })
-      }
-    }
+    return true
   }
-  tryAttach()
+
+  if (!tryAttach()) {
+    // Give up rather than spin forever if the component genuinely failed to build.
+    const deadline = performance.now() + 5_000
+    const poll = (): void => {
+      if (tryAttach() || performance.now() > deadline) return
+      requestAnimationFrame(poll)
+    }
+    requestAnimationFrame(poll)
+  }
+
+  // The container, not a root reached through the slot: it exists from the moment the
+  // constructor returns, so this is registered unconditionally rather than only once some
+  // attempt has already found a slot to navigate up from.
+  new MutationObserver(() => {
+    tryAttach()
+  }).observe(chartPro.getContainer(), { childList: true, subtree: true })
 }
 
 // The price band on screen, which is NOT the price range of the visible bars: rescaling the
