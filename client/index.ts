@@ -5,7 +5,7 @@ import { attachToSlot, createLayerController } from './chartlayers/controller'
 import { WdashboardDatafeed } from './datafeed'
 import { loadDiscovery } from './indicators/api'
 import { createIndicatorController } from './indicators/controller'
-import { registerServerIndicators } from './indicators/templates'
+import { createParamsValidator, registerServerIndicators } from './indicators/templates'
 import { hydrateLayout, loadLayout, saveLayout, toPaneOptions } from './layout'
 import { levelsLayer } from './levels/layer'
 import { renderLogin } from './login'
@@ -79,6 +79,11 @@ async function mountChart(container: HTMLElement): Promise<void> {
   const serverSpecs = discovery?.indicators ?? []
   const indicatorGroups = registerServerIndicators(serverSpecs)
   const indicatorController = createIndicatorController(serverSpecs)
+  // The settings dialog asks this before it will commit params, so a combination the server
+  // cannot serve is refused with its own explanation instead of being drawn and then
+  // failing on the first fetch. Null against a server without `indicators.resolve`, which
+  // leaves the dialog exactly as it behaved before.
+  const indicatorParamsValidator = createParamsValidator(serverSpecs)
 
   // Every chart layer (today: just Levels) is built before the chart exists: its `sync`
   // becomes the wall's onPanesChange, which is a constructor argument.
@@ -115,6 +120,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
     indicatorGroups,
+    indicatorParamsValidator,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
     // symbol+interval sharing one would clobber each other's stream subscription.

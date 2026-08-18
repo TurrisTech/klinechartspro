@@ -76,6 +76,9 @@ export default class KLineChartPro implements ChartPro {
         mainIndicators: options.mainIndicators ?? ['MA'],
         subIndicators: options.subIndicators ?? ['VOL'],
         indicatorGroups: options.indicatorGroups ?? [],
+        // Null, not a no-op that answers ok: the dialog distinguishes "nobody is checking"
+        // from "checked and fine", and only the first leaves the UI exactly as it was.
+        indicatorParamsValidator: options.indicatorParamsValidator ?? null,
         datafeed: options.datafeed,
         paneLayout,
         panes: options.panes ?? [],

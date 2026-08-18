@@ -56,6 +56,7 @@
     ChartProPane,
     Datafeed,
     DatafeedFactory,
+    IndicatorParamsCheck,
     PaneOptions,
     PaneSnapshot,
     Period,
@@ -107,6 +108,7 @@
     mainIndicators,
     subIndicators,
     indicatorGroups,
+    indicatorParamsValidator,
     datafeed,
     paneLayout,
     panes,
@@ -152,6 +154,66 @@
     chartPaneId: '',
     indicatorName: '',
     calcParams: []
+  })
+  // The app's verdict on the numbers currently in the dialog. `null` means nobody is
+  // checking (no validator supplied, or the answer is still in flight) -- which must look
+  // exactly like the old behaviour rather than like a pending refusal, so Confirm stays
+  // enabled and nothing is drawn until an answer actually arrives.
+  let indicatorParamsCheck = $state<IndicatorParamsCheck | null>(null)
+  let indicatorParamsChecking = $state(false)
+
+  // Debounced, and last-write-wins: the params inputs fire per keystroke, and a slow answer
+  // for "1" must never overwrite the answer for "14" that the user has since typed.
+  const INDICATOR_PARAMS_DEBOUNCE_MS = 300
+  let paramsCheckTimer: ReturnType<typeof setTimeout> | null = null
+  let paramsCheckSeq = 0
+  const checkIndicatorParams = (state: IndicatorSettingsState): void => {
+    const validate = indicatorParamsValidator
+    if (paramsCheckTimer) clearTimeout(paramsCheckTimer)
+    if (!validate || !state.indicatorName) {
+      indicatorParamsCheck = null
+      indicatorParamsChecking = false
+      return
+    }
+    const pane = wall.panes.find((item) => item.id === state.paneId)
+    if (!pane?.symbol || !pane.period) {
+      indicatorParamsCheck = null
+      return
+    }
+    const seq = ++paramsCheckSeq
+    indicatorParamsChecking = true
+    paramsCheckTimer = setTimeout(() => {
+      void validate({
+        indicatorName: state.indicatorName,
+        calcParams: [...state.calcParams],
+        symbol: pane.symbol,
+        period: pane.period
+      })
+        .then((result) => {
+          if (seq !== paramsCheckSeq) return
+          indicatorParamsCheck = result
+        })
+        .catch(() => {
+          // An unreachable or older server must not lock the dialog: fall back to the
+          // no-validator behaviour rather than refusing params we simply could not check.
+          if (seq !== paramsCheckSeq) return
+          indicatorParamsCheck = null
+        })
+        .finally(() => {
+          if (seq === paramsCheckSeq) indicatorParamsChecking = false
+        })
+    }, INDICATOR_PARAMS_DEBOUNCE_MS)
+  }
+
+  $effect(() => {
+    if (!indicatorSettingsOpen) {
+      if (paramsCheckTimer) clearTimeout(paramsCheckTimer)
+      paramsCheckSeq++
+      indicatorParamsCheck = null
+      indicatorParamsChecking = false
+      return
+    }
+    checkIndicatorParams(indicatorSettings)
   })
   let fullscreen = $state(false)
 
@@ -889,9 +951,14 @@
               }} />
             </div>
           {/each}
+          {#if indicatorParamsCheck && indicatorParamsCheck.ok === false && indicatorParamsCheck.reason}
+            <p class="kc-field-error" role="alert">{indicatorParamsCheck.reason}</p>
+          {:else if indicatorParamsCheck?.hint}
+            <p class="kc-field-hint">{indicatorParamsCheck.hint}</p>
+          {/if}
         </div>
         <div class="kc-dialog-footer">
-          <button class="kc-button kc-button-primary" onclick={() => {
+          <button class="kc-button kc-button-primary" disabled={indicatorParamsCheck?.ok === false || indicatorParamsChecking} onclick={() => {
             const config = indicatorSettingsFor(indicatorSettings.indicatorName)
             const params = indicatorSettings.calcParams.map((value, index) => value === '' || value == null ? config[index]?.default : value)
             const targetPane = wall.panes.find((item) => item.id === indicatorSettings.paneId)

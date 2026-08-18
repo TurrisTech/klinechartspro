@@ -1,6 +1,9 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
-import type { IndicatorSpec, SeriesDoc } from './api'
+import { resolveSeries, type IndicatorSpec, type SeriesDoc } from './api'
+import { hasFeature } from '../capabilities'
+import { symbolVendor } from '../symbols'
+import type { SymbolInfo } from '../../src'
 import { peekStore } from './store'
 
 // One klinecharts indicator template per library indicator (per version): the chart draws
@@ -200,4 +203,43 @@ export function registerServerIndicators(specs: IndicatorSpec[]): IndicatorGroup
     ;(spec.pane === 'main' ? main : sub).items.push(item)
   })
   return [main, sub].filter((g) => g.items.length > 0)
+}
+
+/** Build the params validator the chart's settings dialog asks, or `null` when this server
+ * cannot answer.
+ *
+ * Keeps the server knowledge in the app: the library's dialog knows only a template name
+ * and a flat `calcParams` array, so the mapping back to a node document -- which is exactly
+ * `seriesDocFor` -- has to happen here. A built-in indicator (`MA`, `VOL`, anything without
+ * the `S:` prefix) is computed by klinecharts itself and has nothing to ask about.
+ */
+export function createParamsValidator(
+  specs: IndicatorSpec[]
+): ((request: {
+  indicatorName: string
+  calcParams: unknown[]
+  symbol: SymbolInfo
+  period: { text: string }
+}) => Promise<{ ok: boolean; reason?: string | null; hint?: string | null }>) | null {
+  if (!hasFeature('indicators.resolve')) return null
+  const byTemplate = new Map(specs.map((s) => [templateName(s), s]))
+  return async (request) => {
+    const spec = byTemplate.get(request.indicatorName)
+    if (!spec) return { ok: true }
+    const vendorSymbol = `${symbolVendor(request.symbol)}:${request.symbol.ticker}`
+    const result = await resolveSeries(
+      vendorSymbol,
+      request.period.text,
+      seriesDocFor(spec, request.calcParams)
+    )
+    if (!result) return { ok: true } // unanswerable: behave as if nobody were checking
+    if (!result.servable) return { ok: false, reason: result.reason }
+    // A servable series still has a cost worth showing: the lead-in scales with the
+    // look-back, so "window 5000" quietly means reading thousands of extra bars per draw.
+    const hint =
+      result.mode === 'persisted'
+        ? 'Served from the store.'
+        : `Computed on demand; needs ${result.warmupBars.toLocaleString()} bars of warm-up.`
+    return { ok: true, hint }
+  }
 }

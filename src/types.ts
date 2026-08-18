@@ -105,6 +105,29 @@ export interface IndicatorGroup {
   items: Array<{ name: string; label: string; description?: string }>
 }
 
+/** What an app knows about a set of indicator params that the library cannot.
+ *
+ * The params dialog edits a flat numeric `calcParams` array and knows nothing beyond the
+ * template name -- not the instrument, not the datafeed, certainly not whether a server can
+ * answer for those numbers. An app that does know supplies this, and the dialog turns the
+ * answer into a message and a disabled Confirm instead of letting the user commit params
+ * that will fail on the next fetch. */
+export interface IndicatorParamsCheck {
+  /** False disables Confirm; `reason` then says why. */
+  ok: boolean
+  /** Human sentence shown when `ok` is false. */
+  reason?: string | null
+  /** Advisory note shown whether or not `ok` -- a cost, a warm-up, a caveat. */
+  hint?: string | null
+}
+
+export type IndicatorParamsValidator = (request: {
+  indicatorName: string
+  calcParams: unknown[]
+  symbol: SymbolInfo
+  period: Period
+}) => Promise<IndicatorParamsCheck>
+
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>
@@ -126,6 +149,9 @@ export interface ChartProOptions {
   subIndicators?: string[]
   /** Extra indicator groups for the picker dialog (see IndicatorGroup). */
   indicatorGroups?: IndicatorGroup[]
+  /** Asked, debounced, whenever the indicator params dialog is open and its numbers change.
+   * Omitted, the dialog behaves exactly as before: every params combination is offered. */
+  indicatorParamsValidator?: IndicatorParamsValidator | null
   datafeed: Datafeed | DatafeedFactory
 
   /** Layout preset id (see src/config/layouts.ts). Defaults to '1', a single chart. */
