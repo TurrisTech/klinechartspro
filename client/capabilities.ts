@@ -21,6 +21,9 @@ export type Feature =
   // GET /indicators/resolve — per-instance warm-up and servability. Gated on, because a
   // server without it 404s, and a 404 alone cannot be told from "that series is unknown".
   | 'indicators.resolve'
+  // GET /arev/values — AREV research predictions (wdashboard-server services/arev.py).
+  // The client only registers its AREV templates and picker entries when advertised.
+  | 'arev'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.

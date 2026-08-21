@@ -1,4 +1,6 @@
-import { KLineChartPro } from '../src'
+import { KLineChartPro, type ChartProPane } from '../src'
+import { createArevController } from './arev/controller'
+import { registerArevIndicators } from './arev/templates'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
@@ -20,6 +22,12 @@ import './style.css'
 // user's own set fails — the account's real starred set otherwise comes from
 // loadStarredTimeframes(), seeded server-side by wdashboard-server's appstate migration.
 const DEFAULT_STARRED_TIMEFRAMES = ['1m', '1h', '1D', '1W', '1M']
+
+declare global {
+  interface Window {
+    __wdPanes?: ChartProPane[]
+  }
+}
 
 const params = new URLSearchParams(window.location.search)
 
@@ -79,6 +87,10 @@ async function mountChart(container: HTMLElement): Promise<void> {
   const serverSpecs = discovery?.indicators ?? []
   const indicatorGroups = registerServerIndicators(serverSpecs)
   const indicatorController = createIndicatorController(serverSpecs)
+  // AREV research predictions (client/arev/): two fixed sub-pane templates over
+  // GET /arev/values, registered only when the server can actually serve them.
+  const arevGroups = hasFeature('arev') ? registerArevIndicators() : []
+  const arevController = createArevController()
   // The settings dialog asks this before it will commit params, so a combination the server
   // cannot serve is refused with its own explanation instead of being drawn and then
   // failing on the first fetch. Null against a server without `indicators.resolve`, which
@@ -121,7 +133,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
-    indicatorGroups,
+    indicatorGroups: [...indicatorGroups, ...arevGroups],
     indicatorParamsValidator,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
@@ -138,8 +150,12 @@ async function mountChart(container: HTMLElement): Promise<void> {
     // chart exists. Every mounted chart layer resyncs from this directly; nothing here polls
     // getChart().
     onPanesChange: (panes) => {
+      // Debug hook, like window.__wdIndicators: the live wall panes, so a console (or a
+      // headless test) can reach a pane's chart. Read-only by convention.
+      window.__wdPanes = panes
       levelsController.sync(panes)
       indicatorController.sync(panes)
+      arevController.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
