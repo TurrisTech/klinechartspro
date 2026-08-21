@@ -5,17 +5,28 @@ import { peekStore } from './store'
 
 // One klinecharts indicator template per AREV model generation, drawn in its own sub-pane.
 // Like the `S:` server-indicator templates (indicators/templates.ts), `calc` computes
-// nothing: it reads the points the controller fetched from `/arev/values`. Unlike them, a
-// template carries five figures — the k-NN prediction, its running extrema, and the 0.9x
-// overbought/oversold bands the pine script draws (`arev30.pine`: prediction in blue, the
-// extrema channel in gray, the thresholds in red/lime; `bin/arev19_chart.py` charts the
-// same trio of prediction/max90/min90). The bands are derived here from max/min — the
-// server serves what the model computed, not presentation.
+// nothing: it reads the points the controller fetched from `/arev/values`.
+//
+// What the pane draws is the probability the k-NN vote implies — the share of comparable
+// past legs that rose — against a flat threshold either side of a coin flip, plus an arrow
+// on every bar the server flagged. It used to draw the raw vote sum with its running
+// extrema and the 0.9x bands derived from them, and the reason it no longer does is that
+// those bands could not work: an all-time extremum is an order statistic, so it ratchets
+// out of reach while the series it gates stays exactly as wide. On EURUSD 1h the running
+// maximum reached 88 in 2020 and never moved again, and the bands produced 123 signals in
+// 2010, one in 2023 and none in 2024 or 2025. A probability needs no such reference, which
+// is why the thresholds here are horizontal lines and stay where they are.
 //
 // There are no calcParams: the generation's k and momentum window are baked into the
 // hand-run generation scripts, so a template names a generation, not a parameterisation.
 
 export const TEMPLATE_PREFIX = 'AREV:'
+
+// Mirrors wdashboard-server's arev.SIGNAL_CONFIDENCE. Drawn, not applied: whether a point
+// is a signal is the server's call (`point.signal`), and this is only where the line goes.
+const SIGNAL_CONFIDENCE = 0.075
+
+const COIN_FLIP = 0.5
 
 export interface ExtendData {
   seriesKey: string
@@ -23,11 +34,12 @@ export interface ExtendData {
 }
 
 export interface Value {
-  prediction?: number
-  max?: number
-  min?: number
-  max90?: number
-  min90?: number
+  p?: number
+  upper?: number
+  lower?: number
+  mid?: number
+  /** Not a figure — read by `draw` to place the arrows. */
+  signal?: number
 }
 
 export function templateName(generation: ArevGeneration): string {
@@ -45,27 +57,48 @@ export function parseTemplateName(name: string): ArevGeneration | null {
 }
 
 // Figure order and the styles.lines order below must agree: klinecharts pairs them by index.
-const FIGURES: Array<{ key: keyof Value; title: string; color: string }> = [
-  { key: 'prediction', title: 'prediction: ', color: '#426EFF' },
-  { key: 'max90', title: 'max90: ', color: '#EF5350' },
-  { key: 'min90', title: 'min90: ', color: '#26A69A' },
-  { key: 'max', title: 'max: ', color: '#787B86' },
-  { key: 'min', title: 'min: ', color: '#787B86' }
+const FIGURES: Array<{ key: keyof Value; title: string; color: string; dashed?: boolean }> = [
+  { key: 'p', title: 'P(up): ', color: '#426EFF' },
+  { key: 'upper', title: 'long: ', color: '#26A69A', dashed: true },
+  { key: 'lower', title: 'short: ', color: '#EF5350', dashed: true },
+  { key: 'mid', title: 'even: ', color: '#787B86', dashed: true }
 ]
+
+function upArrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string): void {
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x - size, y + size * 1.4)
+  ctx.lineTo(x + size, y + size * 1.4)
+  ctx.closePath()
+  ctx.fill()
+}
+
+function downArrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string): void {
+  ctx.fillStyle = color
+  ctx.beginPath()
+  ctx.moveTo(x, y)
+  ctx.lineTo(x - size, y - size * 1.4)
+  ctx.lineTo(x + size, y - size * 1.4)
+  ctx.closePath()
+  ctx.fill()
+}
 
 function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
   const key = indicator.extendData?.seriesKey
   const store = key ? peekStore(key) : undefined
   if (!store) return dataList.map(() => ({}))
   return dataList.map((d) => {
-    const p = store.values.get(d.timestamp)
-    if (!p) return {}
+    const point = store.values.get(d.timestamp)
+    if (!point) return {}
     return {
-      prediction: p.prediction,
-      max: p.max,
-      min: p.min,
-      max90: p.max * 0.9,
-      min90: p.min * 0.9
+      p: point.p,
+      // Flat by construction. They are the same two numbers on the first bar of the
+      // series and on the two hundred thousandth, which is the whole point.
+      upper: COIN_FLIP + SIGNAL_CONFIDENCE,
+      lower: COIN_FLIP - SIGNAL_CONFIDENCE,
+      mid: COIN_FLIP,
+      signal: point.signal ? point.p : undefined
     }
   })
 }
@@ -88,7 +121,8 @@ export function registerArevIndicators(): IndicatorGroup[] {
       const template: IndicatorTemplate<Value, number, ExtendData> = {
         name,
         shortName: generation.toUpperCase(),
-        precision: 1,
+        // A probability, not a vote count: three decimals, where the raw sum wanted one.
+        precision: 3,
         calcParams: [],
         shouldOhlc: false,
         shouldFormatBigNumber: false,
@@ -97,13 +131,15 @@ export function registerArevIndicators(): IndicatorGroup[] {
         extendData: { seriesKey: '', rev: 0 },
         series: 'normal',
         figures: FIGURES.map((f) => ({ key: f.key, title: f.title, type: 'line' })),
-        minValue: null,
-        maxValue: null,
+        // Pinned to the scale a probability lives on, so the pane does not rescale to
+        // whatever the visible window happens to contain and make a 0.52 look decisive.
+        minValue: 0,
+        maxValue: 1,
         styles: {
           lines: FIGURES.map((f) => ({
             color: f.color,
             size: 1,
-            style: 'solid',
+            style: f.dashed ? 'dashed' : 'solid',
             smooth: false,
             dashedValue: [2, 2]
           }))
@@ -112,7 +148,22 @@ export function registerArevIndicators(): IndicatorGroup[] {
         calc,
         regenerateFigures: null,
         createTooltipDataSource: null,
-        draw: null
+        // The server decides what a signal is; this only marks where they landed. They
+        // sit on cross bars, which is the only kind of bar the model is fitted on.
+        draw: ({ ctx, chart, indicator, xAxis, yAxis }) => {
+          const data = chart.getDataList()
+          const range = chart.getVisibleRange()
+          const size = Math.max(3, Math.min(7, chart.getBarSpace().bar * 0.4))
+          for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
+            const p = indicator.result[i]?.signal
+            if (p == null) continue
+            const x = xAxis.convertToPixel(i)
+            const y = yAxis.convertToPixel(p)
+            if (p > COIN_FLIP) upArrow(ctx, x, y + 4, size, '#26A69A')
+            else downArrow(ctx, x, y - 4, size, '#EF5350')
+          }
+          return true
+        }
       }
       registerIndicator(template)
     }
