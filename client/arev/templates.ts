@@ -150,6 +150,16 @@ export function registerArevIndicators(): IndicatorGroup[] {
         createTooltipDataSource: null,
         // The server decides what a signal is; this only marks where they landed. They
         // sit on cross bars, which is the only kind of bar the model is fitted on.
+        //
+        // Returns FALSE, and that is load-bearing: klinecharts assigns this callback's
+        // return to `isCover` and then renders the declared figures only `if (!isCover)`.
+        // Returning true means "I have covered the drawing myself" and silently skips
+        // every line in FIGURES -- which is what happened here: the arrows appeared and
+        // P(up), the thresholds and the mid line did not. The marker templates in
+        // client/indicators/templates.ts do return true, correctly, because they declare
+        // `figures: []` and have nothing to suppress. This pane has four figures, so it
+        // wants the default rendering *and* these arrows. Cost of the mix-up: the arrows
+        // paint before the lines, so a line crosses over an arrow rather than under it.
         draw: ({ ctx, chart, indicator, xAxis, yAxis }) => {
           const data = chart.getDataList()
           const range = chart.getVisibleRange()
@@ -162,7 +172,7 @@ export function registerArevIndicators(): IndicatorGroup[] {
             if (p > COIN_FLIP) upArrow(ctx, x, y + 4, size, '#26A69A')
             else downArrow(ctx, x, y - 4, size, '#EF5350')
           }
-          return true
+          return false
         }
       }
       registerIndicator(template)
