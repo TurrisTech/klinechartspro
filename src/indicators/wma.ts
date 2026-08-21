@@ -41,7 +41,10 @@ import type { IndicatorTemplate, KLineData } from 'klinecharts'
  * magnitude below any price precision the chart displays, and reset on every recalc.
  */
 
-interface Wma {
+// Exported because the declaration build names it: `indicators` (src/indicators/index.ts)
+// infers its element type from this template, and tsc cannot write that .d.ts for a type
+// it has no name for (TS4023).
+export interface Wma {
   [key: string]: number | undefined
 }
 

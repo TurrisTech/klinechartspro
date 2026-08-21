@@ -21,7 +21,11 @@ const inner = SveltePlugin()
 const plugin: BunPlugin = {
   name: 'bun-plugin-svelte-preserve-whitespace-off',
   setup(builder) {
-    const target = builder as typeof builder & { config?: { minify?: unknown } }
+    // `PluginBuilder.config` is declared as an always-present, complete `BuildConfig`, which
+    // is exactly what the dev server does not hand us — hence the `??=`. Replacing the field
+    // rather than intersecting with it is what makes both lines typecheck: intersected, the
+    // declared `BuildConfig` survives and `{}` is missing `entrypoints`.
+    const target = builder as Omit<typeof builder, 'config'> & { config?: { minify?: unknown } }
     target.config ??= {}
     target.config.minify = { whitespace: true }
     return inner.setup(builder)
