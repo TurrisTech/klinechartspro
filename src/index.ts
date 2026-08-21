@@ -12,13 +12,15 @@
  * limitations under the License.
  */
 
-import { registerOverlay } from 'klinecharts'
+import { registerIndicator, registerOverlay } from 'klinecharts'
 
 import overlays from './extension'
+import indicators from './indicators'
 
 import './app.css'
 
 overlays.forEach(o => { registerOverlay(o) })
+indicators.forEach(i => { registerIndicator(i) })
 
 export { default as DefaultDatafeed } from './DefaultDatafeed'
 export { default as KLineChartPro } from './KLineChartPro'

@@ -38,6 +38,7 @@
 
   "ma": "MA(Moving Average)",
   "ema": "EMA(Exponential Moving Average)",
+  "wma": "WMA(Weighted Moving Average)",
   "sma": "SMA",
   "boll": "BOLL(Bolinger Bands)",
   "bbi": "BBI(Bull And Bearlndex)",
