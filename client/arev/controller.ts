@@ -145,6 +145,21 @@ export function createArevController(): ArevController {
     if (!used) dropStore(b.storeKey)
   }
 
+  // klinecharts pads an indicator pane's y-axis by 20% above and 10% below its data range,
+  // which is sized for a candle pane (room for the legend, and for a price line to sit off
+  // the top). This pane's range is already bounded either side by the flat threshold lines,
+  // so most of that padding is just empty pane. Give it half: enough that the top line
+  // clears the legend row, without spending a third of the height on nothing.
+  const AXIS_GAP = { top: 0.1, bottom: 0.05 }
+
+  const tightenAxis = (chart: Chart, chartPaneId: string): void => {
+    try {
+      chart.overrideYAxis({ paneId: chartPaneId, gap: AXIS_GAP })
+    } catch (err) {
+      console.warn('[arev] y-axis override failed', err)
+    }
+  }
+
   const signatureOf = (ind: Pick<Indicator, 'name' | 'paneId'>, vendor: string, ticker: string, interval: string): string =>
     JSON.stringify([ind.name, ind.paneId, vendor, ticker, interval])
 
@@ -188,6 +203,7 @@ export function createArevController(): ArevController {
         lastShortName: ''
       }
       entry.bindings.set(ind.id, b)
+      tightenAxis(entry.chart, ind.paneId)
       apply(entry, b)
       void ensureCoverage(entry, b)
     }

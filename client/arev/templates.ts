@@ -131,10 +131,22 @@ export function registerArevIndicators(): IndicatorGroup[] {
         extendData: { seriesKey: '', rev: 0 },
         series: 'normal',
         figures: FIGURES.map((f) => ({ key: f.key, title: f.title, type: 'line' })),
-        // Pinned to the scale a probability lives on, so the pane does not rescale to
-        // whatever the visible window happens to contain and make a 0.52 look decisive.
-        minValue: 0,
-        maxValue: 1,
+        // Deliberately NOT pinned to [0, 1]. It was, so that the pane could not rescale to
+        // whatever the visible window held and make a 0.52 look decisive -- but a vote over
+        // 200 neighbours lives in a narrow band around a coin flip (EURUSD 1h: 99% of bars
+        // between 0.325 and 0.670, sd 0.084), so a pinned unit axis spent two thirds of the
+        // pane on empty space and drew the series as a flat line through the middle.
+        //
+        // The thresholds do that job better and cost nothing: klinecharts takes the y-range
+        // as the min/max over every figure of the visible range, then WIDENS it by
+        // minValue/maxValue -- it never narrows. Pinning them to the signal band therefore
+        // says only "never zoom inside the two lines the reader judges against", so a 0.52
+        // is always drawn as less than a third of the way to the long line and the window
+        // that would have made it look decisive cannot be reached. It is also what the pane
+        // falls back to when the visible range holds no predictions at all (`calc` returns
+        // an empty value there, thresholds included), instead of klinecharts' own [0, 10].
+        minValue: COIN_FLIP - SIGNAL_CONFIDENCE,
+        maxValue: COIN_FLIP + SIGNAL_CONFIDENCE,
         styles: {
           lines: FIGURES.map((f) => ({
             color: f.color,
