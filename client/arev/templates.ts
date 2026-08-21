@@ -9,7 +9,12 @@ import { peekStore } from './store'
 //
 // What the pane draws is the probability the k-NN vote implies — the share of comparable
 // past legs that rose — against a flat threshold either side of a coin flip, plus an arrow
-// on every bar the server flagged. It used to draw the raw vote sum with its running
+// on every bar where P(up) crosses out of the band: red where it crosses up over the
+// upper (long) line, green where it crosses down below the lower (short) line — a fade
+// of the overshoot, computed here from consecutive points rather than taken from the
+// server's `point.signal` flag (which stays on the wire, unread). A gap in the
+// predictions breaks the crossing pair, so a cross "over" a warm-up hole never signals.
+// It used to draw the raw vote sum with its running
 // extrema and the 0.9x bands derived from them, and the reason it no longer does is that
 // those bands could not work: an all-time extremum is an order statistic, so it ratchets
 // out of reach while the series it gates stays exactly as wide. On EURUSD 1h the running
@@ -22,8 +27,8 @@ import { peekStore } from './store'
 
 export const TEMPLATE_PREFIX = 'AREV:'
 
-// Mirrors wdashboard-server's arev.SIGNAL_CONFIDENCE. Drawn, not applied: whether a point
-// is a signal is the server's call (`point.signal`), and this is only where the line goes.
+// Mirrors wdashboard-server's arev.SIGNAL_CONFIDENCE. Both drawn and applied here: the
+// two threshold lines sit at 0.5 +/- this, and the arrows mark where P(up) crosses them.
 const SIGNAL_CONFIDENCE = 0.075
 
 const COIN_FLIP = 0.5
@@ -38,8 +43,10 @@ export interface Value {
   upper?: number
   lower?: number
   mid?: number
-  /** Not a figure — read by `draw` to place the arrows. */
-  signal?: number
+  /** Not figures — read by `draw` to place the arrows. Set on the bar where P(up)
+   * first sits past the named line, holding that bar's `p`. */
+  crossAboveUpper?: number
+  crossBelowLower?: number
 }
 
 export function templateName(generation: ArevGeneration): string {
@@ -88,19 +95,32 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
   const key = indicator.extendData?.seriesKey
   const store = key ? peekStore(key) : undefined
   if (!store) return dataList.map(() => ({}))
-  return dataList.map((d) => {
+  // Flat by construction. They are the same two numbers on the first bar of the
+  // series and on the two hundred thousandth, which is the whole point.
+  const upper = COIN_FLIP + SIGNAL_CONFIDENCE
+  const lower = COIN_FLIP - SIGNAL_CONFIDENCE
+  const result: Value[] = []
+  let prevP: number | undefined
+  for (const d of dataList) {
     const point = store.values.get(d.timestamp)
-    if (!point) return {}
-    return {
-      p: point.p,
-      // Flat by construction. They are the same two numbers on the first bar of the
-      // series and on the two hundred thousandth, which is the whole point.
-      upper: COIN_FLIP + SIGNAL_CONFIDENCE,
-      lower: COIN_FLIP - SIGNAL_CONFIDENCE,
-      mid: COIN_FLIP,
-      signal: point.signal ? point.p : undefined
+    if (!point) {
+      // No prediction here (warm-up, abstention, or outside the fetched range): the
+      // line breaks, and so must the crossing pair — the next predicted bar starts
+      // fresh rather than being compared across the hole.
+      result.push({})
+      prevP = undefined
+      continue
     }
-  })
+    const p = point.p
+    const value: Value = { p, upper, lower, mid: COIN_FLIP }
+    if (prevP != null && p != null) {
+      if (prevP <= upper && p > upper) value.crossAboveUpper = p
+      else if (prevP >= lower && p < lower) value.crossBelowLower = p
+    }
+    result.push(value)
+    prevP = p
+  }
+  return result
 }
 
 function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
@@ -160,8 +180,10 @@ export function registerArevIndicators(): IndicatorGroup[] {
         calc,
         regenerateFigures: null,
         createTooltipDataSource: null,
-        // The server decides what a signal is; this only marks where they landed. They
-        // sit on cross bars, which is the only kind of bar the model is fitted on.
+        // Marks the threshold crossings `calc` found: a cross up over the upper (long)
+        // line draws red, a cross down below the lower (short) line draws green —
+        // fading the overshoot, so the arrow's colour is the direction it argues for,
+        // not the direction P(up) just moved.
         //
         // Returns FALSE, and that is load-bearing: klinecharts assigns this callback's
         // return to `isCover` and then renders the declared figures only `if (!isCover)`.
@@ -177,12 +199,14 @@ export function registerArevIndicators(): IndicatorGroup[] {
           const range = chart.getVisibleRange()
           const size = Math.max(3, Math.min(7, chart.getBarSpace().bar * 0.4))
           for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
-            const p = indicator.result[i]?.signal
-            if (p == null) continue
+            const value = indicator.result[i]
+            if (value == null) continue
             const x = xAxis.convertToPixel(i)
-            const y = yAxis.convertToPixel(p)
-            if (p > COIN_FLIP) upArrow(ctx, x, y + 4, size, '#26A69A')
-            else downArrow(ctx, x, y - 4, size, '#EF5350')
+            if (value.crossAboveUpper != null) {
+              downArrow(ctx, x, yAxis.convertToPixel(value.crossAboveUpper) - 4, size, '#EF5350')
+            } else if (value.crossBelowLower != null) {
+              upArrow(ctx, x, yAxis.convertToPixel(value.crossBelowLower) + 4, size, '#26A69A')
+            }
           }
           return false
         }
