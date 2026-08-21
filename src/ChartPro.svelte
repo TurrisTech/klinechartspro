@@ -221,9 +221,9 @@
   let overlaysLocked = $state(false)
   let overlaysVisible = $state(true)
 
-  const mainIndicatorNames = ['MA', 'EMA', 'SMA', 'BOLL', 'SAR', 'BBI']
+  const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI']
   const subIndicatorNames = [
-    'MA', 'EMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
+    'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
     'DMI', 'CR', 'PSY', 'DMA', 'TRIX', 'OBV', 'VR', 'WR', 'MTM', 'EMV',
     'SAR', 'SMA', 'ROC', 'PVT', 'BBI', 'AO'
   ]

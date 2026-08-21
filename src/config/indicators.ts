@@ -154,6 +154,15 @@ const builtin = {
     { paramNameKey: 'params_1', precision: 0, min: 1, default: 26 },
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 6 }
   ],
+  // WMA is this library's own template (src/indicators/wma.ts), not a klinecharts
+  // built-in, but it is registered at import time like one and takes the same settings.
+  WMA: [
+    { paramNameKey: 'WMA1', precision: 0, min: 1, styleKey: 'lines[0].color' },
+    { paramNameKey: 'WMA2', precision: 0, min: 1, styleKey: 'lines[1].color' },
+    { paramNameKey: 'WMA3', precision: 0, min: 1, styleKey: 'lines[2].color' },
+    { paramNameKey: 'WMA4', precision: 0, min: 1, styleKey: 'lines[3].color' },
+    { paramNameKey: 'WMA5', precision: 0, min: 1, styleKey: 'lines[4].color' }
+  ],
   WR: [
     { paramNameKey: 'WR1', precision: 0, min: 1, styleKey: 'lines[0].color' },
     { paramNameKey: 'WR2', precision: 0, min: 1, styleKey: 'lines[1].color' },
