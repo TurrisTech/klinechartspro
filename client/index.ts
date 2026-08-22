@@ -6,6 +6,8 @@ import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
 import { WdashboardDatafeed } from './datafeed'
 import { loadDiscovery } from './indicators/api'
+import { createKrevController } from './krev/controller'
+import { registerKrevIndicators } from './krev/templates'
 import { createIndicatorController } from './indicators/controller'
 import { createParamsValidator, registerServerIndicators } from './indicators/templates'
 import { hydrateLayout, loadLayout, saveLayout, toPaneOptions } from './layout'
@@ -91,6 +93,10 @@ async function mountChart(container: HTMLElement): Promise<void> {
   // GET /arev/values, registered only when the server can actually serve them.
   const arevGroups = hasFeature('arev') ? registerArevIndicators() : []
   const arevController = createArevController()
+  // krev01 reversal votes (client/krev/): one price-pane template over GET /krev/values,
+  // registered only when the server can serve it.
+  const krevGroups = hasFeature('krev') ? registerKrevIndicators() : []
+  const krevController = createKrevController()
   // The settings dialog asks this before it will commit params, so a combination the server
   // cannot serve is refused with its own explanation instead of being drawn and then
   // failing on the first fetch. Null against a server without `indicators.resolve`, which
@@ -133,7 +139,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
-    indicatorGroups: [...indicatorGroups, ...arevGroups],
+    indicatorGroups: [...indicatorGroups, ...arevGroups, ...krevGroups],
     indicatorParamsValidator,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
@@ -156,6 +162,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
       levelsController.sync(panes)
       indicatorController.sync(panes)
       arevController.sync(panes)
+      krevController.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,

@@ -24,6 +24,9 @@ export type Feature =
   // GET /arev/values — AREV research predictions (wdashboard-server services/arev.py).
   // The client only registers its AREV templates and picker entries when advertised.
   | 'arev'
+  // GET /krev/values — krev01 k-NN reversal votes (wdashboard-server services/krev.py).
+  // The client only registers its KREV template and picker entry when advertised.
+  | 'krev'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.
