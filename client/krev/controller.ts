@@ -4,15 +4,14 @@ import { periodToResolution } from '../periods'
 import { symbolVendor } from '../symbols'
 import { fetchKrevValues, KREV_GENERATION, type KrevPoint } from './api'
 import { dropStore, storeFor, type KrevStore, type Range } from './store'
-import { isKrevIndicator, P_TEMPLATE_NAME, type ExtendData } from './templates'
+import { isKrevIndicator, type ExtendData } from './templates'
 
-// Keeps every KREV template fed: arev/controller.ts with one generation, no sub-pane and
-// therefore no y-axis override — the template sits on the price pane, whose axis belongs
-// to the candles. Per pane it watches the chart's own indicator list, and for the KREV
-// template found fetches history for exactly the bar range the chart holds and nothing it
-// already has, then hands the chart the values by bumping the indicator's extendData
-// (which its `calc` reads back from the store). No live stream: the rows are written by a
-// hand-run research script, so new data appears when it is re-run.
+// Keeps every KREV pane fed: arev/controller.ts with one generation and one template. Per
+// pane it watches the chart's own indicator list, and for the KREV template found fetches
+// history for exactly the bar range the chart holds and nothing it already has, then hands
+// the chart the values by bumping the indicator's extendData (which its `calc` reads back
+// from the store). No live stream: the rows are written by a hand-run research script, so
+// new data appears when it is re-run.
 
 const POLL_MS = 500
 const RANGE_DEBOUNCE_MS = 250
@@ -51,7 +50,7 @@ export function createKrevController(): KrevController {
   const wired = new Map<string, WiredPane>()
 
   const label = (b: Binding): string => {
-    const base = b.name === P_TEMPLATE_NAME ? `${KREV_GENERATION.toUpperCase()} P` : KREV_GENERATION.toUpperCase()
+    const base = KREV_GENERATION.toUpperCase()
     switch (b.store.phase) {
       case 'idle':
       case 'loading':
@@ -142,6 +141,20 @@ export function createKrevController(): KrevController {
     if (!used) dropStore(b.storeKey)
   }
 
+  // klinecharts pads an indicator pane's y-axis by 20% above and 10% below its data range,
+  // which is sized for a candle pane (room for the legend, and for a price line to sit off
+  // the top). This pane's range is already bounded either side by the flat threshold lines,
+  // so most of that padding is just empty pane. Give it half, exactly as the AREV panes do.
+  const AXIS_GAP = { top: 0.1, bottom: 0.05 }
+
+  const tightenAxis = (chart: Chart, chartPaneId: string): void => {
+    try {
+      chart.overrideYAxis({ paneId: chartPaneId, gap: AXIS_GAP })
+    } catch (err) {
+      console.warn('[krev] y-axis override failed', err)
+    }
+  }
+
   const signatureOf = (ind: Pick<Indicator, 'name' | 'paneId'>, vendor: string, ticker: string, interval: string): string =>
     JSON.stringify([ind.name, ind.paneId, vendor, ticker, interval])
 
@@ -182,6 +195,7 @@ export function createKrevController(): KrevController {
         lastShortName: ''
       }
       entry.bindings.set(ind.id, b)
+      tightenAxis(entry.chart, ind.paneId)
       apply(entry, b)
       void ensureCoverage(entry, b)
     }

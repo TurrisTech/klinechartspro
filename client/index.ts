@@ -93,7 +93,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
   // GET /arev/values, registered only when the server can actually serve them.
   const arevGroups = hasFeature('arev') ? registerArevIndicators() : []
   const arevController = createArevController()
-  // krev01 reversal votes (client/krev/): one price-pane template over GET /krev/values,
+  // krev01 reversal votes (client/krev/): one sub-pane template over GET /krev/values,
   // registered only when the server can serve it.
   const krevGroups = hasFeature('krev') ? registerKrevIndicators() : []
   const krevController = createKrevController()

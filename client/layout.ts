@@ -97,6 +97,17 @@ export async function loadLayout(): Promise<PersistedLayout | null> {
   }
 }
 
+// Templates that were once picked and no longer exist. A layout is persisted per user and
+// outlives the code that wrote it, so a name retired here would otherwise be handed to
+// klinecharts forever -- warning on every pane mount, and unremovable, since a name the
+// picker no longer offers has no checkbox to untick.
+//
+// 'KREV:krev01' was the price-pane half of the KREV indicator, folded into the sub-pane
+// template 'KREV:krev01:p' (see client/krev/templates.ts).
+const RETIRED_INDICATORS = new Set(['KREV:krev01'])
+
+const live = (names: string[]): string[] => names.filter((name) => !RETIRED_INDICATORS.has(name))
+
 // Resolves a persisted layout's tickers into full SymbolInfo (pricePrecision and the rest are
 // vendor-sourced, never persisted -- see client/symbols.ts's own note on why). Deduplicated by
 // `vendor:ticker` and resolved in parallel: a 12-pane layout typically names far fewer
@@ -120,8 +131,8 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
   const panes: HydratedPane[] = layout.panes.map((pane, index) => ({
     symbol: symbols[index],
     period: periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
-    mainIndicators: pane.mi ?? ['MA'],
-    subIndicators: pane.si ?? ['VOL']
+    mainIndicators: live(pane.mi ?? ['MA']),
+    subIndicators: live(pane.si ?? ['VOL'])
   }))
 
   return {
