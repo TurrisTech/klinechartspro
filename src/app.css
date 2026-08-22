@@ -979,10 +979,11 @@
 }
 
 /* Jump to live: only rendered while the newest bar is off screen (see ChartPane's `atLive`).
-   Inset by the chart's own measured axis gutters -- passed inline as bottom/right -- so it sits
-   in the lower-right of the PRICE area, clear of the x-axis labels and the y-axis scale, at
-   every pane size. z-index 4 clears the active-pane ring (3), which is pointer-events: none and
-   so would not have swallowed the click either way. */
+   Inset by the chart's own measured gutters -- passed inline as bottom/right -- so it sits in
+   the lower-right of the CANDLE pane's price area at every pane size: clear of the y-axis
+   scale, and above everything below the candles (indicator sub-panes, their separators and
+   the x-axis) rather than inside the lowest of them. z-index 4 clears the active-pane ring
+   (3), which is pointer-events: none and so would not have swallowed the click either way. */
 .klinecharts-pro-live-jump {
 	position: absolute;
 	z-index: 4;

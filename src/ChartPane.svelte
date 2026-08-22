@@ -293,11 +293,13 @@
   // it is parked in history and does not hold that tail at all. A pane with no data yet is
   // reported as `true` -- there is nothing to jump to, so nothing to offer.
   let atLive = $state(true)
-  // The chart's own axis gutters, so the control can sit inside the price area rather than on
-  // top of the x-axis labels or the y-axis scale. Read from klinecharts rather than guessed:
-  // both sizes are computed from the tick text they have to hold, so they move with the price
-  // precision and the theme's font.
-  let xAxisHeight = $state(0)
+  // The chart's own gutters, so the control sits inside the CANDLE pane's price area rather
+  // than on top of the x-axis labels, the y-axis scale, or -- once the pane carries indicator
+  // sub-panes -- down in the lowest sub-pane, which is what insetting by the x-axis alone
+  // gave. Read from klinecharts rather than guessed: the y-axis width is computed from the
+  // tick text it has to hold (so it moves with the price precision and the theme's font), and
+  // everything below the candles is a layout the user can add to and drag.
+  let priceAreaBottom = $state(0)
   let yAxisWidth = $state(0)
 
   function positionAtLive(chart: Chart): void {
@@ -348,7 +350,16 @@
     if (!widget) return
     const last = widget.getDataList().at(-1)?.timestamp
     atLive = last === undefined || (!parkedInHistory && isTimestampVisible(widget, last))
-    xAxisHeight = widget.getSize('x_axis_pane')?.height ?? 0
+    // Everything below the candle pane -- its indicator sub-panes, their separators and the
+    // x-axis -- as one distance, since pane boundings are measured from the chart container's
+    // own top. The x-axis alone is the fallback for the case where either read comes back
+    // null, which is the pre-sub-pane answer and right whenever there are none.
+    const chartHeight = widget.getSize()?.height ?? 0
+    const candlePane = widget.getSize('candle_pane')
+    priceAreaBottom =
+      candlePane !== null && chartHeight > 0
+        ? Math.max(chartHeight - (candlePane.top + candlePane.height), 0)
+        : (widget.getSize('x_axis_pane')?.height ?? 0)
     yAxisWidth = widget.getSize('candle_pane', 'yAxis')?.width ?? 0
   }
 
@@ -780,6 +791,14 @@
     }
     widget.subscribeAction('onVisibleRangeChange', onVisibleRangeChange)
 
+    // The candle pane's height is not a function of the visible range: adding or removing an
+    // indicator sub-pane and dragging a separator both resize it while the range stands still,
+    // and neither dispatches anything. Without this the jump-to-live control keeps the inset
+    // measured before the layout changed and drifts out of the price area.
+    const candleRoot = widget.getDom('candle_pane')
+    const candleResize = new ResizeObserver(() => { refreshViewState() })
+    if (candleRoot) candleResize.observe(candleRoot)
+
     // Listened for on the chart's own root (so an x-axis drag counts, not just one over the
     // candles) but released on the window: a drag that ends with the pointer outside the pane
     // -- off the edge of a small pane in a dense layout, which is most of them -- never
@@ -850,6 +869,7 @@
       widget?.unsubscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
       widget?.unsubscribeAction('onCrosshairChange', onCrosshairChange)
       widget?.unsubscribeAction('onVisibleRangeChange', onVisibleRangeChange)
+      candleResize.disconnect()
       pane.api = null
       // dispose()/destroy() calls the store's _clearData(), never _processDataUnsubscribe() --
       // only an in-place setSymbol/setPeriod (resetData) does that. Without this explicit
@@ -877,7 +897,7 @@
     <button
       type="button"
       class="klinecharts-pro-live-jump"
-      style={`bottom: ${xAxisHeight}px; right: ${yAxisWidth}px;`}
+      style={`bottom: ${priceAreaBottom}px; right: ${yAxisWidth}px;`}
       aria-label={i18n('jump_to_live', locale)}
       title={i18n('jump_to_live', locale)}
       onclick={jumpToLive}
