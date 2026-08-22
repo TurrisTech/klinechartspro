@@ -41,7 +41,7 @@ export interface LayoutPreset {
   paneAreas: readonly string[]
 }
 
-// [id, rows] pairs. 13 presets covering counts 1/2/3/4/6/8/9/12. Counts 5/7/10/11 have no
+// [id, rows] pairs. 17 presets covering counts 1/2/3/4/6/8/9/12. Counts 5/7/10/11 have no
 // pleasing rectangular arrangement and are left out rather than shipping a ragged grid.
 const RAW: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['p1']],
@@ -55,8 +55,10 @@ const RAW: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['4h', ['p1 p2 p3 p4']],
   ['4v', ['p1', 'p2', 'p3', 'p4']],
   ['6', ['p1 p2 p3', 'p4 p5 p6']],
+  ['6h', ['p1 p2 p3 p4 p5 p6']],
   ['6v', ['p1 p2', 'p3 p4', 'p5 p6']],
   ['8', ['p1 p2 p3 p4', 'p5 p6 p7 p8']],
+  ['8h', ['p1 p2 p3 p4 p5 p6 p7 p8']],
   ['9', ['p1 p2 p3', 'p4 p5 p6', 'p7 p8 p9']],
   ['12', ['p1 p2 p3 p4', 'p5 p6 p7 p8', 'p9 p10 p11 p12']]
 ]
