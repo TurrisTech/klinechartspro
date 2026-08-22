@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import type { Chart, Coordinate } from 'klinecharts'
+import type { Chart, Coordinate, Point } from 'klinecharts'
 
 import type { CrosshairPoint } from './crosshair'
 
@@ -120,4 +120,22 @@ export function resolveSeekTarget(
     return { timestamp: (start + end) / 2, fraction: CENTER_FRACTION, crosshairTimestamp: start }
   }
   return { timestamp: start, fraction: SPAN_START_FRACTION, crosshairTimestamp: start }
+}
+
+// The instant currently under the horizontal CENTRE of `chart`'s main price area -- what auto
+// time sync (src/sync/bus.ts's broadcastPan) carries between panes. The midpoint rather than
+// an edge because it is the one point every pane can reproduce regardless of how wide it is
+// or how many bars it has loaded: aligning left edges makes a narrow pane show a strict
+// prefix of a wide one, whereas aligning midpoints keeps the same moment in the middle of
+// both. Resolved through this chart's own scale (the same convertFromPixel path the crosshair
+// uses), so it extrapolates past the loaded range instead of clamping to the last bar.
+export function visibleMidpointTimestamp(chart: Chart): number | null {
+  const main = chart.getSize('candle_pane', 'main')
+  if (!main || main.width === 0) return null
+  const points = chart.convertFromPixel(
+    [{ x: main.width * CENTER_FRACTION }],
+    { paneId: 'candle_pane' }
+  ) as Array<Partial<Point>>
+  const timestamp = points[0]?.timestamp
+  return typeof timestamp === 'number' ? timestamp : null
 }

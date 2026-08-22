@@ -25,7 +25,10 @@ interface PersistedLayout {
   preset: string
   active: number // index into panes
   panes: PersistedPane[]
-  sync: { crosshair: boolean; time: boolean }
+  // `auto` is optional on the way IN and always written on the way out -- a document written
+  // before auto sync existed must still validate (see isPersistedLayout), and the honest
+  // answer for one is "auto sync was not on", which is also its default.
+  sync: { crosshair: boolean; time: boolean; auto?: boolean }
 }
 
 export interface HydratedPane {
@@ -39,7 +42,7 @@ export interface HydratedLayout {
   preset: string
   active: number
   panes: HydratedPane[]
-  sync: { crosshair: boolean; time: boolean }
+  sync: { crosshair: boolean; time: boolean; auto: boolean }
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -71,7 +74,8 @@ function isPersistedLayout(value: unknown): value is PersistedLayout {
     layout.panes.every(isPersistedPane) &&
     typeof layout.sync === 'object' && layout.sync !== null &&
     typeof (layout.sync as Record<string, unknown>).crosshair === 'boolean' &&
-    typeof (layout.sync as Record<string, unknown>).time === 'boolean'
+    typeof (layout.sync as Record<string, unknown>).time === 'boolean' &&
+    ['boolean', 'undefined'].includes(typeof (layout.sync as Record<string, unknown>).auto)
   )
 }
 
@@ -139,7 +143,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     preset: layout.preset,
     active: Math.min(Math.max(layout.active, 0), panes.length - 1),
     panes,
-    sync: layout.sync
+    sync: { ...layout.sync, auto: layout.sync.auto ?? false }
   }
 }
 
@@ -171,7 +175,7 @@ export function saveLayout(
   preset: string,
   panes: PaneSnapshot[],
   active: number,
-  sync: { crosshair: boolean; time: boolean }
+  sync: { crosshair: boolean; time: boolean; auto: boolean }
 ): void {
   const layout: PersistedLayout = {
     version: LAYOUT_VERSION,

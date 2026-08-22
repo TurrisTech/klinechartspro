@@ -164,9 +164,11 @@ export interface ChartProOptions {
   /** Which pane (by id, 'p1'..'pN') starts active. Defaults to 'p1'; out-of-range ids fall
    * back to the same default. */
   activePane?: string
-  /** Initial state of the two sync toggles; both default true. */
+  /** Initial state of the sync toggles. `syncCrosshair`/`syncTime` default true; `syncAuto`
+   * defaults false, and while it is on it SUPERSEDES `syncTime` -- see onSyncChange. */
   syncCrosshair?: boolean
   syncTime?: boolean
+  syncAuto?: boolean
   onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void
   onActivePaneChange?: (paneId: string) => void
   /** Fires whenever the live pane set changes -- a pane's chart was just created or just
@@ -176,8 +178,10 @@ export interface ChartProOptions {
   onPanesChange?: (panes: ChartProPane[]) => void
   onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void
   onPeriodChange?: (paneId: string, period: Period) => void
-  /** Fires whenever either sync toggle (the toolbar's Sync popover) changes. */
-  onSyncChange?: (options: { crosshair: boolean; time: boolean }) => void
+  /** Fires whenever any sync toggle changes -- the two in the toolbar's Sync popover, and the
+   * auto-sync button beside it. `auto` and `time` are alternatives, not additions: with `auto`
+   * on the wall follows every pan, and click-to-scroll is inert whatever `time` says. */
+  onSyncChange?: (options: { crosshair: boolean; time: boolean; auto: boolean }) => void
 }
 
 export interface ChartPro {

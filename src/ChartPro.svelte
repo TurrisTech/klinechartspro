@@ -37,6 +37,7 @@
   import XIcon from '@lucide/svelte/icons/x'
   import StarIcon from '@lucide/svelte/icons/star'
   import ChevronDownIcon from '@lucide/svelte/icons/chevron-down'
+  import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right'
   import {
     Avatar,
     Checkbox,
@@ -116,6 +117,7 @@
     activePane,
     syncCrosshair,
     syncTime,
+    syncAuto,
     onPaneLayoutChange,
     onActivePaneChange,
     onPanesChange,
@@ -136,6 +138,7 @@
   let starred = $state<Set<string>>(untrack(() => new Set(starredPeriods)))
   let syncCrosshairEnabled = $state(untrack(() => syncCrosshair))
   let syncTimeEnabled = $state(untrack(() => syncTime))
+  let syncAutoEnabled = $state(untrack(() => syncAuto))
 
   let symbolDialogOpen = $state(false)
   let indicatorDialogOpen = $state(false)
@@ -514,9 +517,28 @@
     }
   })
 
+  // Tracks syncAutoEnabled's PREVIOUS value so the alignment below fires on the transition
+  // into auto sync, not on every re-run of the effect (a crosshair toggle would otherwise
+  // yank every pane back to the active one's view for no reason the user asked for).
+  let syncAutoWas = untrack(() => syncAuto)
+
   $effect(() => {
-    bus.setOptions({ crosshair: syncCrosshairEnabled, time: syncTimeEnabled })
-    onSyncChange({ crosshair: syncCrosshairEnabled, time: syncTimeEnabled })
+    bus.setOptions({
+      crosshair: syncCrosshairEnabled,
+      time: syncTimeEnabled,
+      auto: syncAutoEnabled
+    })
+    onSyncChange({
+      crosshair: syncCrosshairEnabled,
+      time: syncTimeEnabled,
+      auto: syncAutoEnabled
+    })
+    const turnedOn = syncAutoEnabled && !syncAutoWas
+    syncAutoWas = syncAutoEnabled
+    // Switching auto sync on aligns the wall immediately, to the ACTIVE pane. Waiting for the
+    // next drag would leave a mode called "sync" changing nothing at the moment it is turned
+    // on, and leave the user to guess which pane the others will eventually follow.
+    if (turnedOn) bus.alignTo(untrack(() => wall.activeId))
   })
 
   $effect(() => {
@@ -623,9 +645,23 @@
 
       <div class="kc-toolbar-actions">
         <LayoutPicker {wall} {locale} {portalProps} />
+        <Tooltip.Root>
+          <Tooltip.Trigger
+            class={iconButtonClass(syncAutoEnabled)}
+            aria-pressed={syncAutoEnabled}
+            aria-label={i18n('sync_auto', locale)}
+            onclick={() => { syncAutoEnabled = !syncAutoEnabled }}
+          >
+            <ArrowLeftRightIcon />
+          </Tooltip.Trigger>
+          <Tooltip.Portal {...portalProps}>
+            <Tooltip.Content class="kc-tooltip">{i18n('sync_auto', locale)}</Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
         <SyncToggle
           bind:crosshair={syncCrosshairEnabled}
           bind:time={syncTimeEnabled}
+          auto={syncAutoEnabled}
           {locale}
           {portalProps}
         />

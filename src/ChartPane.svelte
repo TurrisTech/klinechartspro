@@ -20,6 +20,9 @@
     type TooltipFeatureStyle
   } from 'klinecharts'
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle'
+  import ChevronsRightIcon from '@lucide/svelte/icons/chevrons-right'
+
+  import i18n from './i18n'
 
   import type { Period, SymbolInfo } from './types'
   import { getOptions } from './config/settings'
@@ -28,7 +31,7 @@
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
   import { applyCrosshairAt, crosshairPoint, type CrosshairPoint } from './sync/crosshair'
-  import { seekToTimestamp } from './sync/seek'
+  import { isTimestampVisible, seekToTimestamp, visibleMidpointTimestamp } from './sync/seek'
 
   type IndicatorFeatureClick = {
     paneId: string
@@ -240,7 +243,7 @@
   // symbol/period change): only a seek anchors on ITS OWN target instead of "now", and only
   // a seek opens backward paging (see the 'backward' branch and the init branch's
   // `more.backward`).
-  let pendingSeek: { timestamp: number; fraction: number; crosshair: CrosshairPoint } | null = null
+  let pendingSeek: { timestamp: number; fraction: number; crosshair: CrosshairPoint | null } | null = null
   // Bumped on every 'init' load this loader starts, so a load whose result lands after a
   // NEWER 'init' has already started (two seeks fired in quick succession, or a seek racing
   // a symbol/period change) can tell it was superseded and drop its result instead of
@@ -253,7 +256,16 @@
   // soon as the pane is back at the present -- either because backward paging ran dry, or
   // because a live bar turns out to sit right at the tail after all. Nothing else parks a
   // pane: a plain init loads a window ending at `now`.
-  let parkedInHistory = false
+  //
+  // $state, not a plain local: the jump-to-live control's visibility is derived from it. A
+  // parked pane is never showing the live bar, however it happens to be scrolled -- the newest
+  // bar it HOLDS is not the newest bar there is.
+  let parkedInHistory = $state(false)
+
+  // Set by jumpToLive below and consumed by the very next 'init' load, exactly as pendingSeek
+  // is -- the two are mutually exclusive (a seek anchors on its own target, this one on now)
+  // and jumpToLive clears any pending seek before setting this.
+  let pendingLive = false
 
   // Requested by the sync bus (src/sync/bus.ts) when a click lands outside this pane's own
   // loaded data. Reloads the dataset anchored on `timestamp` instead of scrolling/paging
@@ -262,10 +274,101 @@
   // for the reset dataset, and re-applies `crosshair` once that reload lands. `crosshair` is
   // not necessarily at `timestamp`: resolveSeekTarget's span-centring case reloads/scrolls to
   // a span's midpoint but still marks the instant that was actually clicked.
-  function seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint): void {
+  function seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint | null): void {
     if (!widget) return
+    pendingLive = false
     pendingSeek = { timestamp, fraction, crosshair }
     widget.resetData()
+  }
+
+  // --- Jump to live ----------------------------------------------------------------------
+
+  // Where the newest bar lands when the jump-to-live control is used: four fifths of the way
+  // across the price area, leaving a fifth of empty chart to its right. Not flush against the
+  // right edge -- a live candle is still forming, and the room ahead of it is where it forms.
+  const LIVE_EDGE_FRACTION = 0.8
+
+  // Whether the newest bar there is, is on screen. False in two different ways, both of which
+  // the control has to offer to fix: this pane is scrolled away from a tail it does hold, or
+  // it is parked in history and does not hold that tail at all. A pane with no data yet is
+  // reported as `true` -- there is nothing to jump to, so nothing to offer.
+  let atLive = $state(true)
+  // The chart's own axis gutters, so the control can sit inside the price area rather than on
+  // top of the x-axis labels or the y-axis scale. Read from klinecharts rather than guessed:
+  // both sizes are computed from the tick text they have to hold, so they move with the price
+  // precision and the theme's font.
+  let xAxisHeight = $state(0)
+  let yAxisWidth = $state(0)
+
+  function positionAtLive(chart: Chart): void {
+    const last = chart.getDataList().at(-1)?.timestamp
+    if (last === undefined) return
+    seekToTimestamp(chart, last, LIVE_EDGE_FRACTION, 0)
+  }
+
+  function jumpToLive(): void {
+    if (!widget) return
+    // Parked panes hold no tail to scroll to: the data itself has to be replaced with a window
+    // ending at `now`, and only then positioned. Anything else -- a pane merely scrolled off
+    // to the left -- already holds the bar and only needs the scroll.
+    if (parkedInHistory || widget.getDataList().length === 0) {
+      pendingSeek = null
+      pendingLive = true
+      widget.resetData()
+      return
+    }
+    positionAtLive(widget)
+    // A pane the user drove to the present should take the wall with it when auto sync is on;
+    // the bus drops this when it is off. Explicit rather than relying on the gesture tracking
+    // below, which only ever sees pointer and wheel input on the chart itself.
+    broadcastPan()
+    refreshViewState()
+  }
+
+  // --- Auto time sync (pan) source ---------------------------------------------------------
+
+  // A pan is only broadcast while a real gesture on THIS pane is driving it. Every other cause
+  // of a visible-range change -- the sync bus scrolling this pane to follow another, a page of
+  // history arriving, a live bar, a resize -- must stay silent, or a wall of panes echoes one
+  // drag around itself indefinitely. The bus has its own re-entrancy guard; this is the half
+  // that makes the source of a movement unambiguous rather than merely non-recursive.
+  const WHEEL_TAIL_MS = 250
+  let pointerDriving = false
+  let wheelDrivingUntil = 0
+  const isDriving = () => pointerDriving || Date.now() < wheelDrivingUntil
+
+  function broadcastPan(): void {
+    if (!widget) return
+    const midpoint = visibleMidpointTimestamp(widget)
+    if (midpoint !== null) bus.broadcastPan(pane.id, midpoint)
+  }
+
+  // Recomputes what the jump-to-live control shows, from whatever the chart looks like now.
+  function refreshViewState(): void {
+    if (!widget) return
+    const last = widget.getDataList().at(-1)?.timestamp
+    atLive = last === undefined || (!parkedInHistory && isTimestampVisible(widget, last))
+    xAxisHeight = widget.getSize('x_axis_pane')?.height ?? 0
+    yAxisWidth = widget.getSize('candle_pane', 'yAxis')?.width ?? 0
+  }
+
+  // onVisibleRangeChange fires once per animation frame during a drag, and again for every
+  // data change, so both of its consumers are coalesced onto one rAF rather than run per
+  // dispatch: each does pixel<->timestamp conversions that are pointless to repeat within a
+  // frame. `panPending` is latched at DISPATCH time, not read inside the callback -- a drag
+  // that ends between the two would otherwise lose its final frame, leaving the wall one pan
+  // short of where the user let go.
+  let viewRaf = 0
+  let panPending = false
+  function scheduleViewTick(): void {
+    if (viewRaf !== 0) return
+    viewRaf = requestAnimationFrame(() => {
+      viewRaf = 0
+      const pan = panPending
+      panPending = false
+      refreshViewState()
+      if (pan) broadcastPan()
+    })
   }
 
   const chartDataLoader: DataLoader = {
@@ -300,6 +403,7 @@
           // bars onto its tail.
           if (fresh.length === 0) parkedInHistory = false
           callback(fresh, { backward: fresh.length > 0 })
+          scheduleViewTick()
         } finally {
           pane.loading = false
         }
@@ -310,6 +414,8 @@
         const generation = ++loadGeneration
         const seek = pendingSeek
         pendingSeek = null
+        const live = pendingLive
+        pendingLive = false
         pane.loading = true
         const [from, to] = seek
           ? seekWindow(currentPeriod, seek.timestamp, SEEK_WINDOW_BARS)
@@ -337,8 +443,18 @@
             // resetData() cleared this pane's crosshair along with its data (see
             // _clearData in klinecharts) -- without this, the pane lands in the right
             // place but shows no crosshair marking where every other pane just aligned to.
-            applyCrosshairAt(widget, seek.crosshair)
+            // An auto-sync pan carries no crosshair (see SyncPane.seekTo): a pan points at
+            // nothing, so the pane lands clean instead of marking an arbitrary instant.
+            if (seek.crosshair) applyCrosshairAt(widget, seek.crosshair)
+          } else if (live && data.length > 0 && widget) {
+            // The reload jumpToLive asked for has landed; only now does the tail exist to be
+            // positioned. Without this the pane would sit wherever klinecharts' own default
+            // offset put it, which is flush right, not the fifth of clear air the control
+            // promises.
+            positionAtLive(widget)
+            broadcastPan()
           }
+          scheduleViewTick()
         } finally {
           pane.loading = false
         }
@@ -385,6 +501,7 @@
         }
         parkedInHistory = false
         callback(bar)
+        scheduleViewTick()
       })
     },
     unsubscribeBar({ symbol: chartSymbol, period: chartPeriod }) {
@@ -652,6 +769,25 @@
     candleMain?.addEventListener('pointerdown', onCandleMainPointerDown)
     candleMain?.addEventListener('click', onCandleMainClick)
 
+    // Auto time sync source, and the jump-to-live control's own trigger. Both consume the same
+    // dispatch: klinecharts fires this whenever the visible range moves, whether from a drag,
+    // a zoom, a page of history, a live bar or a resize. Which of those it was is not in the
+    // payload, so `isDriving()` -- a pointer or wheel gesture on THIS pane, right now -- is
+    // what separates a pan the wall should follow from one it caused itself.
+    const onVisibleRangeChange = () => {
+      if (isDriving()) panPending = true
+      scheduleViewTick()
+    }
+    widget.subscribeAction('onVisibleRangeChange', onVisibleRangeChange)
+
+    // Listened for on the chart's own root (so an x-axis drag counts, not just one over the
+    // candles) but released on the window: a drag that ends with the pointer outside the pane
+    // -- off the edge of a small pane in a dense layout, which is most of them -- never
+    // delivers pointerup to the element it started on, and would leave this stuck driving.
+    const onPanPointerDown = () => { pointerDriving = true }
+    const onPanPointerUp = () => { pointerDriving = false }
+    const onPanWheel = () => { wheelDrivingUntil = Date.now() + WHEEL_TAIL_MS }
+
     // There is no klinecharts action for "crosshair cleared" -- on pointer leave it clears
     // its own internal state directly, with no observable dispatch. `chart.getDom()` with no
     // args returns the chart's own root container, which is what actually receives pointer
@@ -659,6 +795,10 @@
     const onPointerLeave = () => { bus.clearCrosshair(pane.id) }
     const chartDom = widget.getDom() ?? widgetElement
     chartDom.addEventListener('pointerleave', onPointerLeave)
+    chartDom.addEventListener('pointerdown', onPanPointerDown)
+    chartDom.addEventListener('wheel', onPanWheel, { passive: true })
+    window.addEventListener('pointerup', onPanPointerUp)
+    window.addEventListener('pointercancel', onPanPointerUp)
 
     bus.register({
       id: pane.id,
@@ -674,6 +814,10 @@
     applyIndicatorIcons()
     defaultStyles = clone(widget.getStyles())
     mounted = true
+    // Sizes the axis gutters the jump-to-live control is inset by, before any range change has
+    // happened -- a pane that mounts already scrolled off the tail (it cannot yet, but nothing
+    // here should depend on that) would otherwise place its control over the axes.
+    refreshViewState()
 
     pane.api = {
       chart: widget,
@@ -695,11 +839,17 @@
       // the crosshair source, unregister() itself clears every other pane's synced line
       // rather than leaving it stale with no owner.
       bus.unregister(pane.id)
+      if (viewRaf !== 0) cancelAnimationFrame(viewRaf)
       chartDom.removeEventListener('pointerleave', onPointerLeave)
+      chartDom.removeEventListener('pointerdown', onPanPointerDown)
+      chartDom.removeEventListener('wheel', onPanWheel)
+      window.removeEventListener('pointerup', onPanPointerUp)
+      window.removeEventListener('pointercancel', onPanPointerUp)
       candleMain?.removeEventListener('pointerdown', onCandleMainPointerDown)
       candleMain?.removeEventListener('click', onCandleMainClick)
       widget?.unsubscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
       widget?.unsubscribeAction('onCrosshairChange', onCrosshairChange)
+      widget?.unsubscribeAction('onVisibleRangeChange', onVisibleRangeChange)
       pane.api = null
       // dispose()/destroy() calls the store's _clearData(), never _processDataUnsubscribe() --
       // only an in-place setSymbol/setPeriod (resetData) does that. Without this explicit
@@ -723,6 +873,18 @@
   onfocusin={() => onActivate(pane.id)}
 >
   <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
+  {#if !atLive}
+    <button
+      type="button"
+      class="klinecharts-pro-live-jump"
+      style={`bottom: ${xAxisHeight}px; right: ${yAxisWidth}px;`}
+      aria-label={i18n('jump_to_live', locale)}
+      title={i18n('jump_to_live', locale)}
+      onclick={jumpToLive}
+    >
+      <ChevronsRightIcon />
+    </button>
+  {/if}
   {#if pane.loading}
     <div class="klinecharts-pro-loading"><LoaderCircleIcon class="kc-spinner" aria-label="Loading chart data" /></div>
   {/if}

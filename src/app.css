@@ -978,6 +978,39 @@
 	box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
 }
 
+/* Jump to live: only rendered while the newest bar is off screen (see ChartPane's `atLive`).
+   Inset by the chart's own measured axis gutters -- passed inline as bottom/right -- so it sits
+   in the lower-right of the PRICE area, clear of the x-axis labels and the y-axis scale, at
+   every pane size. z-index 4 clears the active-pane ring (3), which is pointer-events: none and
+   so would not have swallowed the click either way. */
+.klinecharts-pro-live-jump {
+	position: absolute;
+	z-index: 4;
+	display: grid;
+	place-items: center;
+	margin: 0 0.5rem 0.5rem 0;
+	width: 1.75rem;
+	height: 1.75rem;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--background);
+	color: var(--muted-foreground);
+	cursor: pointer;
+	box-shadow: 0 1px 3px rgb(0 0 0 / 0.16);
+	transition: color 120ms ease, border-color 120ms ease;
+}
+
+.klinecharts-pro-live-jump:hover {
+	border-color: var(--kc-active-pane);
+	color: var(--foreground);
+}
+
+.klinecharts-pro-live-jump svg {
+	width: 0.875rem;
+	height: 0.875rem;
+}
+
 .klinecharts-pro-loading {
 	position: absolute;
 	inset: 0;

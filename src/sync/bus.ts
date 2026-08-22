@@ -15,7 +15,12 @@
 import type { Chart, Nullable } from 'klinecharts'
 
 import { applyCrosshairAt, clearCrosshair, type CrosshairPoint } from './crosshair'
-import { isTimestampVisible, resolveSeekTarget, seekToTimestamp } from './seek'
+import {
+  isTimestampVisible,
+  resolveSeekTarget,
+  seekToTimestamp,
+  visibleMidpointTimestamp
+} from './seek'
 
 export interface SyncPane {
   id: string
@@ -33,13 +38,23 @@ export interface SyncPane {
   // once landed -- usually the same instant, but not always, so kept separate rather than
   // assumed equal. Carried through so the implementation can apply it once its own reload
   // lands -- resetData() wipes klinecharts' internal crosshair state, so without this the
-  // target pane would jump to the right place but show no crosshair marking it.
-  seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint): void
+  // target pane would jump to the right place but show no crosshair marking it. `null` for an
+  // auto-sync pan (broadcastPan below): a pan is not a pointing gesture, so there is no instant
+  // to mark, and the pane should land carrying no crosshair rather than one at an arbitrary
+  // point of its new view.
+  seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint | null): void
 }
 
 export interface SyncOptions {
   crosshair: boolean
+  // Click-to-scroll: a click on one pane scrolls every other one to that instant. Mutually
+  // exclusive with `auto` -- see broadcastSeek.
   time: boolean
+  // Auto time sync: every pane follows whichever one the user is panning or zooming, keeping
+  // the same instant under all their midpoints. While this is on, click-to-scroll is off: with
+  // the wall already following the pan there is nothing left for a click to do, and the click
+  // that ENDS a pan-drag would immediately re-seek the wall away from where the drag landed.
+  auto: boolean
 }
 
 // Jump, don't pan: an animated scrollByDistance drives onVisibleRangeChange on every frame,
@@ -48,13 +63,22 @@ export interface SyncOptions {
 // "someone else clicked a date", which is a teleport, not a drag.
 const SEEK_ANIMATION_MS = 0
 
+// Where an auto-sync pan puts the source pane's midpoint instant on every other pane: its own
+// midpoint. See visibleMidpointTimestamp (src/sync/seek.ts) for why the middle and not an edge.
+const PAN_FRACTION = 0.5
+
+// How long a pan must stand still before a pane that cannot reach the target by scrolling is
+// reloaded around it. Scrolling is free, so an in-range pane follows every frame; a reload is a
+// round trip to the server, so dragging across a year must not fire one per frame on the way.
+const PAN_RELOAD_DEBOUNCE_MS = 200
+
 // The wall's crosshair + click-to-scroll registry. One instance per ChartPro shell, created
 // in ChartPro.svelte and threaded down to every ChartPane. Panes register/unregister
 // themselves from their own onMount/cleanup, so the live set here is always exactly the
 // currently-mounted panes -- the bus never reaches out to discover panes on its own.
 export class SyncBus {
   private readonly panes = new Map<string, SyncPane>()
-  private options: SyncOptions = { crosshair: true, time: true }
+  private options: SyncOptions = { crosshair: true, time: true, auto: false }
 
   private crosshairRaf = 0
   private pendingCrosshair: { sourceId: string; point: CrosshairPoint } | null = null
@@ -65,12 +89,30 @@ export class SyncBus {
 
   private seekRaf = 0
 
+  private panRaf = 0
+  private pendingPan: { sourceId: string; timestamp: number } | null = null
+  // Re-entrancy only. Unlike the crosshair action, klinecharts has no notExecuteAction escape
+  // for onVisibleRangeChange: the scroll this bus applies to a target pane dispatches that
+  // pane's OWN range-change subscriber synchronously, from inside the loop below.
+  //
+  // What actually stops a wall of N panes echoing one pan around itself is upstream of here --
+  // ChartPane broadcasts only while a real pointer or wheel gesture is driving THAT pane, and a
+  // pane the bus scrolled has no such gesture. This flag cannot substitute for that (a pane's
+  // reaction reaches broadcastPan a frame later, by which time it is false again); it is here
+  // so that a synchronous broadcast from inside a dispatch cannot recurse.
+  private dispatchingPan = false
+  // Per-pane debounced reload, keyed by pane id -- see PAN_RELOAD_DEBOUNCE_MS. Holds the most
+  // recent target, so the reload that eventually fires lands where the pan actually ended
+  // rather than where it first left this pane's loaded range.
+  private readonly panReloads = new Map<string, { timer: ReturnType<typeof setTimeout>; timestamp: number }>()
+
   register(pane: SyncPane): void {
     this.panes.set(pane.id, pane)
   }
 
   unregister(id: string): void {
     this.panes.delete(id)
+    this.cancelPanReload(id)
     if (this.pendingCrosshair?.sourceId === id) this.pendingCrosshair = null
     // A pane being torn down while it was the crosshair source would otherwise leave every
     // other pane showing a line with no owner left to move or clear it.
@@ -78,7 +120,12 @@ export class SyncBus {
   }
 
   setOptions(options: SyncOptions): void {
+    const wasAuto = this.options.auto
     this.options = options
+    // A pan already coalesced (or a reload already scheduled) when auto sync was switched off
+    // must not still land afterwards -- the user turned following off, and a pane jumping one
+    // beat later is exactly the thing they just asked to stop.
+    if (wasAuto && !options.auto) this.cancelPan()
   }
 
   // --- Crosshair -----------------------------------------------------------------------
@@ -133,6 +180,13 @@ export class SyncBus {
   // calls collapses to the latest target instead of seeking every pane once per call. `point`
   // (not a bare timestamp) so a reload can restore the crosshair afterwards -- see seekPane.
   broadcastSeek(sourceId: string, point: CrosshairPoint, fraction: number): void {
+    // Auto sync owns the time axis while it is on -- see SyncOptions.auto. Checked before
+    // `time` so that turning auto on disables click-to-scroll whatever that switch says,
+    // rather than leaving the two fighting over the same panes.
+    if (this.options.auto) {
+      console.debug('[sync] seek skipped: auto time sync owns the time axis')
+      return
+    }
     if (!this.options.time) {
       console.debug('[sync] seek skipped: time sync is off')
       return
@@ -216,9 +270,113 @@ export class SyncBus {
     pane.seekTo(target.timestamp, target.fraction, crosshairTarget)
   }
 
+  // --- Auto time sync (pan) --------------------------------------------------------------
+
+  // The source pane's midpoint moved: bring every other pane's midpoint to the same instant.
+  // Called by ChartPane from klinecharts' onVisibleRangeChange, but ONLY while a real
+  // pointer/wheel gesture is driving that pane -- see ChartPane's `panGesture`. That, plus
+  // `dispatchingPan`, is what keeps a wall of N panes from echoing one pan around itself.
+  //
+  // Coalesced to one rAF, like the other two broadcasts: a drag fires a range change per
+  // frame and there is no value in dispatching more often than the display refreshes.
+  broadcastPan(sourceId: string, timestamp: number): void {
+    if (!this.options.auto) return
+    if (this.dispatchingPan) return
+    this.pendingPan = { sourceId, timestamp }
+    if (this.panRaf !== 0) return
+    this.panRaf = requestAnimationFrame(() => {
+      this.panRaf = 0
+      const pending = this.pendingPan
+      this.pendingPan = null
+      if (!pending) return
+      this.dispatchPan(pending.sourceId, pending.timestamp)
+    })
+  }
+
+  // Aligns the wall to `sourceId`'s current view without waiting for a pan. What ChartPro
+  // calls the moment auto sync is switched on: the panes are wherever their own history left
+  // them, and a mode called "sync" that changes nothing until the next drag would look broken.
+  alignTo(sourceId: string): void {
+    if (!this.options.auto) return
+    const source = this.panes.get(sourceId)
+    const chart = source?.getChart()
+    if (!chart) return
+    const timestamp = visibleMidpointTimestamp(chart)
+    if (timestamp === null) return
+    this.dispatchPan(sourceId, timestamp)
+  }
+
+  private dispatchPan(sourceId: string, timestamp: number): void {
+    this.dispatchingPan = true
+    try {
+      for (const [id, pane] of this.panes) {
+        if (id === sourceId) continue
+        const chart = pane.getChart()
+        if (!chart) continue
+        this.panPane(chart, pane, timestamp)
+      }
+    } finally {
+      this.dispatchingPan = false
+    }
+  }
+
+  private panPane(chart: Chart, pane: SyncPane, timestamp: number): void {
+    const dataList = chart.getDataList()
+    if (dataList.length === 0) return
+
+    // Reachable by scrolling: this pane already holds a bar on each side of the target, so
+    // seekToTimestamp lands on it exactly with no fetch. Also cancels any reload this pane had
+    // pending -- a pan that wanders out of the loaded range and back again should end up
+    // scrolled, not reloaded a beat later around a target it has since left.
+    if (timestamp >= dataList[0].timestamp && timestamp <= dataList[dataList.length - 1].timestamp) {
+      this.cancelPanReload(pane.id)
+      seekToTimestamp(chart, timestamp, PAN_FRACTION, SEEK_ANIMATION_MS)
+      return
+    }
+
+    // Past either end of what this pane has loaded -- it can only get there by reloading
+    // around the target, which is a round trip, so it waits for the pan to settle first. The
+    // pane stays where it is until then; it does not creep toward the edge in the meantime,
+    // which would be motion that never arrives anywhere.
+    this.schedulePanReload(pane, timestamp)
+  }
+
+  private schedulePanReload(pane: SyncPane, timestamp: number): void {
+    const existing = this.panReloads.get(pane.id)
+    if (existing) clearTimeout(existing.timer)
+    const timer = setTimeout(() => {
+      const pending = this.panReloads.get(pane.id)
+      this.panReloads.delete(pane.id)
+      // Re-read the pane from the registry rather than trusting the captured reference: a
+      // layout shrink between scheduling and firing tears its chart down, and reloading a
+      // pane that is no longer on the wall would fetch a page nothing will ever draw.
+      if (!pending || !this.panes.has(pane.id) || !pane.getChart()) return
+      pane.seekTo(pending.timestamp, PAN_FRACTION, null)
+    }, PAN_RELOAD_DEBOUNCE_MS)
+    this.panReloads.set(pane.id, { timer, timestamp })
+  }
+
+  private cancelPanReload(id: string): void {
+    const pending = this.panReloads.get(id)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.panReloads.delete(id)
+  }
+
+  private cancelPan(): void {
+    if (this.panRaf !== 0) {
+      cancelAnimationFrame(this.panRaf)
+      this.panRaf = 0
+    }
+    this.pendingPan = null
+    for (const { timer } of this.panReloads.values()) clearTimeout(timer)
+    this.panReloads.clear()
+  }
+
   dispose(): void {
     if (this.crosshairRaf !== 0) cancelAnimationFrame(this.crosshairRaf)
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
+    this.cancelPan()
     this.panes.clear()
   }
 }

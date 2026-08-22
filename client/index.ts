@@ -121,7 +121,11 @@ async function mountChart(container: HTMLElement): Promise<void> {
     const activeIndex = Math.max(0, panes.findIndex((pane) => pane.id === cp.getActivePaneId()))
     saveLayout(cp.getPaneLayout(), panes, activeIndex, latestSync)
   }
-  let latestSync = { crosshair: hydrated?.sync.crosshair ?? true, time: hydrated?.sync.time ?? true }
+  let latestSync = {
+    crosshair: hydrated?.sync.crosshair ?? true,
+    time: hydrated?.sync.time ?? true,
+    auto: hydrated?.sync.auto ?? false
+  }
 
   chartPro = new KLineChartPro({
     container,
@@ -151,6 +155,7 @@ async function mountChart(container: HTMLElement): Promise<void> {
     activePane: hydrated ? `p${hydrated.active + 1}` : 'p1',
     syncCrosshair: latestSync.crosshair,
     syncTime: latestSync.time,
+    syncAuto: latestSync.auto,
     // The definitive "which panes are actually live" signal -- fires once per pane mount and
     // once per pane teardown (including every layout grow/shrink), never before a pane's
     // chart exists. Every mounted chart layer resyncs from this directly; nothing here polls
