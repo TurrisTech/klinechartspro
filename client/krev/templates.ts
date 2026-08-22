@@ -7,14 +7,25 @@ import { peekStore, type BarPoints } from './store'
 // extremes they are about, not in a sub-pane. Like the AREV templates, `calc` computes
 // nothing — it reads the points the controller fetched from `/krev/values`.
 //
-// What is drawn, and what is not. A triangle sits on every extreme the server flagged as
-// a signal (P(holds) at or above its threshold, off a full window): pointing down from
-// above a top's high, up from below a bottom's low — the direction the reversal argues
-// for, red for a top (down) and green for a bottom (up). Its fill is the outcome: solid
-// once the extreme held, hollow once it failed, half-transparent while still in play.
-// Candidates below the threshold are NOT drawn — about a third of all bars print a fresh
-// extreme, and marking every one would bury the ones the model singled out — but every
-// candidate on the crosshair bar, flagged or not, is in the tooltip with its p and outcome.
+// What is drawn, and what is not. A triangle sits on an extreme the model leans on:
+// pointing down from above a top's high, up from below a bottom's low — the direction the
+// reversal argues for, red for a top (down) and green for a bottom (up). Two tiers: a
+// full-size triangle with its `p` printed beside it where the server flagged a signal
+// (P(holds) >= 0.5, off a full window), and a small faint one where p is at least LEAN_P —
+// the model leaning without committing. Both carry the outcome as fill: solid once the
+// extreme held, hollow once it failed, half-transparent while still in play. Anything
+// below LEAN_P is not drawn at all.
+//
+// The lean tier exists because signals alone are invisible at chart scale: on EURUSD 1h
+// there are 678 in sixteen years, one every ~155 bars, so a screen of 130 bars usually
+// holds none and the template looked broken. At LEAN_P about 7% of candidates qualify —
+// two or three per screen on 1h — which is enough to see the model working without
+// burying the ones it singled out (about a third of all bars print a fresh extreme, so
+// marking every candidate is not an option).
+//
+// The `p` label is drawn here rather than offered through `createTooltipDataSource`,
+// because ChartPane.svelte's createIndicator wrapper replaces every template's tooltip
+// source with its own icons-only one — a template's legends never reach the screen.
 //
 // Declares no figures (the marker-template rule from indicators/templates.ts): a price
 // must not enter the pane's y-axis range through this template, and with nothing to
@@ -32,6 +43,11 @@ export type Value = BarPoints
 const TOP_COLOR = '#EF5350'
 const BOTTOM_COLOR = '#26A69A'
 
+// The lower tier. Mirrors nothing on the server: a presentation choice, like the
+// threshold lines AREV draws. 0.5 is the server's SIGNAL_P.
+const LEAN_P = 0.35
+const MIN_NEIGHBOURS = 50
+
 export function isKrevIndicator(name: string): boolean {
   return name === TEMPLATE_NAME
 }
@@ -43,9 +59,12 @@ function triangle(
   size: number,
   color: string,
   pointingDown: boolean,
-  fill: 'solid' | 'hollow' | 'pending'
+  fill: 'solid' | 'hollow' | 'pending',
+  alpha: number
 ): void {
   const dir = pointingDown ? 1 : -1
+  ctx.save()
+  ctx.globalAlpha = alpha
   ctx.beginPath()
   ctx.moveTo(x, y)
   ctx.lineTo(x - size, y - dir * size * 1.4)
@@ -53,15 +72,24 @@ function triangle(
   ctx.closePath()
   ctx.lineWidth = 1.5
   ctx.strokeStyle = color
-  if (fill === 'hollow') {
-    ctx.stroke()
-    return
+  if (fill !== 'hollow') {
+    ctx.globalAlpha = alpha * (fill === 'pending' ? 0.45 : 1)
+    ctx.fillStyle = color
+    ctx.fill()
+    ctx.globalAlpha = alpha
   }
-  ctx.globalAlpha = fill === 'pending' ? 0.45 : 1
-  ctx.fillStyle = color
-  ctx.fill()
-  ctx.globalAlpha = 1
   ctx.stroke()
+  ctx.restore()
+}
+
+function label(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string, above: boolean): void {
+  ctx.save()
+  ctx.font = '10px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = above ? 'bottom' : 'top'
+  ctx.fillStyle = color
+  ctx.fillText(text, x, y)
+  ctx.restore()
 }
 
 function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
@@ -124,13 +152,15 @@ export function registerKrevIndicators(): IndicatorGroup[] {
           if (bar == null) continue
           const x = xAxis.convertToPixel(i)
           for (const point of [bar.top, bar.bottom]) {
-            if (!point?.signal) continue
+            if (!point || point.n < MIN_NEIGHBOURS || point.p < LEAN_P) continue
+            const lean = !point.signal
             const fill = point.outcome === 'held' ? 'solid' : point.outcome === 'failed' ? 'hollow' : 'pending'
-            if (point.side === 'top') {
-              triangle(ctx, x, yAxis.convertToPixel(point.extreme) - 4, size, TOP_COLOR, true, fill)
-            } else {
-              triangle(ctx, x, yAxis.convertToPixel(point.extreme) + 4, size, BOTTOM_COLOR, false, fill)
-            }
+            const color = point.side === 'top' ? TOP_COLOR : BOTTOM_COLOR
+            const top = point.side === 'top'
+            const y = yAxis.convertToPixel(point.extreme) + (top ? -4 : 4)
+            const s = lean ? size * 0.55 : size
+            triangle(ctx, x, y, s, color, top, fill, lean ? 0.5 : 1)
+            if (!lean) label(ctx, x, y + (top ? -s * 1.4 - 2 : s * 1.4 + 2), point.p.toFixed(2), color, top)
           }
         }
         return true
