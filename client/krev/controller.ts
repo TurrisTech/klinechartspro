@@ -4,7 +4,7 @@ import { periodToResolution } from '../periods'
 import { symbolVendor } from '../symbols'
 import { fetchKrevValues, KREV_GENERATION, type KrevPoint } from './api'
 import { dropStore, storeFor, type KrevStore, type Range } from './store'
-import { isKrevIndicator, type ExtendData } from './templates'
+import { isKrevIndicator, P_TEMPLATE_NAME, type ExtendData } from './templates'
 
 // Keeps every KREV template fed: arev/controller.ts with one generation, no sub-pane and
 // therefore no y-axis override — the template sits on the price pane, whose axis belongs
@@ -51,7 +51,7 @@ export function createKrevController(): KrevController {
   const wired = new Map<string, WiredPane>()
 
   const label = (b: Binding): string => {
-    const base = KREV_GENERATION.toUpperCase()
+    const base = b.name === P_TEMPLATE_NAME ? `${KREV_GENERATION.toUpperCase()} P` : KREV_GENERATION.toUpperCase()
     switch (b.store.phase) {
       case 'idle':
       case 'loading':
