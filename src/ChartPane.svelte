@@ -893,17 +893,26 @@
   onfocusin={() => onActivate(pane.id)}
 >
   <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
-  {#if !atLive}
+  {#snippet liveJump(bottom: number, right: number)}
     <button
       type="button"
       class="klinecharts-pro-live-jump"
-      style={`bottom: ${priceAreaBottom}px; right: ${yAxisWidth}px;`}
+      style={`bottom: ${bottom}px; right: ${right}px;`}
       aria-label={i18n('jump_to_live', locale)}
       title={i18n('jump_to_live', locale)}
       onclick={jumpToLive}
     >
       <ChevronsRightIcon />
     </button>
+  {/snippet}
+  {#if !atLive}
+    <!-- Inside the candle pane's own price area, above whatever sub-panes and axis sit
+         below it, and the chart's true lower right corner. The same control twice: the
+         first is where the eye already is when reading candles, the second is where a
+         scroll-to-the-end control is conventionally looked for, and on a pane carrying
+         several tall indicator sub-panes those are a long way apart. -->
+    {@render liveJump(priceAreaBottom, yAxisWidth)}
+    {@render liveJump(0, 0)}
   {/if}
   {#if pane.loading}
     <div class="klinecharts-pro-loading"><LoaderCircleIcon class="kc-spinner" aria-label="Loading chart data" /></div>
