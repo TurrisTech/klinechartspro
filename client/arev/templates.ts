@@ -8,7 +8,7 @@ import { peekStore } from './store'
 // nothing: it reads the points the controller fetched from `/arev/values`.
 //
 // What the pane draws is the probability the k-NN vote implies — the share of comparable
-// past legs that rose — against a flat threshold either side of a coin flip, plus an arrow
+// past samples that rose — against a flat threshold either side of a coin flip, plus an arrow
 // on every bar where P(up) crosses out of the band: red where it crosses up over the
 // upper (long) line, green where it crosses down below the lower (short) line — a fade
 // of the overshoot, computed here from consecutive points rather than taken from the
@@ -26,6 +26,15 @@ import { peekStore } from './store'
 // hand-run generation scripts, so a template names a generation, not a parameterisation.
 
 export const TEMPLATE_PREFIX = 'AREV:'
+
+// What distinguishes the generations, for the picker. arev19 and arev20 are the same
+// model built two ways; arev21 is the same model asked of different bars, which is why
+// drawing it beside arev19 is the point of having it.
+const DESCRIPTIONS: Record<ArevGeneration, string> = {
+  arev19: 'k-NN reversal prediction, single-pass generation (store-and-predict together)',
+  arev20: 'k-NN reversal prediction, split train/predict generation',
+  arev21: 'arev19 sampled at fresh price extremes instead of WMA crosses'
+}
 
 // Mirrors wdashboard-server's arev.SIGNAL_CONFIDENCE. Both drawn and applied here: the
 // two threshold lines sit at 0.5 +/- this, and the arrows mark where P(up) crosses them.
@@ -216,10 +225,7 @@ export function registerArevIndicators(): IndicatorGroup[] {
     group.items.push({
       name,
       label: generation.toUpperCase(),
-      description:
-        generation === 'arev19'
-          ? 'k-NN reversal prediction, single-pass generation (store-and-predict together)'
-          : 'k-NN reversal prediction, split train/predict generation'
+      description: DESCRIPTIONS[generation]
     })
   }
   registered = true
