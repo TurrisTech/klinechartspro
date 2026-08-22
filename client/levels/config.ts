@@ -49,14 +49,20 @@ export interface LevelsConfig {
   }
 }
 
-// Chosen so the default render is visually identical to what shipped before this feature —
-// solid, 1px, the server's own advisory color — with only the two emphasis encodings turned
-// on, since drawing thickness/brightness from level metadata is the reason this exists.
+// Dotted, 1px, the server's own advisory color, with both emphasis encodings turned on —
+// drawing thickness/brightness from level metadata is the reason this exists. Dotted rather
+// than solid so a level reads as an annotation over the candles rather than as price data,
+// and it stays distinct from the dashed pattern a spent level is drawn in.
+//
+// 1M and 1W on, 1D off: the weekly and monthly books are the ones the server computes for
+// every symbol (wtradingindicators feeds/levels_declare.py pins exactly those two), and 1D
+// is no longer computed at all — the code is still sent in `intervals=` and accepted by the
+// server, so it stays a toggle, just not a default one.
 export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
-  intervals: Object.fromEntries(LEVELS_INTERVAL_ORDER.map((code) => [code, true])),
+  intervals: Object.fromEntries(LEVELS_INTERVAL_ORDER.map((code) => [code, code !== '1D'])),
   showSpent: false,
   base: {
-    pattern: 'solid',
+    pattern: 'dotted',
     width: 1,
     opacity: 1,
     colorMode: 'server',
