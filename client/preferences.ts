@@ -3,9 +3,10 @@ import { authHeaders } from './auth'
 
 // GET/PUT /preferences — a single JSON blob per user, versioned by an integer `revision`
 // (wdashboard-server's appstate.py). Starred timeframes were the first key this held; per-
-// layer chart settings (client/chartlayers/store.ts) and the wall layout (client/layout.ts)
-// are the others — all go through the generic loadPreferences/savePreference below, so a
-// further key is no new code here.
+// layer chart settings (client/chartlayers/store.ts) and the user's saved workspaces
+// (client/workspaces/store.ts — one key per workspace, plus an index) are the others — all go
+// through the generic loadPreferences/savePreference/removePreference below, so a further key
+// is no new code here.
 
 const STARRED_TIMEFRAMES_KEY = 'starredTimeframes'
 
@@ -84,6 +85,15 @@ export function savePreference(key: string, value: unknown): void {
     pending = {}
     void flush(changes)
   }, SAVE_DEBOUNCE_MS)
+}
+
+// Deleting a key is a `savePreference(key, undefined)`: `flush` spreads pending changes over
+// the known document, and JSON.stringify drops an undefined value, so the PUT body — which
+// REPLACES the stored document rather than merging into it (appstate.py) — simply no longer
+// carries it. Named, rather than left to each caller to know that, because it is the one
+// place the delete semantics of a replace-the-whole-document PUT are non-obvious.
+export function removePreference(key: string): void {
+  savePreference(key, undefined)
 }
 
 export function saveStarredTimeframes(starredTimeframes: string[]): void {

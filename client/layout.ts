@@ -1,15 +1,15 @@
 import type { PaneOptions, PaneSnapshot, Period, SymbolInfo } from '../src'
-import { hasFeature } from './capabilities'
 import { availablePeriods, defaultPeriod } from './periods'
-import { loadPreferences, savePreference } from './preferences'
-import { fetchSymbolInfo, symbolVendor } from './symbols'
+import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 
-// The wall's `layout` preference key -- symbol/period/indicators per pane, the active pane,
-// the two sync toggles, and which layout preset was in use. Free-form JSON under the same
-// 64 KiB /preferences document as starredTimeframes; a realistic 12-pane layout is on the
-// order of 2 KiB, so field names are kept short but not cryptic.
-const LAYOUT_KEY = 'layout'
-const LOCAL_STORAGE_KEY = 'wd.layout'
+// The SHAPE of one wall document -- symbol/period/indicators per pane, the active pane, the
+// two sync toggles, and which layout preset was in use. Where a document is stored, and how
+// many of them a user keeps, is client/workspaces/store.ts's problem, not this file's: a
+// layout used to be a single `layout` preference key and is now the `layout` field of a
+// workspace, and nothing here had to change for that.
+//
+// A realistic 12-pane layout is on the order of 2 KiB, so field names are kept short but not
+// cryptic -- a user's whole workspace set shares one 64 KiB /preferences document.
 const LAYOUT_VERSION = 1
 
 interface PersistedPane {
@@ -20,7 +20,7 @@ interface PersistedPane {
   si?: string[] // sub indicator names, omitted when empty
 }
 
-interface PersistedLayout {
+export interface PersistedLayout {
   version: number
   preset: string
   active: number // index into panes
@@ -60,9 +60,10 @@ function isPersistedPane(value: unknown): value is PersistedPane {
 }
 
 // Tolerant: an older or newer client's document (extra keys, a bumped `version`) degrades to
-// "no persisted layout" instead of throwing, so a schema change can't leave a client stuck
-// unable to boot until the field is cleared.
-function isPersistedLayout(value: unknown): value is PersistedLayout {
+// "not a layout" instead of throwing, so a schema change can't leave a client stuck unable to
+// boot until the field is cleared. A workspace whose layout fails this is dropped from the
+// set rather than mounted half-formed.
+export function isPersistedLayout(value: unknown): value is PersistedLayout {
   if (!value || typeof value !== 'object') return false
   const layout = value as Record<string, unknown>
   return (
@@ -79,25 +80,16 @@ function isPersistedLayout(value: unknown): value is PersistedLayout {
   )
 }
 
-// `hasFeature('preferences')` is dev-only -- prod's wdashboard-server has no appstate
-// database, so /preferences 404s there. The server blob is authoritative when advertised;
-// localStorage is the fallback everywhere else. Never throws: a parse/fetch failure here
-// should degrade to no persisted layout (the caller's own single-symbol default), not block
-// the chart from opening.
-export async function loadLayout(): Promise<PersistedLayout | null> {
-  try {
-    if (hasFeature('preferences')) {
-      const data = await loadPreferences()
-      const value = data[LAYOUT_KEY]
-      return isPersistedLayout(value) ? value : null
-    }
-    const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as unknown
-    return isPersistedLayout(parsed) ? parsed : null
-  } catch (err) {
-    console.warn('[layout] load failed, using defaults', err)
-    return null
+// The wall a brand-new workspace opens on: one pane, the default instrument and timeframe,
+// both sync toggles on. Deliberately the same thing the client mounted before any layout was
+// ever persisted, so "New workspace" and "first ever visit" land on the same chart.
+export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): PersistedLayout {
+  return {
+    version: LAYOUT_VERSION,
+    preset: '1',
+    active: 0,
+    panes: [{ s: ticker, p: defaultPeriod(availablePeriods()).text, mi: ['MA'], si: ['VOL'] }],
+    sync: { crosshair: true, time: true, auto: false }
   }
 }
 
@@ -167,34 +159,20 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
   }
 }
 
-// Dirty-checked: `active` changes on every pane click, and without this a click-around
-// session would generate a PUT (or a localStorage write) per click regardless of debounce.
-let lastWritten = ''
-
-export function saveLayout(
+/** The live wall, as a document. */
+export function toPersistedLayout(
   preset: string,
   panes: PaneSnapshot[],
   active: number,
   sync: { crosshair: boolean; time: boolean; auto: boolean }
-): void {
-  const layout: PersistedLayout = {
-    version: LAYOUT_VERSION,
-    preset,
-    active,
-    panes: panes.map(toPersistedPane),
-    sync
-  }
-  const serialized = JSON.stringify(layout)
-  if (serialized === lastWritten) return
-  lastWritten = serialized
+): PersistedLayout {
+  return { version: LAYOUT_VERSION, preset, active, panes: panes.map(toPersistedPane), sync }
+}
 
-  if (hasFeature('preferences')) savePreference(LAYOUT_KEY, layout)
-  // Always ALSO written locally, not only when the server feature is absent: prod has no
-  // appstate database today, so this is the only persistence prod gets, and it costs nothing
-  // extra to keep it as a same-tab-reload fallback even where the server copy is authoritative.
-  try {
-    window.localStorage.setItem(LOCAL_STORAGE_KEY, serialized)
-  } catch (err) {
-    console.warn('[layout] localStorage save failed', err)
-  }
+/** A one-line description of a stored layout, for the workspace switcher's rows. */
+export function describeLayout(layout: PersistedLayout): string {
+  const count = layout.panes.length
+  const first = layout.panes[Math.min(Math.max(layout.active, 0), count - 1)]
+  const panes = count === 1 ? '1 pane' : `${count} panes`
+  return `${panes} · ${first.s} ${first.p}`
 }

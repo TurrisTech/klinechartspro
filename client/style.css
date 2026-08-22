@@ -91,8 +91,13 @@ body {
 
 /* client/chartlayers/settings.ts's settings panel. Wider than the library's default
    `.kc-popover` (16rem) — a layer's field list runs several groups deep — and scrolls
-   internally rather than growing past the viewport. */
-.wd-layer-panel {
+   internally rather than growing past the viewport.
+
+   Compound selector, deliberately: src/app.css's own `.kc-popover { width: 16rem }` is a
+   single class too and lands LATER in the cascade (the library's stylesheet is bundled after
+   this one), so a bare `.wd-layer-panel { width }` loses the tie and the panel renders at
+   16rem — which is what it did until 2026-08-22. */
+.kc-popover.wd-layer-panel {
   width: 20rem;
   max-height: min(70vh, 32rem);
   overflow-y: auto;
@@ -196,4 +201,204 @@ body {
 .wd-login-submit:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* --- Workspace switcher --------------------------------------------------------------- */
+
+/* client/workspaces/menu.ts. The button sits first in the toolbar slot, ahead of the Levels
+   toggle, and carries a name rather than an icon -- which wall you are on is the one piece of
+   toolbar state that has no other visual tell. */
+.wd-ws-button {
+  gap: 0.375rem;
+  max-width: 12rem;
+  font-weight: 500;
+}
+
+/* A `?symbol=` deep link mounts a wall belonging to no workspace and saving nothing; the
+   dashed outline is what says the name in the button is a link, not a workspace. */
+.wd-ws-button.is-transient {
+  border: 1px dashed color-mix(in oklab, var(--muted-foreground) 55%, transparent);
+  color: var(--muted-foreground);
+}
+
+/* Compound, for the same cascade reason as .wd-layer-panel above. Wide enough that a row's
+   "2 panes · EURUSD 1D · 3h ago" fits beside the name without ellipsing. */
+.kc-popover.wd-ws-panel {
+  width: 24rem;
+  max-height: min(70vh, 30rem);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wd-ws-list {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 -0.25rem;
+}
+
+.wd-ws-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: var(--radius-md);
+  padding: 0 0.25rem;
+}
+
+.wd-ws-row:hover {
+  background: color-mix(in oklab, var(--muted-foreground) 12%, transparent);
+}
+
+.wd-ws-row.is-active {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+}
+
+/* The row's whole left side is the switch target -- a workspace is picked far more often than
+   it is renamed, so the small icon buttons stay out of the way on the right. */
+.wd-ws-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0.4rem 0.25rem;
+  cursor: pointer;
+}
+
+.wd-ws-mark {
+  width: 0.875rem;
+  flex: none;
+  color: var(--primary);
+  display: flex;
+}
+
+.wd-ws-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.wd-ws-name {
+  font-size: 0.8125rem;
+}
+
+.wd-ws-meta {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+
+.wd-ws-rename {
+  width: 100%;
+  height: 1.75rem;
+  font-size: 0.8125rem;
+}
+
+/* Revealed on hover or keyboard focus rather than always shown: three icons per row, on up to
+   twelve rows, reads as clutter when what you came to do is switch. */
+.wd-ws-actions {
+  display: flex;
+  gap: 0.125rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.wd-ws-row:hover .wd-ws-actions,
+.wd-ws-row:focus-within .wd-ws-actions {
+  opacity: 1;
+}
+
+.wd-ws-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.wd-ws-action:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--muted-foreground) 20%, transparent);
+  color: inherit;
+}
+
+.wd-ws-action:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Delete confirms in the row itself -- a window.confirm() blocks the page, and a modal over a
+   popover is more chrome than a two-click destructive action deserves. */
+.wd-ws-confirm-text {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.25rem;
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wd-ws-confirm-button {
+  height: 1.75rem;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-ws-confirm-button.is-danger {
+  background: #f23645;
+  color: #fff;
+}
+
+.wd-ws-footer {
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.5rem;
+}
+
+.wd-ws-add {
+  width: 100%;
+  gap: 0.375rem;
+}
+
+/* Shown while a workspace's wall is being built (client/index.ts remount()) and, with a retry
+   control, if that build fails -- the switcher is attached to the chart, so a failed mount
+   would otherwise leave the page with no way back to another workspace. */
+.wd-wall-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  width: 100%;
+  height: 100%;
+  color: #787b86;
+  font-size: 0.8125rem;
+}
+
+.wd-wall-placeholder p {
+  margin: 0;
+}
+
+.wd-wall-retry {
+  border: 1px solid #2a2e39;
+  border-radius: 6px;
+  background: transparent;
+  color: #d1d4dc;
+  font: inherit;
+  padding: 0.375rem 0.875rem;
+  cursor: pointer;
+}
+
+.wd-wall-retry:hover {
+  background: #2a2e39;
 }

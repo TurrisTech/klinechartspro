@@ -69,12 +69,18 @@ const CACHE_TTL_MS = 5 * 60_000
 // ChartPro.svelte's `{#if drawingBarVisible}` — so re-parent into whichever instance of the
 // slot currently exists rather than attaching once, or the control vanishes for good the
 // first time someone hides the drawing tools instead of merely hiding with it.
+/** Returns a disposer. Switching workspaces tears the chart down and builds a new one against
+ * the SAME container element, so an observer left running would accumulate one per switch,
+ * all watching the same live element -- and the element it re-attaches would be one belonging
+ * to a chart that no longer exists. */
 export function attachToSlot(
   chartPro: KLineChartPro,
   slotName: 'toolbar' | 'rail-footer',
   element: HTMLElement
-): void {
+): () => void {
+  let detached = false
   const tryAttach = (): boolean => {
+    if (detached) return true
     const slot = chartPro.getSlot(slotName)
     if (!slot) return false
     if (element.parentElement !== slot) slot.appendChild(element)
@@ -94,9 +100,16 @@ export function attachToSlot(
   // The container, not a root reached through the slot: it exists from the moment the
   // constructor returns, so this is registered unconditionally rather than only once some
   // attempt has already found a slot to navigate up from.
-  new MutationObserver(() => {
+  const observer = new MutationObserver(() => {
     tryAttach()
-  }).observe(chartPro.getContainer(), { childList: true, subtree: true })
+  })
+  observer.observe(chartPro.getContainer(), { childList: true, subtree: true })
+
+  return () => {
+    detached = true
+    observer.disconnect()
+    element.remove()
+  }
 }
 
 // The price band on screen, which is NOT the price range of the visible bars: rescaling the
@@ -210,6 +223,11 @@ export interface LayerController {
   /** Attaches the layer's single toolbar button once a KLineChartPro instance exists. Call
    * once, right after construction. */
   attach(chartPro: KLineChartPro): void
+  /** Removes that button, closes any open settings panel, and stops watching the chart's DOM.
+   * Paired with attach() across a chart TEARDOWN -- a workspace switch builds a whole new
+   * KLineChartPro against the same container, and an undetached controller would keep
+   * re-attaching a button belonging to the chart that just went away. */
+  detach(): void
   /** Reconciles this layer's per-pane wiring against the wall's currently-live panes. Pass
    * straight through as `ChartProOptions.onPanesChange` — built before the chart exists so
    * its `sync` can be supplied at construction time. */
@@ -463,9 +481,17 @@ export function createLayerController<TDatum, TConfig extends object>(
     for (const entry of wired.values()) scheduleRedraw(entry)
   })()
 
+  let detachButton: (() => void) | null = null
+
   return {
     attach(chartPro: KLineChartPro): void {
-      attachToSlot(chartPro, 'toolbar', layerButton)
+      detachButton?.()
+      detachButton = attachToSlot(chartPro, 'toolbar', layerButton)
+    },
+    detach(): void {
+      closePanel()
+      detachButton?.()
+      detachButton = null
     },
     sync(panes: ChartProPane[]): void {
       const live = new Set(panes.map((pane) => pane.id))
