@@ -32,6 +32,8 @@ import { peekStore, type BarPoints } from './store'
 // suppress `draw` returns true.
 
 export const TEMPLATE_NAME = `KREV:${KREV_GENERATION}`
+// The sub-pane companion: the same votes as a series, the way the AREV panes draw P(up).
+export const P_TEMPLATE_NAME = `KREV:${KREV_GENERATION}:p`
 
 export interface ExtendData {
   seriesKey: string
@@ -49,7 +51,121 @@ const LEAN_P = 0.35
 const MIN_NEIGHBOURS = 50
 
 export function isKrevIndicator(name: string): boolean {
-  return name === TEMPLATE_NAME
+  return name === TEMPLATE_NAME || name === P_TEMPLATE_NAME
+}
+
+// Mirrors wdashboard-server's krev.SIGNAL_P.
+const SIGNAL_P = 0.5
+
+// -- the sub-pane series ----------------------------------------------------------------
+//
+// A vote exists only on a candidate bar — about a third of them — so a plain line of `p`
+// would be mostly gaps. What the pane draws instead is each side's LATEST vote carried
+// forward (two step-lines: the model's current lean on tops, and on bottoms) with a dot
+// on the bar each vote was actually cast, plus the two flat references the price-pane
+// markers use: SIGNAL_P and LEAN_P. Tops and bottoms are separate series for the same
+// reason AREV19 and AREV20 are separate panes — seeing them side by side is the point.
+
+export interface PValue {
+  top?: number
+  bottom?: number
+  topVote?: number
+  bottomVote?: number
+  signal?: number
+  lean?: number
+}
+
+const P_LINES: Array<{ key: keyof PValue; title: string; color: string; dashed?: boolean }> = [
+  { key: 'top', title: 'top p: ', color: '#EF535099' },
+  { key: 'bottom', title: 'bottom p: ', color: '#26A69A99' },
+  { key: 'signal', title: 'signal: ', color: '#787B86', dashed: true },
+  { key: 'lean', title: 'lean: ', color: '#787B86', dashed: true }
+]
+const P_CIRCLES: Array<{ key: keyof PValue; title: string; color: string }> = [
+  { key: 'topVote', title: 'top vote: ', color: TOP_COLOR },
+  { key: 'bottomVote', title: 'bottom vote: ', color: BOTTOM_COLOR }
+]
+
+function calcP(dataList: KLineData[], indicator: Indicator<PValue, number, ExtendData>): PValue[] {
+  const key = indicator.extendData?.seriesKey
+  const store = key ? peekStore(key) : undefined
+  if (!store) return dataList.map(() => ({}))
+  let top: number | undefined
+  let bottom: number | undefined
+  return dataList.map((d) => {
+    const bar = store.values.get(d.timestamp)
+    const value: PValue = { signal: SIGNAL_P, lean: LEAN_P }
+    if (bar?.top && bar.top.n >= MIN_NEIGHBOURS) {
+      top = bar.top.p
+      value.topVote = top
+    }
+    if (bar?.bottom && bar.bottom.n >= MIN_NEIGHBOURS) {
+      bottom = bar.bottom.p
+      value.bottomVote = bottom
+    }
+    if (top != null) value.top = top
+    if (bottom != null) value.bottom = bottom
+    return value
+  })
+}
+
+function shouldUpdateP(prev: Indicator<PValue, number, ExtendData>, cur: Indicator<PValue, number, ExtendData>) {
+  const dataChanged =
+    prev.extendData?.seriesKey !== cur.extendData?.seriesKey || prev.extendData?.rev !== cur.extendData?.rev
+  return { calc: dataChanged, draw: true }
+}
+
+function registerPTemplate(): void {
+  const template: IndicatorTemplate<PValue, number, ExtendData> = {
+    name: P_TEMPLATE_NAME,
+    shortName: `${KREV_GENERATION.toUpperCase()} P`,
+    precision: 3,
+    calcParams: [],
+    shouldOhlc: false,
+    shouldFormatBigNumber: false,
+    visible: true,
+    zLevel: 0,
+    extendData: { seriesKey: '', rev: 0 },
+    series: 'normal',
+    // klinecharts counts line and circle figures separately and pairs each with
+    // styles.lines / styles.circles by that index, so the two arrays below must keep
+    // the order of P_LINES and P_CIRCLES.
+    figures: [
+      ...P_LINES.map((f) => ({ key: f.key, title: f.title, type: 'line' })),
+      ...P_CIRCLES.map((f) => ({ key: f.key, title: f.title, type: 'circle' }))
+    ],
+    // Never zoom inside the two reference lines; p rarely exceeds 0.6, so the axis
+    // widens past 0.5 only when a vote actually does.
+    minValue: 0,
+    maxValue: SIGNAL_P,
+    styles: {
+      lines: P_LINES.map((f) => ({
+        color: f.color,
+        size: 1,
+        style: f.dashed ? 'dashed' : 'solid',
+        smooth: false,
+        dashedValue: [2, 2]
+      })),
+      // A circle figure takes its colour from noChangeColor (klinecharts compares the
+      // value with the previous bar's to pick up/down/noChange, and a vote is not a
+      // direction); the radius is half the bar gap, set by the chart.
+      circles: P_CIRCLES.map((f) => ({
+        style: 'fill',
+        borderStyle: 'solid',
+        borderSize: 1,
+        borderDashedValue: [2, 2],
+        upColor: f.color,
+        downColor: f.color,
+        noChangeColor: f.color
+      }))
+    },
+    shouldUpdate: shouldUpdateP,
+    calc: calcP,
+    regenerateFigures: null,
+    createTooltipDataSource: null,
+    draw: null
+  }
+  registerIndicator(template)
 }
 
 function triangle(
@@ -167,17 +283,29 @@ export function registerKrevIndicators(): IndicatorGroup[] {
       }
     }
     registerIndicator(template)
+    registerPTemplate()
     registered = true
   }
   return [
     {
-      label: 'KREV research',
+      label: 'KREV research · price pane',
       main: true,
       items: [
         {
           name: TEMPLATE_NAME,
           label: KREV_GENERATION.toUpperCase(),
-          description: 'k-NN reversal: does this fresh extreme hold? Signals on the price pane, outcome by fill'
+          description: 'k-NN reversal: does this fresh extreme hold? Markers at the extremes, outcome by fill'
+        }
+      ]
+    },
+    {
+      label: 'KREV research · sub-pane',
+      main: false,
+      items: [
+        {
+          name: P_TEMPLATE_NAME,
+          label: `${KREV_GENERATION.toUpperCase()} P`,
+          description: 'P(extreme holds) per side as a series: latest vote carried forward, a dot per vote'
         }
       ]
     }
