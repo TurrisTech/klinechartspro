@@ -9,6 +9,8 @@ import { loadDiscovery } from './indicators/api'
 import { createKrevController } from './krev/controller'
 import { registerKrevIndicators } from './krev/templates'
 import { createIndicatorController } from './indicators/controller'
+import { createMtfController } from './mtf/controller'
+import { registerMtfIndicators } from './mtf/templates'
 import { createParamsValidator, registerServerIndicators } from './indicators/templates'
 import {
   defaultLayout,
@@ -264,6 +266,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // registered only when the server can serve it.
   const krevGroups = hasFeature('krev') ? registerKrevIndicators() : []
   const krevController = createKrevController()
+  // AREV21 across timeframes (client/mtf/): one price-pane template per source timeframe
+  // over the same GET /arev/values the AREV panes read, which is why it gates on 'arev'
+  // and not on a capability of its own -- there is no new server surface behind it.
+  const mtfGroups = hasFeature('arev') ? registerMtfIndicators() : []
+  const mtfController = createMtfController()
   // The settings dialog asks this before it will commit params, so a combination the server
   // cannot serve is refused with its own explanation instead of being drawn and then
   // failing on the first fetch. Null against a server without `indicators.resolve`, which
@@ -309,7 +316,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
-    indicatorGroups: [...indicatorGroups, ...arevGroups, ...krevGroups],
+    indicatorGroups: [...indicatorGroups, ...arevGroups, ...krevGroups, ...mtfGroups],
     indicatorParamsValidator,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
@@ -333,6 +340,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       indicatorController.sync(panes)
       arevController.sync(panes)
       krevController.sync(panes)
+      mtfController.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
@@ -357,6 +365,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       indicatorController.sync([])
       arevController.sync([])
       krevController.sync([])
+      mtfController.sync([])
       levelsController.detach()
       detachExtras()
       chartPro?.remove()
