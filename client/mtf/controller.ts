@@ -5,7 +5,7 @@ import { periodToResolution, resolutionDurationMs } from '../periods'
 import { symbolVendor } from '../symbols'
 import { MTF_GENERATION, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
 import { MTF_DEFAULTS, MTF_FIELDS, enabledIntervals, type MtfConfig } from './config'
-import { configFor, loadMtfPrefs, saveMtfPaneConfig, type MtfPanePrefs } from './prefs'
+
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { dropStore, storeFor, type MtfStore, type Range } from './store'
 import { TEMPLATE_NAME, isMtfIndicator, type ExtendData } from './templates'
@@ -20,6 +20,14 @@ import { TEMPLATE_NAME, isMtfIndicator, type ExtendData } from './templates'
 //
 // It fetches a BAR GRID as well as the votes for each timeframe, because placing a vote one
 // source bar forward is a question about that timeframe's candle boundaries (shift.ts).
+//
+// Settings are per pane and live in that pane's own entry of the wall document
+// (client/layout.ts's PersistedPane.mtf). The controller is their only writer: it is seeded
+// with what the layout hydrated, and asks the app to save the wall whenever the panel edits
+// one. It deliberately does NOT own a store of its own -- an earlier draft kept them in a
+// pane-index-keyed map on the workspace, which is the second home for pane state that
+// klinechartspro 90cfbd9 removed for indicator parameters, and for the same reason: one
+// fact with two writers, when the pane's own document already knows which pane it is.
 //
 // Like AREV there is nothing to subscribe: the rows are written by hand-run research
 // scripts, not a live feed, so new votes appear when a script is re-run and a reload or a
@@ -85,30 +93,25 @@ export interface MtfController {
   /** Wired as ChartProOptions.indicatorSettingsHandler: claims the gear on this indicator
    * and opens the per-timeframe panel instead of the numeric params dialog. */
   handleSettings(request: { indicatorName: string; paneId: string; chartPaneId: string }): boolean
+  /** Every pane's current settings, by pane index — what toPersistedLayout writes. Includes
+   * panes that are no longer mounted, so a pane temporarily off a shrunk wall does not lose
+   * its settings the next time the wall is saved. */
+  configByPane(): Record<number, MtfConfig>
 }
 
-export function createMtfController(): MtfController {
-  const wired = new Map<string, WiredPane>()
-  // paneIndex -> settings, for the workspace that is active. Null until the load below
-  // resolves; a pane wired before then runs on MTF_DEFAULTS and is re-seeded when it lands.
-  let prefs: MtfPanePrefs | null = null
-  let panel: SettingsPanelHandle | null = null
+export interface MtfControllerOptions {
+  /** What the wall document hydrated for each pane, by pane index. A pane with nothing
+   * saved is absent and starts on MTF_DEFAULTS. */
+  initial?: Record<number, MtfConfig>
+  /** Asks the app to save the wall. Called after a panel edit; the app reads the new value
+   * back through `configByPane()` when it builds the document. */
+  onChange?: () => void
+}
 
-  void loadMtfPrefs()
-    .then((loaded) => {
-      prefs = loaded
-      // Whatever is already mounted was built against the defaults; re-seed and re-apply so
-      // saved settings take effect without waiting for a pan.
-      for (const entry of wired.values()) {
-        entry.config = configFor(loaded, entry.paneIndex)
-        entry.configRev++
-        for (const b of entry.bindings.values()) {
-          apply(entry, b)
-          void ensureCoverage(entry, b)
-        }
-      }
-    })
-    .catch((err: unknown) => console.warn('[mtf] settings load failed, using defaults', err))
+export function createMtfController(options: MtfControllerOptions = {}): MtfController {
+  const initial = options.initial ?? {}
+  const wired = new Map<string, WiredPane>()
+  let panel: SettingsPanelHandle | null = null
 
   /** A source timeframe finer than the chart's is refused rather than drawn: hundreds of
    * sub-bar votes collapsing onto one candle reads as noise, not as context. Named in the
@@ -309,8 +312,7 @@ export function createMtfController(): MtfController {
     const entry: WiredPane = {
       pane,
       paneIndex,
-      // MTF_DEFAULTS until the prefs load resolves, which re-seeds every wired pane.
-      config: prefs ? configFor(prefs, paneIndex) : MTF_DEFAULTS,
+      config: structuredClone(initial[paneIndex] ?? MTF_DEFAULTS),
       configRev: 0,
       chart,
       bindings: new Map(),
@@ -350,7 +352,8 @@ export function createMtfController(): MtfController {
   const settingsChanged = (entry: WiredPane, next: MtfConfig): void => {
     entry.config = next
     entry.configRev++
-    saveMtfPaneConfig(entry.paneIndex, next)
+    initial[entry.paneIndex] = next
+    options.onChange?.()
     for (const b of entry.bindings.values()) {
       apply(entry, b)
       void ensureCoverage(entry, b)
@@ -438,13 +441,11 @@ export function createMtfController(): MtfController {
           // settings are keyed by position -- so follow the move and re-read.
           if (existing.paneIndex !== i) {
             existing.paneIndex = i
-            if (prefs) {
-              existing.config = configFor(prefs, i)
-              existing.configRev++
-              for (const b of existing.bindings.values()) {
-                apply(existing, b)
-                void ensureCoverage(existing, b)
-              }
+            existing.config = structuredClone(initial[i] ?? MTF_DEFAULTS)
+            existing.configRev++
+            for (const b of existing.bindings.values()) {
+              apply(existing, b)
+              void ensureCoverage(existing, b)
             }
           }
           continue
@@ -456,6 +457,13 @@ export function createMtfController(): MtfController {
     handleSettings({ indicatorName, paneId }): boolean {
       if (!isMtfIndicator(indicatorName)) return false
       return openPanel(paneId)
+    },
+    configByPane(): Record<number, MtfConfig> {
+      // `initial` is the accumulated set: seeded from the document and updated on every
+      // edit, so it survives a pane being unwired.
+      const out: Record<number, MtfConfig> = { ...initial }
+      for (const entry of wired.values()) out[entry.paneIndex] = entry.config
+      return out
     }
   }
 }

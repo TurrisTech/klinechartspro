@@ -1,6 +1,5 @@
 import type { SettingsField } from '../chartlayers/settings'
-import { loadLayerConfig } from '../chartlayers/store'
-import { MTF_INTERVALS, type MtfInterval } from './api'
+import { MTF_INTERVALS, isMtfInterval, type MtfInterval } from './api'
 
 // The one AREV21 multi-timeframe overlay's settings: which timeframes it draws, and how
 // each one looks. Per timeframe rather than per indicator, because the whole point of the
@@ -15,11 +14,10 @@ import { MTF_INTERVALS, type MtfInterval } from './api'
 // and `group` — the exact vocabulary this needs, and the same one the Levels layer uses for
 // its per-timeframe colours), and reaches `calc`/`draw` through the indicator's extendData.
 //
-// WHERE these are stored is client/mtf/prefs.ts's business, not this module's: one config
-// per pane, inside the active workspace, beside the server indicators' own per-pane
-// parameters. This module owns only the shape, the defaults and the field schema.
-
-export const MTF_CONFIG_ID = 'mtf-arev21'
+// WHERE these are stored is client/layout.ts's business: one config per pane, in that pane's
+// own entry of the wall document, beside its indicator parameters and its view state. This
+// module owns only the shape, the defaults, the field schema and the validator a stored
+// document is read back through.
 
 export interface MtfTimeframeStyle {
   /** Whether this timeframe is drawn at all. */
@@ -108,13 +106,59 @@ export function enabledIntervals(config: MtfConfig | undefined): MtfInterval[] {
   return MTF_INTERVALS.filter((interval) => timeframes[interval]?.enabled === true)
 }
 
-/** The single global config this overlay kept before its settings became per-pane.
+/** What actually goes in the wall document: only the fields that differ from MTF_DEFAULTS.
  *
- * Read-only now, and read exactly once: client/mtf/prefs.ts uses it to seed a pane that has
- * no settings of its own, so a user who had already picked their timeframes and colours
- * keeps them. Nothing writes this key any more, so it stays as whatever it was and quietly
- * stops mattering once every pane has been configured; where it was never written,
- * loadLayerConfig answers MTF_DEFAULTS, which is the same seed. */
-export function loadLegacyGlobalMtfConfig(): Promise<MtfConfig> {
-  return loadLayerConfig(MTF_CONFIG_ID, MTF_DEFAULTS)
+ * A full config is ~620 bytes, and the whole workspace SET shares one 64 KiB document — up
+ * to twelve walls of up to twelve panes, where client/layout.ts budgets a following-the-
+ * market pane at thirty bytes. Storing the whole object per pane would be the largest thing
+ * in that document by an order of magnitude, for a user who typically changes one colour.
+ * A diff makes the common case a few dozen bytes and costs one merge on the way back in. */
+export type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeStyle>>>
+
+const STYLE_KEYS = ['enabled', 'color', 'arrowSize', 'textSize'] as const
+
+function validStyleValue(key: (typeof STYLE_KEYS)[number], value: unknown): boolean {
+  if (key === 'enabled') return typeof value === 'boolean'
+  if (key === 'color') return typeof value === 'string'
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+/** The diff to store, or undefined when this pane is on the defaults and has nothing to say. */
+export function toStoredMtfConfig(config: MtfConfig): StoredMtfConfig | undefined {
+  const stored: StoredMtfConfig = {}
+  for (const interval of MTF_INTERVALS) {
+    const style = config.timeframes[interval]
+    const base = MTF_DEFAULTS.timeframes[interval]
+    if (!style) continue
+    const diff: Partial<MtfTimeframeStyle> = {}
+    for (const key of STYLE_KEYS) {
+      if (style[key] !== base[key]) (diff as unknown as Record<string, unknown>)[key] = style[key]
+    }
+    if (Object.keys(diff).length > 0) stored[interval] = diff
+  }
+  return Object.keys(stored).length > 0 ? stored : undefined
+}
+
+/** A stored diff merged back onto the defaults, or undefined when there is nothing usable.
+ *
+ * Every field is type-checked on the way in and a bad one falls back to its default rather
+ * than reaching the drawing code: these become canvas coordinates, where a non-finite size
+ * is a silently invisible marker and a missing `enabled` drops a timeframe the user turned
+ * on. A document from a future version naming a timeframe this build does not know is
+ * ignored, which is what lets the field be added to without a version bump. */
+export function fromStoredMtfConfig(stored: unknown): MtfConfig | undefined {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
+  const config = structuredClone(MTF_DEFAULTS)
+  let touched = false
+  for (const [interval, diff] of Object.entries(stored as Record<string, unknown>)) {
+    if (!isMtfInterval(interval) || !diff || typeof diff !== 'object') continue
+    const target = config.timeframes[interval]
+    for (const key of STYLE_KEYS) {
+      const value = (diff as Record<string, unknown>)[key]
+      if (value === undefined || !validStyleValue(key, value)) continue
+      ;(target as unknown as Record<string, unknown>)[key] = value
+      touched = true
+    }
+  }
+  return touched ? config : undefined
 }

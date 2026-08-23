@@ -4,7 +4,6 @@ import { periodToResolution } from '../periods'
 import { stream, type IndicatorListener } from '../stream'
 import { symbolVendor } from '../symbols'
 import { fetchValues, type IndicatorPoint, type IndicatorSpec, type SeriesDoc } from './api'
-import { loadServerIndicatorPrefs, saveServerIndicatorParams, type ServerIndicatorPrefs } from './prefs'
 import { dropStore, storeFor, type Range, type SeriesStore } from './store'
 import {
   defaultCalcParams,
@@ -54,13 +53,11 @@ interface Binding {
 
 interface WiredPane {
   pane: ChartProPane
-  paneIndex: number
   chart: Chart
   bindings: Map<string, Binding>
   poll: ReturnType<typeof setInterval>
   rangeTimer: ReturnType<typeof setTimeout> | null
   onRange: () => void
-  restoredParams: Set<string>
 }
 
 export interface IndicatorController {
@@ -70,11 +67,6 @@ export interface IndicatorController {
 export function createIndicatorController(specs: IndicatorSpec[]): IndicatorController {
   const specByName = new Map(specs.map((s) => [templateName(s), s]))
   const wired = new Map<string, WiredPane>()
-  let prefs: ServerIndicatorPrefs | null = null
-  const prefsReady = loadServerIndicatorPrefs().then((p) => {
-    prefs = p
-    for (const entry of wired.values()) reconcile(entry)
-  })
 
   // klinecharts renders `${shortName}(${calcParams})` itself, so the label carries the title
   // and the series' state, never the params.
@@ -286,20 +278,11 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
     const seen = new Set<string>()
     for (const ind of indicators) {
       seen.add(ind.id)
-      // Restore persisted params once per (pane, template) before binding.
-      const restoreKey = `${entry.paneIndex}:${ind.name}`
-      if (prefs && !entry.restoredParams.has(restoreKey)) {
-        entry.restoredParams.add(restoreKey)
-        const saved = prefs[String(entry.paneIndex)]?.[ind.name]
-        if (saved && JSON.stringify(saved) !== JSON.stringify(ind.calcParams)) {
-          try {
-            entry.chart.overrideIndicator({ id: ind.id, name: ind.name, paneId: ind.paneId, calcParams: saved } as never)
-          } catch {
-            // ignore
-          }
-          continue // next poll sees the new params
-        }
-      }
+      // No parameter restoration here any more: a persisted series' calcParams are part of the
+      // wall document (client/layout.ts's `ip`), and the library applies them when it CREATES
+      // the indicator -- so what this reads is already the user's own numbers, on the first
+      // poll, with no window ever fetched for the template default. See the note on
+      // Workspace.indicatorParams in client/workspaces/store.ts for the shape this replaced.
       const sig = signatureOf(ind, vendor, symbol.ticker, interval)
       const existing = entry.bindings.get(ind.id)
       if (existing && existing.signature === sig) {
@@ -312,11 +295,6 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
       if (!specByName.has(ind.name)) continue
       const b = bind(entry, ind as Indicator<Value, number, ExtendData>, symbol, interval)
       entry.bindings.set(ind.id, b)
-      // Persist non-default params (and any change to previously persisted ones).
-      const persisted = prefs?.[String(entry.paneIndex)]?.[b.name]
-      if (prefs && (persisted || JSON.stringify(b.calcParams) !== JSON.stringify(defaultCalcParams(b.spec)))) {
-        saveServerIndicatorParams(entry.paneIndex, b.name, b.calcParams)
-      }
       void ensureCoverage(entry, b)
     }
     for (const [id, b] of entry.bindings) {
@@ -331,11 +309,10 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
     for (const b of entry.bindings.values()) void ensureCoverage(entry, b)
   }
 
-  const wire = (pane: ChartProPane, paneIndex: number): void => {
+  const wire = (pane: ChartProPane): void => {
     const chart = pane.getChart()
     const entry: WiredPane = {
       pane,
-      paneIndex,
       chart,
       bindings: new Map(),
       poll: setInterval(() => reconcile(entry), POLL_MS),
@@ -346,12 +323,10 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
           entry.rangeTimer = null
           coverAll(entry)
         }, RANGE_DEBOUNCE_MS)
-      },
-      restoredParams: new Set()
+      }
     }
     chart.subscribeAction('onVisibleRangeChange', entry.onRange)
     wired.set(pane.id, entry)
-    void prefsReady.then(() => reconcile(entry))
     reconcile(entry)
   }
 
@@ -397,16 +372,16 @@ export function createIndicatorController(specs: IndicatorSpec[]): IndicatorCont
 
   return {
     sync(panes: ChartProPane[]): void {
-      const live = new Map(panes.map((p, i) => [p.id, { p, i }]))
+      // Pane POSITION is no longer part of this: it was only ever here to index into the
+      // pane-index-keyed parameter map that the wall document replaced, and a pane's identity
+      // is its id.
+      const live = new Map(panes.map((p) => [p.id, p]))
       for (const id of [...wired.keys()]) if (!live.has(id)) unwire(id)
-      for (const [id, { p, i }] of live) {
+      for (const [id, p] of live) {
         const existing = wired.get(id)
-        if (existing && existing.chart === p.getChart()) {
-          existing.paneIndex = i
-          continue
-        }
+        if (existing && existing.chart === p.getChart()) continue
         if (existing) unwire(id)
-        wire(p, i)
+        wire(p)
       }
     }
   }

@@ -37,6 +37,8 @@ export type {
   IndicatorSettingsHandler,
   PaneOptions,
   PaneSnapshot,
+  PaneViewState,
+  PaneYAxisRange,
   Period,
   SymbolInfo
 } from './types'

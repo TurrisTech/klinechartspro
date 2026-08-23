@@ -20,6 +20,7 @@ import type {
   Datafeed,
   PaneOptions,
   PaneSnapshot,
+  PaneViewState,
   Period,
   SymbolInfo
 } from '../types'
@@ -44,6 +45,10 @@ export interface PaneApi {
   // needing its own clone/setByPath bookkeeping of the chart's internal style tree.
   setStyleValue(key: string, value: unknown): Styles
   restoreStyles(): Styles
+  // Applies calcParams to one mounted indicator AND records them on PaneState, so the change
+  // is persisted rather than living only inside klinecharts until the chart is disposed. The
+  // settings dialog goes through this instead of calling chart.overrideIndicator itself.
+  setIndicatorParams(chartPaneId: string, name: string, calcParams: unknown[]): void
   createOverlay(name: string, drawing: { mode: OverlayMode; lock: boolean; visible: boolean }): void
   overrideOverlay(patch: Partial<OverlayCreate>): void
   removeDrawings(): void
@@ -55,12 +60,18 @@ function cloneOptions(options?: PaneOptions | null): {
   period: Period | undefined
   mainIndicators: string[]
   subIndicators: string[]
+  indicatorParams: Record<string, unknown[]>
+  view: PaneViewState | null
 } {
   return {
     symbol: options?.symbol as SymbolInfo,
     period: options?.period,
     mainIndicators: options?.mainIndicators ? [...options.mainIndicators] : [],
-    subIndicators: options?.subIndicators ? [...options.subIndicators] : []
+    subIndicators: options?.subIndicators ? [...options.subIndicators] : [],
+    // Structurally cloned, not aliased: these are the caller's own persisted documents, and a
+    // pane mutating one in place would edit storage behind the caller's back.
+    indicatorParams: options?.indicatorParams ? structuredClone(options.indicatorParams) : {},
+    view: options?.view ? structuredClone(options.view) : null
   }
 }
 
@@ -80,6 +91,14 @@ export class PaneState {
   subIndicatorNames = $state.raw<string[]>([])
   yAxisType = $state('normal')
   yAxisReverse = $state(false)
+  // Indicator template name -> calcParams, for every indicator on this pane carrying any.
+  // Durable for the same reason the name lists are: a layout shrink disposes the chart that
+  // holds klinecharts' own copy.
+  indicatorParams = $state.raw<Record<string, unknown[]>>({})
+  // Where this pane was last looking -- see PaneViewState. Written by ChartPane on every
+  // settled view change, and read back by the NEXT mount of this pane (a layout grow, a
+  // workspace switch, a page reload), which is why it cannot live inside the component.
+  view = $state.raw<PaneViewState | null>(null)
   loading = $state(false)
   // The live imperative handle, or null before/after the chart exists. $state.raw: a Chart
   // instance (canvases, internal stores, event handlers) must never be deep-proxied.
@@ -96,6 +115,10 @@ export class PaneState {
     if (resolved.period) this.period = resolved.period
     this.mainIndicators = resolved.mainIndicators
     this.subIndicatorNames = resolved.subIndicators
+    this.indicatorParams = resolved.indicatorParams
+    this.view = resolved.view
+    if (resolved.view?.yAxis?.type) this.yAxisType = resolved.view.yAxis.type
+    if (resolved.view?.yAxis?.reverse !== undefined) this.yAxisReverse = resolved.view.yAxis.reverse
   }
 
   // Constructed lazily on first access (i.e. this pane's first mount), not eagerly for all
@@ -106,10 +129,13 @@ export class PaneState {
   }
 
   seed(options: PaneOptions): void {
-    this.symbol = options.symbol
-    if (options.period) this.period = options.period
-    this.mainIndicators = options.mainIndicators ? [...options.mainIndicators] : []
-    this.subIndicatorNames = options.subIndicators ? [...options.subIndicators] : []
+    const resolved = cloneOptions(options)
+    this.symbol = resolved.symbol
+    if (resolved.period) this.period = resolved.period
+    this.mainIndicators = resolved.mainIndicators
+    this.subIndicatorNames = resolved.subIndicators
+    this.indicatorParams = resolved.indicatorParams
+    this.view = resolved.view
   }
 
   snapshot(): PaneSnapshot {
@@ -118,7 +144,9 @@ export class PaneState {
       symbol: this.symbol,
       period: this.period,
       mainIndicators: [...this.mainIndicators],
-      subIndicators: [...this.subIndicatorNames]
+      subIndicators: [...this.subIndicatorNames],
+      indicatorParams: structuredClone(this.indicatorParams),
+      view: this.view ? structuredClone(this.view) : null
     }
   }
 }

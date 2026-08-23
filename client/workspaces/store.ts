@@ -4,11 +4,10 @@ import {
   isPersistedLayout,
   type PersistedLayout
 } from '../layout'
-import type { MtfConfig } from '../mtf/config'
 import { loadPreferences, removePreference, savePreference } from '../preferences'
 
-// A WORKSPACE is one saved wall: its layout preset, every pane's symbol/timeframe/indicators,
-// the sync toggles, and the parameters of any server indicator on it. A user keeps several —
+// A WORKSPACE is one saved wall: its layout preset, every pane's symbol/timeframe/indicators
+// (with their parameters, and where that pane was looking), and the sync toggles. A user keeps several —
 // one per desk or device ("Laptop", "Home 4K"), one per book ("Majors", "Metals"), one per
 // strategy ("Reversals", "Levels review") — and switches between them from the toolbar.
 //
@@ -22,6 +21,8 @@ import { loadPreferences, removePreference, savePreference } from '../preference
 //
 //   workspaces          -> { version, order: string[], lastActive: string }   (the index)
 //   workspace.<id>      -> { id, name, updatedAt, layout, indicatorParams }   (one per workspace)
+//
+// `indicatorParams` is legacy and read-only -- see ServerIndicatorPrefs below.
 //
 // WHICH workspace this device is looking at is deliberately NOT part of the shared document:
 // it lives in localStorage, so opening the dashboard on a second screen doesn't yank the
@@ -46,18 +47,16 @@ const WORKSPACES_VERSION = 1
 // user gets a clear "you have enough" instead of a 413 from a PUT they can't see.
 export const MAX_WORKSPACES = 12
 
-/** paneIndex -> template name -> calcParams. Lives here rather than in
- * client/indicators/prefs.ts because it is part of a workspace: a pane index means nothing
- * outside the layout it indexes into, so duplicating or deleting a workspace has to carry
- * (or drop) its indicator parameters in the same breath. */
+/** paneIndex -> template name -> calcParams. LEGACY: indicator parameters are part of the
+ * layout's own panes now (client/layout.ts's `ip`), where they are keyed by the pane they
+ * belong to rather than by that pane's position, and where the library applies them as it
+ * creates each indicator instead of overriding it afterwards.
+ *
+ * Kept only to be read: `toWorkspace` folds a document written before that into its layout,
+ * once, and nothing writes this field again. Left in the stored document rather than deleted,
+ * for the same reason the legacy `layout` key is (see LEGACY_KEY): a client from before the
+ * change still reads it, and it costs a few hundred bytes. */
 export type ServerIndicatorPrefs = Record<string, Record<string, number[]>>
-
-/** paneIndex -> that pane's AREV21 multi-timeframe overlay settings (which timeframes it
- * draws, and each one's colour and sizes). Here for exactly the reason above, and separate
- * from ServerIndicatorPrefs because these are not klinecharts calcParams: the overlay's
- * settings are a record per timeframe, not a flat numeric array, which is why it owns its
- * own settings panel in the first place (client/mtf/config.ts). */
-export type MtfPanePrefs = Record<string, MtfConfig>
 
 export interface Workspace {
   id: string
@@ -66,8 +65,9 @@ export interface Workspace {
    * "which of these did I touch on the other machine" answerable. */
   updatedAt: number
   layout: PersistedLayout
+  /** Legacy, read-only -- see ServerIndicatorPrefs. Carried so that a document written before
+   * parameters moved into the layout keeps them for any older client still reading it. */
   indicatorParams: ServerIndicatorPrefs
-  mtfConfig: MtfPanePrefs
 }
 
 interface WorkspaceIndex {
@@ -95,17 +95,32 @@ function toWorkspace(value: unknown): Workspace | null {
   if (typeof doc.id !== 'string' || typeof doc.name !== 'string') return null
   if (!isPersistedLayout(doc.layout)) return null
   const params = doc.indicatorParams
-  const mtf = doc.mtfConfig
+  const indicatorParams = params && typeof params === 'object' ? (params as ServerIndicatorPrefs) : {}
   return {
     id: doc.id,
     name: doc.name,
     updatedAt: typeof doc.updatedAt === 'number' ? doc.updatedAt : 0,
-    layout: doc.layout,
-    indicatorParams: params && typeof params === 'object' ? (params as ServerIndicatorPrefs) : {},
-    // Absent on every document written before the overlay's settings became per-pane, which
-    // is why it is filled in rather than validated: an empty set means "no pane has been
-    // configured", and client/mtf/prefs.ts seeds those.
-    mtfConfig: mtf && typeof mtf === 'object' ? (mtf as MtfPanePrefs) : {}
+    layout: adoptLegacyIndicatorParams(doc.layout, indicatorParams),
+    indicatorParams
+  }
+}
+
+// One upgrade path, taken once per workspace: the pane-index-keyed `indicatorParams` a
+// document may carry from before parameters lived in the layout are folded onto the panes
+// they index into. Only where the pane has none of its own -- the layout is the authority the
+// moment it says anything, since it is the only one of the two that is still written.
+function adoptLegacyIndicatorParams(
+  layout: PersistedLayout,
+  legacy: ServerIndicatorPrefs
+): PersistedLayout {
+  if (Object.keys(legacy).length === 0) return layout
+  return {
+    ...layout,
+    panes: layout.panes.map((pane, index) => {
+      const saved = legacy[String(index)]
+      if (!saved || pane.ip) return pane
+      return { ...pane, ip: { ...saved } }
+    })
   }
 }
 
@@ -259,20 +274,6 @@ export class WorkspaceStore {
     this.writeDoc(workspace)
   }
 
-  setIndicatorParams(params: ServerIndicatorPrefs): void {
-    const workspace = this.active()
-    workspace.indicatorParams = params
-    workspace.updatedAt = Date.now()
-    this.writeDoc(workspace)
-  }
-
-  setMtfConfig(config: MtfPanePrefs): void {
-    const workspace = this.active()
-    workspace.mtfConfig = config
-    workspace.updatedAt = Date.now()
-    this.writeDoc(workspace)
-  }
-
   /** Per-device, never part of the shared document -- see this module's header. */
   setActive(id: string): void {
     if (!this.get(id)) return
@@ -298,8 +299,7 @@ export class WorkspaceStore {
       name: uniqueName(this.workspaces, name.trim() || 'Workspace'),
       updatedAt: Date.now(),
       layout,
-      indicatorParams: {},
-      mtfConfig: {}
+      indicatorParams: {}
     }
     this.workspaces.push(workspace)
     this.writeDoc(workspace)
@@ -307,10 +307,9 @@ export class WorkspaceStore {
     return workspace
   }
 
-  /** A copy carries the per-pane settings too -- server indicator parameters and the AREV21
-   * overlay's timeframes and colours alike: both are keyed by pane index, so a duplicated
-   * wall without them would come back with every server indicator reset to its default
-   * period and every overlay reset to its default palette. */
+  /** A copy carries the whole layout, which is where a pane's indicator parameters and view
+   * now live; the legacy pane-index-keyed map is cloned with it so that duplicating a
+   * workspace an older client wrote doesn't strand that client's copy of them. */
   duplicate(id: string): Workspace | null {
     const source = this.get(id)
     if (!source || !this.canCreate()) return null
@@ -319,8 +318,7 @@ export class WorkspaceStore {
       name: uniqueName(this.workspaces, `${source.name} copy`),
       updatedAt: Date.now(),
       layout: structuredClone(source.layout),
-      indicatorParams: structuredClone(source.indicatorParams),
-      mtfConfig: structuredClone(source.mtfConfig)
+      indicatorParams: structuredClone(source.indicatorParams)
     }
     this.workspaces.splice(this.workspaces.indexOf(source) + 1, 0, copy)
     this.writeDoc(copy)
@@ -391,8 +389,8 @@ function ordered(found: Workspace[], index: WorkspaceIndex | null): Workspace[] 
 
 let loading: Promise<WorkspaceStore> | null = null
 
-/** Memoized: the switcher, the chart bootstrap and client/indicators/prefs.ts all want the
- * same store, and none of them is guaranteed to run first. Never throws -- a failure of any
+/** Memoized: the switcher and the chart bootstrap both want the same store, and neither is
+ * guaranteed to run first. Never throws -- a failure of any
  * kind degrades to a single default workspace, the same contract loadLayout() had. */
 export function loadWorkspaces(): Promise<WorkspaceStore> {
   if (!loading) loading = build()
@@ -428,14 +426,7 @@ async function build(): Promise<WorkspaceStore> {
         // given it anyway. The legacy `layout` key is left where it is -- an older client
         // still reads it, and it costs a few hundred bytes.
         found = [
-          {
-            id: newId(),
-            name: 'Default',
-            updatedAt: Date.now(),
-            layout: legacy,
-            indicatorParams: {},
-            mtfConfig: {}
-          }
+          { id: newId(), name: 'Default', updatedAt: Date.now(), layout: legacy, indicatorParams: {} }
         ]
         fresh = true
       }
@@ -450,8 +441,7 @@ async function build(): Promise<WorkspaceStore> {
       name: 'Default',
       updatedAt: Date.now(),
       layout: defaultLayout(),
-      indicatorParams: {},
-      mtfConfig: {}
+      indicatorParams: {}
     })
   }
 

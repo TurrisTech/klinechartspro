@@ -1,15 +1,30 @@
-import type { PaneOptions, PaneSnapshot, Period, SymbolInfo } from '../src'
+import type {
+  PaneOptions,
+  PaneSnapshot,
+  PaneViewState,
+  PaneYAxisRange,
+  Period,
+  SymbolInfo
+} from '../src'
 import { availablePeriods, defaultPeriod } from './periods'
+import { fromStoredMtfConfig, toStoredMtfConfig, type MtfConfig, type StoredMtfConfig } from './mtf/config'
 import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 
-// The SHAPE of one wall document -- symbol/period/indicators per pane, the active pane, the
-// two sync toggles, and which layout preset was in use. Where a document is stored, and how
-// many of them a user keeps, is client/workspaces/store.ts's problem, not this file's: a
-// layout used to be a single `layout` preference key and is now the `layout` field of a
-// workspace, and nothing here had to change for that.
+// The SHAPE of one wall document -- per pane its symbol/period/indicators, those indicators'
+// parameters and where the pane was looking, plus the active pane, the two sync toggles and
+// which layout preset was in use. Where a document is stored, and how many of them a user
+// keeps, is client/workspaces/store.ts's problem, not this file's: a layout used to be a
+// single `layout` preference key and is now the `layout` field of a workspace, and nothing
+// here had to change for that.
 //
 // A realistic 12-pane layout is on the order of 2 KiB, so field names are kept short but not
 // cryptic -- a user's whole workspace set shares one 64 KiB /preferences document.
+//
+// `version` is deliberately NOT bumped by the addition of per-pane parameters and view state:
+// both are optional and both are validated on the way out, so a document written by either
+// client reads correctly in the other -- an older one simply ignores the two new fields, and
+// a newer one treats their absence as "never saved", which mounts the pane exactly where it
+// used to mount. A bump would buy nothing and would strand every existing workspace.
 const LAYOUT_VERSION = 1
 
 interface PersistedPane {
@@ -18,6 +33,32 @@ interface PersistedPane {
   p: string // Period.text -- which IS the server's resolution code ('1h', '1D')
   mi?: string[] // main indicator names, omitted when empty
   si?: string[] // sub indicator names, omitted when empty
+  ip?: Record<string, number[]> // indicator template name -> calcParams, omitted when empty
+  vw?: PersistedView // where this pane was looking, omitted for a pane never read back
+  // The AREV21 multi-timeframe overlay's settings for THIS pane -- which timeframes it
+  // draws and each one's colour and sizes. Its own field rather than a slot in `ip`
+  // because those are klinecharts calcParams (a flat numeric array); this is a record per
+  // timeframe, which is the whole reason that overlay owns a settings panel of its own.
+  // Omitted for a pane that has never been configured, which reads as the defaults.
+  mtf?: StoredMtfConfig
+}
+
+// One pane's view -- the library's PaneViewState, minus what is not worth storing. Kept
+// deliberately small because the whole workspace SET shares one 64 KiB document and a wall of
+// 12 panes is one of twelve walls: a following-the-market pane is 30 bytes here, and only a
+// pane parked in history or carrying a hand-scaled price axis pays for more.
+interface PersistedView {
+  bs: number // bar space, px per bar -- the time axis's zoom
+  live: boolean // was the newest bar on screen
+  at?: number // anchor timestamp; written only when !live, which is the only time it is read
+  f?: number // the on-screen fraction `at` was under
+  y?: {
+    t?: string // y axis type: 'normal' | 'percentage' | 'logarithm'
+    r?: boolean // reversed
+    // The candle pane's hand-scaled price range, only when the user actually scaled it. Same
+    // field names as the library's PaneYAxisRange, so this is a copy and not a mapping.
+    range?: PaneYAxisRange
+  }
 }
 
 export interface PersistedLayout {
@@ -36,6 +77,10 @@ export interface HydratedPane {
   period: Period
   mainIndicators: string[]
   subIndicators: string[]
+  indicatorParams: Record<string, number[]>
+  /** Undefined for a pane never configured; the overlay seeds those itself. */
+  mtfConfig?: MtfConfig
+  view: PaneViewState | null
 }
 
 export interface HydratedLayout {
@@ -56,6 +101,9 @@ function isPersistedPane(value: unknown): value is PersistedPane {
   if (pane.v !== undefined && typeof pane.v !== 'string') return false
   if (pane.mi !== undefined && !isStringArray(pane.mi)) return false
   if (pane.si !== undefined && !isStringArray(pane.si)) return false
+  // `ip` and `vw` are checked on the way OUT instead (see hydrateView / hydrateIndicatorParams):
+  // a malformed view is worth losing on its own, whereas failing the whole pane here would
+  // cost the user their symbol, timeframe and indicators over a bad number.
   return true
 }
 
@@ -109,10 +157,9 @@ const RETIRED_INDICATORS = new Set(['KREV:krev01'])
 // onto one and the result has to be deduplicated -- klinecharts keys an indicator by name
 // per pane, and handing it the same one three times creates one and warns twice.
 //
-// What does NOT survive is WHICH timeframes were ticked: that moved out of the layout and
-// into the overlay's own per-user settings (client/mtf/config.ts), which a layout has no
-// business writing into. A pane that had 4h and 1D therefore comes back drawing whatever
-// the settings panel says, which is the same set on every pane by design.
+// What does NOT survive is WHICH timeframes were ticked: the eight names carried that, and
+// the one template carries it in the pane's `mtf` field instead, which a layout written
+// against the eight has nothing to put in. Such a pane comes back on the defaults.
 const MTF_LEGACY_PREFIX = 'MTF:arev21:'
 const MTF_TEMPLATE = 'MTF:arev21'
 
@@ -124,6 +171,63 @@ const live = (names: string[]): string[] => {
     if (!kept.includes(mapped)) kept.push(mapped)
   }
   return kept
+}
+
+function isNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'number' && Number.isFinite(item))
+}
+
+// Indicator parameters for templates the pane still carries. A name the picker retired, or a
+// value that is not a finite number, is dropped rather than handed to klinecharts -- calcParams
+// go straight into an indicator's own calculation, where a NaN silently produces an empty line.
+function hydrateIndicatorParams(pane: PersistedPane): Record<string, number[]> {
+  const stored = pane.ip
+  if (!stored || typeof stored !== 'object') return {}
+  const params: Record<string, number[]> = {}
+  for (const [name, value] of Object.entries(stored)) {
+    if (RETIRED_INDICATORS.has(name) || !isNumberArray(value)) continue
+    params[name] = [...value]
+  }
+  return params
+}
+
+const Y_AXIS_RANGE_KEYS = [
+  'from', 'to', 'range', 'realFrom', 'realTo', 'realRange',
+  'displayFrom', 'displayTo', 'displayRange'
+] as const
+
+function hydrateYAxisRange(value: unknown): PaneYAxisRange | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  // All nine or none: a partial range is not a price window, and klinecharts reads every
+  // field of it without checking.
+  if (!Y_AXIS_RANGE_KEYS.every((key) => typeof record[key] === 'number' && Number.isFinite(record[key]))) {
+    return undefined
+  }
+  return Object.fromEntries(Y_AXIS_RANGE_KEYS.map((key) => [key, record[key]])) as unknown as PaneYAxisRange
+}
+
+// A view that doesn't validate degrades to no view at all, which mounts the pane at the live
+// edge -- the same place a pane with no saved view has always mounted.
+function hydrateView(pane: PersistedPane): PaneViewState | null {
+  const stored = pane.vw
+  if (!stored || typeof stored !== 'object') return null
+  if (typeof stored.bs !== 'number' || !Number.isFinite(stored.bs) || stored.bs <= 0) return null
+  if (typeof stored.live !== 'boolean') return null
+  const anchor = typeof stored.at === 'number' && Number.isFinite(stored.at) ? stored.at : undefined
+  const fraction = typeof stored.f === 'number' && Number.isFinite(stored.f) ? stored.f : undefined
+  const range = hydrateYAxisRange(stored.y?.range)
+  return {
+    barSpace: stored.bs,
+    live: stored.live,
+    ...(anchor !== undefined ? { anchor } : {}),
+    ...(fraction !== undefined ? { fraction } : {}),
+    yAxis: {
+      ...(typeof stored.y?.t === 'string' ? { type: stored.y.t } : {}),
+      ...(typeof stored.y?.r === 'boolean' ? { reverse: stored.y.r } : {}),
+      ...(range ? { range } : {})
+    }
+  }
 }
 
 // Resolves a persisted layout's tickers into full SymbolInfo (pricePrecision and the rest are
@@ -146,12 +250,21 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
   }
 
   const symbols = await Promise.all(layout.panes.map(symbolFor))
-  const panes: HydratedPane[] = layout.panes.map((pane, index) => ({
-    symbol: symbols[index],
-    period: periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
-    mainIndicators: live(pane.mi ?? ['MA']),
-    subIndicators: live(pane.si ?? ['VOL'])
-  }))
+  const panes: HydratedPane[] = layout.panes.map((pane, index) => {
+    const mtfConfig = fromStoredMtfConfig(pane.mtf)
+    return {
+      symbol: symbols[index],
+      period: periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
+      mainIndicators: live(pane.mi ?? ['MA']),
+      subIndicators: live(pane.si ?? ['VOL']),
+      indicatorParams: hydrateIndicatorParams(pane),
+      // Merged onto the defaults and validated field by field: this is a stored document, so
+      // a malformed one must read as "never configured" rather than reach the drawing code
+      // as a half-object.
+      ...(mtfConfig ? { mtfConfig } : {}),
+      view: hydrateView(pane)
+    }
+  })
 
   return {
     preset: layout.preset,
@@ -166,29 +279,82 @@ export function toPaneOptions(pane: HydratedPane): PaneOptions {
     symbol: pane.symbol,
     period: pane.period,
     mainIndicators: pane.mainIndicators,
-    subIndicators: pane.subIndicators
+    subIndicators: pane.subIndicators,
+    indicatorParams: pane.indicatorParams,
+    ...(pane.view ? { view: pane.view } : {})
+  }
+}
+
+// Only parameters that belong to an indicator the pane still shows, and only finite numbers:
+// klinecharts' calcParams are `unknown[]` at the type level, but every template this client
+// mounts takes numbers, and a string that round-trips through JSON would come back and be
+// calculated with.
+function toPersistedIndicatorParams(pane: PaneSnapshot): Record<string, number[]> | undefined {
+  const mounted = new Set([...pane.mainIndicators, ...pane.subIndicators])
+  const params: Record<string, number[]> = {}
+  for (const [name, values] of Object.entries(pane.indicatorParams)) {
+    if (!mounted.has(name) || !isNumberArray(values)) continue
+    params[name] = values
+  }
+  return Object.keys(params).length > 0 ? params : undefined
+}
+
+function toPersistedView(view: PaneViewState | null): PersistedView | undefined {
+  if (!view) return undefined
+  const range = view.yAxis?.range
+  const y = {
+    ...(view.yAxis?.type && view.yAxis.type !== 'normal' ? { t: view.yAxis.type } : {}),
+    ...(view.yAxis?.reverse ? { r: true } : {}),
+    ...(range ? { range } : {})
+  }
+  return {
+    bs: view.barSpace,
+    live: view.live,
+    // The anchor is what a NON-live pane comes back to; a live one comes back to the tail as
+    // it stands then, so storing where the tail used to be would only make the document
+    // bigger and the reader wonder which of the two wins.
+    ...(!view.live && typeof view.anchor === 'number' ? { at: view.anchor, f: view.fraction } : {}),
+    ...(Object.keys(y).length > 0 ? { y } : {})
   }
 }
 
 function toPersistedPane(pane: PaneSnapshot): PersistedPane {
   const vendor = symbolVendor(pane.symbol)
+  const indicatorParams = toPersistedIndicatorParams(pane)
+  const view = toPersistedView(pane.view)
   return {
     s: pane.symbol.ticker,
     ...(vendor === 'oanda' ? {} : { v: vendor }),
     p: pane.period.text,
     ...(pane.mainIndicators.length > 0 ? { mi: pane.mainIndicators } : {}),
-    ...(pane.subIndicators.length > 0 ? { si: pane.subIndicators } : {})
+    ...(pane.subIndicators.length > 0 ? { si: pane.subIndicators } : {}),
+    ...(indicatorParams ? { ip: indicatorParams } : {}),
+    ...(view ? { vw: view } : {})
   }
 }
 
 /** The live wall, as a document. */
+/** `mtfByPane` is keyed by pane index and comes from the overlay's controller: the AREV21
+ * settings are app state the library has never heard of, so unlike everything else here they
+ * cannot be read off a PaneSnapshot. A pane absent from the map keeps whatever it had. */
 export function toPersistedLayout(
   preset: string,
   panes: PaneSnapshot[],
   active: number,
-  sync: { crosshair: boolean; time: boolean; auto: boolean }
+  sync: { crosshair: boolean; time: boolean; auto: boolean },
+  mtfByPane: Record<number, MtfConfig> = {}
 ): PersistedLayout {
-  return { version: LAYOUT_VERSION, preset, active, panes: panes.map(toPersistedPane), sync }
+  return {
+    version: LAYOUT_VERSION,
+    preset,
+    active,
+    panes: panes.map((pane, index) => {
+      const persisted = toPersistedPane(pane)
+      const mtf = mtfByPane[index] ? toStoredMtfConfig(mtfByPane[index]) : undefined
+      return mtf ? { ...persisted, mtf } : persisted
+    }),
+    sync
+  }
 }
 
 /** A one-line description of a stored layout, for the workspace switcher's rows. */

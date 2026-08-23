@@ -60,6 +60,51 @@ export interface Datafeed {
 // share when the datafeed itself is stateless.
 export type DatafeedFactory = (paneId: string) => Datafeed
 
+// Where one pane was LOOKING when it was last read -- the half of a pane's state that the
+// symbol, the period and the indicator list say nothing about, and that a reload would
+// otherwise throw away. Every field is what the chart itself reports, so a captured view can
+// be handed straight back as a seed.
+export interface PaneViewState {
+  /** klinecharts' bar space, in px per bar: the TIME axis's zoom. Restored as-is, so a pane
+   * comes back at the same magnification whatever it is showing. */
+  barSpace: number
+  /** Whether the newest bar there is was on screen -- i.e. the pane was following the live
+   * candle. Restored by scrolling to the tail as it stands NOW, not to `anchor`: a pane that
+   * was watching the market must still be watching it after an hour-long tab close. */
+  live: boolean
+  /** The instant under `fraction` of the price area's width, and that fraction. Written
+   * always, read only when `live` is false -- for a pane parked in (or merely scrolled back
+   * into) history, this is the position to come back to. */
+  anchor?: number
+  fraction?: number
+  /** The PRICE axis. `type`/`reverse` are the settings dialog's own two y-axis controls
+   * ('normal' | 'percentage' | 'logarithm'), which apply to every chart pane. `range` is the
+   * candle pane's manually-scaled range, present only when the user has actually dragged the
+   * axis -- an auto-scaled axis has no range worth restoring, and pinning one would stop it
+   * following the data. */
+  yAxis?: {
+    type?: string
+    reverse?: boolean
+    range?: PaneYAxisRange
+  }
+}
+
+/** klinecharts' own AxisRange, carried verbatim: a manual scale is an absolute price window,
+ * and every derived field (real/display) is a pure function of the axis type it was captured
+ * under, so round-tripping the whole record is exact where recomputing two of nine fields
+ * would not be. */
+export interface PaneYAxisRange {
+  from: number
+  to: number
+  range: number
+  realFrom: number
+  realTo: number
+  realRange: number
+  displayFrom: number
+  displayTo: number
+  displayRange: number
+}
+
 // Seed for one wall pane, either at construction (`ChartProOptions.panes`) or read back via
 // `PaneSnapshot`. `period` falls back to `ChartProOptions.period` when omitted.
 export interface PaneOptions {
@@ -67,6 +112,13 @@ export interface PaneOptions {
   period?: Period
   mainIndicators?: string[]
   subIndicators?: string[]
+  /** Indicator template name -> calcParams, for any indicator on this pane whose parameters
+   * were changed from its template default. Applied AT CREATION (klinecharts' own
+   * `createIndicator` takes them), so a restored MA(50) is never briefly drawn at MA(5). */
+  indicatorParams?: Record<string, unknown[]>
+  /** Where this pane was looking. Omitted for a pane that has never been read back -- it then
+   * mounts at the live edge, which is what a fresh pane has always done. */
+  view?: PaneViewState
 }
 
 // A plain-data read of one pane's current construction-relevant state -- what
@@ -78,6 +130,10 @@ export interface PaneSnapshot {
   period: Period
   mainIndicators: string[]
   subIndicators: string[]
+  /** As PaneOptions.indicatorParams. Only templates that actually carry calcParams appear. */
+  indicatorParams: Record<string, unknown[]>
+  /** As PaneOptions.view. Null until this pane's chart has mounted and been read once. */
+  view: PaneViewState | null
 }
 
 // Public per-pane handle returned by getPanes()/getPane(). Only ever handed out for a pane
@@ -190,6 +246,15 @@ export interface ChartProOptions {
   syncAuto?: boolean
   onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void
   onActivePaneChange?: (paneId: string) => void
+  /** Fires whenever a pane's own durable state changes without the layout, the symbol or the
+   * period changing: an indicator added, removed or re-parameterised, and -- debounced to the
+   * end of a gesture -- the time and price axes moving. Carries only the pane id: like every
+   * other change callback here, the answer is to re-read `getPaneSnapshots()`, which is now
+   * the whole of what a caller needs to persist.
+   *
+   * Without this a pan, a zoom or an MA(5) -> MA(50) survived only until the next symbol or
+   * layout change happened to persist the wall on its behalf. */
+  onPaneStateChange?: (paneId: string) => void
   /** Fires whenever the live pane set changes -- a pane's chart was just created or just
    * destroyed. The definitive replacement for polling getChart(); a consumer that needs to
    * wire per-pane behaviour (e.g. price-level overlays) should resync entirely from this

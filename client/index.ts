@@ -270,7 +270,15 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // over the same GET /arev/values the AREV panes read, which is why it gates on 'arev'
   // and not on a capability of its own -- there is no new server surface behind it.
   const mtfGroups = hasFeature('arev') ? registerMtfIndicators() : []
-  const mtfController = createMtfController()
+  // Seeded from what the wall document hydrated for each pane, and asks for a save whenever
+  // its settings panel commits an edit. `persist` is declared below; the thunk is not called
+  // until a user edits something, long after it is initialised.
+  const mtfController = createMtfController({
+    initial: Object.fromEntries(
+      hydrated.panes.flatMap((pane, index) => (pane.mtfConfig ? [[index, pane.mtfConfig]] : []))
+    ),
+    onChange: () => persist()
+  })
   // The settings dialog asks this before it will commit params, so a combination the server
   // cannot serve is refused with its own explanation instead of being drawn and then
   // failing on the first fetch. Null against a server without `indicators.resolve`, which
@@ -293,7 +301,17 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     const panes = cp.getPaneSnapshots()
     if (panes.length === 0) return
     const activeIndex = Math.max(0, panes.findIndex((pane) => pane.id === cp.getActivePaneId()))
-    store.saveActiveLayout(toPersistedLayout(cp.getPaneLayout(), panes, activeIndex, latestSync))
+    store.saveActiveLayout(
+      toPersistedLayout(
+        cp.getPaneLayout(),
+        panes,
+        activeIndex,
+        latestSync,
+        // The AREV21 overlay's per-pane settings: app state the library's PaneSnapshot has
+        // never heard of, so they are supplied here rather than read off the snapshots.
+        mtfController.configByPane()
+      )
+    )
     // The switcher's row for the active workspace shows its pane count and instrument, so it
     // has to follow the wall it is describing.
     switcher.refresh()
@@ -349,6 +367,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
+    // Everything else a pane can change on its own: an indicator added, removed or
+    // re-parameterised, and -- debounced to the end of the gesture -- a pan, a zoom or a
+    // hand-scaled price axis. Before this, those survived only until some OTHER change
+    // (a symbol, a timeframe, a layout) happened to persist the wall on their behalf.
+    onPaneStateChange: persist,
     onSymbolChange: persist,
     onPeriodChange: persist,
     onSyncChange: (options) => {
