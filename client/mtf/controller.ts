@@ -4,14 +4,8 @@ import { openSettingsPanel, type SettingsPanelHandle } from '../chartlayers/sett
 import { periodToResolution, resolutionDurationMs } from '../periods'
 import { symbolVendor } from '../symbols'
 import { MTF_GENERATION, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
-import {
-  MTF_DEFAULTS,
-  MTF_FIELDS,
-  enabledIntervals,
-  loadMtfConfig,
-  saveMtfConfig,
-  type MtfConfig
-} from './config'
+import { MTF_DEFAULTS, MTF_FIELDS, enabledIntervals, type MtfConfig } from './config'
+import { configFor, loadMtfPrefs, saveMtfPaneConfig, type MtfPanePrefs } from './prefs'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { dropStore, storeFor, type MtfStore, type Range } from './store'
 import { TEMPLATE_NAME, isMtfIndicator, type ExtendData } from './templates'
@@ -71,6 +65,14 @@ interface Binding {
 
 interface WiredPane {
   pane: ChartProPane
+  /** Position in the wall, which is what the settings are keyed by — see mtf/prefs.ts. */
+  paneIndex: number
+  /** THIS pane's settings. Per pane, not per user: two panes on the same wall routinely
+   * want different source timeframes, and a 1h pane's useful set is not a 1D pane's. */
+  config: MtfConfig
+  /** Bumped on every settings edit so `apply` can tell "the stores changed" from "the way
+   * they are drawn changed" — both must reach the template, only one needs a fetch. */
+  configRev: number
   chart: Chart
   bindings: Map<string, Binding>
   poll: ReturnType<typeof setInterval>
@@ -87,41 +89,38 @@ export interface MtfController {
 
 export function createMtfController(): MtfController {
   const wired = new Map<string, WiredPane>()
-  // Settings are per USER, not per pane: a colour that meant 4h on one pane and 1D on
-  // another would defeat the point of colouring by timeframe at all. One config, shared by
-  // every binding, loaded once and saved on every edit.
-  let config: MtfConfig = MTF_DEFAULTS
-  // Bumped on every settings edit so `apply` can tell "the stores changed" from "the way
-  // they are drawn changed" — both must reach the template, only one needs a fetch.
-  let configRev = 0
+  // paneIndex -> settings, for the workspace that is active. Null until the load below
+  // resolves; a pane wired before then runs on MTF_DEFAULTS and is re-seeded when it lands.
+  let prefs: MtfPanePrefs | null = null
   let panel: SettingsPanelHandle | null = null
 
-  void loadMtfConfig()
+  void loadMtfPrefs()
     .then((loaded) => {
-      config = loaded
-      configRev++
-      // Whatever is already mounted was built against the defaults; re-apply so a saved
-      // config takes effect without waiting for a pan.
+      prefs = loaded
+      // Whatever is already mounted was built against the defaults; re-seed and re-apply so
+      // saved settings take effect without waiting for a pan.
       for (const entry of wired.values()) {
+        entry.config = configFor(loaded, entry.paneIndex)
+        entry.configRev++
         for (const b of entry.bindings.values()) {
           apply(entry, b)
           void ensureCoverage(entry, b)
         }
       }
     })
-    .catch((err) => console.warn('[mtf] settings load failed, using defaults', err))
+    .catch((err: unknown) => console.warn('[mtf] settings load failed, using defaults', err))
 
   /** A source timeframe finer than the chart's is refused rather than drawn: hundreds of
    * sub-bar votes collapsing onto one candle reads as noise, not as context. Named in the
    * legend, because silently drawing nothing is indistinguishable from a timeframe no run
    * has ever written. */
-  const drawable = (b: Binding): MtfInterval[] =>
-    enabledIntervals(config).filter((interval) => !isFinerThan(interval, b.chartInterval))
+  const drawable = (entry: WiredPane, b: Binding): MtfInterval[] =>
+    enabledIntervals(entry.config).filter((interval) => !isFinerThan(interval, b.chartInterval))
 
-  const label = (b: Binding): string => {
-    const shown = drawable(b)
+  const label = (entry: WiredPane, b: Binding): string => {
+    const shown = drawable(entry, b)
     if (shown.length === 0) {
-      const on = enabledIntervals(config)
+      const on = enabledIntervals(entry.config)
       return on.length === 0 ? 'AREV21 MTF · none on' : `AREV21 MTF · needs ≥ ${b.chartInterval} chart`
     }
     const stores = shown.map((interval) => b.stores.get(interval))
@@ -138,23 +137,28 @@ export function createMtfController(): MtfController {
     `${MTF_GENERATION}|${b.vendor}:${b.ticker}|${interval}`
 
   /** Sum of every contributing store's revision, so any one of them changing moves it. */
-  const aggregateRev = (b: Binding): number => {
+  const aggregateRev = (entry: WiredPane, b: Binding): number => {
     let rev = 0
-    for (const interval of drawable(b)) rev += b.stores.get(interval)?.rev ?? 0
+    for (const interval of drawable(entry, b)) rev += b.stores.get(interval)?.rev ?? 0
     return rev
   }
 
   const apply = (entry: WiredPane, b: Binding): void => {
     if (b.disposed) return
-    const rev = aggregateRev(b)
-    const shortName = label(b)
-    if (rev === b.lastAppliedRev && shortName === b.lastShortName && configRev === b.lastConfigRev) return
+    const rev = aggregateRev(entry, b)
+    const shortName = label(entry, b)
+    if (rev === b.lastAppliedRev && shortName === b.lastShortName && entry.configRev === b.lastConfigRev) return
     b.lastAppliedRev = rev
     b.lastShortName = shortName
-    b.lastConfigRev = configRev
+    b.lastConfigRev = entry.configRev
     const seriesKeys: Record<string, string> = {}
-    for (const interval of drawable(b)) seriesKeys[interval] = storeKeyFor(b, interval)
-    const extendData: ExtendData = { seriesKeys, rev: rev + configRev, chartInterval: b.chartInterval, config }
+    for (const interval of drawable(entry, b)) seriesKeys[interval] = storeKeyFor(b, interval)
+    const extendData: ExtendData = {
+      seriesKeys,
+      rev: rev + entry.configRev,
+      chartInterval: b.chartInterval,
+      config: entry.config
+    }
     try {
       entry.chart.overrideIndicator({ id: b.indicatorId, name: TEMPLATE_NAME, paneId: b.chartPaneId, extendData, shortName } as never)
     } catch (err) {
@@ -211,7 +215,7 @@ export function createMtfController(): MtfController {
 
   const ensureCoverage = async (entry: WiredPane, b: Binding): Promise<void> => {
     if (b.disposed) return
-    for (const interval of drawable(b)) {
+    for (const interval of drawable(entry, b)) {
       // Stores are created lazily, when a timeframe is first switched on: switching all
       // eight on and off again should not leave eight populated caches behind.
       let store = b.stores.get(interval)
@@ -300,10 +304,14 @@ export function createMtfController(): MtfController {
     for (const b of entry.bindings.values()) void ensureCoverage(entry, b)
   }
 
-  const wire = (pane: ChartProPane): void => {
+  const wire = (pane: ChartProPane, paneIndex: number): void => {
     const chart = pane.getChart()
     const entry: WiredPane = {
       pane,
+      paneIndex,
+      // MTF_DEFAULTS until the prefs load resolves, which re-seeds every wired pane.
+      config: prefs ? configFor(prefs, paneIndex) : MTF_DEFAULTS,
+      configRev: 0,
       chart,
       bindings: new Map(),
       poll: setInterval(() => reconcile(entry), POLL_MS),
@@ -336,16 +344,16 @@ export function createMtfController(): MtfController {
     wired.delete(id)
   }
 
-  /** Re-apply every binding, and fetch for any timeframe newly switched on. */
-  const settingsChanged = (next: MtfConfig): void => {
-    config = next
-    configRev++
-    saveMtfConfig(next)
-    for (const entry of wired.values()) {
-      for (const b of entry.bindings.values()) {
-        apply(entry, b)
-        void ensureCoverage(entry, b)
-      }
+  /** Re-apply THIS pane's bindings, and fetch for any timeframe it newly switched on.
+   * Only this pane: the settings belong to it now, so another pane showing the same
+   * instrument keeps whatever it was set to. */
+  const settingsChanged = (entry: WiredPane, next: MtfConfig): void => {
+    entry.config = next
+    entry.configRev++
+    saveMtfPaneConfig(entry.paneIndex, next)
+    for (const b of entry.bindings.values()) {
+      apply(entry, b)
+      void ensureCoverage(entry, b)
     }
   }
 
@@ -374,14 +382,16 @@ export function createMtfController(): MtfController {
       // is clamped to the window anyway -- what matters is that it opens beside the chart's
       // legend rather than off the bottom of it.
       anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
-      title: 'AREV21 multi-timeframe',
+      // Names the pane, because the settings are now that pane's alone and a wall can have
+      // twelve of them open on different instruments.
+      title: `AREV21 MTF · ${entry.pane.getSymbol().ticker} ${periodToResolution(entry.pane.getPeriod())}`,
       // No enable row: this overlay's on/off is the indicator being on the pane at all,
       // which the picker and the legend's own close icon already own. Omitting
       // onToggleEnabled is what suppresses the row -- see openSettingsPanel.
       fields: MTF_FIELDS,
-      config,
+      config: entry.config,
       defaults: MTF_DEFAULTS,
-      onChange: settingsChanged,
+      onChange: (next) => settingsChanged(entry, next),
       onClose: () => {
         panel = null
       }
@@ -397,9 +407,10 @@ export function createMtfController(): MtfController {
         [...wired.values()].flatMap((entry) =>
           [...entry.bindings.values()].map((b) => ({
             pane: entry.pane.id,
+            paneIndex: entry.paneIndex,
             chart: b.chartInterval,
-            enabled: enabledIntervals(config),
-            drawn: drawable(b),
+            enabled: enabledIntervals(entry.config),
+            drawn: drawable(entry, b),
             stores: Object.fromEntries(
               [...b.stores].map(([interval, store]) => [
                 interval,
@@ -408,23 +419,38 @@ export function createMtfController(): MtfController {
             )
           }))
         ),
-      config: () => config
+      config: () => Object.fromEntries([...wired.values()].map((e) => [e.paneIndex, e.config]))
     }
   }
 
   return {
     sync(panes: ChartProPane[]): void {
-      const live = new Map(panes.map((p) => [p.id, p]))
+      const live = new Map(panes.map((p, i) => [p.id, { p, i }]))
       for (const id of [...wired.keys()]) if (!live.has(id)) unwire(id)
       if (live.size === 0) {
         panel?.close()
         panel = null
       }
-      for (const [id, p] of live) {
+      for (const [id, { p, i }] of live) {
         const existing = wired.get(id)
-        if (existing && existing.chart === p.getChart()) continue
+        if (existing && existing.chart === p.getChart()) {
+          // A layout change can renumber panes without remounting their charts, and the
+          // settings are keyed by position -- so follow the move and re-read.
+          if (existing.paneIndex !== i) {
+            existing.paneIndex = i
+            if (prefs) {
+              existing.config = configFor(prefs, i)
+              existing.configRev++
+              for (const b of existing.bindings.values()) {
+                apply(existing, b)
+                void ensureCoverage(existing, b)
+              }
+            }
+          }
+          continue
+        }
         if (existing) unwire(id)
-        wire(p)
+        wire(p, i)
       }
     },
     handleSettings({ indicatorName, paneId }): boolean {

@@ -1,5 +1,5 @@
 import type { SettingsField } from '../chartlayers/settings'
-import { loadLayerConfig, saveLayerConfig } from '../chartlayers/store'
+import { loadLayerConfig } from '../chartlayers/store'
 import { MTF_INTERVALS, type MtfInterval } from './api'
 
 // The one AREV21 multi-timeframe overlay's settings: which timeframes it draws, and how
@@ -15,12 +15,9 @@ import { MTF_INTERVALS, type MtfInterval } from './api'
 // and `group` — the exact vocabulary this needs, and the same one the Levels layer uses for
 // its per-timeframe colours), and reaches `calc`/`draw` through the indicator's extendData.
 //
-// Persistence borrows the chart layers' store: `/preferences` where the server advertises
-// it (dev), localStorage otherwise (prod), with per-level default merging so adding a field
-// here does not blank out a config a user saved before it existed. The key namespace it
-// writes under says "layer" and this is an indicator, which is a small misnomer worth
-// living with — the alternative is a second copy of a store whose whole job is a merge rule
-// that took a bug to get right.
+// WHERE these are stored is client/mtf/prefs.ts's business, not this module's: one config
+// per pane, inside the active workspace, beside the server indicators' own per-pane
+// parameters. This module owns only the shape, the defaults and the field schema.
 
 export const MTF_CONFIG_ID = 'mtf-arev21'
 
@@ -111,10 +108,13 @@ export function enabledIntervals(config: MtfConfig | undefined): MtfInterval[] {
   return MTF_INTERVALS.filter((interval) => timeframes[interval]?.enabled === true)
 }
 
-export function loadMtfConfig(): Promise<MtfConfig> {
+/** The single global config this overlay kept before its settings became per-pane.
+ *
+ * Read-only now, and read exactly once: client/mtf/prefs.ts uses it to seed a pane that has
+ * no settings of its own, so a user who had already picked their timeframes and colours
+ * keeps them. Nothing writes this key any more, so it stays as whatever it was and quietly
+ * stops mattering once every pane has been configured; where it was never written,
+ * loadLayerConfig answers MTF_DEFAULTS, which is the same seed. */
+export function loadLegacyGlobalMtfConfig(): Promise<MtfConfig> {
   return loadLayerConfig(MTF_CONFIG_ID, MTF_DEFAULTS)
-}
-
-export function saveMtfConfig(config: MtfConfig): void {
-  saveLayerConfig(MTF_CONFIG_ID, config)
 }

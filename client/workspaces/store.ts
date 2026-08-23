@@ -4,6 +4,7 @@ import {
   isPersistedLayout,
   type PersistedLayout
 } from '../layout'
+import type { MtfConfig } from '../mtf/config'
 import { loadPreferences, removePreference, savePreference } from '../preferences'
 
 // A WORKSPACE is one saved wall: its layout preset, every pane's symbol/timeframe/indicators,
@@ -51,6 +52,13 @@ export const MAX_WORKSPACES = 12
  * (or drop) its indicator parameters in the same breath. */
 export type ServerIndicatorPrefs = Record<string, Record<string, number[]>>
 
+/** paneIndex -> that pane's AREV21 multi-timeframe overlay settings (which timeframes it
+ * draws, and each one's colour and sizes). Here for exactly the reason above, and separate
+ * from ServerIndicatorPrefs because these are not klinecharts calcParams: the overlay's
+ * settings are a record per timeframe, not a flat numeric array, which is why it owns its
+ * own settings panel in the first place (client/mtf/config.ts). */
+export type MtfPanePrefs = Record<string, MtfConfig>
+
 export interface Workspace {
   id: string
   name: string
@@ -59,6 +67,7 @@ export interface Workspace {
   updatedAt: number
   layout: PersistedLayout
   indicatorParams: ServerIndicatorPrefs
+  mtfConfig: MtfPanePrefs
 }
 
 interface WorkspaceIndex {
@@ -86,12 +95,17 @@ function toWorkspace(value: unknown): Workspace | null {
   if (typeof doc.id !== 'string' || typeof doc.name !== 'string') return null
   if (!isPersistedLayout(doc.layout)) return null
   const params = doc.indicatorParams
+  const mtf = doc.mtfConfig
   return {
     id: doc.id,
     name: doc.name,
     updatedAt: typeof doc.updatedAt === 'number' ? doc.updatedAt : 0,
     layout: doc.layout,
-    indicatorParams: params && typeof params === 'object' ? (params as ServerIndicatorPrefs) : {}
+    indicatorParams: params && typeof params === 'object' ? (params as ServerIndicatorPrefs) : {},
+    // Absent on every document written before the overlay's settings became per-pane, which
+    // is why it is filled in rather than validated: an empty set means "no pane has been
+    // configured", and client/mtf/prefs.ts seeds those.
+    mtfConfig: mtf && typeof mtf === 'object' ? (mtf as MtfPanePrefs) : {}
   }
 }
 
@@ -252,6 +266,13 @@ export class WorkspaceStore {
     this.writeDoc(workspace)
   }
 
+  setMtfConfig(config: MtfPanePrefs): void {
+    const workspace = this.active()
+    workspace.mtfConfig = config
+    workspace.updatedAt = Date.now()
+    this.writeDoc(workspace)
+  }
+
   /** Per-device, never part of the shared document -- see this module's header. */
   setActive(id: string): void {
     if (!this.get(id)) return
@@ -277,7 +298,8 @@ export class WorkspaceStore {
       name: uniqueName(this.workspaces, name.trim() || 'Workspace'),
       updatedAt: Date.now(),
       layout,
-      indicatorParams: {}
+      indicatorParams: {},
+      mtfConfig: {}
     }
     this.workspaces.push(workspace)
     this.writeDoc(workspace)
@@ -285,9 +307,10 @@ export class WorkspaceStore {
     return workspace
   }
 
-  /** A copy carries the indicator parameters too: they are keyed by pane index, so a
-   * duplicated wall without them would come back with every server indicator reset to its
-   * default period. */
+  /** A copy carries the per-pane settings too -- server indicator parameters and the AREV21
+   * overlay's timeframes and colours alike: both are keyed by pane index, so a duplicated
+   * wall without them would come back with every server indicator reset to its default
+   * period and every overlay reset to its default palette. */
   duplicate(id: string): Workspace | null {
     const source = this.get(id)
     if (!source || !this.canCreate()) return null
@@ -296,7 +319,8 @@ export class WorkspaceStore {
       name: uniqueName(this.workspaces, `${source.name} copy`),
       updatedAt: Date.now(),
       layout: structuredClone(source.layout),
-      indicatorParams: structuredClone(source.indicatorParams)
+      indicatorParams: structuredClone(source.indicatorParams),
+      mtfConfig: structuredClone(source.mtfConfig)
     }
     this.workspaces.splice(this.workspaces.indexOf(source) + 1, 0, copy)
     this.writeDoc(copy)
@@ -404,7 +428,14 @@ async function build(): Promise<WorkspaceStore> {
         // given it anyway. The legacy `layout` key is left where it is -- an older client
         // still reads it, and it costs a few hundred bytes.
         found = [
-          { id: newId(), name: 'Default', updatedAt: Date.now(), layout: legacy, indicatorParams: {} }
+          {
+            id: newId(),
+            name: 'Default',
+            updatedAt: Date.now(),
+            layout: legacy,
+            indicatorParams: {},
+            mtfConfig: {}
+          }
         ]
         fresh = true
       }
@@ -419,7 +450,8 @@ async function build(): Promise<WorkspaceStore> {
       name: 'Default',
       updatedAt: Date.now(),
       layout: defaultLayout(),
-      indicatorParams: {}
+      indicatorParams: {},
+      mtfConfig: {}
     })
   }
 
