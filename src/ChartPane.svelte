@@ -24,7 +24,7 @@
 
   import i18n from './i18n'
 
-  import type { Period, SymbolInfo } from './types'
+  import type { PaneViewState, PaneYAxisRange, Period, SymbolInfo } from './types'
   import { getOptions } from './config/settings'
   import type { PaneApi, PaneState } from './state/wall.svelte'
   import { clone, setByPath } from './utils/object'
@@ -56,7 +56,8 @@
     periods,
     bus,
     onActivate,
-    onIndicatorSettings
+    onIndicatorSettings,
+    onStateChange
   }: {
     pane: PaneState
     active: boolean
@@ -69,6 +70,7 @@
     bus: SyncBus
     onActivate: (paneId: string) => void
     onIndicatorSettings: (payload: IndicatorSettingsPayload) => void
+    onStateChange: (paneId: string) => void
   } = $props()
 
   let paneElement = $state<HTMLDivElement>()
@@ -99,9 +101,15 @@
     chartPaneId?: string
   ): Nullable<string> {
     if (!widget) return null
+    // Persisted parameters are applied AT CREATION rather than overridden afterwards: an
+    // override is a second calculation, and between the two the pane draws the template
+    // default -- an MA(50) restored as MA(5) for a frame, and a server indicator fetching a
+    // window for params nobody asked for.
+    const restoredParams = pane.indicatorParams[indicatorName]
     const indicatorId = widget.createIndicator({
       name: indicatorName,
       paneId: chartPaneId,
+      ...(restoredParams ? { calcParams: [...restoredParams] } : {}),
       createTooltipDataSource: ({ indicator }) => {
         const defaultFeatures = widget?.getStyles().indicator.tooltip.features ?? []
         const icons = indicator.visible
@@ -243,7 +251,15 @@
   // symbol/period change): only a seek anchors on ITS OWN target instead of "now", and only
   // a seek opens backward paging (see the 'backward' branch and the init branch's
   // `more.backward`).
-  let pendingSeek: { timestamp: number; fraction: number; crosshair: CrosshairPoint | null } | null = null
+  let pendingSeek: {
+    timestamp: number
+    fraction: number
+    crosshair: CrosshairPoint | null
+    // True only for the seek restoreView() opens with, which is the one seek whose target
+    // came from storage rather than from something the user just clicked -- and so the one
+    // that can name an instant this instrument no longer has bars for.
+    restore?: boolean
+  } | null = null
   // Bumped on every 'init' load this loader starts, so a load whose result lands after a
   // NEWER 'init' has already started (two seeks fired in quick succession, or a seek racing
   // a symbol/period change) can tell it was superseded and drop its result instead of
@@ -264,8 +280,15 @@
 
   // Set by jumpToLive below and consumed by the very next 'init' load, exactly as pendingSeek
   // is -- the two are mutually exclusive (a seek anchors on its own target, this one on now)
-  // and jumpToLive clears any pending seek before setting this.
-  let pendingLive = false
+  // and jumpToLive clears any pending seek before setting this. `broadcast` separates the two
+  // callers: a user who pressed the control takes the wall with them (see jumpToLive), whereas
+  // a pane merely restoring the view it was saved in has moved nothing and must say nothing --
+  // a wall of panes each announcing its own restored position would shove them all onto
+  // whichever one finished loading last.
+  let pendingLive: { broadcast: boolean } | null = null
+  // A manually-scaled price axis, waiting for the init load it was restored alongside -- see
+  // applyYAxisRange, and restoreView for why it cannot simply be applied at mount.
+  let pendingYAxisRange: PaneYAxisRange | null = null
 
   // Requested by the sync bus (src/sync/bus.ts) when a click lands outside this pane's own
   // loaded data. Reloads the dataset anchored on `timestamp` instead of scrolling/paging
@@ -276,7 +299,7 @@
   // a span's midpoint but still marks the instant that was actually clicked.
   function seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint | null): void {
     if (!widget) return
-    pendingLive = false
+    pendingLive = null
     pendingSeek = { timestamp, fraction, crosshair }
     widget.resetData()
   }
@@ -315,7 +338,7 @@
     // to the left -- already holds the bar and only needs the scroll.
     if (parkedInHistory || widget.getDataList().length === 0) {
       pendingSeek = null
-      pendingLive = true
+      pendingLive = { broadcast: true }
       widget.resetData()
       return
     }
@@ -379,7 +402,128 @@
       panPending = false
       refreshViewState()
       if (pan) broadcastPan()
+      // Every cause of a range change is worth persisting, not just a gesture on this pane:
+      // a wall following an auto-sync pan, a jump to live, a seek. Debounced, so the frames
+      // of one drag collapse into a single capture.
+      scheduleViewCapture()
     })
+  }
+
+  // --- Durable view state -------------------------------------------------------------------
+  //
+  // What a reload would otherwise throw away: the time axis's zoom and position, whether the
+  // pane was following the live candle, and the price axis. Captured onto PaneState (which
+  // outlives this component) and handed back by the next mount -- a layout grow, a workspace
+  // switch, or the caller restoring a persisted wall.
+
+  // The anchor is read at, and put back at, the horizontal MIDPOINT -- the same point auto
+  // time sync carries between panes, for the same reason: it is the one position a pane can
+  // reproduce whatever its width, bar count or zoom (see visibleMidpointTimestamp).
+  const VIEW_ANCHOR_FRACTION = 0.5
+  // A capture is worth one workspace write, and onVisibleRangeChange fires once per animation
+  // frame for the whole of a drag -- so captures wait for the gesture to stop rather than
+  // riding the same rAF tick refreshViewState does.
+  const VIEW_CAPTURE_DEBOUNCE_MS = 400
+
+  // klinecharts' y-axis keeps a manual range (set by dragging the axis) as an internal
+  // override, and exposes neither the flag nor the setter on its public `Axis` type -- only
+  // `getRange()`, which answers whatever range is in force, auto or not. Reading the flag is
+  // what separates "the user scaled this axis" from "the axis is following the data", and
+  // writing the range is the only way to put a scale back. Both are guarded by a typeof
+  // check: a klinecharts that renamed them degrades to an auto-scaled axis, which is the
+  // behaviour before any of this existed, rather than throwing on every pane mount.
+  type ManualYAxis = {
+    getRange: () => PaneYAxisRange
+    getAutoCalcTickFlag?: () => boolean
+    setRange?: (range: PaneYAxisRange) => void
+  }
+
+  function candleYAxis(): ManualYAxis | null {
+    const axes = widget?.getYAxes({ paneId: 'candle_pane' }) ?? []
+    return (axes[0] as ManualYAxis | undefined) ?? null
+  }
+
+  /** The candle pane's price range, but only when the user actually set it. */
+  function manualYAxisRange(): PaneYAxisRange | undefined {
+    const axis = candleYAxis()
+    if (!axis || typeof axis.getAutoCalcTickFlag !== 'function') return undefined
+    if (axis.getAutoCalcTickFlag()) return undefined
+    const range = axis.getRange()
+    const values = Object.values(range) as unknown[]
+    if (values.length === 0 || !values.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+      return undefined
+    }
+    return { ...range }
+  }
+
+  function applyYAxisRange(range: PaneYAxisRange): void {
+    const axis = candleYAxis()
+    if (!axis || typeof axis.setRange !== 'function') return
+    axis.setRange({ ...range })
+    // setRange only writes the range; nothing repaints on its own. resize() is the public
+    // call that re-lays-out and rebuilds ticks WITHOUT resetting the manual flag -- which
+    // overrideYAxis, the other repaint trigger to hand, always does (see applyYAxisSettings).
+    widget?.resize()
+  }
+
+  function captureView(): void {
+    if (!widget) return
+    const anchor = visibleMidpointTimestamp(widget)
+    const range = manualYAxisRange()
+    const view: PaneViewState = {
+      barSpace: widget.getBarSpace().bar,
+      live: atLive,
+      ...(anchor !== null ? { anchor, fraction: VIEW_ANCHOR_FRACTION } : {}),
+      yAxis: {
+        type: pane.yAxisType,
+        reverse: pane.yAxisReverse,
+        ...(range ? { range } : {})
+      }
+    }
+    // Compared before writing: a workspace write is a localStorage write and a debounced PUT,
+    // and plenty of things dispatch a visible-range change without moving the view (a live
+    // bar arriving at a pane already at the tail, a resize that settles where it started).
+    if (JSON.stringify(pane.view) === JSON.stringify(view)) return
+    pane.view = view
+    onStateChange(pane.id)
+  }
+
+  let captureTimer: ReturnType<typeof setTimeout> | null = null
+  function scheduleViewCapture(): void {
+    if (captureTimer) clearTimeout(captureTimer)
+    captureTimer = setTimeout(() => {
+      captureTimer = null
+      captureView()
+    }, VIEW_CAPTURE_DEBOUNCE_MS)
+  }
+
+  // Called once, before the data loader is installed, so the first 'init' load is already the
+  // right one -- a pane parked in history reloads AROUND its anchor rather than loading the
+  // present and then jumping away from it.
+  function restoreView(): void {
+    const view = pane.view
+    if (!widget || !view) return
+    // Out-of-range values are ignored by klinecharts itself (setBarSpace clamps to its own
+    // limits by returning early), so this only has to rule out the values that would be
+    // meaningless rather than merely large.
+    if (Number.isFinite(view.barSpace) && view.barSpace > 0) widget.setBarSpace(view.barSpace)
+    if (!view.live && typeof view.anchor === 'number') {
+      // Exactly what a click-to-scroll seek sets, minus the crosshair: nothing was clicked.
+      // The loader's own 'init' branch then brackets the anchor, opens backward paging and
+      // marks the pane parked, all of which a restored history position wants.
+      pendingSeek = {
+        timestamp: view.anchor,
+        fraction: view.fraction ?? VIEW_ANCHOR_FRACTION,
+        crosshair: null,
+        restore: true
+      }
+    } else {
+      // Following the live candle means following it as it stands NOW, not as it stood when
+      // the view was saved: a tab reopened an hour later must come back to the market, not to
+      // an hour-old anchor that happens to have been at the edge.
+      pendingLive = { broadcast: false }
+    }
+    pendingYAxisRange = view.yAxis?.range ?? null
   }
 
   const chartDataLoader: DataLoader = {
@@ -426,7 +570,7 @@
         const seek = pendingSeek
         pendingSeek = null
         const live = pendingLive
-        pendingLive = false
+        pendingLive = null
         pane.loading = true
         const [from, to] = seek
           ? seekWindow(currentPeriod, seek.timestamp, SEEK_WINDOW_BARS)
@@ -449,6 +593,17 @@
           // it is not: the window it just loaded ends at `now`.
           parkedInHistory = Boolean(seek)
           callback(data, { forward: data.length > 0, backward: Boolean(seek) })
+          if (seek?.restore && data.length === 0) {
+            // The saved anchor no longer has bars around it -- history was trimmed, or the
+            // instrument's data moved. Left as it is the pane would sit empty AND offer no way
+            // out: the jump-to-live control hides itself when there is no data to jump from.
+            // So fall back to what a pane with no saved view does, which is load the present.
+            console.warn('[view] saved position has no data; falling back to live', { pane: pane.id })
+            pendingLive = { broadcast: false }
+            parkedInHistory = false
+            setTimeout(() => widget?.resetData(), 0)
+            return
+          }
           if (seek && data.length > 0 && widget) {
             seekToTimestamp(widget, seek.timestamp, seek.fraction, 0)
             // resetData() cleared this pane's crosshair along with its data (see
@@ -458,12 +613,19 @@
             // nothing, so the pane lands clean instead of marking an arbitrary instant.
             if (seek.crosshair) applyCrosshairAt(widget, seek.crosshair)
           } else if (live && data.length > 0 && widget) {
-            // The reload jumpToLive asked for has landed; only now does the tail exist to be
-            // positioned. Without this the pane would sit wherever klinecharts' own default
-            // offset put it, which is flush right, not the fifth of clear air the control
-            // promises.
+            // The reload jumpToLive asked for -- or the one a restored live pane opens with --
+            // has landed; only now does the tail exist to be positioned. Without this the pane
+            // would sit wherever klinecharts' own default offset put it, which is flush right,
+            // not the fifth of clear air the control promises.
             positionAtLive(widget)
-            broadcastPan()
+            if (live.broadcast) broadcastPan()
+          }
+          // After the positioning, not before: klinecharts rebuilds the y-axis ticks as part
+          // of the same layout a scroll triggers, and a range set ahead of that is recomputed
+          // away on any pane whose axis is still auto-scaling.
+          if (pendingYAxisRange) {
+            applyYAxisRange(pendingYAxisRange)
+            pendingYAxisRange = null
           }
           scheduleViewTick()
         } finally {
@@ -520,6 +682,17 @@
     }
   }
 
+  // Parameters of an indicator that is no longer on the pane: dropped rather than kept for a
+  // possible re-add, so that ticking a template off and on again gives the default it shows
+  // in the picker, and a workspace document doesn't accumulate settings for indicators the
+  // user removed months ago.
+  function forgetIndicatorParams(name: string): void {
+    if (!(name in pane.indicatorParams)) return
+    const next = { ...pane.indicatorParams }
+    delete next[name]
+    pane.indicatorParams = next
+  }
+
   function changeIndicator(name: string, main: boolean, added: boolean) {
     if (main) {
       if (added) {
@@ -528,7 +701,9 @@
       } else {
         widget?.removeIndicator({ paneId: 'candle_pane', name })
         pane.mainIndicators = pane.mainIndicators.filter((item) => item !== name)
+        forgetIndicatorParams(name)
       }
+      onStateChange(pane.id)
       return
     }
 
@@ -544,7 +719,19 @@
       delete nextMap[name]
       subIndicatorMap = nextMap
       pane.subIndicatorNames = pane.subIndicatorNames.filter((item) => item !== name)
+      forgetIndicatorParams(name)
     }
+    onStateChange(pane.id)
+  }
+
+  // The settings dialog's Confirm, routed through the pane rather than reaching for
+  // `api.chart.overrideIndicator` itself, so that the parameters land on PaneState in the same
+  // breath as on the chart. Keyed by template NAME, like the picker: a template is on a pane
+  // at most once, whichever chart pane klinecharts put it in.
+  function setIndicatorParams(chartPaneId: string, name: string, calcParams: unknown[]): void {
+    widget?.overrideIndicator({ name, paneId: chartPaneId, calcParams })
+    pane.indicatorParams = { ...pane.indicatorParams, [name]: [...calcParams] }
+    onStateChange(pane.id)
   }
 
   function applyYAxisSettings(chartPaneId?: string) {
@@ -561,11 +748,13 @@
     if (key === 'yAxis.type') {
       pane.yAxisType = String(value)
       applyYAxisSettings()
+      captureView()
       return widget?.getStyles() as Styles
     }
     if (key === 'yAxis.reverse') {
       pane.yAxisReverse = Boolean(value)
       applyYAxisSettings()
+      captureView()
       return widget?.getStyles() as Styles
     }
     const patch = {}
@@ -586,6 +775,7 @@
     pane.yAxisType = 'normal'
     pane.yAxisReverse = false
     applyYAxisSettings()
+    captureView()
     return clone(widget?.getStyles() ?? (defaultStyles as Styles))
   }
 
@@ -680,7 +870,13 @@
       if (chartPaneId) initialSubIndicatorMap[name] = chartPaneId
     }
     subIndicatorMap = initialSubIndicatorMap
+    // createIndicator applies these to each sub-pane it creates; the candle pane has no such
+    // moment, so a restored logarithmic or reversed price axis needs saying here.
+    applyYAxisSettings('candle_pane')
 
+    // Before the loader, not after: installing it is what triggers the first 'init' load, and
+    // restoreView's whole job is to make that first load the right one.
+    restoreView()
     widget.setDataLoader(chartDataLoader)
     const onIndicatorFeatureClick = (value?: unknown) => {
       const data = value as IndicatorFeatureClick
@@ -804,7 +1000,13 @@
     // -- off the edge of a small pane in a dense layout, which is most of them -- never
     // delivers pointerup to the element it started on, and would leave this stuck driving.
     const onPanPointerDown = () => { pointerDriving = true }
-    const onPanPointerUp = () => { pointerDriving = false }
+    // Dragging the PRICE axis scales it without moving the visible range, so it dispatches
+    // nothing this pane subscribes to -- the end of any pointer gesture is the one signal
+    // that covers it as well as the pans that do dispatch.
+    const onPanPointerUp = () => {
+      pointerDriving = false
+      scheduleViewCapture()
+    }
     const onPanWheel = () => { wheelDrivingUntil = Date.now() + WHEEL_TAIL_MS }
 
     // There is no klinecharts action for "crosshair cleared" -- on pointer leave it clears
@@ -846,6 +1048,7 @@
       setStyles: (patch: DeepPartial<Styles>) => widget?.setStyles(patch),
       setStyleValue,
       restoreStyles,
+      setIndicatorParams,
       createOverlay,
       overrideOverlay,
       removeDrawings,
@@ -859,6 +1062,9 @@
       // rather than leaving it stale with no owner.
       bus.unregister(pane.id)
       if (viewRaf !== 0) cancelAnimationFrame(viewRaf)
+      // A capture fired after the chart is disposed would read a dead widget; the state it
+      // would have written is already on PaneState, captured on the last settled change.
+      if (captureTimer) clearTimeout(captureTimer)
       chartDom.removeEventListener('pointerleave', onPointerLeave)
       chartDom.removeEventListener('pointerdown', onPanPointerDown)
       chartDom.removeEventListener('wheel', onPanWheel)

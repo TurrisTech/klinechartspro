@@ -89,6 +89,7 @@ export default class KLineChartPro implements ChartPro {
         syncAuto: options.syncAuto ?? false,
         onPaneLayoutChange: options.onPaneLayoutChange ?? (() => {}),
         onActivePaneChange: options.onActivePaneChange ?? (() => {}),
+        onPaneStateChange: options.onPaneStateChange ?? (() => {}),
         onPanesChange: options.onPanesChange ?? (() => {}),
         onSymbolChange: options.onSymbolChange ?? (() => {}),
         onPeriodChange: options.onPeriodChange ?? (() => {}),

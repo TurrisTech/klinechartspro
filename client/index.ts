@@ -336,6 +336,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
+    // Everything else a pane can change on its own: an indicator added, removed or
+    // re-parameterised, and -- debounced to the end of the gesture -- a pan, a zoom or a
+    // hand-scaled price axis. Before this, those survived only until some OTHER change
+    // (a symbol, a timeframe, a layout) happened to persist the wall on their behalf.
+    onPaneStateChange: persist,
     onSymbolChange: persist,
     onPeriodChange: persist,
     onSyncChange: (options) => {

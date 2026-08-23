@@ -120,6 +120,7 @@
     syncAuto,
     onPaneLayoutChange,
     onActivePaneChange,
+    onPaneStateChange,
     onPanesChange,
     onSymbolChange,
     onPeriodChange,
@@ -783,6 +784,7 @@
             {periods}
             {bus}
             onActivate={(id) => wall.activate(id)}
+            onStateChange={onPaneStateChange}
             onIndicatorSettings={(payload) => {
               indicatorSettings = {
                 paneId: payload.paneId,
@@ -998,11 +1000,14 @@
             const config = indicatorSettingsFor(indicatorSettings.indicatorName)
             const params = indicatorSettings.calcParams.map((value, index) => value === '' || value == null ? config[index]?.default : value)
             const targetPane = wall.panes.find((item) => item.id === indicatorSettings.paneId)
-            targetPane?.api?.chart.overrideIndicator({
-              name: indicatorSettings.indicatorName,
-              paneId: indicatorSettings.chartPaneId,
-              calcParams: params
-            })
+            // Not chart.overrideIndicator directly: the pane records the parameters on its own
+            // state and reports the change, which is what makes an MA(50) still an MA(50)
+            // after a reload.
+            targetPane?.api?.setIndicatorParams(
+              indicatorSettings.chartPaneId,
+              indicatorSettings.indicatorName,
+              params
+            )
             indicatorSettingsOpen = false
           }}>{i18n('confirm', locale)}</button>
         </div>

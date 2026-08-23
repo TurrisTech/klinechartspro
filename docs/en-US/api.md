@@ -29,6 +29,7 @@ new KLineChartPro(
     syncTime?: boolean;
     onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void;
     onActivePaneChange?: (paneId: string) => void;
+    onPaneStateChange?: (paneId: string) => void;
     onPanesChange?: (panes: ChartProPane[]) => void;
     onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void;
     onPeriodChange?: (paneId: string, period: Period) => void;
@@ -75,6 +76,14 @@ compatible: omitting every option below still yields the original single chart.
   pane's symbol/period/indicators -- the payload to persist if you want the wall to survive a
   reload.
 + `onActivePaneChange` Fired when the active pane changes.
++ `onPaneStateChange` Fired when a pane changes in a way none of the other callbacks report:
+  an indicator added, removed or re-parameterised, and -- debounced to the end of the gesture
+  -- a pan, a zoom or a hand-scaled price axis. Carries only the pane id; re-read
+  `getPaneSnapshots()`, which carries everything a wall needs to be restored exactly:
+  each pane's `indicatorParams` (template name -> `calcParams`) and its `view`
+  (`barSpace`, whether it was following the live candle, the anchor timestamp and fraction it
+  was positioned at, and the y-axis type/reverse plus any manual price range). Hand those
+  back as `panes[].indicatorParams` / `panes[].view` and the wall comes back as it was.
 + `onPanesChange` Fired whenever the LIVE pane set changes -- a pane's chart was just created
   or just destroyed (including every layout grow/shrink). Resync any per-pane external
   behaviour (e.g. price-level overlays) entirely from this callback's argument.

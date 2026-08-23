@@ -36,6 +36,8 @@ export type {
   IndicatorGroup,
   PaneOptions,
   PaneSnapshot,
+  PaneViewState,
+  PaneYAxisRange,
   Period,
   SymbolInfo
 } from './types'
