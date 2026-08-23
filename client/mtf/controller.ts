@@ -50,6 +50,10 @@ const WINDOW_PAD_FLOOR_MS = 7 * 86_400_000
 // always comfortably under the 5000 cap.
 const GRID_CHUNK_BARS = 4000
 
+/** Rough height of one klinecharts legend row, used only to hang the settings panel just
+ * below the legend the gear sits in. */
+const LEGEND_ROW_HEIGHT = 24
+
 interface Binding {
   indicatorId: string
   chartPaneId: string
@@ -348,9 +352,12 @@ export function createMtfController(): MtfController {
   const openPanel = (paneId: string): boolean => {
     const entry = wired.get(paneId)
     if (!entry) return false
-    // The gear is drawn on the chart's canvas, not in the DOM, so there is no element to
-    // anchor to. The chart's own container is the next best thing: the panel opens under
-    // its top-left, which is where the legend the gear sits in is drawn.
+    // The gear is drawn on the chart's CANVAS, not in the DOM, so there is no element to
+    // point at. The chart container is what the panel must live inside (it is what carries
+    // the theme class the panel's tokens resolve against), but it is the full height of the
+    // pane, so its own rect is the wrong place to hang the panel from -- under its bottom
+    // edge is below the fold. Hence an explicit rect: the panel opens just under the
+    // legend row at the chart's top left, which is where the gear that opened it is drawn.
     let anchor: HTMLElement | null = null
     try {
       anchor = entry.chart.getDom() as HTMLElement | null
@@ -358,15 +365,19 @@ export function createMtfController(): MtfController {
       anchor = null
     }
     if (!anchor) return false
+    const chartRect = anchor.getBoundingClientRect()
     panel?.close()
     panel = openSettingsPanel<MtfConfig>({
       anchor,
+      // One legend row's worth below the top of the chart. Approximate on purpose: the
+      // exact y of the gear depends on how many indicators the pane carries, and the panel
+      // is clamped to the window anyway -- what matters is that it opens beside the chart's
+      // legend rather than off the bottom of it.
+      anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
       title: 'AREV21 multi-timeframe',
-      // The overlay's own on/off is the indicator being on the pane at all — it is removed
-      // from the picker or the legend's close icon, not from here — so the framework's
-      // enable row is pinned on and does nothing.
-      enabled: true,
-      onToggleEnabled: () => {},
+      // No enable row: this overlay's on/off is the indicator being on the pane at all,
+      // which the picker and the legend's own close icon already own. Omitting
+      // onToggleEnabled is what suppresses the row -- see openSettingsPanel.
       fields: MTF_FIELDS,
       config,
       defaults: MTF_DEFAULTS,

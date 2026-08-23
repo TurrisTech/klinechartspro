@@ -97,9 +97,18 @@ export const MTF_FIELDS: SettingsField[] = MTF_INTERVALS.map(
 )
 
 /** The timeframes to draw, shortest-first — which is also the lane order, so the markers
- * nearest the candles come from the timeframe nearest the chart's own. */
-export function enabledIntervals(config: MtfConfig): MtfInterval[] {
-  return MTF_INTERVALS.filter((interval) => config.timeframes[interval].enabled)
+ * nearest the candles come from the timeframe nearest the chart's own.
+ *
+ * Tolerates a config missing entries rather than indexing straight into it. klinecharts
+ * calls an indicator's `draw` as soon as it is created, which is BEFORE the controller's
+ * next poll has applied any extendData, so the very first frames run against whatever the
+ * template declared as its placeholder — and a config that has not loaded yet is a normal
+ * state here, not a broken one. Reading `.enabled` off an absent entry threw a TypeError
+ * every frame of that window. */
+export function enabledIntervals(config: MtfConfig | undefined): MtfInterval[] {
+  const timeframes = config?.timeframes
+  if (!timeframes) return []
+  return MTF_INTERVALS.filter((interval) => timeframes[interval]?.enabled === true)
 }
 
 export function loadMtfConfig(): Promise<MtfConfig> {

@@ -1,7 +1,7 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import { MTF_GENERATION, type MtfInterval } from './api'
-import { enabledIntervals, type MtfConfig, type MtfTimeframeStyle } from './config'
+import { MTF_DEFAULTS, enabledIntervals, type MtfConfig, type MtfTimeframeStyle } from './config'
 import { shiftSignals, type ShiftedSignal } from './shift'
 import { peekStore } from './store'
 
@@ -174,7 +174,10 @@ export function registerMtfIndicators(): IndicatorGroup[] {
       shouldFormatBigNumber: false,
       visible: true,
       zLevel: 0,
-      extendData: { seriesKeys: {}, rev: 0, chartInterval: '', config: { timeframes: {} } as MtfConfig },
+      // The real defaults, not an empty shell: klinecharts draws an indicator the moment it
+      // is created, which is before the controller's next poll applies anything, so this
+      // placeholder is what the first frames actually render against.
+      extendData: { seriesKeys: {}, rev: 0, chartInterval: '', config: MTF_DEFAULTS },
       series: 'price',
       figures: [],
       minValue: null,
@@ -200,7 +203,8 @@ export function registerMtfIndicators(): IndicatorGroup[] {
         let running = LANE_INSET
         for (const interval of intervals) {
           offsets.push(running)
-          running += laneHeight(config.timeframes[interval])
+          const style = config.timeframes[interval]
+          if (style) running += laneHeight(style)
         }
         for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
           const marks = indicator.result[i]?.marks

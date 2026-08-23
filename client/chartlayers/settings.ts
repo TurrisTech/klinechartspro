@@ -43,9 +43,14 @@ export interface SettingsPanelOptions<T extends object> {
   title: string
   /** Whether the layer itself is on — rendered as the panel's first row, ahead of `fields`.
    * Kept separate from `config`/`onChange` rather than folded into T: every layer has this
-   * regardless of what it configures, so it's a framework-level concern, not a per-layer one. */
-  enabled: boolean
-  onToggleEnabled: (enabled: boolean) => void
+   * regardless of what it configures, so it's a framework-level concern, not a per-layer one.
+   *
+   * OPTIONAL as a pair: omit `onToggleEnabled` and the row is not rendered at all. Not every
+   * caller has an on/off of its own — an indicator's is being on the pane, which is the
+   * picker's and the legend's business, not this panel's — and a switch that ignores clicks
+   * is worse than no switch. */
+  enabled?: boolean
+  onToggleEnabled?: (enabled: boolean) => void
   fields: SettingsField[]
   config: T
   defaults: T
@@ -54,6 +59,13 @@ export interface SettingsPanelOptions<T extends object> {
    * so a caller tracking "is my panel open" (to make a second button-click toggle it
    * instead of stacking a duplicate) doesn't hold a stale handle. */
   onClose?: () => void
+  /** Where to hang the panel, in viewport coordinates. Defaults to `anchor`'s own rect,
+   * which is right when the anchor IS the control that was clicked — a toolbar button.
+   * It is wrong when the anchor is merely the element the panel must live INSIDE: a chart
+   * container is the full height of the pane, so hanging the panel under its bottom edge
+   * puts it below the fold. A caller whose control is drawn on a canvas, and so has no
+   * element of its own to point at, passes the rect it wants instead. */
+  anchorRect?: { top: number; bottom: number; left: number }
 }
 
 // Opens a `.kc-popover`-styled panel anchored under `anchor`, positioned with `position:
@@ -67,7 +79,7 @@ export function openSettingsPanel<T extends object>(
 ): SettingsPanelHandle {
   const { anchor, title, fields, defaults, onChange, onClose, onToggleEnabled } = options
   let config = structuredClone(options.config)
-  let enabled = options.enabled
+  let enabled = options.enabled ?? true
 
   const panel = document.createElement('div')
   panel.className = 'kc-popover wd-layer-panel'
@@ -203,27 +215,29 @@ export function openSettingsPanel<T extends object>(
     return input
   }
 
-  // The enable/disable switch is always the panel's first row, ahead of anything layer-
-  // specific — rendered once here (not by refresh()) since it isn't part of `fields`/`config`
-  // and Reset to defaults must not touch it.
-  const enabledRow = document.createElement('div')
-  enabledRow.className = 'kc-field kc-field-horizontal'
-  const enabledId = 'wd-field-enabled'
-  const enabledLabel = document.createElement('label')
-  enabledLabel.htmlFor = enabledId
-  enabledLabel.textContent = 'Enabled'
-  enabledRow.appendChild(enabledLabel)
-  enabledRow.appendChild(
-    createSwitch(
-      enabledId,
-      () => enabled,
-      (next) => {
-        enabled = next
-        onToggleEnabled(next)
-      }
+  // The enable/disable switch is the panel's first row, ahead of anything layer-specific —
+  // rendered once here (not by refresh()) since it isn't part of `fields`/`config` and Reset
+  // to defaults must not touch it. Skipped entirely for a caller that has no such toggle.
+  if (onToggleEnabled) {
+    const enabledRow = document.createElement('div')
+    enabledRow.className = 'kc-field kc-field-horizontal'
+    const enabledId = 'wd-field-enabled'
+    const enabledLabel = document.createElement('label')
+    enabledLabel.htmlFor = enabledId
+    enabledLabel.textContent = 'Enabled'
+    enabledRow.appendChild(enabledLabel)
+    enabledRow.appendChild(
+      createSwitch(
+        enabledId,
+        () => enabled,
+        (next) => {
+          enabled = next
+          onToggleEnabled(next)
+        }
+      )
     )
-  )
-  body.appendChild(enabledRow)
+    body.appendChild(enabledRow)
+  }
 
   const fieldsBody = document.createElement('div')
   fieldsBody.className = 'kc-field-group'
@@ -251,12 +265,18 @@ export function openSettingsPanel<T extends object>(
   const mountPoint = anchor.closest('.klinecharts-pro') ?? document.body
   mountPoint.appendChild(panel)
 
-  const anchorRect = anchor.getBoundingClientRect()
+  const anchorRect = options.anchorRect ?? anchor.getBoundingClientRect()
   const gap = 6
   panel.style.position = 'fixed'
-  panel.style.top = `${anchorRect.bottom + gap}px`
   const maxLeft = window.innerWidth - panel.offsetWidth - 8
   panel.style.left = `${Math.max(8, Math.min(anchorRect.left, maxLeft))}px`
+  // Below the anchor by preference, but never off the bottom of the window: the panel's
+  // height depends on how many fields the layer declares, and a tall one hung off a low
+  // anchor would otherwise render partly or entirely out of view with nothing to say so.
+  // Measured after the append above, so offsetHeight is the laid-out height (capped by the
+  // stylesheet's own max-height) rather than zero.
+  const maxTop = window.innerHeight - panel.offsetHeight - 8
+  panel.style.top = `${Math.max(8, Math.min(anchorRect.bottom + gap, maxTop))}px`
 
   function onOutsideClick(event: MouseEvent): void {
     if (!panel.contains(event.target as Node) && event.target !== anchor) close()
@@ -264,9 +284,13 @@ export function openSettingsPanel<T extends object>(
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') close()
   }
-  // Deferred one microtask so the same click that opened the panel (the anchor button's own
-  // click event, still bubbling to document) doesn't immediately close it again.
-  queueMicrotask(() => document.addEventListener('mousedown', onOutsideClick))
+  // Deferred a whole TASK, not a microtask, so the interaction that opened the panel cannot
+  // also close it. A microtask checkpoint runs BETWEEN listener callbacks during dispatch,
+  // so a listener added from one can still receive the very event that is propagating; a
+  // task cannot run until dispatch has finished. The guard above (target is the anchor, or
+  // inside the panel) covers the toolbar-button case either way, but it does not cover a
+  // caller whose control is drawn on a canvas and so has no element of its own to exempt.
+  setTimeout(() => document.addEventListener('mousedown', onOutsideClick), 0)
   document.addEventListener('keydown', onKeydown)
 
   let closed = false
