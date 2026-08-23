@@ -110,6 +110,7 @@
     subIndicators,
     indicatorGroups,
     indicatorParamsValidator,
+    indicatorSettingsHandler,
     datafeed,
     paneLayout,
     panes,
@@ -784,6 +785,19 @@
             {bus}
             onActivate={(id) => wall.activate(id)}
             onIndicatorSettings={(payload) => {
+              // An app may own this indicator's settings entirely -- see
+              // IndicatorSettingsHandler. It answers true once it has opened its own UI,
+              // and the numeric dialog below never opens for that indicator.
+              if (
+                indicatorSettingsHandler?.({
+                  indicatorName: payload.name,
+                  paneId: payload.paneId,
+                  chartPaneId: payload.chartPaneId,
+                  calcParams: payload.calcParams
+                })
+              ) {
+                return
+              }
               indicatorSettings = {
                 paneId: payload.paneId,
                 chartPaneId: payload.chartPaneId,

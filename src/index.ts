@@ -34,6 +34,7 @@ export type {
   DatafeedFactory,
   DatafeedSubscribeCallback,
   IndicatorGroup,
+  IndicatorSettingsHandler,
   PaneOptions,
   PaneSnapshot,
   Period,

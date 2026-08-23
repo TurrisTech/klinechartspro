@@ -128,6 +128,22 @@ export type IndicatorParamsValidator = (request: {
   period: Period
 }) => Promise<IndicatorParamsCheck>
 
+/** An app's chance to own an indicator's settings entry point.
+ *
+ * The built-in settings dialog edits a flat NUMERIC `calcParams` array, which suits the
+ * klinecharts library indicators it was written for and nothing whose settings are, say, a
+ * colour per timeframe. An app that registers such an indicator supplies this; returning
+ * true means "I have opened my own UI for this one", and the built-in dialog stays shut.
+ * Returning false (or omitting the callback) leaves every indicator exactly as it was. */
+export type IndicatorSettingsHandler = (request: {
+  indicatorName: string
+  /** The wall pane, 'p1'..'pN'. */
+  paneId: string
+  /** The chart pane within it -- 'candle_pane' for a price-pane indicator. */
+  chartPaneId: string
+  calcParams: unknown[]
+}) => boolean
+
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>
@@ -152,6 +168,9 @@ export interface ChartProOptions {
   /** Asked, debounced, whenever the indicator params dialog is open and its numbers change.
    * Omitted, the dialog behaves exactly as before: every params combination is offered. */
   indicatorParamsValidator?: IndicatorParamsValidator | null
+  /** Consulted before the built-in indicator settings dialog opens; see
+   * IndicatorSettingsHandler. Omitted, every indicator uses the built-in dialog. */
+  indicatorSettingsHandler?: IndicatorSettingsHandler | null
   datafeed: Datafeed | DatafeedFactory
 
   /** Layout preset id (see src/config/layouts.ts). Defaults to '1', a single chart. */

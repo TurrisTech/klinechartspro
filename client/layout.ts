@@ -102,7 +102,29 @@ export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): Persisted
 // template 'KREV:krev01:p' (see client/krev/templates.ts).
 const RETIRED_INDICATORS = new Set(['KREV:krev01'])
 
-const live = (names: string[]): string[] => names.filter((name) => !RETIRED_INDICATORS.has(name))
+// Templates that were replaced rather than retired, and whose saved names are MIGRATED so
+// the pane keeps the overlay it had. 'MTF:arev21:<timeframe>' was one price-pane template
+// per timeframe, ticked from the picker; they are now a single 'MTF:arev21' whose
+// timeframes are a setting (client/mtf/templates.ts), so several saved names can collapse
+// onto one and the result has to be deduplicated -- klinecharts keys an indicator by name
+// per pane, and handing it the same one three times creates one and warns twice.
+//
+// What does NOT survive is WHICH timeframes were ticked: that moved out of the layout and
+// into the overlay's own per-user settings (client/mtf/config.ts), which a layout has no
+// business writing into. A pane that had 4h and 1D therefore comes back drawing whatever
+// the settings panel says, which is the same set on every pane by design.
+const MTF_LEGACY_PREFIX = 'MTF:arev21:'
+const MTF_TEMPLATE = 'MTF:arev21'
+
+const live = (names: string[]): string[] => {
+  const kept: string[] = []
+  for (const name of names) {
+    if (RETIRED_INDICATORS.has(name)) continue
+    const mapped = name.startsWith(MTF_LEGACY_PREFIX) ? MTF_TEMPLATE : name
+    if (!kept.includes(mapped)) kept.push(mapped)
+  }
+  return kept
+}
 
 // Resolves a persisted layout's tickers into full SymbolInfo (pricePrecision and the rest are
 // vendor-sourced, never persisted -- see client/symbols.ts's own note on why). Deduplicated by

@@ -1,30 +1,33 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane } from '../../src'
+import { openSettingsPanel, type SettingsPanelHandle } from '../chartlayers/settings'
 import { periodToResolution, resolutionDurationMs } from '../periods'
 import { symbolVendor } from '../symbols'
-import { MTF_GENERATION, MTF_INTERVALS, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
+import { MTF_GENERATION, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
+import {
+  MTF_DEFAULTS,
+  MTF_FIELDS,
+  enabledIntervals,
+  loadMtfConfig,
+  saveMtfConfig,
+  type MtfConfig
+} from './config'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { dropStore, storeFor, type MtfStore, type Range } from './store'
-import { isMtfIndicator, parseTemplateName, type ExtendData } from './templates'
+import { TEMPLATE_NAME, isMtfIndicator, type ExtendData } from './templates'
 
-// Keeps every ticked AREV21 multi-timeframe overlay fed, the way arev/controller.ts does
-// for the AREV panes: per pane it watches the chart's own indicator list, and for each
-// MTF template found fetches exactly the source-timeframe window the chart needs and
-// nothing it already has, then hands the chart the data by bumping the indicator's
-// extendData (which its `calc` reads back from the store).
+// Keeps the one AREV21 multi-timeframe overlay fed on every pane that has it, and owns its
+// settings panel.
 //
-// Two things it does that the AREV controller does not, both consequences of the source
-// timeframe not being the chart's:
+// Where the AREV controller has one binding per pane per generation, this has one binding
+// per pane holding N source-timeframe stores — one for each timeframe the settings switch
+// on. That is the shape the consolidation forced: a single indicator reads several series
+// at once, so coverage, revision tracking and the legend all aggregate across them.
 //
-//   * it fetches a BAR GRID as well as the votes, because placing a vote one source bar
-//     forward is a question about the source timeframe's candle boundaries (shift.ts);
-//   * it assigns each ticked timeframe a drawing LANE, so two overlays on one pane never
-//     draw over each other. A template cannot do this for itself -- klinecharts gives a
-//     `draw` callback no view of the other indicators on its pane -- and deriving it from
-//     the timeframe's position in MTF_INTERVALS would leave gaps, putting a lone 1D
-//     overlay in the eighth lane, 150-odd pixels off the candles it describes.
+// It fetches a BAR GRID as well as the votes for each timeframe, because placing a vote one
+// source bar forward is a question about that timeframe's candle boundaries (shift.ts).
 //
-// Like AREV, there is nothing to subscribe: the rows are written by hand-run research
+// Like AREV there is nothing to subscribe: the rows are written by hand-run research
 // scripts, not a live feed, so new votes appear when a script is re-run and a reload or a
 // range change picks them up.
 
@@ -33,37 +36,33 @@ const RANGE_DEBOUNCE_MS = 250
 const MAX_VALUES_PER_REQUEST = 5000
 
 // A fetch is widened past the chart's own span at both ends, and neither end is optional.
-// FORWARD, because the newest vote in the window can only be placed once its successor
-// bar is known, and that bar lies beyond the window by definition. BACKWARD, because a
-// vote cast just before the window shifts INTO it. The floor covers the market's longest
-// routine gap -- an FX weekend is ~65h, and a holiday can stretch it -- so a Friday vote's
-// successor is always in reach.
+// FORWARD, because the newest vote in the window can only be placed once its successor bar
+// is known, and that bar lies beyond the window by definition. BACKWARD, because a vote
+// cast just before the window shifts INTO it. The floor covers the market's longest routine
+// gap — an FX weekend is ~65h, and a holiday can stretch it — so a Friday vote's successor
+// is always in reach.
 const WINDOW_PAD_BARS = 4
 const WINDOW_PAD_FLOOR_MS = 7 * 86_400_000
 
 // `/getbars` is bounded by range, not by count, and 413s past the server's per-request bar
-// cap. A gap is therefore fetched in chunks of at most this many NOMINAL source bars --
+// cap. A gap is therefore fetched in chunks of at most this many NOMINAL source bars —
 // nominal overcounts (the market is shut about a third of the week), so the real reply is
 // always comfortably under the 5000 cap.
 const GRID_CHUNK_BARS = 4000
 
 interface Binding {
   indicatorId: string
-  name: string
   chartPaneId: string
-  sourceInterval: MtfInterval
   vendor: string
   ticker: string
   chartInterval: string
   signature: string
-  storeKey: string
-  store: MtfStore
+  stores: Map<MtfInterval, MtfStore>
   inFlight: Set<string>
   disposed: boolean
-  lane: number
   lastAppliedRev: number
   lastShortName: string
-  lastLane: number
+  lastConfigRev: number
 }
 
 interface WiredPane {
@@ -77,73 +76,108 @@ interface WiredPane {
 
 export interface MtfController {
   sync(panes: ChartProPane[]): void
+  /** Wired as ChartProOptions.indicatorSettingsHandler: claims the gear on this indicator
+   * and opens the per-timeframe panel instead of the numeric params dialog. */
+  handleSettings(request: { indicatorName: string; paneId: string; chartPaneId: string }): boolean
 }
 
 export function createMtfController(): MtfController {
   const wired = new Map<string, WiredPane>()
+  // Settings are per USER, not per pane: a colour that meant 4h on one pane and 1D on
+  // another would defeat the point of colouring by timeframe at all. One config, shared by
+  // every binding, loaded once and saved on every edit.
+  let config: MtfConfig = MTF_DEFAULTS
+  // Bumped on every settings edit so `apply` can tell "the stores changed" from "the way
+  // they are drawn changed" — both must reach the template, only one needs a fetch.
+  let configRev = 0
+  let panel: SettingsPanelHandle | null = null
+
+  void loadMtfConfig()
+    .then((loaded) => {
+      config = loaded
+      configRev++
+      // Whatever is already mounted was built against the defaults; re-apply so a saved
+      // config takes effect without waiting for a pan.
+      for (const entry of wired.values()) {
+        for (const b of entry.bindings.values()) {
+          apply(entry, b)
+          void ensureCoverage(entry, b)
+        }
+      }
+    })
+    .catch((err) => console.warn('[mtf] settings load failed, using defaults', err))
 
   /** A source timeframe finer than the chart's is refused rather than drawn: hundreds of
-   * sub-bar votes collapsing onto one candle reads as noise, not as context. The legend
-   * is where that is said -- silently drawing nothing would be indistinguishable from a
-   * timeframe no run has ever written. */
-  const tooFine = (b: Binding): boolean => isFinerThan(b.sourceInterval, b.chartInterval)
+   * sub-bar votes collapsing onto one candle reads as noise, not as context. Named in the
+   * legend, because silently drawing nothing is indistinguishable from a timeframe no run
+   * has ever written. */
+  const drawable = (b: Binding): MtfInterval[] =>
+    enabledIntervals(config).filter((interval) => !isFinerThan(interval, b.chartInterval))
 
   const label = (b: Binding): string => {
-    const base = `A21 ${b.sourceInterval}`
-    if (tooFine(b)) return `${base} · needs ≥ ${b.chartInterval} chart`
-    switch (b.store.phase) {
-      case 'idle':
-      case 'loading':
-        return `${base} · loading`
-      case 'error':
-        return `${base} · error`
-      default:
-        return base
+    const shown = drawable(b)
+    if (shown.length === 0) {
+      const on = enabledIntervals(config)
+      return on.length === 0 ? 'AREV21 MTF · none on' : `AREV21 MTF · needs ≥ ${b.chartInterval} chart`
     }
+    const stores = shown.map((interval) => b.stores.get(interval))
+    if (stores.some((s) => s?.phase === 'error')) return `AREV21 MTF · error`
+    if (stores.some((s) => !s || s.phase === 'idle' || s.phase === 'loading')) {
+      return `AREV21 MTF ${shown.join(' ')} · loading`
+    }
+    // Names the active set, which is the one thing eight separate legend rows used to say
+    // for free.
+    return `AREV21 MTF ${shown.join(' ')}`
+  }
+
+  const storeKeyFor = (b: Binding, interval: MtfInterval): string =>
+    `${MTF_GENERATION}|${b.vendor}:${b.ticker}|${interval}`
+
+  /** Sum of every contributing store's revision, so any one of them changing moves it. */
+  const aggregateRev = (b: Binding): number => {
+    let rev = 0
+    for (const interval of drawable(b)) rev += b.stores.get(interval)?.rev ?? 0
+    return rev
   }
 
   const apply = (entry: WiredPane, b: Binding): void => {
     if (b.disposed) return
-    const rev = b.store.rev
+    const rev = aggregateRev(b)
     const shortName = label(b)
-    if (rev === b.lastAppliedRev && shortName === b.lastShortName && b.lane === b.lastLane) return
+    if (rev === b.lastAppliedRev && shortName === b.lastShortName && configRev === b.lastConfigRev) return
     b.lastAppliedRev = rev
     b.lastShortName = shortName
-    b.lastLane = b.lane
-    const extendData: ExtendData = {
-      seriesKey: b.storeKey,
-      rev,
-      chartInterval: b.chartInterval,
-      lane: b.lane
-    }
+    b.lastConfigRev = configRev
+    const seriesKeys: Record<string, string> = {}
+    for (const interval of drawable(b)) seriesKeys[interval] = storeKeyFor(b, interval)
+    const extendData: ExtendData = { seriesKeys, rev: rev + configRev, chartInterval: b.chartInterval, config }
     try {
-      entry.chart.overrideIndicator({ id: b.indicatorId, name: b.name, paneId: b.chartPaneId, extendData, shortName } as never)
+      entry.chart.overrideIndicator({ id: b.indicatorId, name: TEMPLATE_NAME, paneId: b.chartPaneId, extendData, shortName } as never)
     } catch (err) {
       console.warn('[mtf] override failed', err)
     }
   }
 
   /** The chart's loaded span, converted out of the chart's wire clock and into the source
-   * timeframe's, padded at both ends. Both conversions are needed and they are different
-   * whenever exactly one of the two intervals is daily-or-coarser -- see shift.ts. */
-  const sourceWindow = (chart: Chart, b: Binding): Range | null => {
+   * timeframe's, padded at both ends. Both conversions are needed and they differ whenever
+   * exactly one of the two intervals is daily-or-coarser — see shift.ts. */
+  const sourceWindow = (chart: Chart, b: Binding, interval: MtfInterval): Range | null => {
     const data = chart.getDataList()
     if (data.length === 0) return null
-    const pad = Math.max(WINDOW_PAD_BARS * resolutionDurationMs(b.sourceInterval), WINDOW_PAD_FLOOR_MS)
+    const pad = Math.max(WINDOW_PAD_BARS * resolutionDurationMs(interval), WINDOW_PAD_FLOOR_MS)
     const absFrom = toAbsolute(b.chartInterval, data[0].timestamp) - pad
     const absTo = toAbsolute(b.chartInterval, data[data.length - 1].timestamp) + pad
-    return {
-      from: fromAbsolute(b.sourceInterval, absFrom),
-      to: fromAbsolute(b.sourceInterval, absTo)
-    }
+    return { from: fromAbsolute(interval, absFrom), to: fromAbsolute(interval, absTo) }
   }
 
-  const fetchGap = async (entry: WiredPane, b: Binding, gap: Range): Promise<void> => {
-    const tag = `${gap.from}-${gap.to}`
+  const fetchGap = async (entry: WiredPane, b: Binding, interval: MtfInterval, gap: Range): Promise<void> => {
+    const store = b.stores.get(interval)
+    if (!store) return
+    const tag = `${interval}|${gap.from}-${gap.to}`
     if (b.inFlight.has(tag)) return
     b.inFlight.add(tag)
     const vendorSymbol = `${b.vendor}:${b.ticker}`
-    const chunk = GRID_CHUNK_BARS * resolutionDurationMs(b.sourceInterval)
+    const chunk = GRID_CHUNK_BARS * resolutionDurationMs(interval)
     try {
       let from = gap.from
       let chunks = 0
@@ -153,63 +187,60 @@ export function createMtfController(): MtfController {
         // Votes and grid together, over one window, so a single range covers both in the
         // store. Concurrently, because neither depends on the other.
         const [points, grid] = await Promise.all([
-          fetchMtfPoints(vendorSymbol, b.sourceInterval, from, to, MAX_VALUES_PER_REQUEST),
-          fetchMtfBarGrid(vendorSymbol, b.sourceInterval, from, to)
+          fetchMtfPoints(vendorSymbol, interval, from, to, MAX_VALUES_PER_REQUEST),
+          fetchMtfBarGrid(vendorSymbol, interval, from, to)
         ])
         if (b.disposed) return
-        b.store.setMany(points, grid, { from, to })
-        b.store.setPhase('ready')
+        store.setMany(points, grid, { from, to })
+        store.setPhase('ready')
         apply(entry, b)
         from = to
       }
     } catch (err) {
-      b.store.setPhase('error', err instanceof Error ? err.message : String(err))
+      store.setPhase('error', err instanceof Error ? err.message : String(err))
       apply(entry, b)
-      console.error('[mtf] history fetch failed', err)
+      console.error(`[mtf] history fetch failed for ${interval}`, err)
     } finally {
       b.inFlight.delete(tag)
     }
   }
 
   const ensureCoverage = async (entry: WiredPane, b: Binding): Promise<void> => {
-    if (b.disposed || tooFine(b)) return
-    const window = sourceWindow(entry.chart, b)
-    if (!window) return
-    for (const gap of b.store.missing(window)) await fetchGap(entry, b, gap)
+    if (b.disposed) return
+    for (const interval of drawable(b)) {
+      // Stores are created lazily, when a timeframe is first switched on: switching all
+      // eight on and off again should not leave eight populated caches behind.
+      let store = b.stores.get(interval)
+      if (!store) {
+        store = storeFor(storeKeyFor(b, interval))
+        b.stores.set(interval, store)
+      }
+      const window = sourceWindow(entry.chart, b, interval)
+      if (!window) continue
+      for (const gap of store.missing(window)) await fetchGap(entry, b, interval, gap)
+    }
     apply(entry, b)
   }
 
   const dispose = (b: Binding): void => {
     b.disposed = true
-    // Drop the store when nobody else on the wall reads this exact source series.
-    let used = false
-    for (const e of wired.values()) for (const other of e.bindings.values()) if (other !== b && other.storeKey === b.storeKey) used = true
-    if (!used) dropStore(b.storeKey)
-  }
-
-  const signatureOf = (
-    ind: Pick<Indicator, 'name' | 'paneId'>,
-    vendor: string,
-    ticker: string,
-    chartInterval: string
-  ): string => JSON.stringify([ind.name, ind.paneId, vendor, ticker, chartInterval])
-
-  /** Lanes are handed out shortest-timeframe-first across whatever is ticked RIGHT NOW, so
-   * the markers nearest the candles are always the ones from the timeframe nearest the
-   * chart's own. */
-  const assignLanes = (entry: WiredPane): boolean => {
-    const ordered = [...entry.bindings.values()].sort(
-      (a, b) => MTF_INTERVALS.indexOf(a.sourceInterval) - MTF_INTERVALS.indexOf(b.sourceInterval)
-    )
-    let changed = false
-    ordered.forEach((b, index) => {
-      if (b.lane !== index) {
-        b.lane = index
-        changed = true
+    // Drop each store when nobody else on the wall reads that exact source series.
+    for (const [interval] of b.stores) {
+      const key = storeKeyFor(b, interval)
+      let used = false
+      for (const e of wired.values()) {
+        for (const other of e.bindings.values()) {
+          if (other === b || other.disposed) continue
+          if (other.stores.has(interval) && storeKeyFor(other, interval) === key) used = true
+        }
       }
-    })
-    return changed
+      if (!used) dropStore(key)
+    }
+    b.stores.clear()
   }
+
+  const signatureOf = (chartPaneId: string, vendor: string, ticker: string, chartInterval: string): string =>
+    JSON.stringify([chartPaneId, vendor, ticker, chartInterval])
 
   const reconcile = (entry: WiredPane): void => {
     let indicators: Indicator[]
@@ -225,35 +256,26 @@ export function createMtfController(): MtfController {
     const fresh: Binding[] = []
     for (const ind of indicators) {
       seen.add(ind.id)
-      const sig = signatureOf(ind, vendor, symbol.ticker, chartInterval)
+      const sig = signatureOf(ind.paneId, vendor, symbol.ticker, chartInterval)
       const existing = entry.bindings.get(ind.id)
       if (existing && existing.signature === sig) continue
       if (existing) {
         dispose(existing)
         entry.bindings.delete(ind.id)
       }
-      const sourceInterval = parseTemplateName(ind.name)
-      if (!sourceInterval) continue
-      // Keyed by the SOURCE timeframe only: what is being read is the 1D votes, whatever
-      // interval the chart in front of them happens to be on.
-      const storeKey = `${MTF_GENERATION}|${vendor}:${symbol.ticker}|${sourceInterval}`
       const b: Binding = {
         indicatorId: ind.id,
-        name: ind.name,
         chartPaneId: ind.paneId,
-        sourceInterval,
         vendor,
         ticker: symbol.ticker,
         chartInterval,
         signature: sig,
-        storeKey,
-        store: storeFor(storeKey),
+        stores: new Map(),
         inFlight: new Set(),
         disposed: false,
-        lane: 0,
         lastAppliedRev: -1,
         lastShortName: '',
-        lastLane: -1
+        lastConfigRev: -1
       }
       entry.bindings.set(ind.id, b)
       fresh.push(b)
@@ -264,10 +286,6 @@ export function createMtfController(): MtfController {
         entry.bindings.delete(id)
       }
     }
-    // Untick one of three overlays and the two that remain move up a lane, so every
-    // binding is re-applied when the assignment shifts, not just the new ones.
-    const lanesChanged = assignLanes(entry)
-    if (lanesChanged) for (const b of entry.bindings.values()) apply(entry, b)
     for (const b of fresh) {
       apply(entry, b)
       void ensureCoverage(entry, b)
@@ -314,7 +332,53 @@ export function createMtfController(): MtfController {
     wired.delete(id)
   }
 
-  // Debug hook, mirroring window.__wdArev: what each pane's MTF overlays currently hold --
+  /** Re-apply every binding, and fetch for any timeframe newly switched on. */
+  const settingsChanged = (next: MtfConfig): void => {
+    config = next
+    configRev++
+    saveMtfConfig(next)
+    for (const entry of wired.values()) {
+      for (const b of entry.bindings.values()) {
+        apply(entry, b)
+        void ensureCoverage(entry, b)
+      }
+    }
+  }
+
+  const openPanel = (paneId: string): boolean => {
+    const entry = wired.get(paneId)
+    if (!entry) return false
+    // The gear is drawn on the chart's canvas, not in the DOM, so there is no element to
+    // anchor to. The chart's own container is the next best thing: the panel opens under
+    // its top-left, which is where the legend the gear sits in is drawn.
+    let anchor: HTMLElement | null = null
+    try {
+      anchor = entry.chart.getDom() as HTMLElement | null
+    } catch {
+      anchor = null
+    }
+    if (!anchor) return false
+    panel?.close()
+    panel = openSettingsPanel<MtfConfig>({
+      anchor,
+      title: 'AREV21 multi-timeframe',
+      // The overlay's own on/off is the indicator being on the pane at all — it is removed
+      // from the picker or the legend's close icon, not from here — so the framework's
+      // enable row is pinned on and does nothing.
+      enabled: true,
+      onToggleEnabled: () => {},
+      fields: MTF_FIELDS,
+      config,
+      defaults: MTF_DEFAULTS,
+      onChange: settingsChanged,
+      onClose: () => {
+        panel = null
+      }
+    })
+    return true
+  }
+
+  // Debug hook, mirroring window.__wdArev: what each pane's overlay currently holds --
   // read-only by convention, never used by the app itself.
   if (typeof window !== 'undefined') {
     window.__wdMtf = {
@@ -322,17 +386,18 @@ export function createMtfController(): MtfController {
         [...wired.values()].flatMap((entry) =>
           [...entry.bindings.values()].map((b) => ({
             pane: entry.pane.id,
-            name: b.name,
-            source: b.sourceInterval,
             chart: b.chartInterval,
-            lane: b.lane,
-            storeKey: b.storeKey,
-            votes: b.store.values.size,
-            gridBars: b.store.grid().length,
-            phase: b.store.phase,
-            error: b.store.error
+            enabled: enabledIntervals(config),
+            drawn: drawable(b),
+            stores: Object.fromEntries(
+              [...b.stores].map(([interval, store]) => [
+                interval,
+                { votes: store.values.size, gridBars: store.grid().length, phase: store.phase, error: store.error }
+              ])
+            )
           }))
-        )
+        ),
+      config: () => config
     }
   }
 
@@ -340,18 +405,26 @@ export function createMtfController(): MtfController {
     sync(panes: ChartProPane[]): void {
       const live = new Map(panes.map((p) => [p.id, p]))
       for (const id of [...wired.keys()]) if (!live.has(id)) unwire(id)
+      if (live.size === 0) {
+        panel?.close()
+        panel = null
+      }
       for (const [id, p] of live) {
         const existing = wired.get(id)
         if (existing && existing.chart === p.getChart()) continue
         if (existing) unwire(id)
         wire(p)
       }
+    },
+    handleSettings({ indicatorName, paneId }): boolean {
+      if (!isMtfIndicator(indicatorName)) return false
+      return openPanel(paneId)
     }
   }
 }
 
 declare global {
   interface Window {
-    __wdMtf?: { debug: () => unknown[] }
+    __wdMtf?: { debug: () => unknown[]; config: () => unknown }
   }
 }

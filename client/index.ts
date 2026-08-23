@@ -318,6 +318,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     subIndicators: ['VOL'],
     indicatorGroups: [...indicatorGroups, ...arevGroups, ...krevGroups, ...mtfGroups],
     indicatorParamsValidator,
+    // The AREV21 multi-timeframe overlay owns its own settings: one indicator whose
+    // settings are a colour and two sizes PER TIMEFRAME, which the built-in dialog (a flat
+    // numeric calcParams array) cannot express. Every other indicator is untouched -- the
+    // handler answers false and the numeric dialog opens as before.
+    indicatorSettingsHandler: mtfController.handleSettings,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
     // symbol+interval sharing one would clobber each other's stream subscription.
