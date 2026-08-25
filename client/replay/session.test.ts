@@ -148,16 +148,41 @@ function make(opts: { base?: string; cursor?: number; hits?: SignalHit[]; stored
 }
 
 describe('ReplayTradingSession', () => {
-  test('a step walks one base bar and quotes from its close', async () => {
+  test('a step with nothing working SEEKS: no bars walked, the quote still lands', async () => {
     const { session, advanced } = make()
     const start = ny('2024-03-04 09:00')
     const r = await session.step()
     expect(r?.reason).toBe('target')
     expect(session.cursor).toBe(start + H)
-    expect(r?.bars.map((b) => b.open)).toEqual([start])
+    // Nothing rests and nothing is protected, so no bar could have changed the account.
+    expect(r?.walked).toBe(false)
+    expect(r?.bars).toEqual([])
+    // The quote is still the last base bar closing at the cursor -- the ticket prices right.
     expect(session.snapshot.quotes[SYM].time).toBe(start + H)
     expect(session.snapshot.quotes[SYM].bid).toBeCloseTo(1.1 + 59 * 0.0001, 9)
     expect(advanced).toEqual([{ from: start, to: start + H, reason: 'target' }])
+  })
+
+  test('a step with something working WALKS every base bar', async () => {
+    const { session } = make()
+    const start = ny('2024-03-04 09:00')
+    await session.step()
+    // A limit far below: it rests, so the walk must happen even though it cannot fill here.
+    await session.placeOrder({ symbol: SYM, side: 'buy', type: 'limit', units: 1000, price: 1.05 })
+    const r = await session.step()
+    expect(r?.walked).toBe(true)
+    expect(r?.bars.length).toBe(1) // the harness's base is 1h
+    expect(r?.bars[0].open).toBe(start + H)
+    expect(session.cursor).toBe(start + 2 * H)
+    // An open trade with no protection cannot fill either -- back to seeking.
+    await session.cancelOrder(session.snapshot.orders[0].id)
+    await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000 })
+    const r2 = await session.step()
+    expect(r2?.walked).toBe(false)
+    // ...but give the trade a stop loss and it walks again.
+    await session.modifyTrade(session.snapshot.trades[0].id, { stopLoss: 1.05 })
+    const r3 = await session.step()
+    expect(r3?.walked).toBe(true)
   })
 
   test('an armed signal before the target stops the advance at its effective instant', async () => {
@@ -168,7 +193,7 @@ describe('ReplayTradingSession', () => {
     expect(r?.reason).toBe('signal')
     expect(r?.signal?.ref).toBe('arev:arev21:long')
     expect(session.cursor).toBe(start + 3 * H)
-    expect(r?.bars.length).toBe(3)
+    expect(r?.walked).toBe(false)
     // Next signal from here: none armed ahead -> the end of the data.
     const n = await session.nextSignal()
     expect(n?.reason).toBe('end')

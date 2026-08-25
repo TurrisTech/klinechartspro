@@ -144,7 +144,11 @@ function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogue
     case 'end':
       return 'End of data'
     default:
-      return `Advanced ${result.bars.length} bar${result.bars.length === 1 ? '' : 's'}`
+      // A seek (nothing could fill) consumed no bars by design -- say so rather than
+      // reporting "0 bars", which reads as a broken step.
+      return result.walked
+        ? `Advanced ${result.bars.length} bar${result.bars.length === 1 ? '' : 's'}`
+        : 'Jumped — nothing working'
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimOrder, SimTrade } from '../trading/api'
-import { hasWorking, intersectsWorking, planAdvance, targetOf } from './clock'
+import { canFill, intersectsWorking, planAdvance, targetOf } from './clock'
 import { fromWall } from './timeframes'
 
 function ny(text: string): number {
@@ -86,7 +86,7 @@ describe('intersectsWorking', () => {
   const band = { bidLow: 1.099, bidHigh: 1.101, askLow: 1.0992, askHigh: 1.1012 }
   const sym = 'oanda:EURUSD'
   test('nothing working: no descent', () => {
-    expect(hasWorking([], [], sym)).toBe(false)
+    expect(canFill([], [], sym)).toBe(false)
     expect(intersectsWorking(band, [], [], sym)).toBe(false)
   })
   test('a buy limit is tested against the ask band', () => {
@@ -109,6 +109,27 @@ describe('intersectsWorking', () => {
     expect(intersectsWorking(band, [order({ symbol: 'oanda:GBPUSD', price: 1.1 })], [], sym)).toBe(false)
     expect(intersectsWorking(band, [order({ status: 'filled', price: 1.1 })], [], sym)).toBe(false)
     expect(intersectsWorking(band, [], [trade({ stopLoss: 1.1, closedAt: 1 })], sym)).toBe(false)
-    expect(hasWorking([order({ status: 'cancelled' })], [trade({ closedAt: 1 })], sym)).toBe(false)
+    expect(canFill([order({ status: 'cancelled' })], [trade({ closedAt: 1 })], sym)).toBe(false)
+  })
+})
+
+describe('canFill -- what makes an advance walk instead of seek', () => {
+  const sym = 'oanda:EURUSD'
+  test('a resting limit or stop can fill', () => {
+    expect(canFill([order({ type: 'limit', price: 1.1 })], [], sym)).toBe(true)
+    expect(canFill([order({ type: 'stop', price: 1.1 })], [], sym)).toBe(true)
+  })
+  test('a protected open trade can close', () => {
+    expect(canFill([], [trade({ stopLoss: 1.09 })], sym)).toBe(true)
+    expect(canFill([], [trade({ takeProfit: 1.11 })], sym)).toBe(true)
+  })
+  test('an UNPROTECTED open trade cannot -- no bar can change the account', () => {
+    expect(canFill([], [trade({ stopLoss: null, takeProfit: null })], sym)).toBe(false)
+  })
+  test('filled/cancelled orders, closed trades and other symbols cannot', () => {
+    expect(canFill([order({ status: 'filled', price: 1.1 })], [], sym)).toBe(false)
+    expect(canFill([order({ status: 'cancelled', price: 1.1 })], [], sym)).toBe(false)
+    expect(canFill([], [trade({ stopLoss: 1.09, closedAt: 5 })], sym)).toBe(false)
+    expect(canFill([order({ symbol: 'oanda:GBPUSD', price: 1.1 })], [trade({ symbol: 'oanda:GBPUSD', stopLoss: 1 })], sym)).toBe(false)
   })
 })

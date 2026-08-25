@@ -31,8 +31,12 @@ A replay has a **cursor**. `config.ts`'s `setReadClock(cursor)` makes `apiUrl` a
 `asof=<cursor>` to *every* read the client makes — bars, indicator values, plugin points,
 levels, signals — in one place. The server (`services/asof.py`) answers only what had closed
 by then, plus the forming bar rebuilt from finer stored rows. After a step, `index.ts` moves
-the clock, pushes bars, then `pluginHost.invalidateFrom(...)` / `levelsController.invalidate()`
-so every store forgets coverage that was fetched under the old clock.
+the clock, pushes bars, then `pluginHost.invalidateFrom(...)` so every store forgets coverage
+that was fetched under the old clock. **Levels are refetched only when the cursor crosses a
+daily boundary**: they are computed on 1W/1M, so one can only appear or be spent at a 17:00
+market-day close. Invalidating them every step cost three slow `/levels` reads per 15-minute
+step, which saturated the browser's six-connection budget and starved the panes' own history
+loads.
 
 ## The base timeframe
 
@@ -45,8 +49,15 @@ floored to the coarsest stored interval dividing it (`defaultBase`): 3m+5m → 1
 
 `advanceBy(request)`: plan the target on the boundary rules (`advanceTarget`, never a
 timedelta), ask the signal book for armed occurrences in `(cursor, target]`, stop at the
-earliest of those (**an intervening signal wins**), else the target; walk base bars from the
-cache, feeding each to the engine — or, when a candle's band intersects a working order or
+earliest of those (**an intervening signal wins**), else the target; then **walk or seek**.
+
+**Walk vs seek.** `canFill` (clock.ts) asks whether any bar could produce an event — a
+resting limit/stop, or an open trade carrying a stop loss or take profit. When it is false
+the account cannot change however the price moves, so the advance **seeks**: the cursor lands
+on the same instant, `quoteAt` takes the closing quote there, and `AdvanceResult.walked` is
+false. (A months-long "next signal" jump used to feed ~10⁵ bars to the engine for nothing —
+measured at 5s per 20 market days at a 1m base.) When it is true the advance **walks** base
+bars from the cache, feeding each to the engine — or, when a candle's band intersects a working order or
 an open trade's stop/target, the finer stored bars inside it instead (recursively; a per-span
 refinement that never lowers the base). "Pause on fill" stops at the filling bar. `nextSignal`
 is an advance to the end of the data.

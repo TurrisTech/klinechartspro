@@ -78,8 +78,21 @@ export function intersectsWorking(band: Band, orders: readonly SimOrder[], trade
   return false
 }
 
-/** Whether anything is working on `symbol` at all -- when nothing is, no candle needs
- * refining and the walk consumes base bars whole. */
-export function hasWorking(orders: readonly SimOrder[], trades: readonly SimTrade[], symbol: string): boolean {
-  return orders.some((o) => o.symbol === symbol && o.status === 'pending') || trades.some((t) => t.symbol === symbol && t.closedAt === null)
+/** Whether any sequence of bars could produce an event: a pending order (one that rests is
+ * always a limit or a stop -- a market order fills on submission), or an open trade carrying
+ * a stop loss or a take profit.
+ *
+ * False means the account cannot change however the price moves, which is what lets an
+ * advance SEEK instead of walking (session.ts). The walk exists so that orders resting in
+ * the middle of a jump fill; when nothing rests and nothing is protected there is nothing to
+ * fill, and feeding tens of thousands of bars to the engine only costs time. It is also the
+ * right test for the refinement rule: `intersectsWorking` looks at exactly these. */
+export function canFill(orders: readonly SimOrder[], trades: readonly SimTrade[], symbol: string): boolean {
+  for (const o of orders) {
+    if (o.symbol === symbol && o.status === 'pending' && o.price !== null) return true
+  }
+  for (const t of trades) {
+    if (t.symbol === symbol && t.closedAt === null && (t.stopLoss !== null || t.takeProfit !== null)) return true
+  }
+  return false
 }
