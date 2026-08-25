@@ -1,6 +1,6 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
-import { KREV_GENERATION, type KrevPoint, type KrevSide } from './api'
+import { KREV_GENERATION, type KrevPoint, type KrevSide, krevSignal } from './api'
 
 /** A bar's votes by side: a top and a bottom candidate can print on the same bar. */
 export type BarPoints = Partial<Record<KrevSide, KrevPoint>>
@@ -233,7 +233,7 @@ export function registerKrevIndicators(): IndicatorGroup[] {
             const color = top ? TOP_COLOR : BOTTOM_COLOR
             const y = yAxis.convertToPixel(point.p)
             const fill = fillOf(point)
-            if (point.signal) {
+            if (krevSignal(point)) {
               triangle(ctx, x, y, size, color, top, fill, 1)
               label(ctx, x + size + 3, y, point.p.toFixed(2), color)
             } else {

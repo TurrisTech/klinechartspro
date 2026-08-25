@@ -1,11 +1,13 @@
 import { hasFeature } from '../capabilities'
 import { apiGet, apiUrl, OhlcvApiError } from '../config'
-import type { Page, PointsRequest } from './types'
+import type { Page, PointsRequest, SignalCatalogueEntry, SignalPoint, SignalSpec, SignalsRequest } from './types'
 
 // The unified plugin wire (wdashboard_server/plugins/host.py):
 //
 //   GET /plugins                          the catalogue
 //   GET /plugins/{id}/values?symbol&resolution&from&to&limit[&variant][&params]
+//   GET /plugins/signals                  every published signal label, with its ref
+//   GET /plugins/{id}/signals?...[&signal]  only the labelled points, each with `effective`
 //
 // with the `{ s: 'ok' | 'no_data' | 'replaying', points, ... }` envelope every values route
 // on this server shares. A server from before the host (no `plugins` feature) is asked on
@@ -20,6 +22,8 @@ export interface PluginCatalogueEntry {
   description: string
   variants: string[]
   available: boolean
+  /** The labels this plugin publishes; empty for a continuous series. */
+  signals?: SignalSpec[]
   [extra: string]: unknown
 }
 
@@ -38,6 +42,60 @@ export function loadPluginCatalogue(): Promise<PluginCatalogue> {
     })
   }
   return catalogue
+}
+
+let signalCatalogue: Promise<SignalCatalogueEntry[]> | null = null
+
+/** `GET /plugins/signals`, once per page; empty on a server without the feature. */
+export function loadSignalCatalogue(): Promise<SignalCatalogueEntry[]> {
+  if (!signalCatalogue) {
+    signalCatalogue = hasFeature('plugins.signals')
+      ? apiGet<{ signals: SignalCatalogueEntry[] }>('/plugins/signals')
+          .then((r) => r.signals)
+          .catch((err) => {
+            signalCatalogue = null
+            throw err
+          })
+      : Promise.resolve([])
+  }
+  return signalCatalogue
+}
+
+/** `plugin:variant:id` -- the server's `signal_ref`; the variant part empty when the
+ * plugin has none, the id part empty for "every label". */
+export function signalRef(plugin: string, variant: string | null | undefined, id = ''): string {
+  return `${plugin}:${variant ?? ''}:${id}`
+}
+
+export function parseSignalRef(ref: string): { plugin: string; variant: string | null; id: string } {
+  const parts = ref.split(':')
+  if (parts.length !== 3 || !parts[0]) throw new Error(`not a signal ref: ${ref} (want plugin:variant:id)`)
+  return { plugin: parts[0], variant: parts[1] || null, id: parts[2] }
+}
+
+export function signalsUrl(request: SignalsRequest): URL {
+  const { plugin, variant, id } = parseSignalRef(request.ref)
+  return apiUrl(`/plugins/${plugin}/signals`, {
+    symbol: request.vendorSymbol,
+    resolution: request.resolution,
+    from: request.from,
+    to: request.to,
+    limit: request.limit,
+    variant: variant ?? undefined,
+    signal: id || undefined,
+    params: request.params ? JSON.stringify(request.params) : undefined
+  })
+}
+
+/** The facilities' `signals.points`: a page of one plugin's labelled points. The page
+ * continues from the server's `nextFrom` (the underlying read is what is paged, so a page
+ * can hold no signal and still not be the end), not from its last point. */
+export async function fetchSignals<P extends { date: number }>(request: SignalsRequest): Promise<Page<SignalPoint<P>>> {
+  if (!hasFeature('plugins.signals')) return { points: [], nextFrom: null }
+  const envelope = await fetchEnvelope<SignalPoint<P>>(signalsUrl(request))
+  const page = toPage(envelope, Number.POSITIVE_INFINITY)
+  const nextFrom = envelope.s === 'replaying' ? null : typeof envelope.nextFrom === 'number' ? envelope.nextFrom : null
+  return { ...page, nextFrom }
 }
 
 export type PointsEnvelope<P> =

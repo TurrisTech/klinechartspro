@@ -25,13 +25,21 @@ export interface KrevPoint {
   extreme: number
   close: number
   atr: number
-  /** The server's verdict: `p` at or above its threshold, off a full window. */
-  signal: boolean
+  /** The server's PUBLISHED label: the `side` (`'top'` / `'bottom'`) where `p` is at or
+   * above its threshold off a full window, null elsewhere. A server from before
+   * `plugins.signals` sends a boolean -- read it through `krevSignal`. */
+  signal: KrevSide | null | boolean
   /** Null while the candidate is still in play. */
   outcome: KrevOutcome | null
   resolvedAt: number | null
   /** The furthest favourable excursion before resolution, in ATRs. */
   excursion: number | null
+}
+
+export function krevSignal(point: Pick<KrevPoint, 'signal' | 'side'>): KrevSide | null {
+  const s = point.signal
+  if (s === 'top' || s === 'bottom') return s
+  return s === true ? point.side : null
 }
 
 export type KrevValuesResult =

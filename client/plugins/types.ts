@@ -158,6 +158,49 @@ export interface PluginFacilities {
   requestPersist(): void
   /** The server's per-request values cap. */
   maxValuesPerRequest: number
+  /** Published signals: what every mounted plugin labels, and one plugin's labelled
+   * points -- how a plugin (or a script) consumes another's signals without re-deriving
+   * them. Empty / `no_data` on a server without the `plugins.signals` feature. */
+  signals: {
+    catalogue(): Promise<SignalCatalogueEntry[]>
+    points<P extends { date: number }>(request: SignalsRequest): Promise<Page<SignalPoint<P>>>
+  }
+}
+
+/** One label a plugin publishes (the server's `signal()` row). `id` is what a point's
+ * `signal` field carries; `side` is which way it argues, or null for an undirected event. */
+export interface SignalSpec {
+  id: string
+  label: string
+  side: 'long' | 'short' | null
+  description: string
+}
+
+/** One row of `GET /plugins/signals`: a label under its plugin and variant, with the
+ * `ref` (`plugin:variant:id`, e.g. `arev:arev21:long`) a consumer names it by. */
+export interface SignalCatalogueEntry extends SignalSpec {
+  plugin: string
+  title: string
+  variant: string | null
+  available: boolean
+  ref: string
+}
+
+/** A point the server labelled, as `GET /plugins/{id}/signals` serves it: the plugin's
+ * point with its label id and the ABSOLUTE instant (epoch ms, not a wire date) at which
+ * the signal became knowable -- its bar's close. Any multi-timeframe consumer keys off
+ * `effective`, never off `date` (CLAUDE.md, "Effective timestamps"). */
+export type SignalPoint<P = Record<string, unknown>> = P & { date: number; signal: string; effective: number }
+
+export interface SignalsRequest {
+  /** A `SignalCatalogueEntry.ref`; an empty id (`arev:arev21:`) is every label. */
+  ref: string
+  vendorSymbol: string
+  resolution: string
+  from: number
+  to: number
+  limit: number
+  params?: Record<string, unknown>
 }
 
 export interface PointsRequest {

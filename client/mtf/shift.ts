@@ -1,6 +1,6 @@
 import type { KLineData } from 'klinecharts'
 import { resolutionDurationMs, resolutionToPeriod } from '../periods'
-import type { ArevPoint } from '../arev/api'
+import { arevSignal, type ArevPoint } from '../arev/api'
 
 // Where a higher-timeframe vote belongs on a lower-timeframe chart.
 //
@@ -78,8 +78,7 @@ export interface ShiftedSignal {
   knownAt: number
   /** P(price rises to the next sample), as the server computed it. */
   p: number
-  /** `p > 0.5`: the vote argues up. Signals are never exactly 0.5 — a signal needs
-   * `|p - 0.5| >= 0.075` — so this has no degenerate case to resolve. */
+  /** The server's label: `'long'` argues up. Read off the published label, not off `p`. */
   up: boolean
 }
 
@@ -136,7 +135,8 @@ export function shiftSignals(input: ShiftInput): Map<number, ShiftedSignal[]> {
   const chartAbs = chartBars.map((bar) => toAbsolute(chartInterval, bar.timestamp))
 
   for (const point of points) {
-    if (!point.signal) continue
+    const label = arevSignal(point)
+    if (!label) continue
     const castAbs = toAbsolute(sourceInterval, point.date)
     // The successor bar: the first grid open strictly after the one the vote was cast on.
     // Strictly, so a vote is never placed back on its own bar.
@@ -165,7 +165,7 @@ export function shiftSignals(input: ShiftInput): Map<number, ShiftedSignal[]> {
     // dropping the last bar outright.
     if (at === chartBars.length - 1 && knownAt >= chartAbs[at] + resolutionDurationMs(chartInterval)) continue
     const key = chartBars[at].timestamp
-    const signal: ShiftedSignal = { sourceDate: point.date, knownAt, p: point.p, up: point.p > 0.5 }
+    const signal: ShiftedSignal = { sourceDate: point.date, knownAt, p: point.p, up: label === 'long' }
     const existing = placed.get(key)
     if (existing) existing.push(signal)
     else placed.set(key, [signal])
