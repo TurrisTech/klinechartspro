@@ -232,6 +232,9 @@ export interface LayerController {
    * straight through as `ChartProOptions.onPanesChange` — built before the chart exists so
    * its `sync` can be supplied at construction time. */
   sync(panes: ChartProPane[]): void
+  /** Forget every pane's fetched data and redraw: the read clock moved (a replay step), so
+   * what the server answers for the same window has changed. */
+  invalidate(): void
 }
 
 // What one pane has fetched so far: `data` is everything the layer returned for `window`,
@@ -440,6 +443,13 @@ export function createLayerController<TDatum, TConfig extends object>(
     }
   }
 
+  const invalidate = (): void => {
+    for (const entry of wired.values()) {
+      entry.cache = null
+      void redraw(entry)
+    }
+  }
+
   const onToggleEnabled = (next: boolean): void => {
     enabled = next
     applyToggleState()
@@ -484,6 +494,7 @@ export function createLayerController<TDatum, TConfig extends object>(
   let detachButton: (() => void) | null = null
 
   return {
+    invalidate,
     attach(chartPro: KLineChartPro): void {
       detachButton?.()
       detachButton = attachToSlot(chartPro, 'toolbar', layerButton)

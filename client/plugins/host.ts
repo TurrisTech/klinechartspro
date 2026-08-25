@@ -1,6 +1,6 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck } from '../../src'
-import { dropStore, storeFor, WindowStore } from './store'
+import { dropStore, forgetAllAfter, storeFor, WindowStore } from './store'
 import type {
   BindContext,
   BindingSpec,
@@ -74,6 +74,9 @@ export interface PluginHost {
   readonly validateParams: ((request: ValidateRequest) => Promise<IndicatorParamsCheck>) | null
   /** Per-plugin, per-pane document state -- what the wall document persists. */
   paneState(): Record<string, Record<number, unknown>>
+  /** The read clock moved forward past `from` (a replay step): forget every store's
+   * coverage from there and re-cover every binding. */
+  invalidateFrom(from: number): void
   teardown(): void
 }
 
@@ -456,6 +459,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const out: Record<string, Record<number, unknown>> = {}
       for (const p of plugins) if (p.paneState) out[p.id] = p.paneState.snapshot()
       return out
+    },
+    invalidateFrom(from: number): void {
+      // The read clock moved (a replay step): values at or after `from` that were not
+      // knowable under the old clock may be now. Forget that coverage in every store and
+      // re-cover every binding, which refetches exactly the forgotten windows.
+      forgetAllAfter(from)
+      for (const entry of wired.values()) coverAll(entry)
     },
     teardown(): void {
       host.sync([])

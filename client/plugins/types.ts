@@ -50,6 +50,9 @@ export interface SourceStore<P = unknown> {
   ingest(points: P[], window: Range): void
   /** The parts of `window` not yet fetched. */
   missing(window: Range): Range[]
+  /** Forget coverage at or after `from` (the replay's cursor moved: values that were not
+   * knowable then may be now). Optional; a store without it is refetched whole. */
+  forgetAfter?(from: number): void
   setPhase(phase: Phase, progress?: number | null, error?: string | null): void
 }
 
@@ -135,13 +138,17 @@ export interface ValidateRequest {
   period: Period
 }
 
+/** The stream surface a plugin may use: the page's live `StreamClient`, or an inert one on
+ * a replay wall (nothing live may reach a replay's stores). */
+export type PluginStream = Pick<typeof stream, 'subscribe' | 'unsubscribe' | 'subscribeIndicator' | 'unsubscribeIndicator' | 'onStatus'>
+
 /** What the client gives every plugin: the app's shared services, generalised. */
 export interface PluginFacilities {
   api: {
-    get<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T>
-    url(path: string, params?: Record<string, string | number | undefined>): URL
+    get<T>(path: string, params?: Record<string, string | number | null | undefined>): Promise<T>
+    url(path: string, params?: Record<string, string | number | null | undefined>): URL
   }
-  stream: typeof stream
+  stream: PluginStream
   hasFeature(feature: Feature): boolean
   /** The unified server wire: `GET /plugins/{id}/values`, or the plugin's legacy path on a
    * server without the plugin host. */
@@ -201,6 +208,9 @@ export interface SignalsRequest {
   to: number
   limit: number
   params?: Record<string, unknown>
+  /** The read clock for this request; `null` reads past it on purpose (the replay's own
+   * signal look-ahead). Absent: the page-wide clock (config.ts) applies. */
+  asof?: number | null
 }
 
 export interface PointsRequest {

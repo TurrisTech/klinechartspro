@@ -32,6 +32,8 @@ export interface PanelContext {
   instrumentFor: (key: string) => InstrumentInfo
   /** Hide the panel (the header's close button; mirrors the rail toggle). */
   onClose: () => void
+  /** The header title; defaults by mode ('Paper account' / 'Replay account'). */
+  title?: string
 }
 
 type Tab = 'positions' | 'orders' | 'history'
@@ -70,6 +72,12 @@ export class TradingPanel {
     this.render()
   }
 
+  /** Switch to a tab (the replay scrolls a stop's event into view). */
+  showTab(tab: Tab): void {
+    this.tab = tab
+    this.render()
+  }
+
   /** Called when the active pane's instrument changes. */
   syncInstrument(): void {
     this.ticket.syncInstrument()
@@ -79,10 +87,10 @@ export class TradingPanel {
   private buildHeader(): HTMLElement {
     const header = el('div', 'wd-trade-panel-header')
     const title = el('span', 'wd-trade-panel-title')
-    title.textContent = 'Paper account'
+    title.textContent = this.ctx.title ?? (this.session.mode === 'replay' ? 'Replay account' : 'Paper account')
     const spacer = el('span', 'wd-trade-panel-spacer')
     const close = button('kc-icon-button wd-trade-close-panel', '×', () => this.ctx.onClose())
-    close.title = 'Hide the paper panel'
+    close.title = 'Hide the trading panel'
     header.append(title, spacer, close)
     return header
   }
@@ -105,7 +113,7 @@ export class TradingPanel {
     const s = this.session.snapshot
     if (!this.session.ready) {
       this.accountStrip.innerHTML = ''
-      this.accountStrip.appendChild(emptyRow('Connecting to your paper account…'))
+      this.accountStrip.appendChild(emptyRow(`Connecting to your ${this.session.mode ?? 'paper'} account…`))
       this.ticket.element.style.display = 'none'
       this.tabsBar.style.display = 'none'
       this.tablesHost.innerHTML = ''

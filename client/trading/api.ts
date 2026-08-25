@@ -58,7 +58,7 @@ export interface SimAccount {
 
 export interface SimSnapshot {
   id: string
-  mode: 'paper'
+  mode: 'paper' | 'replay'
   name: string
   createdAt: number
   rev: number
@@ -67,6 +67,8 @@ export interface SimSnapshot {
   orders: SimOrder[]
   trades: SimTrade[]
   symbols: string[]
+  /** A replay session's client-owned state document (`PUT /sim/sessions/{id}/state`). */
+  state?: unknown
 }
 
 export interface SimEvent {
@@ -141,8 +143,10 @@ async function call<T>(
 
 export const simApi = {
   list: () => call<{ sessions: SimSnapshot[] }>('GET', '/sim/sessions').then((r) => r.sessions),
-  create: (body: { mode: 'paper'; name?: string; balance?: number; currency?: string; symbol?: string }) =>
+  create: (body: { mode: 'paper' | 'replay'; name?: string; balance?: number; currency?: string; symbol?: string }) =>
     call<SimAnswer>('POST', '/sim/sessions', body),
+  putState: (id: string, rev: number, state: unknown) =>
+    call<SimAnswer>('PUT', `/sim/sessions/${id}/state`, { rev, state }),
   get: (id: string, symbol?: string) =>
     call<SimAnswer>(
       'GET',

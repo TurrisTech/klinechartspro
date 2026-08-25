@@ -83,7 +83,8 @@ export function signalsUrl(request: SignalsRequest): URL {
     limit: request.limit,
     variant: variant ?? undefined,
     signal: id || undefined,
-    params: request.params ? JSON.stringify(request.params) : undefined
+    params: request.params ? JSON.stringify(request.params) : undefined,
+    ...(request.asof !== undefined ? { asof: request.asof } : {})
   })
 }
 

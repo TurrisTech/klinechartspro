@@ -45,19 +45,37 @@ export class OhlcvApiError extends Error {
   }
 }
 
-export function apiUrl(path: string, params?: Record<string, string | number | undefined>): URL {
+// The READ CLOCK. When a bar replay is running, every read the chart makes must be clamped
+// to the replay's cursor -- bars, indicator values, plugin points, levels, signals -- and the
+// server's `asof` query parameter (wdashboard_server/services/asof.py) is what clamps it.
+// It is added HERE, in the one URL builder every read goes through, never at a call site:
+// a new read added anywhere in the client is clamped by construction. A caller that must
+// read past the clock on purpose (the replay's own bar caches, which prefetch ahead of the
+// cursor and are hidden from the chart) passes `asof: null` explicitly.
+let readClock: number | null = null
+
+export function setReadClock(ms: number | null): void {
+  readClock = ms
+}
+
+export function getReadClock(): number | null {
+  return readClock
+}
+
+export type QueryParams = Record<string, string | number | null | undefined>
+
+export function apiUrl(path: string, params?: QueryParams): URL {
   const url = new URL(`${DATASOURCE_BASE_URL}${path}`, window.location.href)
-  for (const [key, value] of Object.entries(params ?? {})) {
-    if (value !== undefined) url.searchParams.set(key, String(value))
+  const query: QueryParams = { ...(params ?? {}) }
+  if (!('asof' in query) && readClock !== null) query.asof = readClock
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
   }
   return url
 }
 
 // Every REST read goes through here so error bodies are decoded once, in one place.
-export async function apiGet<T>(
-  path: string,
-  params?: Record<string, string | number | undefined>
-): Promise<T> {
+export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> {
   const url = apiUrl(path, params)
   const response = await fetch(url)
   const body: unknown = await response.json().catch(() => null)
@@ -85,7 +103,8 @@ export async function apiSend<T>(
   path: string,
   options?: { body?: unknown; headers?: Record<string, string> }
 ): Promise<ApiSendResult<T>> {
-  const url = apiUrl(path)
+  // Writes (and the simulator's own routes) are not market-data reads: never clamped.
+  const url = apiUrl(path, { asof: null })
   const response = await fetch(url, {
     method,
     headers: {

@@ -53,6 +53,20 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
     this.ranges = mergeRange(this.ranges, range)
   }
 
+  /** Drop coverage at or after `from`, and the values held there. The replay's cursor
+   * moved forward: a window fetched under the old clock held no values for bars that had
+   * not closed yet, and those bars must be fetched again under the new clock. */
+  forgetAfter(from: number): void {
+    const kept: Range[] = []
+    for (const r of this.ranges) {
+      if (r.to <= from) kept.push(r)
+      else if (r.from < from) kept.push({ from: r.from, to: from })
+    }
+    this.ranges = kept
+    for (const t of [...this.values.keys()]) if (t >= from) this.values.delete(t)
+    this.rev++
+  }
+
   /** The newest timestamp held, or null. */
   latest(): number | null {
     let max: number | null = null
@@ -124,4 +138,9 @@ export function dropStore(key: string): void {
 
 export function liveStores(): ReadonlyMap<string, SourceStore> {
   return stores
+}
+
+/** Every live store forgets its coverage at or after `from` (see `WindowStore.forgetAfter`). */
+export function forgetAllAfter(from: number): void {
+  for (const s of stores.values()) s.forgetAfter?.(from)
 }

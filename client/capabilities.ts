@@ -40,6 +40,9 @@ export type Feature =
   // The /sim/* route set — the paper-trading account (wdashboard-server sim/). The client
   // only shows its "Paper" rail button and mounts the trading panel when advertised.
   | 'sim'
+  // Every read route takes `asof` (wdashboard_server/services/asof.py), the read clock a
+  // bar replay clamps the chart to. With 'sim', gates the "Replay" rail button.
+  | 'asof'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.

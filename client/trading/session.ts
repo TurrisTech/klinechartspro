@@ -21,6 +21,11 @@ import {
 export type SessionListener = (snapshot: SimSnapshot, events: SimEvent[]) => void
 
 export interface TradingSession {
+  /** Which implementation this is. Optional and additive: the panel does not branch on it
+   * except where the modes genuinely differ (a replay has a clock and no polling). */
+  readonly mode?: 'paper' | 'replay'
+  /** A replay's cursor -- the instant it has stepped to. Absent on a paper session (now). */
+  readonly cursor?: number
   /** The current account state. Always a valid snapshot -- a placeholder until the session
    * has loaded (`ready` is false until then). */
   readonly snapshot: SimSnapshot
@@ -60,6 +65,7 @@ const PLACEHOLDER: SimSnapshot = {
  * loss fires), so it is polled: quickly while it has something working, slowly when it is
  * flat, and never while the tab is hidden. */
 export class PaperTradingSession implements TradingSession {
+  readonly mode = 'paper' as const
   snapshot: SimSnapshot = PLACEHOLDER
   private listeners = new Set<SessionListener>()
   private loadPromise: Promise<void> | null = null
