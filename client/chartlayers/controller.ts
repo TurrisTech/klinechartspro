@@ -1,9 +1,11 @@
 import type { Chart } from 'klinecharts'
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { symbolVendor } from '../symbols'
+import { overlaySignature } from './paint'
 import { openSettingsPanel, type SettingsPanelHandle } from './settings'
 import { loadLayerConfig, saveLayerConfig } from './store'
 import type { ChartLayer, LayerContext, LayerWindow } from './types'
+import { contains, missingWindows, PRICE_WINDOW_FRACTION, targetWindow } from './window'
 
 // Generic multi-pane lifecycle for a ChartLayer (types.ts): one shared toolbar button that
 // opens a settings panel (enable/disable is that panel's first row, not a separate click
@@ -24,32 +26,23 @@ const DEFAULT_DEBOUNCE_MS = 400
 // package does not export.
 const CANDLE_PANE_ID = 'candle_pane'
 
-// The server computes over the full price history, so an unbounded query returns bands
-// nowhere near the current price. Every price-anchored layer needs a window around the
-// visible range, not the whole loaded history — kept here rather than per-layer because it
-// is about how much of the chart is on screen, not about what any one layer computes.
-const PRICE_WINDOW_FRACTION = 0.06
-
-// How far past the window it actually needs a fetch reaches, as a fraction of the visible
-// span on each side. Bought once and kept: the next small pan or rescale then lands inside
-// what the pane already holds and repaints without a request. Half a screen in both axes
-// keeps the held rectangle at ~2x the view per axis rather than unbounded, and measuring it
-// against the VISIBLE span rather than the accumulated one means a long session of panning
-// grows the window a screen at a time instead of doubling it per fetch.
-//
-// This bounds WHICH DATA a pane has, and is deliberately not the same number as how far off
-// screen a layer draws what it has (levels/layer.ts's DRAW_MARGIN_SPANS): a level whose life
-// crosses the view was fetched by that crossing, and its line then has to run well past the
-// pane or the drawing's own edge shows up as a wall when the view moves.
-const PREFETCH_FRACTION = 0.5
-
 // How often a pane's price axis is sampled — see startAxisWatch on why sampling, rather
 // than a subscription, is what notices a rescale.
 const AXIS_POLL_MS = 200
 
-// A pane's accumulated data is a snapshot of a server-side computation that keeps running:
-// levels are recomputed as new candles close, so what a pane holds has to expire even while
-// the user stays inside the window it was fetched for.
+// Ceiling on how long the redraw debounce can defer. The debounce is trailing, so a stream
+// of events closer together than DEFAULT_DEBOUNCE_MS never lets it fire — and that is the
+// normal state of a live chart, where every tick raises onVisibleRangeChange (klinecharts
+// re-adjusts the visible range even when the last bar is merely updated) and nudges the
+// autoscaled price axis for the axis watcher to notice. Without a ceiling a pane panned
+// during an active session would sit on the levels it had before the pan until the market
+// went quiet. The redraw itself is cheap when nothing moved (see paint.ts).
+const MAX_DEBOUNCE_MS = 2_000
+
+// Fallback expiry for a layer that declares no `staleAt`: a pane's accumulated data is a
+// snapshot of a server-side computation that keeps running, so it has to expire even while
+// the user stays inside the window it was fetched for. A layer that knows WHEN its data can
+// change says so instead and is not re-fetched on a timer at all — see types.ts.
 const CACHE_TTL_MS = 5 * 60_000
 
 // Puts `element` in one of the library's two slots (src/types.ts ChartPro.getSlot) and
@@ -175,50 +168,6 @@ function windowOf(ctx: LayerContext): LayerWindow {
   return { priceMin: ctx.priceMin, priceMax: ctx.priceMax, from: ctx.from, to: ctx.to }
 }
 
-function contains(outer: LayerWindow, inner: LayerWindow): boolean {
-  return (
-    outer.priceMin <= inner.priceMin &&
-    outer.priceMax >= inner.priceMax &&
-    outer.from <= inner.from &&
-    outer.to >= inner.to
-  )
-}
-
-function union(a: LayerWindow, b: LayerWindow): LayerWindow {
-  return {
-    priceMin: Math.min(a.priceMin, b.priceMin),
-    priceMax: Math.max(a.priceMax, b.priceMax),
-    from: Math.min(a.from, b.from),
-    to: Math.max(a.to, b.to)
-  }
-}
-
-function withPrefetchMargin(target: LayerWindow, visible: LayerWindow): LayerWindow {
-  const pricePad = (visible.priceMax - visible.priceMin) * PREFETCH_FRACTION
-  const timePad = (visible.to - visible.from) * PREFETCH_FRACTION
-  return {
-    priceMin: target.priceMin - pricePad,
-    priceMax: target.priceMax + pricePad,
-    from: target.from - timePad,
-    to: target.to + timePad
-  }
-}
-
-// `target` minus `loaded` as up to four rectangles: the price bands above and below what is
-// held (each spanning target's full time span) plus, within the held band, the time spans
-// before and after it. They tile the difference exactly, so fetching them and merging is
-// equivalent to refetching `target` whole — and the caller only pays for the new ground.
-// Requires `target` to contain `loaded`, which is what withPrefetchMargin(union(...)) gives.
-function missingWindows(loaded: LayerWindow, target: LayerWindow): LayerWindow[] {
-  const windows: LayerWindow[] = []
-  if (target.priceMin < loaded.priceMin) windows.push({ ...target, priceMax: loaded.priceMin })
-  if (target.priceMax > loaded.priceMax) windows.push({ ...target, priceMin: loaded.priceMax })
-  const heldBand = { priceMin: loaded.priceMin, priceMax: loaded.priceMax }
-  if (target.from < loaded.from) windows.push({ ...heldBand, from: target.from, to: loaded.from })
-  if (target.to > loaded.to) windows.push({ ...heldBand, from: loaded.to, to: target.to })
-  return windows
-}
-
 export interface LayerController {
   /** Attaches the layer's single toolbar button once a KLineChartPro instance exists. Call
    * once, right after construction. */
@@ -238,13 +187,17 @@ export interface LayerController {
 }
 
 // What one pane has fetched so far: `data` is everything the layer returned for `window`,
-// which grows as the view moves and is thrown away whenever `key` changes or `fetchedAt`
-// ages out.
+// which grows as the view moves and is thrown away whenever `key` changes or the clock
+// passes `staleAt`.
 interface LayerCache<TDatum> {
   key: string
   data: TDatum[]
   window: LayerWindow
   fetchedAt: number
+  /** When what the server would answer for this window can first differ from what is held.
+   * From the layer's `staleAt` where it declares one — levels can only change when a 1W or
+   * 1M candle closes, which is a fact about the data, not a guess about elapsed time. */
+  staleAt: number
 }
 
 interface WiredPane<TDatum> {
@@ -258,6 +211,12 @@ interface WiredPane<TDatum> {
   /** Bumped per fetch so a redraw that resolves after a newer one started drops its result
    * instead of overwriting a cache built from different state. */
   generation: number
+  /** `overlaySignature` of what is currently on the chart for this layer; `''` means
+   * nothing of ours is. A redraw that would rebuild the identical set is skipped. */
+  painted: string
+  /** When the pending debounce was first scheduled, so a run of events that never stops
+   * long enough for the trailing edge still gets a redraw within MAX_DEBOUNCE_MS. */
+  scheduledAt: number
 }
 
 export function createLayerController<TDatum, TConfig extends object>(
@@ -307,17 +266,26 @@ export function createLayerController<TDatum, TConfig extends object>(
   }
 
   const clearOverlays = (entry: WiredPane<TDatum>): void => {
+    if (entry.painted === '') return
     entry.chart.removeOverlay({ groupId: layer.id })
+    entry.painted = ''
   }
 
+  // Build the overlays, then compare them with what is already drawn and touch the chart
+  // only if they differ (paint.ts). The build is pure JS over what the pane already holds;
+  // the remove/create pair is a full teardown and rebuild of several hundred overlays plus
+  // two chart invalidations, and on a live chart the redraw that reaches here is several
+  // times a second and almost always draws the same lines.
   const paint = (entry: WiredPane<TDatum>, data: TDatum[], ctx: LayerContext): void => {
-    clearOverlays(entry)
-    if (data.length === 0) return
-    const overlays = layer.toOverlays(data, ctx, config).map((overlay) => ({
-      ...overlay,
-      groupId: layer.id
-    }))
+    const overlays =
+      data.length === 0
+        ? []
+        : layer.toOverlays(data, ctx, config).map((overlay) => ({ ...overlay, groupId: layer.id }))
+    const signature = overlaySignature(overlays)
+    if (signature === entry.painted) return
+    entry.chart.removeOverlay({ groupId: layer.id })
     if (overlays.length > 0) entry.chart.createOverlay(overlays)
+    entry.painted = signature
   }
 
   // Adjacent windows share an edge, and a level sitting on one is returned by both, so a
@@ -333,6 +301,11 @@ export function createLayerController<TDatum, TConfig extends object>(
     }
     return merged
   }
+
+  // When data fetched at `fetchedAt` can first be wrong. A layer that knows the answer says
+  // so; one that doesn't gets the timer.
+  const staleAt = (fetchedAt: number): number =>
+    layer.staleAt ? layer.staleAt(fetchedAt) : fetchedAt + CACHE_TTL_MS
 
   const redraw = async (entry: WiredPane<TDatum>): Promise<void> => {
     // Ahead of the enabled check: whether the button is reachable follows the wall's
@@ -352,7 +325,7 @@ export function createLayerController<TDatum, TConfig extends object>(
     const key = layer.cacheKey(ctx, config)
     const needed = windowOf(ctx)
     let held = entry.cache
-    if (held && (held.key !== key || Date.now() - held.fetchedAt > CACHE_TTL_MS)) held = null
+    if (held && (held.key !== key || Date.now() >= held.staleAt)) held = null
 
     // Everything on screen is already in hand: restyle from it, no request. This is the
     // common case while panning and while rescaling the price axis within the band the
@@ -362,7 +335,7 @@ export function createLayerController<TDatum, TConfig extends object>(
       return
     }
 
-    const target = withPrefetchMargin(held ? union(held.window, needed) : needed, needed)
+    const target = targetWindow(held?.window ?? null, needed)
     const requests = held ? missingWindows(held.window, target) : [target]
     const generation = ++entry.generation
     try {
@@ -374,7 +347,8 @@ export function createLayerController<TDatum, TConfig extends object>(
       // Dated by the OLDEST fetch it still contains, not by this one: a pane that keeps
       // extending its window would otherwise renew the whole set on every extension and
       // never expire the part that was fetched first.
-      entry.cache = { key, data, window: target, fetchedAt: held?.fetchedAt ?? Date.now() }
+      const fetchedAt = held?.fetchedAt ?? Date.now()
+      entry.cache = { key, data, window: target, fetchedAt, staleAt: staleAt(fetchedAt) }
       paint(entry, data, ctx)
     } catch (err) {
       console.error(`[chartlayers] ${layer.id} fetch failed for pane ${entry.pane.id}`, err)
@@ -383,11 +357,20 @@ export function createLayerController<TDatum, TConfig extends object>(
 
   const scheduleRedraw = (entry: WiredPane<TDatum>): void => {
     if (!enabled) return
-    if (entry.timer) clearTimeout(entry.timer)
+    const now = Date.now()
+    if (entry.timer === null) entry.scheduledAt = now
+    else clearTimeout(entry.timer)
+    // Trailing debounce, but never deferred past MAX_DEBOUNCE_MS from the first event of
+    // the run: a live chart produces events faster than the debounce window forever, and a
+    // purely trailing one would then never fire at all.
+    const wait = Math.max(
+      0,
+      Math.min(layer.debounceMs ?? DEFAULT_DEBOUNCE_MS, entry.scheduledAt + MAX_DEBOUNCE_MS - now)
+    )
     entry.timer = setTimeout(() => {
       entry.timer = null
       void redraw(entry)
-    }, layer.debounceMs ?? DEFAULT_DEBOUNCE_MS)
+    }, wait)
   }
 
   // Pan and zoom raise onVisibleRangeChange, but rescaling the PRICE axis raises nothing:
@@ -522,7 +505,9 @@ export function createLayerController<TDatum, TConfig extends object>(
           timer: null,
           onRangeChange: () => {},
           axisSignature: '',
-          generation: 0
+          generation: 0,
+          painted: '',
+          scheduledAt: 0
         }
         // Pan, zoom and every data load land here, which covers symbol and period
         // switches too. The price axis has no equivalent — see pollPriceAxes.

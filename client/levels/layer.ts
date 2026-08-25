@@ -3,6 +3,7 @@ import { levelsCoverageFor, hasFeature } from '../capabilities'
 import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
 import { applyEncodings, toLineStyle, type LineAppearance } from '../chartlayers/encoding'
+import { nextSessionAnchor } from '../replay/timeframes'
 import { fetchLevels, type Level } from './api'
 import {
   DEFAULT_LEVELS_CONFIG,
@@ -187,6 +188,22 @@ function requestedIntervals(config: LevelsConfig): string[] | undefined {
     .map(([code]) => code)
 }
 
+// When a fetched level book can FIRST be out of date. Levels are computed on 1W and 1M only
+// (wdashboard-server levels.py: LEVELS_INTERVAL_ALLOWLIST), so a level can only appear, or
+// take another invalidation, or be spent, when a weekly or monthly candle CLOSES — and every
+// one of those closes is at 17:00 on a market day. Between two 17:00s the server is holding
+// the same book (it says so itself now: `/levels` is keyed by the feed's own watermark), so
+// refetching is asking the same question again.
+//
+// The alternative the controller falls back to is a five-minute timer, which on a chart left
+// open through a session meant a full refetch per pane roughly a hundred times a day, each
+// one several hundred KB, to be handed back what the pane already had. Erring one way is
+// deliberate: a Saturday 17:00 is not a candle boundary and expiring there costs one
+// revalidation, while missing a Friday 17:00 would draw last week's levels.
+export function levelsStaleAt(fetchedAt: number): number {
+  return nextSessionAnchor(fetchedAt)
+}
+
 export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
   id: 'levels',
   label: 'Levels',
@@ -212,6 +229,8 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
   datumKey(level) {
     return `${level.interval}|${level.price}|${level.bornAt}`
   },
+
+  staleAt: levelsStaleAt,
 
   fetch(ctx, config, window) {
     return fetchLevels({

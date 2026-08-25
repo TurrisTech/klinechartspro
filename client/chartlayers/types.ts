@@ -51,6 +51,14 @@ export interface ChartLayer<TDatum, TConfig> {
   /** Fetch exactly `window`, which is a sub-window of the view, not necessarily the view. */
   fetch(ctx: LayerContext, config: TConfig, window: LayerWindow): Promise<TDatum[]>
   toOverlays(data: TDatum[], ctx: LayerContext, config: TConfig): OverlayCreate[]
+  /** When data fetched at `fetchedAt` can FIRST differ from what the server would answer
+   * now — an absolute epoch ms. This is a statement about the data, not a cache policy: a
+   * levels book only changes when a 1W or 1M candle closes, so a pane that fetched one at
+   * 09:00 on Tuesday is holding the current answer until 17:00, whatever it does in
+   * between. Omit it and the controller falls back to a flat five-minute timer, which for
+   * levels meant a full refetch per pane twelve times an hour to be handed the same book.
+   */
+  staleAt?(fetchedAt: number): number
   /** Defaults to the controller's own redraw debounce when omitted. */
   debounceMs?: number
 }

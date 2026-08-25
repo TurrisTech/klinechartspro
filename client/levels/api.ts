@@ -1,4 +1,4 @@
-import { apiGet } from '../config'
+import { apiGet, getReadClock } from '../config'
 
 // `GET /levels` — precomputed support/resistance price levels. Mirrors the `Level` model in
 // wdashboard-server's schemas.py.
@@ -29,7 +29,54 @@ export interface FetchLevelsParams {
   includeInvalidated?: boolean
 }
 
-export async function fetchLevels(params: FetchLevelsParams): Promise<Level[]> {
+// Identical requests already in flight, keyed by the query they resolve to. A wall of panes
+// on one symbol is the common case and its panes share a time axis, so a pan, a replay step
+// or a workspace opening lands two, four or six byte-identical `/levels` reads on the server
+// at once — and the browser only has six connections per origin to spend, which the panes'
+// own history loads are competing for. Sharing the promise makes those one request.
+//
+// Only the IN-FLIGHT window is shared: the entry is dropped as soon as the request settles,
+// so this is deduplication, never a cache with a lifetime of its own. Deciding when an
+// answer stops being current belongs to the layer (levels/layer.ts's `staleAt`), and the
+// server's ETag is what makes asking again cheap.
+const inFlight = new Map<string, Promise<Level[]>>()
+
+export function fetchLevels(params: FetchLevelsParams): Promise<Level[]> {
+  const key = JSON.stringify([
+    // The replay's read clock is not a parameter of this call -- `apiUrl` adds it to every
+    // read -- but it decides the answer, so two requests under different clocks are two
+    // requests. A replay step moves the clock and immediately invalidates the layer, which
+    // is exactly the moment an old-clock read could still be in flight.
+    getReadClock(),
+    params.vendor,
+    params.symbol,
+    params.priceMin,
+    params.priceMax,
+    params.dateFrom,
+    params.dateTo,
+    params.intervals ?? null,
+    params.includeInvalidated ?? false
+  ])
+  const running = inFlight.get(key)
+  if (running) return running
+  const request = requestLevels(params)
+  inFlight.set(key, request)
+  // `void` the chained promise: it exists only to clear the entry, and an unhandled
+  // rejection on it would be reported separately from the one the caller already sees.
+  void request.then(
+    () => inFlight.delete(key),
+    () => inFlight.delete(key)
+  )
+  return request
+}
+
+/** How many identical requests are being shared right now. Test seam; also the number to
+ * watch if `/levels` traffic ever looks higher than the pane count explains. */
+export function levelsRequestsInFlight(): number {
+  return inFlight.size
+}
+
+async function requestLevels(params: FetchLevelsParams): Promise<Level[]> {
   const levels = await apiGet<Level[]>('/levels', {
     vendor: params.vendor,
     symbol: params.symbol,

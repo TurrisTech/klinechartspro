@@ -453,6 +453,20 @@ export function intervalStart(code: string, ms: number, tz: string = MARKET_TZ):
   return fromWall(wallStart - past * HOUR, tz)
 }
 
+/** The next instant strictly after `ms` at which the zone's wall clock reads 17:00 -- the
+ * session anchor every daily-and-coarser candle opens and closes on.
+ *
+ * This is the coarsest true statement about when a daily, weekly, monthly or yearly book can
+ * change: every such boundary is a 17:00, so nothing that keys off one can move between two
+ * consecutive returns of this. Not every 17:00 IS a boundary (Saturday's is not), so it errs
+ * towards asking again, never towards missing a change -- which is the direction a cache
+ * validity horizon has to err in. */
+export function nextSessionAnchor(ms: number, tz: string = MARKET_TZ): number {
+  const wall = toWall(ms, tz)
+  const anchor = floorDay(wall) + SESSION_ANCHOR_HOUR * HOUR
+  return fromWall(anchor > wall ? anchor : anchor + DAY, tz)
+}
+
 /** Is the 24/5 FX week open at `ms` on the zone's wall clock? Friday from 17:00, all
  * Saturday and Sunday before 17:00 are closed. */
 export function isMarketOpen(ms: number, tz: string = MARKET_TZ): boolean {
