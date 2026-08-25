@@ -37,6 +37,9 @@ export type Feature =
   // GET /krev/values — krev01 k-NN reversal votes (wdashboard-server services/krev.py).
   // The client only registers its KREV template and picker entry when advertised.
   | 'krev'
+  // The /sim/* route set — the paper-trading account (wdashboard-server sim/). The client
+  // only shows its "Paper" rail button and mounts the trading panel when advertised.
+  | 'sim'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.

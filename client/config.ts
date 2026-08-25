@@ -81,7 +81,7 @@ export interface ApiSendResult<T> {
 // GET /preferences both require Authorization, and PUT /preferences' caller wants the
 // response's `ETag` header, which apiGet's plain-`T` return does not expose.
 export async function apiSend<T>(
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
   path: string,
   options?: { body?: unknown; headers?: Record<string, string> }
 ): Promise<ApiSendResult<T>> {

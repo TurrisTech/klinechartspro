@@ -17,6 +17,7 @@ import { renderLogin } from './login'
 import { availablePeriods } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
 import { stream, type StreamStatus } from './stream'
+import { mountPaperTrading, type PaperTradingController } from './trading'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
 
@@ -264,6 +265,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // synchronously during the constructor below), so `chartPro` is always assigned by the
   // time any of them runs.
   let chartPro: KLineChartPro | null = null
+  // Assigned after the chart exists (mountPaperTrading needs it), and referenced by
+  // onPanesChange, which never fires before the constructor returns.
+  let paper: PaperTradingController | null = null
   const persist = (): void => {
     const cp = chartPro
     if (!cp || !persistEnabled) return
@@ -330,6 +334,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       window.__wdPanes = panes
       levelsController.sync(panes)
       pluginHost.sync(panes)
+      paper?.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
@@ -346,7 +351,12 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     }
   })
 
-  const detachExtras = mountChartExtras(chartPro, levelsController, switcher)
+  // The paper-trading account: the panel dock below the chart and the per-pane overlays.
+  // Gated on the server's `sim` capability (returns null otherwise); its rail button is added
+  // in mountChartExtras beside the stream status.
+  paper = mountPaperTrading(chartPro, container)
+
+  const detachExtras = mountChartExtras(chartPro, levelsController, switcher, paper)
 
   return {
     teardown(): void {
@@ -357,6 +367,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // fires an empty list of its own -- this is the only teardown signal they get.
       levelsController.sync([])
       pluginHost.teardown()
+      // Clears its overlays against the still-alive charts and removes the dock, before the
+      // component (and its panes) is unmounted below.
+      paper?.teardown()
       levelsController.detach()
       detachExtras()
       chartPro?.remove()
@@ -377,10 +390,27 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 function mountChartExtras(
   chartPro: KLineChartPro,
   levelsController: ReturnType<typeof createLayerController>,
-  switcher: ReturnType<typeof createWorkspaceSwitcher>
+  switcher: ReturnType<typeof createWorkspaceSwitcher>,
+  paper: PaperTradingController | null
 ): () => void {
   const footer = document.createElement('div')
   footer.className = 'wd-rail-footer-content'
+
+  // Paper-trading toggle: no top-toolbar button by design -- it lives in the rail footer's
+  // lower-left corner, beside the stream status and version. Prompt 2's "Bar replay" button
+  // goes right next to it. Only present when the server advertises the `sim` capability
+  // (mountPaperTrading returns null otherwise).
+  if (paper) {
+    const paperButton = document.createElement('button')
+    paperButton.type = 'button'
+    paperButton.className = 'wd-rail-button'
+    paperButton.textContent = 'Paper'
+    paperButton.title = 'Paper trading'
+    paperButton.addEventListener('click', () => {
+      paperButton.classList.toggle('is-on', paper.toggle())
+    })
+    footer.appendChild(paperButton)
+  }
 
   const status = document.createElement('span')
   status.className = 'wd-status'
