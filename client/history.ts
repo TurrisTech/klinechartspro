@@ -2,6 +2,7 @@ import type { KLineData } from 'klinecharts'
 import { capabilities } from './capabilities'
 import { apiGet } from './config'
 import { barToKLineData, isNoData, type GetBarsResponse } from './ohlcv'
+import { barsFromTiles } from './tiles'
 
 // How many times an empty window may be widened before we accept that history really is
 // exhausted. Each attempt DOUBLES the span, so the reach is 2^6 = 64x the chart's own
@@ -16,6 +17,17 @@ async function fetchBars(
   to: number,
   limit: number | null
 ): Promise<KLineData[]> {
+  // Tiles first, when they cover the whole window. They only ever hold *closed* calendar
+  // periods, so anything reaching the live edge returns null here and is served below —
+  // which is the same path the forming bar and the websocket already use. A tile answer is
+  // byte-for-byte the same bars, so this is invisible to every caller above.
+  //
+  // `limit` still has to be honoured: it means "the last n bars", and the widening loop
+  // below depends on that anchoring. Trimming here rather than skipping tiles keeps a
+  // limited request cacheable.
+  const tiled = await barsFromTiles(vendorSymbol, resolution, from, to)
+  if (tiled !== null) return limit === null ? tiled : tiled.slice(-limit)
+
   const body = await apiGet<GetBarsResponse>('/getbars', {
     symbol: vendorSymbol,
     resolution,
