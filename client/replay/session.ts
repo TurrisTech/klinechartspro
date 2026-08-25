@@ -2,11 +2,14 @@ import { OhlcvApiError } from '../config'
 import type { OrderPatch, OrderRequest, SimAnswer, SimEvent, SimSnapshot, TradePatch } from '../trading/api'
 import type { SessionListener, TradingSession } from '../trading/session'
 import { BarCache, type BarSource, type ReplayBar } from './cache'
-import { type AdvanceRequest, type SignalOccurrence, type StopReason, hasWorking, intersectsWorking, planAdvance } from './clock'
+import { type AdvanceRequest, type SignalOccurrence, type StopReason, canFill, intersectsWorking, planAdvance } from './clock'
 import { type BidAskBar, type Engine, SimError } from './engine'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
 import type { SignalBook } from './signals'
 import { type BaseCheck, finerStored, nominalMs, validateBase } from './timeframes'
+
+/** How far back `quoteAt` looks for the last closed base bar, before widening. */
+const QUOTE_PROBE_BARS = 50
 
 // GLUE. `ReplayTradingSession` implements `TradingSession` (the seam the whole trading UI
 // acts through) over the client-side engine and the bar caches, and is the
@@ -22,6 +25,9 @@ export interface AdvanceResult {
   events: SimEvent[]
   /** Base bars consumed by the engine during this advance. */
   bars: ReplayBar[]
+  /** False when the advance seeked instead of walking (nothing could fill), so `bars` is
+   * empty by design rather than because the span held none. */
+  walked: boolean
 }
 
 export interface ReplayController {
@@ -244,17 +250,33 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     this.saveChain = this.saveChain.then(() => this.opts.save(state)).catch((err) => console.warn('[replay] save failed', err))
   }
 
+  /** Feed the engine the closing quote of the last base bar that closed at or before `at`.
+   * Primes the ticket before the first step, and lands a seek (an advance that consumed no
+   * bars) on a real price. Widens the probe when the window is empty -- a cursor just after
+   * a weekend has no bars a few minutes behind it. */
+  private async quoteAt(at: number): Promise<boolean> {
+    let span = QUOTE_PROBE_BARS * nominalMs(this.base)
+    for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
+      const probe = new BarCache(this.opts.barSource, this.symbol, this.base, 'all')
+      probe.seek(at - span)
+      await probe.ensure(at)
+      const last = probe
+        .slice(at - span, at)
+        .filter((b) => b.end <= at)
+        .at(-1)
+      if (!last) continue
+      const bar = toBidAsk(last, this.symbol)
+      this.engine.onQuote({ symbol: this.symbol, time: at, bid: bar.bidClose, ask: bar.askClose })
+      return true
+    }
+    return false
+  }
+
   /** Before the first step the engine has no quote: take the base bar closing at the cursor
    * (the last one the cursor has passed) so the ticket prices at once. */
   async primeQuote(): Promise<void> {
     if (this.engine.quotes.has(this.symbol)) return
-    const probe = new BarCache(this.opts.barSource, this.symbol, this.base, 'all')
-    probe.seek(this.cursor - 50 * nominalMs(this.base))
-    await probe.ensure(this.cursor)
-    const last = probe.slice(0, this.cursor).filter((b) => b.end <= this.cursor).at(-1)
-    if (!last) return
-    const bar = toBidAsk(last, this.symbol)
-    this.engine.onQuote({ symbol: this.symbol, time: this.cursor, bid: bar.bidClose, ask: bar.askClose })
+    if (!(await this.quoteAt(this.cursor))) return
     this.snapshot = this.buildSnapshot()
     for (const listener of [...this.listeners]) listener(this.snapshot, [])
   }
@@ -334,23 +356,33 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const events: SimEvent[] = []
       const consumed: ReplayBar[] = []
       let paused = false
-      for (;;) {
-        await this.baseCache.ensure(stopAt, this.cursor)
-        const bar = this.baseCache.peek()
-        if (!bar || bar.end > stopAt) break
-        this.baseCache.take(bar.end)
-        consumed.push(bar)
-        const produced = await this.consume(bar, this.base)
-        events.push(...produced)
-        this.cursor = bar.end
-        if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
-          paused = true
-          break
+      // Walk the base bars only when one of them could actually do something. With nothing
+      // resting and nothing protected the account cannot change however the price moves, so
+      // the advance SEEKS: the cursor lands on the same instant, the engine takes the closing
+      // quote there, and a months-long jump costs one read instead of a hundred thousand bars.
+      const walked = canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
+      if (walked) {
+        for (;;) {
+          await this.baseCache.ensure(stopAt, this.cursor)
+          const bar = this.baseCache.peek()
+          if (!bar || bar.end > stopAt) break
+          this.baseCache.take(bar.end)
+          consumed.push(bar)
+          const produced = await this.consume(bar, this.base)
+          events.push(...produced)
+          this.cursor = bar.end
+          if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+            paused = true
+            break
+          }
         }
+      } else {
+        this.baseCache.seek(stopAt)
+        await this.quoteAt(stopAt)
       }
       if (paused) reason = 'fill'
       else this.cursor = stopAt
-      const result: AdvanceResult = { from, to: this.cursor, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed }
+      const result: AdvanceResult = { from, to: this.cursor, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed, walked }
       this.lastStop = result
       this.rev++
       this.snapshot = this.buildSnapshot()
@@ -376,7 +408,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   private async consume(bar: ReplayBar, interval: string): Promise<SimEvent[]> {
     const orders = [...this.engine.orders.values()]
     const trades = [...this.engine.trades.values()]
-    if (!hasWorking(orders, trades, this.symbol)) return this.engine.onBar(toBidAsk(bar, this.symbol))
+    if (!canFill(orders, trades, this.symbol)) return this.engine.onBar(toBidAsk(bar, this.symbol))
     const band = bar.bid && bar.ask ? { bidLow: bar.bid.l, bidHigh: bar.bid.h, askLow: bar.ask.l, askHigh: bar.ask.h } : { bidLow: bar.l, bidHigh: bar.h, askLow: bar.l, askHigh: bar.h }
     if (!intersectsWorking(band, orders, trades, this.symbol)) return this.engine.onBar(toBidAsk(bar, this.symbol))
     const finer = finerStored(interval, this.storedIntervals)

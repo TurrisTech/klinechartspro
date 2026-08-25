@@ -247,7 +247,12 @@ export async function mountBarReplay(
       const problems = reports.filter((r) => r.problem)
       if (problems.length > 0) console.error(`${REPLAY_LOG} pane contiguity problems`, problems)
       ctx.pluginHost.invalidateFrom(result.from - nominalMs(session.base))
-      ctx.levelsController.invalidate()
+      // Levels are computed on 1W/1M, so one can only appear -- or be spent -- when a candle
+      // of those intervals closes, and every such close is at 17:00 on a market day, i.e. a
+      // DAILY boundary. Refetching on every step instead cost three slow reads per 15-minute
+      // step, which saturated the browser's six-connection budget and starved the panes' own
+      // history loads (measured: 31 `/levels` reads, the slowest 4.5s, during a short run).
+      if (intervalStart('1D', result.from) !== intervalStart('1D', result.to)) ctx.levelsController.invalidate()
       dock.overlays.update(session.snapshot)
     }
   })
