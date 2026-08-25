@@ -46,8 +46,24 @@ export interface ArevPoint {
    * kept across generations.
    */
   atCross: boolean
-  /** The server's verdict: confident enough, on a sample bar, off a full window. */
-  signal: boolean
+  /**
+   * The server's PUBLISHED label (plugins/README.md "Signals"): `'long'` or `'short'`
+   * where the vote is confident enough, on a sample bar, off a full window; null
+   * elsewhere. These two labels are the pane's arrows. A server from before
+   * `plugins.signals` sends a boolean here -- read it through `arevSignal`, never directly.
+   */
+  signal: ArevSignal | null | boolean
+}
+
+export type ArevSignal = 'long' | 'short'
+
+/** The point's label, normalising the pre-`plugins.signals` boolean with the server's own
+ * rule (`long` iff p > 0.5). The one place that rule is restated on the client. */
+export function arevSignal(point: Pick<ArevPoint, 'signal' | 'p'>): ArevSignal | null {
+  const s = point.signal
+  if (s === 'long' || s === 'short') return s
+  if (s === true) return point.p > 0.5 ? 'long' : 'short'
+  return null
 }
 
 export type ArevValuesResult =

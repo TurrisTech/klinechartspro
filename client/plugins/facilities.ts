@@ -4,7 +4,7 @@ import { apiGet, apiUrl } from '../config'
 import { periodToResolution, resolutionDurationMs } from '../periods'
 import { stream } from '../stream'
 import { symbolVendor } from '../symbols'
-import { fetchPoints } from './api'
+import { fetchPoints, fetchSignals, loadSignalCatalogue } from './api'
 import type { HostFacilities } from './host'
 
 // The app's shared services, bundled for plugin consumption. Built once per mount by
@@ -25,6 +25,7 @@ export function createFacilities(options: { requestPersist(): void }): HostFacil
     symbolVendor,
     openSettingsPanel,
     requestPersist: options.requestPersist,
-    maxValuesPerRequest: MAX_VALUES_PER_REQUEST
+    maxValuesPerRequest: MAX_VALUES_PER_REQUEST,
+    signals: { catalogue: loadSignalCatalogue, points: fetchSignals }
   }
 }

@@ -23,7 +23,8 @@ function facilities(): HostFacilities {
     symbolVendor: () => 'oanda',
     openSettingsPanel: () => ({ close() {} }) as never,
     requestPersist: () => {},
-    maxValuesPerRequest: 3
+    maxValuesPerRequest: 3,
+    signals: { catalogue: async () => [], points: async () => ({ points: [], nextFrom: null }) }
   }
 }
 

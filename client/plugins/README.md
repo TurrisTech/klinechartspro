@@ -38,11 +38,40 @@ const plugin: IndicatorPlugin = {
 
 Then add it to `registry.ts`. `PluginFacilities` is the whole of what a plugin may depend on:
 the API, the stream, `hasFeature`, the unified `points` fetch, the period/symbol helpers, the
-settings panel, `paneInfo`, `requestReconcile`, `requestPersist`.
+settings panel, `paneInfo`, `requestReconcile`, `requestPersist`, and `signals` (below).
 
 A template's `calc` reads its store back: `peekStore<WindowStore<P, V>>(indicator.extendData.seriesKey)`
 (`seriesKeys[id]` for a multi-source binding). The host bumps `extendData.rev` on every store
 change, so `shouldUpdate` compares it.
+
+## Signals
+
+A plugin whose points carry discrete events **labels** them on the server
+(`wdashboard-server/docs/plugins.md` "Signals"): `signals()` declares the labels, `signal_of`
+names a point's, and the host publishes the result — every served point's `signal` field is
+the label id or `null` (`ArevPoint.signal` is `'long' | 'short' | null`, `KrevPoint.signal`
+`'top' | 'bottom' | null`), `GET /plugins/signals` catalogues every label under a stable
+`ref` (`arev:arev21:long`), and `GET /plugins/{id}/signals` serves only the labelled points,
+each with `effective` — the **absolute** instant its bar closed, which is when the signal
+became knowable and what any multi-timeframe consumer keys off.
+
+The client draws the label and never re-derives one: the AREV pane's arrows are the `long`
+(green, up) and `short` (red, down) labels, the same events the AREV21 MTF overlay places and
+a replay's "next signal" jumps to. A plugin (or a script) consumes another's signals through
+the facilities:
+
+```ts
+const labels = await facilities.signals.catalogue()          // SignalCatalogueEntry[]
+const page = await facilities.signals.points<ArevPoint>({
+  ref: 'arev:arev21:long',                                   // '' id = every label
+  vendorSymbol: 'oanda:EURUSD', resolution: '4h', from, to, limit: 5000
+})
+for (const p of page.points) place(p.effective /* not p.date */, p.signal)
+```
+
+Both are gated on the `plugins.signals` feature (empty / `no_data` on an older server, whose
+points carry the old boolean — `arevSignal` / `krevSignal` in the plugins' `api.ts`
+normalise it with the server's own rule). Tests: `signals.test.ts`.
 
 ## Built-ins
 

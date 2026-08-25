@@ -1,7 +1,7 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import { downArrow, upArrow } from '../plugins/draw'
-import { AREV_GENERATIONS, type ArevGeneration, type ArevPoint } from './api'
+import { AREV_GENERATIONS, type ArevGeneration, type ArevPoint, type ArevSignal, arevSignal } from './api'
 import { peekStore, type WindowStore } from '../plugins/store'
 
 // One klinecharts indicator template per AREV model generation, drawn in its own sub-pane.
@@ -11,13 +11,15 @@ import { peekStore, type WindowStore } from '../plugins/store'
 // What the pane draws is the probability the k-NN vote implies — the share of comparable
 // past samples that rose, which is P(the generation's own question: price up to the next
 // sample for arev19/20/21, body midpoint higher 10 bars on for arev22) — against a flat
-// threshold either side of a coin flip, plus an arrow
-// on every bar where P(up) crosses out of the band: red where it crosses up over the
-// upper (long) line, green where it crosses down below the lower (short) line — a fade
-// of the overshoot, computed here from consecutive points rather than taken from the
-// server's `point.signal` flag (which stays on the wire, unread). A gap in the
-// predictions breaks the crossing pair, so a cross "over" a warm-up hole never signals.
-// It used to draw the raw vote sum with its running
+// threshold either side of a coin flip, plus an arrow on every bar the server LABELS:
+// a green up arrow under a `long` point, a red down arrow over a `short` one. The label
+// is the server's published signal (`ArevPoint.signal`, read through `arevSignal`) —
+// confident, on a sample bar, off a full window — and it is the same event the AREV21
+// MTF overlay draws and a replay's "next signal" jumps to, so the three agree. The pane
+// used to compute its own arrows from consecutive points (a crossing of P(up) out of the
+// band, coloured as a fade) and drew a nearly disjoint set in the opposite direction; the
+// research measured the server's definition (60.4% with p > 0.5 → price rises), so that
+// is the one arrow. It used to draw the raw vote sum with its running
 // extrema and the 0.9x bands derived from them, and the reason it no longer does is that
 // those bands could not work: an all-time extremum is an order statistic, so it ratchets
 // out of reach while the series it gates stays exactly as wide. On EURUSD 1h the running
@@ -57,10 +59,17 @@ export interface Value {
   upper?: number
   lower?: number
   mid?: number
-  /** Not figures — read by `draw` to place the arrows. Set on the bar where P(up)
-   * first sits past the named line, holding that bar's `p`. */
-  crossAboveUpper?: number
-  crossBelowLower?: number
+  /** Not a figure — read by `draw` to place the arrow: the server's label on this bar. */
+  mark?: ArevSignal
+}
+
+/** The values one bar contributes: the lines, and the published label as the mark. */
+export function barValue(point: ArevPoint | undefined): Value {
+  if (!point) return {}
+  const value: Value = { p: point.p, upper: COIN_FLIP + SIGNAL_CONFIDENCE, lower: COIN_FLIP - SIGNAL_CONFIDENCE, mid: COIN_FLIP }
+  const mark = arevSignal(point)
+  if (mark) value.mark = mark
+  return value
 }
 
 export function templateName(generation: ArevGeneration): string {
@@ -89,32 +98,10 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
   const key = indicator.extendData?.seriesKey
   const store = peekStore<WindowStore<ArevPoint>>(key)
   if (!store) return dataList.map(() => ({}))
-  // Flat by construction. They are the same two numbers on the first bar of the
-  // series and on the two hundred thousandth, which is the whole point.
-  const upper = COIN_FLIP + SIGNAL_CONFIDENCE
-  const lower = COIN_FLIP - SIGNAL_CONFIDENCE
-  const result: Value[] = []
-  let prevP: number | undefined
-  for (const d of dataList) {
-    const point = store.values.get(d.timestamp)
-    if (!point) {
-      // No prediction here (warm-up, abstention, or outside the fetched range): the
-      // line breaks, and so must the crossing pair — the next predicted bar starts
-      // fresh rather than being compared across the hole.
-      result.push({})
-      prevP = undefined
-      continue
-    }
-    const p = point.p
-    const value: Value = { p, upper, lower, mid: COIN_FLIP }
-    if (prevP != null && p != null) {
-      if (prevP <= upper && p > upper) value.crossAboveUpper = p
-      else if (prevP >= lower && p < lower) value.crossBelowLower = p
-    }
-    result.push(value)
-    prevP = p
-  }
-  return result
+  // The thresholds are flat by construction: the same two numbers on the first bar of
+  // the series and on the two hundred thousandth, which is the whole point. A bar with no
+  // prediction (warm-up, abstention, outside the fetched range) breaks the line.
+  return dataList.map((d) => barValue(store.values.get(d.timestamp)))
 }
 
 function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
@@ -174,10 +161,9 @@ export function registerArevIndicators(): IndicatorGroup[] {
         calc,
         regenerateFigures: null,
         createTooltipDataSource: null,
-        // Marks the threshold crossings `calc` found: a cross up over the upper (long)
-        // line draws red, a cross down below the lower (short) line draws green —
-        // fading the overshoot, so the arrow's colour is the direction it argues for,
-        // not the direction P(up) just moved.
+        // Draws the server's labels: `long` is a green up arrow under the point, `short`
+        // a red down arrow over it -- the arrow's colour and direction are the side the
+        // label argues for.
         //
         // Returns FALSE, and that is load-bearing: klinecharts assigns this callback's
         // return to `isCover` and then renders the declared figures only `if (!isCover)`.
@@ -195,12 +181,10 @@ export function registerArevIndicators(): IndicatorGroup[] {
           for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
             const value = indicator.result[i]
             if (value == null) continue
+            if (value.mark == null || value.p == null) continue
             const x = xAxis.convertToPixel(i)
-            if (value.crossAboveUpper != null) {
-              downArrow(ctx, x, yAxis.convertToPixel(value.crossAboveUpper) - 4, size, '#EF5350')
-            } else if (value.crossBelowLower != null) {
-              upArrow(ctx, x, yAxis.convertToPixel(value.crossBelowLower) + 4, size, '#26A69A')
-            }
+            if (value.mark === 'long') upArrow(ctx, x, yAxis.convertToPixel(value.p) + 4, size, '#26A69A')
+            else downArrow(ctx, x, yAxis.convertToPixel(value.p) - 4, size, '#EF5350')
           }
           return false
         }

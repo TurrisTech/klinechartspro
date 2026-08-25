@@ -26,6 +26,11 @@ export type Feature =
   // `plugins` table names what is mounted. Absent (an older server), the client's plugins
   // fetch on their legacy paths instead (client/plugins/api.ts).
   | 'plugins'
+  // GET /plugins/signals and /plugins/{id}/signals -- the published signal labels
+  // (client/plugins/README.md "Signals"). With it, a labelling plugin's points carry
+  // `signal` as the label id (`'long'`, `'top'`) rather than a boolean; without it the
+  // client's plugins normalise the old boolean themselves (arev/api.ts `arevSignal`).
+  | 'plugins.signals'
   // GET /arev/values — AREV research predictions (wdashboard-server services/arev.py).
   // The client only registers its AREV templates and picker entries when advertised.
   | 'arev'

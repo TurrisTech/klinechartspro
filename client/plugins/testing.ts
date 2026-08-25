@@ -8,7 +8,9 @@ import type { ChartProPane, Period, SymbolInfo } from '../../src'
 export function installWindow(): void {
   const g = globalThis as { window?: unknown }
   if (g.window) return
-  g.window = { location: { origin: 'http://test', href: 'http://test/' } }
+  // `navigator` because klinecharts sniffs the platform at import (a template module
+  // pulls it in); nothing here renders.
+  g.window = { location: { origin: 'http://test', href: 'http://test/' }, navigator: { userAgent: 'test' } }
 }
 
 export interface FakeChart {
