@@ -57,8 +57,15 @@ export interface ChartLayer<TDatum, TConfig> {
    * 09:00 on Tuesday is holding the current answer until 17:00, whatever it does in
    * between. Omit it and the controller falls back to a flat five-minute timer, which for
    * levels meant a full refetch per pane twelve times an hour to be handed the same book.
+   *
+   * `ctx` is passed because the answer is usually per instrument: the producer's progress is
+   * a property of one symbol's series, not of the clock. **A boundary is when the data can
+   * change, not when the producer has finished writing it** — a layer that has a way to ask
+   * how far the producer has got should return a short horizon while it is behind, and must
+   * put a bound on how long it keeps asking, because "behind" and "never coming" look
+   * identical at the moment of asking. `client/levels/freshness.ts` is the worked example.
    */
-  staleAt?(fetchedAt: number): number
+  staleAt?(fetchedAt: number, ctx: LayerContext): number
   /** Defaults to the controller's own redraw debounce when omitted. */
   debounceMs?: number
 }

@@ -3,8 +3,8 @@ import { levelsCoverageFor, hasFeature } from '../capabilities'
 import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
 import { applyEncodings, toLineStyle, type LineAppearance } from '../chartlayers/encoding'
-import { nextSessionAnchor } from '../replay/timeframes'
-import { fetchLevels, type Level } from './api'
+import { fetchLevels, levelsComputedThrough, type Level } from './api'
+import { levelsStaleAt } from './freshness'
 import {
   DEFAULT_LEVELS_CONFIG,
   LEVELS_FIELDS,
@@ -192,16 +192,15 @@ function requestedIntervals(config: LevelsConfig): string[] | undefined {
 // (wdashboard-server levels.py: LEVELS_INTERVAL_ALLOWLIST), so a level can only appear, or
 // take another invalidation, or be spent, when a weekly or monthly candle CLOSES — and every
 // one of those closes is at 17:00 on a market day. Between two 17:00s the server is holding
-// the same book (it says so itself now: `/levels` is keyed by the feed's own watermark), so
-// refetching is asking the same question again.
+// the same book, so refetching is asking the same question again; the alternative the
+// controller falls back to is a five-minute timer, which on a chart left open through a
+// session meant a full refetch per pane roughly a hundred times a day.
 //
-// The alternative the controller falls back to is a five-minute timer, which on a chart left
-// open through a session meant a full refetch per pane roughly a hundred times a day, each
-// one several hundred KB, to be handed back what the pane already had. Erring one way is
-// deliberate: a Saturday 17:00 is not a candle boundary and expiring there costs one
-// revalidation, while missing a Friday 17:00 would draw last week's levels.
-export function levelsStaleAt(fetchedAt: number): number {
-  return nextSessionAnchor(fetchedAt)
+// But a close is when the book can change, NOT when it has been written — see
+// `freshness.ts`, which is where that distinction and the bound on waiting for it live. The
+// watermark is per instrument, which is why this reads `ctx`.
+function staleAt(fetchedAt: number, ctx: LayerContext): number {
+  return levelsStaleAt(fetchedAt, levelsComputedThrough(ctx.vendor, ctx.symbol.ticker))
 }
 
 export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
@@ -230,7 +229,7 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
     return `${level.interval}|${level.price}|${level.bornAt}`
   },
 
-  staleAt: levelsStaleAt,
+  staleAt,
 
   fetch(ctx, config, window) {
     return fetchLevels({

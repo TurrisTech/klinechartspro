@@ -76,6 +76,19 @@ export function apiUrl(path: string, params?: QueryParams): URL {
 
 // Every REST read goes through here so error bodies are decoded once, in one place.
 export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> {
+  return (await apiGetResponse<T>(path, params)).data
+}
+
+/** `apiGet` plus the `Response`, for the few reads that carry meaning in a header as well as
+ * in the body — `/levels` states how far the indicator feed has computed in
+ * `X-Levels-Computed-Through`. Identical in every other respect: same read clock, same error
+ * decoding. Cross-origin, only headers the server names in `expose_headers` are readable
+ * here; a header this cannot see reads as absent, which every caller must already handle
+ * because an older server would not send it either. */
+export async function apiGetResponse<T>(
+  path: string,
+  params?: QueryParams
+): Promise<ApiSendResult<T>> {
   const url = apiUrl(path, params)
   const response = await fetch(url)
   const body: unknown = await response.json().catch(() => null)
@@ -85,7 +98,7 @@ export async function apiGet<T>(path: string, params?: QueryParams): Promise<T> 
     }
     throw new OhlcvApiError(response.status, 'internal', `${response.status} from ${path}`)
   }
-  return body as T
+  return { data: body as T, response }
 }
 
 export interface ApiSendResult<T> {

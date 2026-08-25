@@ -11,6 +11,9 @@ installWindow()
 
 const requests: URL[] = []
 let nextLevelsBody: unknown = []
+/** `X-Levels-Computed-Through` on the next `/levels` answer; `null` = a server that does not
+ * send it at all, which is what an older one looks like. */
+let watermarkHeader: string | null = null
 
 // A real fetch, answering the two routes this file touches. Nothing in client/ is replaced:
 // capabilities.ts parses the document it would parse in a browser, and api.ts builds and
@@ -18,18 +21,32 @@ let nextLevelsBody: unknown = []
 globalThis.fetch = (async (input: URL | RequestInfo) => {
   const url = input instanceof URL ? input : new URL(String(input))
   requests.push(url)
-  const body = url.pathname.endsWith('/capabilities') ? CAPABILITIES : nextLevelsBody
-  return new Response(JSON.stringify(body), {
+  const isCapabilities = url.pathname.endsWith('/capabilities')
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (!isCapabilities && watermarkHeader !== null) {
+    headers['X-Levels-Computed-Through'] = watermarkHeader
+  }
+  return new Response(JSON.stringify(isCapabilities ? CAPABILITIES : nextLevelsBody), {
     status: 200,
-    headers: { 'content-type': 'application/json' }
+    headers
   })
 }) as typeof fetch
+
+const VIEW = { priceMin: 1.05, priceMax: 1.15, from: 1_000_000, to: 2_000_000 }
+const BAND = {
+  vendor: 'oanda',
+  symbol: 'EURUSD',
+  priceMin: 1.05,
+  priceMax: 1.15,
+  dateFrom: 1_000_000,
+  dateTo: 2_000_000
+}
 
 const CAPABILITIES = {
   version: 'test',
   serverTime: 0,
   intervals: ['1h', '1D', '1W', '1M'],
-  features: ['levels.intervals', 'levels.dates'],
+  features: ['levels.intervals', 'levels.dates', 'levels.computedThrough'],
   limits: {
     maxBarsPerRequest: 5000,
     maxBatchRequests: 12,
@@ -45,66 +62,55 @@ const CAPABILITIES = {
 const { loadCapabilities } = await import('../capabilities')
 await loadCapabilities()
 
-const { levelsLayer, levelsStaleAt } = await import('./layer')
-const { fetchLevels, levelsRequestsInFlight } = await import('./api')
+const { levelsLayer } = await import('./layer')
+const { fetchLevels, levelsComputedThrough, levelsRequestsInFlight } = await import('./api')
 const { DEFAULT_LEVELS_CONFIG } = await import('./config')
 const { overlaySignature } = await import('../chartlayers/paint')
 
 type Level = Awaited<ReturnType<typeof fetchLevels>>[number]
 
-// --------------------------------------------------------------------- when it goes stale
+// ------------------------------------------------------------- the layer's freshness wiring
+//
+// The rule itself is `freshness.test.ts`; what matters here is that the layer asks it with
+// the watermark for the right instrument.
 
-/** Epoch ms of a wall-clock reading in New York. Deliberately spelled out rather than
- * imported, so the expectations below do not lean on the code under test. */
-function ny(text: string, offsetHours: number): number {
-  return Date.parse(`${text.replace(' ', 'T')}:00.000${offsetHours < 0 ? '-' : '+'}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`)
-}
-const EDT = -4
-const EST = -5
-
-describe('levelsStaleAt -- a level book only changes at 17:00', () => {
-  test('mid-session, the horizon is this evening', () => {
-    // Levels are computed on 1W and 1M; both close at 17:00 on a market day, so nothing the
-    // server holds can change between 09:30 and 17:00 however many 1m candles arrive.
-    expect(levelsStaleAt(ny('2026-08-25 09:30', EDT))).toBe(ny('2026-08-25 17:00', EDT))
-    expect(levelsStaleAt(ny('2026-08-25 16:59', EDT))).toBe(ny('2026-08-25 17:00', EDT))
+describe('staleAt', () => {
+  test('the layer declares one', () => {
+    expect(typeof levelsLayer.staleAt).toBe('function')
   })
 
-  test('after 17:00, the horizon is tomorrow evening', () => {
-    expect(levelsStaleAt(ny('2026-08-25 17:00', EDT))).toBe(ny('2026-08-26 17:00', EDT))
-    expect(levelsStaleAt(ny('2026-08-25 20:00', EDT))).toBe(ny('2026-08-26 17:00', EDT))
+  test('with no answer from the server yet, it is the calendar horizon', () => {
+    const at = Date.parse('2026-08-25T09:30:00.000-04:00')
+    const ctx = context({ priceMin: 1, priceMax: 1.2, from: 1, to: 2 }, 'NOTASKEDFOR')
+    expect(levelsLayer.staleAt?.(at, ctx)).toBe(Date.parse('2026-08-25T17:00:00.000-04:00'))
   })
 
-  test('it is always in the future -- a horizon in the past would refetch every redraw', () => {
-    for (const hour of [0, 1, 9, 16, 17, 18, 23]) {
-      const at = ny(`2026-08-25 ${String(hour).padStart(2, '0')}:00`, EDT)
-      expect(levelsStaleAt(at)).toBeGreaterThan(at)
-      expect(levelsStaleAt(at) - at).toBeLessThanOrEqual(24 * 3_600_000)
-    }
+  test('it reads the watermark of the pane\'s OWN instrument', async () => {
+    // Two panes on different symbols whose feeds are at different points must get different
+    // horizons; a watermark keyed globally would hand one of them the other's answer.
+    nextLevelsBody = []
+    watermarkHeader = '1W=0' // declared, nothing consumed
+    await fetchLevels({ ...BAND, symbol: 'EURUSD' })
+    watermarkHeader = null
+    expect(levelsComputedThrough('oanda', 'EURUSD')).toEqual({ '1W': 0 })
+    expect(levelsComputedThrough('oanda', 'GBPUSD')).toBeNull()
+
+    // Five minutes after a Friday 17:00 weekly close: EURUSD's feed owes a bar, so that pane
+    // looks again shortly; the pane we have heard nothing about waits for the calendar.
+    const at = Date.parse('2026-08-21T17:05:00.000-04:00')
+    const behind = levelsLayer.staleAt?.(at, context(VIEW, 'EURUSD')) ?? 0
+    const unknown = levelsLayer.staleAt?.(at, context(VIEW, 'GBPUSD')) ?? 0
+    expect(behind).toBe(at + 150_000) // half of five minutes
+    expect(unknown).toBe(Date.parse('2026-08-22T17:00:00.000-04:00'))
+    expect(behind).toBeLessThan(unknown)
   })
 
-  test('it covers the FRIDAY 17:00 weekly close, not just the daily opens', () => {
-    // The distinction matters: a weekly candle closes Friday 17:00 and no daily candle opens
-    // then, so a horizon built out of daily OPENS would hold last week's book until Sunday.
-    const fridayMorning = ny('2026-08-21 09:00', EDT)
-    expect(levelsStaleAt(fridayMorning)).toBe(ny('2026-08-21 17:00', EDT))
-  })
-
-  test('it is a wall-clock 17:00 across a DST change, not a fixed number of hours', () => {
-    // 2026-03-08 is the US spring-forward: 02:00 EST becomes 03:00 EDT, so Saturday 18:00 to
-    // the next 17:00 is 23 hours on the wall and 22 in absolute time. Adding a fixed number
-    // of hours would put the horizon an hour late -- past the boundary it exists to catch.
-    const saturday = ny('2026-03-07 18:00', EST)
-    expect(levelsStaleAt(saturday)).toBe(ny('2026-03-08 17:00', EDT))
-    expect(levelsStaleAt(saturday) - saturday).toBe(22 * 3_600_000)
-    // ...and the fall-back the other way: 23 wall-clock hours, 24 real ones.
-    const autumn = ny('2026-10-31 18:00', EDT)
-    expect(levelsStaleAt(autumn)).toBe(ny('2026-11-01 17:00', EST))
-    expect(levelsStaleAt(autumn) - autumn).toBe(24 * 3_600_000)
-  })
-
-  test('the layer wires it up', () => {
-    expect(levelsLayer.staleAt).toBe(levelsStaleAt)
+  test('the instrument key is case-insensitive, as the wire is', async () => {
+    nextLevelsBody = []
+    watermarkHeader = '1M=123'
+    await fetchLevels({ ...BAND, vendor: 'OANDA', symbol: 'eurusd' })
+    watermarkHeader = null
+    expect(levelsComputedThrough('oanda', 'EURUSD')).toEqual({ '1M': 123 })
   })
 })
 
