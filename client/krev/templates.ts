@@ -1,7 +1,10 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
-import { KREV_GENERATION, type KrevPoint } from './api'
-import { peekStore, type BarPoints } from './store'
+import { KREV_GENERATION, type KrevPoint, type KrevSide } from './api'
+
+/** A bar's votes by side: a top and a bottom candidate can print on the same bar. */
+export type BarPoints = Partial<Record<KrevSide, KrevPoint>>
+import { peekStore, type WindowStore } from '../plugins/store'
 
 // One klinecharts indicator template: krev01's votes as a SUB-PANE series. Like the AREV
 // templates, `calc` computes nothing — it reads the points the controller fetched from
@@ -87,7 +90,7 @@ const LINES: Array<{ key: keyof Value; title: string; color: string; dashed?: bo
 
 function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
   const key = indicator.extendData?.seriesKey
-  const store = key ? peekStore(key) : undefined
+  const store = peekStore<WindowStore<KrevPoint, BarPoints>>(key)
   if (!store) return dataList.map(() => ({}))
   let top: number | undefined
   let bottom: number | undefined

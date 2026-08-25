@@ -1,10 +1,11 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
+import { downArrow, upArrow } from '../plugins/draw'
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
-import { resolveSeries, type IndicatorSpec, type SeriesDoc } from './api'
+import { resolveSeries, type IndicatorPoint, type IndicatorSpec, type SeriesDoc } from './api'
 import { hasFeature } from '../capabilities'
 import { symbolVendor } from '../symbols'
 import type { SymbolInfo } from '../../src'
-import { peekStore } from './store'
+import { peekStore, type WindowStore } from '../plugins/store'
 
 // One klinecharts indicator template per library indicator (per version): the chart draws
 // it exactly like a built-in, but its `calc` reads values the controller (controller.ts)
@@ -108,29 +109,9 @@ export function paramsText(spec: IndicatorSpec, calcParams: unknown[]): string {
 
 export const LINE_COLORS = ['#FF9600', '#9D65C9', '#2196F3', '#E11D74', '#26A69A', '#FFEB3B', '#8D6E63']
 
-function upArrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string): void {
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.moveTo(x, y)
-  ctx.lineTo(x - size, y + size * 1.4)
-  ctx.lineTo(x + size, y + size * 1.4)
-  ctx.closePath()
-  ctx.fill()
-}
-
-function downArrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string): void {
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.moveTo(x, y)
-  ctx.lineTo(x - size, y - size * 1.4)
-  ctx.lineTo(x + size, y - size * 1.4)
-  ctx.closePath()
-  ctx.fill()
-}
-
 function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
   const key = indicator.extendData?.seriesKey
-  const store = key ? peekStore(key) : undefined
+  const store = peekStore<WindowStore<IndicatorPoint, number | null>>(key)
   if (!store) return dataList.map(() => ({}))
   return dataList.map((d) => {
     const v = store.values.get(d.timestamp)

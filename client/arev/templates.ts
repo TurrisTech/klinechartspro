@@ -1,7 +1,8 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
-import { AREV_GENERATIONS, type ArevGeneration } from './api'
-import { peekStore } from './store'
+import { downArrow, upArrow } from '../plugins/draw'
+import { AREV_GENERATIONS, type ArevGeneration, type ArevPoint } from './api'
+import { peekStore, type WindowStore } from '../plugins/store'
 
 // One klinecharts indicator template per AREV model generation, drawn in its own sub-pane.
 // Like the `S:` server-indicator templates (indicators/templates.ts), `calc` computes
@@ -84,29 +85,9 @@ const FIGURES: Array<{ key: keyof Value; title: string; color: string; dashed?: 
   { key: 'mid', title: 'even: ', color: '#787B86', dashed: true }
 ]
 
-function upArrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string): void {
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.moveTo(x, y)
-  ctx.lineTo(x - size, y + size * 1.4)
-  ctx.lineTo(x + size, y + size * 1.4)
-  ctx.closePath()
-  ctx.fill()
-}
-
-function downArrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string): void {
-  ctx.fillStyle = color
-  ctx.beginPath()
-  ctx.moveTo(x, y)
-  ctx.lineTo(x - size, y - size * 1.4)
-  ctx.lineTo(x + size, y - size * 1.4)
-  ctx.closePath()
-  ctx.fill()
-}
-
 function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
   const key = indicator.extendData?.seriesKey
-  const store = key ? peekStore(key) : undefined
+  const store = peekStore<WindowStore<ArevPoint>>(key)
   if (!store) return dataList.map(() => ({}))
   // Flat by construction. They are the same two numbers on the first bar of the
   // series and on the two hundred thousandth, which is the whole point.
