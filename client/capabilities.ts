@@ -43,6 +43,9 @@ export type Feature =
   // Every read route takes `asof` (wdashboard_server/services/asof.py), the read clock a
   // bar replay clamps the chart to. With 'sim', gates the "Replay" rail button.
   | 'asof'
+  // GET /levels2 — support/resistance zones (wdashboard-server services/levels2.py),
+  // served from the file store. The client only mounts the Zones layer when advertised.
+  | 'levels2'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.
@@ -80,6 +83,9 @@ export interface Capabilities {
   levels: LevelsCoverage[]
   /** The mounted indicator plugins; absent on a server without the host. */
   plugins?: PluginInfo[]
+  /** Absent on servers older than the levels2 route — read through levels2CoverageFor,
+   * which treats missing as empty. */
+  levels2?: LevelsCoverage[]
 }
 
 // Used when /capabilities is unreachable. Deliberately the conservative reading of the
@@ -116,7 +122,8 @@ const FALLBACK: Capabilities = {
     maxSubscriptionsPerConnection: 32
   },
   levels: [],
-  plugins: []
+  plugins: [],
+  levels2: []
 }
 
 let cached: Capabilities = FALLBACK
@@ -158,4 +165,13 @@ export function levelsCoverageFor(vendor: string, symbol: string): LevelsCoverag
 // The server's plugin table, empty on a server from before the host.
 export function serverPlugins(): PluginInfo[] {
   return cached.plugins ?? []
+}
+
+// Whether the server advertises stored levels2 zone documents for this instrument.
+export function levels2CoverageFor(vendor: string, symbol: string): LevelsCoverage | undefined {
+  return (cached.levels2 ?? []).find(
+    (entry) =>
+      entry.vendor.toLowerCase() === vendor.toLowerCase() &&
+      entry.symbol.toUpperCase() === symbol.toUpperCase()
+  )
 }

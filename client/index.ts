@@ -11,6 +11,7 @@ import {
   type PersistedLayout
 } from './layout'
 import { levelsLayer } from './levels/layer'
+import { levels2Layer } from './levels2/layer'
 import type { MtfConfig } from './mtf/config'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
@@ -277,9 +278,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     }
   })
 
-  // Every chart layer (today: just Levels) is built before the chart exists: its `sync`
-  // becomes the wall's onPanesChange, which is a constructor argument.
+  // Every chart layer (Levels, and the levels2 Zones beside it) is built before the chart
+  // exists: its `sync` becomes the wall's onPanesChange, which is a constructor argument.
   const levelsController = createLayerController(levelsLayer)
+  const levels2Controller = createLayerController(levels2Layer)
 
   const periods = availablePeriods()
 
@@ -356,6 +358,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // headless test) can reach a pane's chart. Read-only by convention.
       window.__wdPanes = panes
       levelsController.sync(panes)
+      levels2Controller.sync(panes)
       pluginHost.sync(panes)
       paper?.sync(panes)
       replay?.sync(panes)
@@ -390,11 +393,17 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     paper = mountPaperTrading(chartPro, container)
   }
 
-  const detachExtras = mountChartExtras(chartPro, levelsController, switcher, paper, {
-    inReplay: replayBoot !== null,
-    controller: replay,
-    rebuild: options.rebuild
-  })
+  const detachExtras = mountChartExtras(
+    chartPro,
+    [levelsController, levels2Controller],
+    switcher,
+    paper,
+    {
+      inReplay: replayBoot !== null,
+      controller: replay,
+      rebuild: options.rebuild
+    }
+  )
 
   return {
     teardown(): void {
@@ -404,12 +413,14 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // ChartPro.svelte's onPanesChange effect is destroyed with the component, so it never
       // fires an empty list of its own -- this is the only teardown signal they get.
       levelsController.sync([])
+      levels2Controller.sync([])
       pluginHost.teardown()
       // Clears its overlays against the still-alive charts and removes the dock, before the
       // component (and its panes) is unmounted below.
       paper?.teardown()
       replay?.teardown()
       levelsController.detach()
+      levels2Controller.detach()
       detachExtras()
       chartPro?.remove()
       chartPro = null
@@ -428,7 +439,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 // Returns a disposer, because a workspace switch replaces the chart these are attached to.
 function mountChartExtras(
   chartPro: KLineChartPro,
-  levelsController: ReturnType<typeof createLayerController>,
+  layerControllers: ReturnType<typeof createLayerController>[],
   switcher: ReturnType<typeof createWorkspaceSwitcher>,
   paper: PaperTradingController | null,
   replay: { inReplay: boolean; controller: BarReplayController | null; rebuild: () => void }
@@ -516,7 +527,7 @@ function mountChartExtras(
   // reads left-to-right with the symbol and timeframe controls the library owns.
   const detachSwitcher = attachToSlot(chartPro, 'toolbar', switcher.element)
   const detachFooter = attachToSlot(chartPro, 'rail-footer', footer)
-  levelsController.attach(chartPro)
+  for (const controller of layerControllers) controller.attach(chartPro)
 
   return () => {
     switcher.close()
