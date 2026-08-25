@@ -402,3 +402,351 @@ body {
 .wd-wall-retry:hover {
   background: #2a2e39;
 }
+
+/* --- Paper trading (client/trading) ------------------------------------------------- */
+
+/* The rail-footer toggle ("Paper"), beside the stream status and version. A compact button
+   in the muted footer palette; the "on" accent matches the layer toggles. Prompt 2's "Bar
+   replay" button reuses this class. */
+.wd-rail-button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.wd-rail-button:hover {
+  color: var(--foreground);
+}
+
+.wd-rail-button.is-on {
+  border-color: color-mix(in oklab, var(--primary) 55%, transparent);
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  color: var(--foreground);
+}
+
+/* The dock is a sibling of #app (client/trading/index.ts), so it takes its own row below the
+   wall. When a dock is present the page becomes a flex column: #app flexes to fill the space
+   above, the dock takes its height below. `body.wd-has-dock > #app` outweighs src/app.css's
+   `#app { height: 100% }` (id + class + tag beats a bare id). A hidden dock (`display: none`)
+   collapses to nothing, so the chart uses the whole wall when the panel is minimized. */
+body.wd-has-dock {
+  display: flex;
+  flex-direction: column;
+}
+
+body.wd-has-dock > #app {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+.wd-trade-dock {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  background: var(--background);
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  max-height: 40vh;
+}
+
+.wd-trade-dock.is-hidden {
+  display: none;
+}
+
+.wd-trade-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.wd-trade-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-trade-panel-title {
+  font-weight: 600;
+}
+
+.wd-trade-panel-spacer {
+  flex: 1;
+}
+
+.wd-trade-panel-body {
+  display: grid;
+  grid-template-columns: 18rem 1fr;
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    'account account'
+    'ticket tabs'
+    'ticket tables';
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0.75rem;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.wd-trade-account {
+  grid-area: account;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-trade-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.wd-trade-stat-label {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.wd-trade-stat-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wd-trade-stat-value.is-up,
+.wd-trade-table .is-up {
+  color: #26a69a;
+}
+
+.wd-trade-stat-value.is-down,
+.wd-trade-table .is-down {
+  color: #ef5350;
+}
+
+.wd-trade-flatten {
+  margin-left: auto;
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+/* The order ticket. */
+.wd-trade-ticket {
+  grid-area: ticket;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-self: start;
+}
+
+.wd-trade-ticket-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.wd-trade-ticket-symbol {
+  font-weight: 600;
+}
+
+.wd-trade-ticket-quote {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+
+.wd-trade-ticket-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.wd-trade-ticket-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-trade-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.wd-trade-seg {
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+.wd-trade-seg.is-active {
+  background: color-mix(in oklab, var(--primary) 18%, transparent);
+  color: var(--foreground);
+}
+
+.wd-trade-seg.wd-trade-buy.is-active {
+  background: color-mix(in oklab, #26a69a 26%, transparent);
+  color: #26a69a;
+}
+
+.wd-trade-seg.wd-trade-sell.is-active {
+  background: color-mix(in oklab, #ef5350 26%, transparent);
+  color: #ef5350;
+}
+
+.wd-trade-ticket-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.375rem;
+}
+
+.wd-trade-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.wd-trade-field-label {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+
+.wd-trade-input {
+  height: 1.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-submit {
+  height: 2rem;
+  font-weight: 600;
+}
+
+.wd-trade-submit.is-buy {
+  background: #26a69a;
+}
+
+.wd-trade-submit.is-sell {
+  background: #ef5350;
+}
+
+.wd-trade-ticket-error {
+  margin: 0;
+}
+
+/* Tabs + tables. */
+.wd-trade-tables {
+  grid-area: tables;
+  overflow: auto;
+  min-height: 0;
+}
+
+.wd-trade-tabs {
+  grid-area: tabs;
+  display: flex;
+  align-self: start;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-trade-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.wd-trade-tab.is-active {
+  color: var(--foreground);
+  border-bottom-color: var(--primary);
+}
+
+.wd-trade-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-table th {
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  padding: 0.25rem 0.5rem;
+  position: sticky;
+  top: 0;
+  background: var(--background);
+}
+
+.wd-trade-table td {
+  padding: 0.1875rem 0.5rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+.wd-trade-side-badge {
+  display: inline-flex;
+  width: 1.1rem;
+  height: 1.1rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.wd-trade-side-badge.is-buy {
+  background: #26a69a;
+}
+
+.wd-trade-side-badge.is-sell {
+  background: #ef5350;
+}
+
+.wd-trade-table td.wd-trade-editable {
+  padding: 0;
+}
+
+.wd-trade-cell-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 0.1875rem 0.5rem;
+}
+
+.wd-trade-cell-input:hover,
+.wd-trade-cell-input:focus {
+  background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
+  outline: none;
+}
+
+.wd-trade-close {
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.wd-trade-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--muted-foreground);
+}
