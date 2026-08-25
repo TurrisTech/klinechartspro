@@ -1,4 +1,5 @@
-import { apiGet, getReadClock } from '../config'
+import { apiGetResponse, getReadClock } from '../config'
+import { parseWatermark, type Watermark } from './freshness'
 
 // `GET /levels` — precomputed support/resistance price levels. Mirrors the `Level` model in
 // wdashboard-server's schemas.py.
@@ -15,6 +16,10 @@ export interface Level {
   // 'server' — see client/levels/config.ts.
   color: string
 }
+
+/** wdashboard-server levels.py: LEVELS_COMPUTED_THROUGH_HEADER. Named in the server's CORS
+ * `expose_headers`, without which a cross-origin `fetch` could not read it. */
+const COMPUTED_THROUGH_HEADER = 'X-Levels-Computed-Through'
 
 export interface FetchLevelsParams {
   vendor: string
@@ -76,8 +81,25 @@ export function levelsRequestsInFlight(): number {
   return inFlight.size
 }
 
+// How far the indicator feed has computed, per instrument, as of the last answer this client
+// got for it. A server fact, kept because `/levels` is where it is stated and `staleAt` is
+// where it is needed; `null` until a first answer arrives, and for a server that does not
+// send the header at all (`levels/freshness.ts` degrades to the calendar horizon on both).
+//
+// Keyed by instrument, not by request window: the watermark is a property of the series, so
+// every pane on one symbol reads the same one and the narrowest band read updates it.
+const watermarks = new Map<string, Watermark>()
+
+function instrumentKey(vendor: string, symbol: string): string {
+  return `${vendor.toLowerCase()}:${symbol.toUpperCase()}`
+}
+
+export function levelsComputedThrough(vendor: string, symbol: string): Watermark | null {
+  return watermarks.get(instrumentKey(vendor, symbol)) ?? null
+}
+
 async function requestLevels(params: FetchLevelsParams): Promise<Level[]> {
-  const levels = await apiGet<Level[]>('/levels', {
+  const { data: levels, response } = await apiGetResponse<Level[]>('/levels', {
     vendor: params.vendor,
     symbol: params.symbol,
     price_min: params.priceMin,
@@ -91,5 +113,7 @@ async function requestLevels(params: FetchLevelsParams): Promise<Level[]> {
     intervals: params.intervals?.join(','),
     include_invalidated: params.includeInvalidated ? 'true' : undefined
   })
+  const watermark = parseWatermark(response.headers.get(COMPUTED_THROUGH_HEADER))
+  if (watermark !== null) watermarks.set(instrumentKey(params.vendor, params.symbol), watermark)
   return Array.isArray(levels) ? levels : []
 }

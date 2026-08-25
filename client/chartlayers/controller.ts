@@ -304,8 +304,8 @@ export function createLayerController<TDatum, TConfig extends object>(
 
   // When data fetched at `fetchedAt` can first be wrong. A layer that knows the answer says
   // so; one that doesn't gets the timer.
-  const staleAt = (fetchedAt: number): number =>
-    layer.staleAt ? layer.staleAt(fetchedAt) : fetchedAt + CACHE_TTL_MS
+  const staleAt = (fetchedAt: number, ctx: LayerContext): number =>
+    layer.staleAt ? layer.staleAt(fetchedAt, ctx) : fetchedAt + CACHE_TTL_MS
 
   const redraw = async (entry: WiredPane<TDatum>): Promise<void> => {
     // Ahead of the enabled check: whether the button is reachable follows the wall's
@@ -348,7 +348,10 @@ export function createLayerController<TDatum, TConfig extends object>(
       // extending its window would otherwise renew the whole set on every extension and
       // never expire the part that was fetched first.
       const fetchedAt = held?.fetchedAt ?? Date.now()
-      entry.cache = { key, data, window: target, fetchedAt, staleAt: staleAt(fetchedAt) }
+      // Recomputed on every fetch, not carried over with `fetchedAt`: a layer whose horizon
+      // depends on what the server has computed learns that from the answer it just got, so
+      // an extension of the window is also the moment its horizon can move.
+      entry.cache = { key, data, window: target, fetchedAt, staleAt: staleAt(fetchedAt, ctx) }
       paint(entry, data, ctx)
     } catch (err) {
       console.error(`[chartlayers] ${layer.id} fetch failed for pane ${entry.pane.id}`, err)
