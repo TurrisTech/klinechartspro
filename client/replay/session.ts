@@ -1,3 +1,4 @@
+import { OhlcvApiError } from '../config'
 import type { OrderPatch, OrderRequest, SimAnswer, SimEvent, SimSnapshot, TradePatch } from '../trading/api'
 import type { SessionListener, TradingSession } from '../trading/session'
 import { BarCache, type BarSource, type ReplayBar } from './cache'
@@ -5,7 +6,7 @@ import { type AdvanceRequest, type SignalOccurrence, type StopReason, hasWorking
 import { type BidAskBar, type Engine, SimError } from './engine'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
 import type { SignalBook } from './signals'
-import { type BaseCheck, finerStored, validateBase } from './timeframes'
+import { type BaseCheck, finerStored, nominalMs, validateBase } from './timeframes'
 
 // GLUE. `ReplayTradingSession` implements `TradingSession` (the seam the whole trading UI
 // acts through) over the client-side engine and the bar caches, and is the
@@ -236,9 +237,26 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   persist(): void {
     if (this.disposed) return
+    // A star/arm change is persisted through here and must also re-render the strip.
+    this.controlsChanged()
     const state = this.toState()
     // Serialized: saves carry an optimistic rev, so two in flight would conflict.
     this.saveChain = this.saveChain.then(() => this.opts.save(state)).catch((err) => console.warn('[replay] save failed', err))
+  }
+
+  /** Before the first step the engine has no quote: take the base bar closing at the cursor
+   * (the last one the cursor has passed) so the ticket prices at once. */
+  async primeQuote(): Promise<void> {
+    if (this.engine.quotes.has(this.symbol)) return
+    const probe = new BarCache(this.opts.barSource, this.symbol, this.base, 'all')
+    probe.seek(this.cursor - 50 * nominalMs(this.base))
+    await probe.ensure(this.cursor)
+    const last = probe.slice(0, this.cursor).filter((b) => b.end <= this.cursor).at(-1)
+    if (!last) return
+    const bar = toBidAsk(last, this.symbol)
+    this.engine.onQuote({ symbol: this.symbol, time: this.cursor, bid: bar.bidClose, ask: bar.askClose })
+    this.snapshot = this.buildSnapshot()
+    for (const listener of [...this.listeners]) listener(this.snapshot, [])
   }
 
   // -- ReplayController ----------------------------------------------------------------------
@@ -392,13 +410,11 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 }
 
-/** An engine refusal, shaped like the server's `invalid_request` so the panel's error path
- * (which reads `message`) shows it. */
-export class ReplayRequestError extends Error {
-  readonly status = 400
-  readonly code = 'invalid_request'
+/** An engine refusal, as the server's `invalid_request` would arrive (the panel shows an
+ * `OhlcvApiError`'s message and a generic line for anything else). */
+export class ReplayRequestError extends OhlcvApiError {
   constructor(message: string) {
-    super(message)
+    super(400, 'invalid_request', message)
     this.name = 'ReplayRequestError'
   }
 }

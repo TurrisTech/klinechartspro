@@ -86,6 +86,10 @@ export function clearReplay(): void {
 
 // -- entering ------------------------------------------------------------------------------------
 
+/** How far back the stored-ladder probe looks: a store's finest series may lag the newest
+ * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
+const PROBE_WINDOW_MS = 10 * 86_400_000
+
 /** Probe which of the stored ladder the store holds for the instrument around `at`. */
 async function storedIntervalsFor(symbol: string, at: number): Promise<string[]> {
   const out: string[] = []
@@ -95,7 +99,7 @@ async function storedIntervalsFor(symbol: string, at: number): Promise<string[]>
       const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
         symbol,
         resolution: code,
-        from: at - 30 * nominalMs(code) + shift,
+        from: at - Math.max(PROBE_WINDOW_MS, 30 * nominalMs(code)) + shift,
         to: at + shift,
         limit: 1,
         asof: null
@@ -269,6 +273,10 @@ export async function mountBarReplay(
     header: strip.element
   })
   dock.setOpen(true)
+  // The panes mounted while this function was awaiting the session (onPanesChange fired
+  // before the controller existed), so the dock's overlays are synced here explicitly.
+  dock.sync(chartPro.getPanes())
+  await session.primeQuote()
 
   return {
     toggle: () => dock.toggle(),

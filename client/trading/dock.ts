@@ -63,7 +63,9 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
   const dock = document.createElement('div')
   // Minimized by default: `is-hidden` is `display: none`, so the dock is removed from the
   // layout and the chart uses the whole wall until the rail button opens it.
-  dock.className = 'wd-trade-dock is-hidden'
+  // The kc tokens are scoped under `.klinecharts-pro.dark`; the dock is a body-level sibling
+  // of the chart, so it carries the theme class itself.
+  dock.className = `wd-trade-dock is-hidden ${document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''}`
   dock.dataset.mode = session.mode ?? 'paper'
 
   const panel = new TradingPanel(session, {

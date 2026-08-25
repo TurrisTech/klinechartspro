@@ -285,6 +285,8 @@ export class TradingPanel {
 
   private reportError(err: unknown): void {
     const message = err instanceof OhlcvApiError ? err.message : 'Request failed'
+    // A refused edit leaves the state as it was: redraw the tables so the typed value goes.
+    this.render()
     this.ticket.showError(message)
   }
 

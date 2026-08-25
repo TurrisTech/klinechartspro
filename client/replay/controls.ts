@@ -136,7 +136,7 @@ function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogue
   switch (result.reason) {
     case 'signal': {
       const entry = catalogue.find((e) => e.ref === result.signal?.ref)
-      const name = entry ? `${entry.title} ${entry.label}` : (result.signal?.ref ?? 'signal')
+      const name = entry ? `${entry.title}${entry.variant ? ` ${entry.variant}` : ''} ${entry.label}` : (result.signal?.ref ?? 'signal')
       return `Stopped at ${name} @${result.signal?.resolution ?? ''}`
     }
     case 'fill':
@@ -174,7 +174,7 @@ function renderSignals(controller: ReplayController, inUse: string[]): HTMLEleme
     })
     star.title = book.isStarred(entry.ref) ? 'Unstar' : 'Star (shortlist)'
     const name = el('span', `wd-replay-signal-name is-${entry.side ?? 'none'}`)
-    name.textContent = `${entry.title} · ${entry.label}`
+    name.textContent = `${entry.title}${entry.variant ? ` ${entry.variant}` : ''} · ${entry.label}`
     name.title = entry.description || entry.ref
     row.append(star, name)
     if (book.isStarred(entry.ref)) {
@@ -220,7 +220,9 @@ export interface StartDialog {
 }
 
 export function openStartDialog(options: StartDialogOptions): StartDialog {
-  const overlay = el('div', 'wd-replay-dialog-backdrop')
+  // The kc tokens are scoped under the chart's themed root (`.klinecharts-pro.dark`); a
+  // body-level card has to carry the theme class itself or it renders in the light defaults.
+  const overlay = el('div', `wd-replay-dialog-backdrop ${chartTheme()}`)
   const dialog = el('div', 'wd-replay-dialog')
   overlay.appendChild(dialog)
   const title = el('div', 'wd-replay-dialog-title')
@@ -338,6 +340,11 @@ function fromLocalInputValue(value: string): number | null {
 }
 
 // -- small DOM helpers -------------------------------------------------------------------------
+
+/** The mounted chart's theme class ('dark' or ''), for chrome mounted outside its root. */
+export function chartTheme(): string {
+  return document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''
+}
 
 function el(tag: string, className: string): HTMLElement {
   const node = document.createElement(tag)
