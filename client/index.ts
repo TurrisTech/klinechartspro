@@ -1,17 +1,8 @@
 import { KLineChartPro, type ChartProPane } from '../src'
-import { createArevController } from './arev/controller'
-import { registerArevIndicators } from './arev/templates'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
 import { WdashboardDatafeed } from './datafeed'
-import { loadDiscovery } from './indicators/api'
-import { createKrevController } from './krev/controller'
-import { registerKrevIndicators } from './krev/templates'
-import { createIndicatorController } from './indicators/controller'
-import { createMtfController } from './mtf/controller'
-import { registerMtfIndicators } from './mtf/templates'
-import { createParamsValidator, registerServerIndicators } from './indicators/templates'
 import {
   defaultLayout,
   hydrateLayout,
@@ -20,6 +11,8 @@ import {
   type PersistedLayout
 } from './layout'
 import { levelsLayer } from './levels/layer'
+import type { MtfConfig } from './mtf/config'
+import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
 import { availablePeriods } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
@@ -233,57 +226,33 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // "Signing in…" since nothing ever tears the login form down.
   container.innerHTML = ''
 
-  // The wall's instruments, this account's starred timeframes and the server's indicator
-  // catalogue all have to resolve before the chart mounts — price precision, the starred set
-  // and the pane layout are all construction-time properties of the library component
-  // (src/types.ts: ChartProOptions has no setSymbol-style setter for any of them).
-  const [hydrated, starredTimeframes, discovery] = await Promise.all([
+  // The wall's instruments and this account's starred timeframes have to resolve before
+  // the chart mounts -- price precision, the starred set and the pane layout are all
+  // construction-time properties of the library component (src/types.ts: ChartProOptions
+  // has no setSymbol-style setter for any of them). So does the plugin host: it registers
+  // every plugin's klinecharts templates (a restored layout may name them) and collects
+  // their picker groups, which are construction-time too.
+  //
+  // Every plugin, and the host, is built per MOUNT, not once per page: each holds per-pane
+  // state keyed by pane id, and the host seeds the plugins' per-pane document state from
+  // the workspace being switched TO. `teardown` below is what closes the outgoing set down.
+  // `persist` is declared below; the thunk is not called until a user edits something,
+  // long after it is initialised.
+  const [hydrated, starredTimeframes] = await Promise.all([
     hydrateLayout(options.layout),
-    hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES),
-    // Server-computed indicators: the whole library, registered as klinecharts templates
-    // before any pane can create one (a restored layout may name them). A server without
-    // the feature simply contributes no picker groups.
-    hasFeature('indicators')
-      ? loadDiscovery().catch((err) => {
-          console.error('[indicators] discovery failed', err)
-          return null
-        })
-      : Promise.resolve(null)
+    hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES)
   ])
-
-  const serverSpecs = discovery?.indicators ?? []
-  const indicatorGroups = registerServerIndicators(serverSpecs)
-  // Every controller below is built per MOUNT, not once per page: each holds per-pane state
-  // keyed by pane id, and the indicator controller reads the active workspace's saved
-  // indicator parameters at construction. A switch therefore rebuilds them against the
-  // workspace being switched TO, and `teardown` below is what closes the outgoing set down.
-  const indicatorController = createIndicatorController(serverSpecs)
-  // AREV research predictions (client/arev/): two fixed sub-pane templates over
-  // GET /arev/values, registered only when the server can actually serve them.
-  const arevGroups = hasFeature('arev') ? registerArevIndicators() : []
-  const arevController = createArevController()
-  // krev01 reversal votes (client/krev/): one sub-pane template over GET /krev/values,
-  // registered only when the server can serve it.
-  const krevGroups = hasFeature('krev') ? registerKrevIndicators() : []
-  const krevController = createKrevController()
-  // AREV21 across timeframes (client/mtf/): one price-pane template per source timeframe
-  // over the same GET /arev/values the AREV panes read, which is why it gates on 'arev'
-  // and not on a capability of its own -- there is no new server surface behind it.
-  const mtfGroups = hasFeature('arev') ? registerMtfIndicators() : []
-  // Seeded from what the wall document hydrated for each pane, and asks for a save whenever
-  // its settings panel commits an edit. `persist` is declared below; the thunk is not called
-  // until a user edits something, long after it is initialised.
-  const mtfController = createMtfController({
-    initial: Object.fromEntries(
-      hydrated.panes.flatMap((pane, index) => (pane.mtfConfig ? [[index, pane.mtfConfig]] : []))
-    ),
-    onChange: () => persist()
+  const pluginHost = await createPluginHost({
+    plugins: builtinPlugins(),
+    facilities: createFacilities({ requestPersist: () => persist() }),
+    paneState: {
+      // The AREV21 overlay's per-pane settings: app state the library's PaneSnapshot has
+      // never heard of, carried in the pane's own document entry (layout.ts).
+      mtf: Object.fromEntries(
+        hydrated.panes.flatMap((pane, index) => (pane.mtfConfig ? [[index, pane.mtfConfig]] : []))
+      )
+    }
   })
-  // The settings dialog asks this before it will commit params, so a combination the server
-  // cannot serve is refused with its own explanation instead of being drawn and then
-  // failing on the first fetch. Null against a server without `indicators.resolve`, which
-  // leaves the dialog exactly as it behaved before.
-  const indicatorParamsValidator = createParamsValidator(serverSpecs)
 
   // Every chart layer (today: just Levels) is built before the chart exists: its `sync`
   // becomes the wall's onPanesChange, which is a constructor argument.
@@ -307,9 +276,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
         panes,
         activeIndex,
         latestSync,
-        // The AREV21 overlay's per-pane settings: app state the library's PaneSnapshot has
-        // never heard of, so they are supplied here rather than read off the snapshots.
-        mtfController.configByPane()
+        // The plugins' per-pane document state (today: the AREV21 overlay's settings),
+        // supplied here rather than read off the snapshots.
+        (pluginHost.paneState().mtf ?? {}) as Record<number, MtfConfig>
       )
     )
     // The switcher's row for the active workspace shows its pane count and instrument, so it
@@ -334,13 +303,13 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     onStarredPeriodsChange: hasFeature('preferences') ? saveStarredTimeframes : () => {},
     mainIndicators: ['MA'],
     subIndicators: ['VOL'],
-    indicatorGroups: [...indicatorGroups, ...arevGroups, ...krevGroups, ...mtfGroups],
-    indicatorParamsValidator,
-    // The AREV21 multi-timeframe overlay owns its own settings: one indicator whose
-    // settings are a colour and two sizes PER TIMEFRAME, which the built-in dialog (a flat
-    // numeric calcParams array) cannot express. Every other indicator is untouched -- the
-    // handler answers false and the numeric dialog opens as before.
-    indicatorSettingsHandler: mtfController.handleSettings,
+    // Every plugin's picker groups, params validation and settings entry point, through
+    // the one host (client/plugins). A plugin that owns its own settings UI (the AREV21
+    // overlay: a colour and two sizes PER TIMEFRAME, which the built-in numeric dialog
+    // cannot express) claims the gear; every other indicator gets the dialog as before.
+    indicatorGroups: pluginHost.groups,
+    indicatorParamsValidator: pluginHost.validateParams,
+    indicatorSettingsHandler: pluginHost.handleSettings,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
     // symbol+interval sharing one would clobber each other's stream subscription.
@@ -356,14 +325,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     // chart exists. Every mounted chart layer resyncs from this directly; nothing here polls
     // getChart().
     onPanesChange: (panes) => {
-      // Debug hook, like window.__wdIndicators: the live wall panes, so a console (or a
+      // Debug hook, like window.__wdPlugins: the live wall panes, so a console (or a
       // headless test) can reach a pane's chart. Read-only by convention.
       window.__wdPanes = panes
       levelsController.sync(panes)
-      indicatorController.sync(panes)
-      arevController.sync(panes)
-      krevController.sync(panes)
-      mtfController.sync(panes)
+      pluginHost.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
@@ -390,10 +356,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // ChartPro.svelte's onPanesChange effect is destroyed with the component, so it never
       // fires an empty list of its own -- this is the only teardown signal they get.
       levelsController.sync([])
-      indicatorController.sync([])
-      arevController.sync([])
-      krevController.sync([])
-      mtfController.sync([])
+      pluginHost.teardown()
       levelsController.detach()
       detachExtras()
       chartPro?.remove()

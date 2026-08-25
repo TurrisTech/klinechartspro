@@ -21,6 +21,11 @@ export type Feature =
   // GET /indicators/resolve — per-instance warm-up and servability. Gated on, because a
   // server without it 404s, and a 404 alone cannot be told from "that series is unknown".
   | 'indicators.resolve'
+  // GET /plugins and GET /plugins/{id}/values — the indicator plugin host
+  // (wdashboard_server/plugins). Every plugin's points come through one route body; the
+  // `plugins` table names what is mounted. Absent (an older server), the client's plugins
+  // fetch on their legacy paths instead (client/plugins/api.ts).
+  | 'plugins'
   // GET /arev/values — AREV research predictions (wdashboard-server services/arev.py).
   // The client only registers its AREV templates and picker entries when advertised.
   | 'arev'
@@ -48,6 +53,13 @@ export interface LevelsCoverage {
   computedThrough: number
 }
 
+export interface PluginInfo {
+  id: string
+  kind: 'points' | 'series' | 'entities'
+  feature: string | null
+  available: boolean
+}
+
 export interface Capabilities {
   version: string
   serverTime: number
@@ -55,6 +67,8 @@ export interface Capabilities {
   features: Feature[]
   limits: CapabilityLimits
   levels: LevelsCoverage[]
+  /** The mounted indicator plugins; absent on a server without the host. */
+  plugins?: PluginInfo[]
 }
 
 // Used when /capabilities is unreachable. Deliberately the conservative reading of the
@@ -90,7 +104,8 @@ const FALLBACK: Capabilities = {
     maxBackfillBarCount: 500,
     maxSubscriptionsPerConnection: 32
   },
-  levels: []
+  levels: [],
+  plugins: []
 }
 
 let cached: Capabilities = FALLBACK
@@ -127,4 +142,9 @@ export function levelsCoverageFor(vendor: string, symbol: string): LevelsCoverag
       entry.vendor.toLowerCase() === vendor.toLowerCase() &&
       entry.symbol.toUpperCase() === symbol.toUpperCase()
   )
+}
+
+// The server's plugin table, empty on a server from before the host.
+export function serverPlugins(): PluginInfo[] {
+  return cached.plugins ?? []
 }

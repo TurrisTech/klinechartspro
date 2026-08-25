@@ -34,6 +34,8 @@ export type {
   DatafeedFactory,
   DatafeedSubscribeCallback,
   IndicatorGroup,
+  IndicatorParamsCheck,
+  IndicatorParamsValidator,
   IndicatorSettingsHandler,
   PaneOptions,
   PaneSnapshot,
