@@ -20,11 +20,12 @@ interface TradingSession {
 }
 ```
 
-The one implementation today is **`PaperTradingSession`**, backed by the `/sim` routes and a
-poll (fast while something is working, slow when flat, never while the tab is hidden). A later
-**bar-replay** mode is a *second* implementation of this same interface (a client-side engine
-over stored bars); the panel, ticket, tables and overlays here consume the interface only, so
-they work against it unchanged.
+Two implementations: **`PaperTradingSession`** (this module), backed by the `/sim` routes and
+a poll (fast while something is working, slow when flat, never while the tab is hidden), and
+**`ReplayTradingSession`** (`client/replay/session.ts`), a client-side engine over stored
+bars. The panel, ticket, tables and overlays consume the interface only, so they serve both
+unchanged. The optional members `mode` and `cursor` are additive; the panel branches on
+mode only for its title.
 
 ## Pieces
 
@@ -39,10 +40,13 @@ they work against it unchanged.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
 - `format.ts` — pure price / pip / P&L helpers.
-- `index.ts` — `mountPaperTrading(chartPro, container)`: builds the dock (minimized by
-  default, removed from layout), wires overlays to the session, and returns
-  `{ toggle, isOpen, sync, teardown }`. The "Paper" button in the drawing rail's footer
-  (`client/index.ts` `mountChartExtras`) calls `toggle`.
+- `dock.ts` — `mountTradingDock(session, opts)`: the mode-agnostic dock — panel, overlays,
+  the dock element below the chart (minimized by default, removed from layout), open/close,
+  teardown; `opts.header` mounts extra chrome above the panel (the replay's control strip).
+- `index.ts` — `mountPaperTrading(chartPro, container)`: a `PaperTradingSession` on the dock;
+  returns `{ toggle, isOpen, sync, teardown }`. The "Paper" button in the drawing rail's
+  footer (`client/index.ts` `mountChartExtras`) calls `toggle`; "Replay" beside it is
+  `client/replay`.
 
 ## Gating
 

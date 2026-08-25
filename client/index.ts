@@ -17,6 +17,17 @@ import { renderLogin } from './login'
 import { availablePeriods } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
 import { stream, type StreamStatus } from './stream'
+import {
+  type BarReplayController,
+  bootReplay,
+  clearReplay,
+  currentIntent,
+  mountBarReplay,
+  type ReplayBoot,
+  replayAvailable,
+  startReplayFlow
+} from './replay'
+import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
@@ -152,7 +163,8 @@ async function runWall(container: HTMLElement): Promise<void> {
             store,
             switcher,
             layout: scratch ? defaultLayout(linked as string) : store.active().layout,
-            persist: !scratch
+            persist: !scratch,
+            rebuild: () => void remount()
           })
         } catch (err) {
           // The switcher is detached with the wall it was attached to, so a failed mount
@@ -216,10 +228,20 @@ interface WallOptions {
   layout: PersistedLayout
   /** False for the `?symbol=` scratch wall, which deliberately saves nothing. */
   persist: boolean
+  /** Tear this wall down and build the next (entering or leaving replay). */
+  rebuild: () => void
 }
 
 async function mountWall(container: HTMLElement, options: WallOptions): Promise<MountedWall> {
   const { store, switcher, persist: persistEnabled } = options
+
+  // A wall is EITHER live or a replay. The replay intent (session + cursor) is page-level
+  // state (client/replay/persist.ts) read before anything is built, because the datafeed,
+  // the read clock and the plugins' stream are all construction-time: a replay wall loads
+  // its history clamped to the cursor and its plugins never hear a live point.
+  const intent = replayAvailable() ? currentIntent() : null
+  if (!replayAvailable()) clearReplay()
+  const replayBoot: ReplayBoot | null = intent ? bootReplay(intent, '1m') : null
 
   // Svelte's mount() appends to its target rather than replacing its contents, so a prior
   // renderLogin() left in place would sit visually on top of (or behind) the chart forever
@@ -245,7 +267,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   ])
   const pluginHost = await createPluginHost({
     plugins: builtinPlugins(),
-    facilities: createFacilities({ requestPersist: () => persist() }),
+    facilities: createFacilities({ requestPersist: () => persist(), stream: replayBoot ? inertStream : undefined }),
     paneState: {
       // The AREV21 overlay's per-pane settings: app state the library's PaneSnapshot has
       // never heard of, carried in the pane's own document entry (layout.ts).
@@ -268,6 +290,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // Assigned after the chart exists (mountPaperTrading needs it), and referenced by
   // onPanesChange, which never fires before the constructor returns.
   let paper: PaperTradingController | null = null
+  let replay: BarReplayController | null = null
   const persist = (): void => {
     const cp = chartPro
     if (!cp || !persistEnabled) return
@@ -317,7 +340,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
     // symbol+interval sharing one would clobber each other's stream subscription.
-    datafeed: () => new WdashboardDatafeed(),
+    datafeed: replayBoot ? replayBoot.datafeed : () => new WdashboardDatafeed(),
     paneLayout: hydrated.preset,
     panes: hydrated.panes.map(toPaneOptions),
     activePane: `p${hydrated.active + 1}`,
@@ -335,6 +358,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       levelsController.sync(panes)
       pluginHost.sync(panes)
       paper?.sync(panes)
+      replay?.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
@@ -354,9 +378,23 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // The paper-trading account: the panel dock below the chart and the per-pane overlays.
   // Gated on the server's `sim` capability (returns null otherwise); its rail button is added
   // in mountChartExtras beside the stream status.
-  paper = mountPaperTrading(chartPro, container)
+  // A replay wall mounts the replay dock instead (client/replay/index.ts); a live wall the
+  // paper account. The "Replay" rail button starts one here, or exits it there.
+  if (replayBoot) {
+    replay = await mountBarReplay(chartPro, container, replayBoot, {
+      pluginHost,
+      levelsController,
+      rebuild: options.rebuild
+    })
+  } else {
+    paper = mountPaperTrading(chartPro, container)
+  }
 
-  const detachExtras = mountChartExtras(chartPro, levelsController, switcher, paper)
+  const detachExtras = mountChartExtras(chartPro, levelsController, switcher, paper, {
+    inReplay: replayBoot !== null,
+    controller: replay,
+    rebuild: options.rebuild
+  })
 
   return {
     teardown(): void {
@@ -370,6 +408,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // Clears its overlays against the still-alive charts and removes the dock, before the
       // component (and its panes) is unmounted below.
       paper?.teardown()
+      replay?.teardown()
       levelsController.detach()
       detachExtras()
       chartPro?.remove()
@@ -391,7 +430,8 @@ function mountChartExtras(
   chartPro: KLineChartPro,
   levelsController: ReturnType<typeof createLayerController>,
   switcher: ReturnType<typeof createWorkspaceSwitcher>,
-  paper: PaperTradingController | null
+  paper: PaperTradingController | null,
+  replay: { inReplay: boolean; controller: BarReplayController | null; rebuild: () => void }
 ): () => void {
   const footer = document.createElement('div')
   footer.className = 'wd-rail-footer-content'
@@ -410,6 +450,26 @@ function mountChartExtras(
       paperButton.classList.toggle('is-on', paper.toggle())
     })
     footer.appendChild(paperButton)
+  }
+
+  // Bar replay toggle, right next to Paper. On a live wall it opens the start dialog (and
+  // rebuilds the wall in replay mode); on a replay wall it exits replay. Only present when
+  // the server advertises both `sim` and `asof`.
+  if (replayAvailable()) {
+    const replayButton = document.createElement('button')
+    replayButton.type = 'button'
+    replayButton.className = `wd-rail-button${replay.inReplay ? ' is-on' : ''}`
+    replayButton.textContent = 'Replay'
+    replayButton.title = replay.inReplay ? 'Exit bar replay' : 'Bar replay'
+    replayButton.addEventListener('click', () => {
+      if (replay.inReplay) {
+        clearReplay()
+        replay.rebuild()
+        return
+      }
+      void startReplayFlow(chartPro, replayButton, replay.rebuild)
+    })
+    footer.appendChild(replayButton)
   }
 
   const status = document.createElement('span')

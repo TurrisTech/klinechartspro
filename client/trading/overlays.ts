@@ -123,7 +123,10 @@ export class TradingOverlays {
   private snapshot: SimSnapshot | null = null
   private colors: OverlayColors = DEFAULT_COLORS
 
-  constructor(private onDrag: DragHandler) {}
+  constructor(
+    private onDrag: DragHandler,
+    private tag = 'paper'
+  ) {}
 
   /** Called from the wall's onPanesChange, exactly like a ChartLayer's sync. */
   sync(panes: ChartProPane[]): void {
@@ -184,7 +187,7 @@ export class TradingOverlays {
       try {
         chart.createOverlay(created)
       } catch (err) {
-        console.warn('[paper] overlay create failed', err)
+        console.warn(`[${this.tag}] overlay create failed`, err)
       }
     }
   }
