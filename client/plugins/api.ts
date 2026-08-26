@@ -118,9 +118,16 @@ export async function fetchEnvelope<P>(url: URL): Promise<PointsEnvelope<P>> {
 export function toPage<P extends { date: number }>(
   envelope: PointsEnvelope<P>,
   limit: number,
-  onEnvelope?: (envelope: PointsEnvelope<P>) => void
+  onEnvelope?: (envelope: PointsEnvelope<P>) => void,
+  arrays?: readonly string[]
 ): Page<P> {
   onEnvelope?.(envelope)
+  // A requested array always appears on the page, even on an envelope that carries none:
+  // `no_data`, a replaying server, or one too old to know the name. The plugin then reads
+  // an empty array instead of `undefined`, which is the honest answer in every case.
+  const extra = arrays?.length
+    ? { arrays: Object.fromEntries(arrays.map((name) => [name, readArray(envelope, name)])) }
+    : {}
   if (envelope.s === 'replaying') {
     return {
       points: [],
@@ -129,14 +136,26 @@ export function toPage<P extends { date: number }>(
         phase: envelope.phase === 'queued' ? 'queued' : 'replaying',
         progress: envelope.progress ?? null,
         retryAfterMs: envelope.retryAfterMs
-      }
+      },
+      ...extra
     }
   }
-  if (envelope.s === 'no_data') return { points: [], nextFrom: null }
+  if (envelope.s === 'no_data') return { points: [], nextFrom: null, ...extra }
   const points = envelope.points
   const last = points[points.length - 1]
   const full = points.length >= limit
-  return { points, nextFrom: full && last ? last.date + 1 : null }
+  // `nextFrom` is driven by `points` alone. An auxiliary array is a different kind of row,
+  // not more of the same one, so it has no cursor of its own -- the server caps each array
+  // independently and a capped `points` is what tells the host to come back for more.
+  return { points, nextFrom: full && last ? last.date + 1 : null, ...extra }
+}
+
+/** One auxiliary array off an envelope, defensively: anything that is not an array of
+ * dated rows reads as empty rather than reaching a template as garbage. */
+function readArray(envelope: PointsEnvelope<unknown>, name: string): { date: number }[] {
+  const value = (envelope as Record<string, unknown>)[name]
+  if (!Array.isArray(value)) return []
+  return value.filter((row): row is { date: number } => typeof (row as { date?: unknown })?.date === 'number')
 }
 
 export function pointsUrl(request: PointsRequest): URL {
@@ -167,5 +186,5 @@ export async function fetchPoints<P extends { date: number }>(
   request: PointsRequest,
   onEnvelope?: (envelope: PointsEnvelope<P>) => void
 ): Promise<Page<P>> {
-  return toPage(await fetchEnvelope<P>(pointsUrl(request)), request.limit, onEnvelope)
+  return toPage(await fetchEnvelope<P>(pointsUrl(request)), request.limit, onEnvelope, request.arrays)
 }

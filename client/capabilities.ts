@@ -37,6 +37,10 @@ export type Feature =
   // GET /krev/values — krev01 k-NN reversal votes (wdashboard-server services/krev.py).
   // The client only registers its KREV template and picker entry when advertised.
   | 'krev'
+  // GET /plugins/mtf01/values — the mtf01 multi-timeframe cascade (wdashboard-server
+  // services/mtf01.py): the arrows in `points`, the trades they produced in the `trades`
+  // array. The client registers its MTF01 template only when advertised.
+  | 'strategy'
   // The /sim/* route set — the paper-trading account (wdashboard-server sim/). The client
   // only shows its "Paper" rail button and mounts the trading panel when advertised.
   | 'sim'
