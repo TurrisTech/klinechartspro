@@ -14,6 +14,11 @@
 //     CORS-only code path.
 import index from './index.html'
 
+// Where build_chart_tiles.py (wmarketdata) wrote its output. Serving these here is a
+// stand-in for the object store they will eventually live in: the bytes and the cache
+// headers are the same either way, so the client path does not change when they move.
+const TILES_ROOT = (process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles').replace(/\/+$/, '')
+
 const PORT = Number(process.env.CLIENT_PORT ?? process.env.PORT0 ?? process.env.PORT ?? 3000)
 
 // The upstream the /ohlcv proxy forwards to. Origin only — the /ohlcv prefix is preserved
@@ -48,6 +53,34 @@ function forwardHeaders(req: Request): Headers {
   const headers = new Headers(req.headers)
   for (const name of ['host', 'origin', 'referer', 'connection']) headers.delete(name)
   return headers
+}
+
+// Tiles are immutable by construction -- build_chart_tiles.py only writes a period once
+// the source holds a bar at or past its end, and whole-history tiles are content-addressed.
+// So they get a year of `immutable`, which is what makes a scroll-back cost no network at
+// all. The manifest is the mutable index that points at them, so it must never be cached:
+// it is how the client learns that a new tile exists. Same split as client/nginx.conf uses
+// for hashed bundles vs index.html.
+async function serveTile(req: Request): Promise<Response> {
+  const { pathname } = new URL(req.url)
+  const rest = decodeURIComponent(pathname.replace(/^\/tiles\//, ''))
+  // Reject traversal before touching the filesystem: this serves a directory by raw path.
+  if (rest.split('/').some((segment) => segment === '..' || segment === '')) {
+    return new Response('bad tile path', { status: 400 })
+  }
+  const file = Bun.file(`${TILES_ROOT}/${rest}`)
+  if (!(await file.exists())) return new Response('no such tile', { status: 404 })
+
+  const manifest = rest.endsWith('.json')
+  return new Response(file, {
+    headers: {
+      'content-type': manifest ? 'application/json' : 'application/vnd.apache.parquet',
+      'cache-control': manifest ? 'no-cache' : 'public, max-age=31536000, immutable',
+      // Parquet is already Snappy-compressed internally; gzipping it again costs CPU at
+      // both ends for ~2% (129.4 KB snappy vs 127.0 KB gzipped).
+      'content-encoding': 'identity'
+    }
+  })
 }
 
 async function proxyRest(req: Request): Promise<Response> {
@@ -93,7 +126,7 @@ interface SocketProxy {
 // Bun.serve's second type parameter is the union of route paths, not an options bag; it has
 // to be named explicitly here because the `websocket`/`data` generic in the first slot stops
 // it being inferred from the `routes` literal.
-const server = Bun.serve<SocketProxy, '/ohlcv/stream' | '/ohlcv/*' | '/*'>({
+const server = Bun.serve<SocketProxy, '/ohlcv/stream' | '/ohlcv/*' | '/tiles/*' | '/*'>({
   hostname: '0.0.0.0',
   port: PORT,
   // Chart cold loads fetch several hundred bars per pane and the upstream can take its
@@ -105,6 +138,7 @@ const server = Bun.serve<SocketProxy, '/ohlcv/stream' | '/ohlcv/*' | '/*'>({
       return new Response('expected a websocket upgrade', { status: 426 })
     },
     '/ohlcv/*': proxyRest,
+    '/tiles/*': serveTile,
     '/*': index
   },
   websocket: {
@@ -143,4 +177,6 @@ const server = Bun.serve<SocketProxy, '/ohlcv/stream' | '/ohlcv/*' | '/*'>({
   }
 })
 
-console.log(`client dev server ready at ${server.url} (proxying /ohlcv -> ${UPSTREAM})`)
+console.log(
+  `client dev server ready at ${server.url} (proxying /ohlcv -> ${UPSTREAM}, tiles from ${TILES_ROOT})`
+)
