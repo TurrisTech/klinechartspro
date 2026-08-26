@@ -197,7 +197,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
           return
         }
         const to = page.nextFrom ?? gap.to
-        store.ingest(page.points, { from, to })
+        store.ingest(page.points, { from, to }, page.arrays)
         store.setPhase('ready')
         apply(entry, b)
         if (page.nextFrom === null) return

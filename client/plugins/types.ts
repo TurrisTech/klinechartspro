@@ -35,6 +35,12 @@ export interface Page<P> {
   points: P[]
   nextFrom: number | null
   status?: { phase: 'queued' | 'replaying'; progress: number | null; retryAfterMs: number }
+  /** The auxiliary arrays named in the request, by name. Absent when none were asked for;
+   * a name the server did not send reads as an empty array, so a plugin talking to an
+   * older server sees "no trades" rather than a crash. Paging is driven by `points`
+   * alone: an auxiliary array is a different kind of row and does not have its own
+   * cursor. */
+  arrays?: Record<string, { date: number }[]>
 }
 
 /** What the host needs from a store. `WindowStore` (store.ts) is the implementation
@@ -47,7 +53,10 @@ export interface SourceStore<P = unknown> {
   progress: number | null
   error: string | null
   size: number
-  ingest(points: P[], window: Range): void
+  /** `arrays` carries the auxiliary arrays the source asked for, by name -- a store
+   * that reads only points ignores the third argument, which is why it is optional and
+   * why every existing store is unchanged. */
+  ingest(points: P[], window: Range, arrays?: Record<string, { date: number }[]>): void
   /** The parts of `window` not yet fetched. */
   missing(window: Range): Range[]
   /** Forget coverage at or after `from` (the replay's cursor moved: values that were not
@@ -226,6 +235,11 @@ export interface PointsRequest {
   params?: Record<string, unknown>
   /** The legacy path's query, when it differs from the unified one. */
   legacyQuery?: Record<string, string | number | undefined>
+  /** Auxiliary arrays to read out of the response beside `points`, by the names the
+   * plugin declares in its catalogue entry (`arrays`). A plugin whose read produces a
+   * second KIND of row -- mtf01's trades beside its cascade events -- names them here and
+   * reads them back off `Page.arrays`. Omitted: the single-array wire. */
+  arrays?: readonly string[]
 }
 
 export interface IndicatorPlugin {
