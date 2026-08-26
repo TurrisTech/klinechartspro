@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import type { Chart } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
 import { installWindow } from '../plugins/testing'
@@ -15,9 +15,20 @@ let nextLevelsBody: unknown = []
  * send it at all, which is what an older one looks like. */
 let watermarkHeader: string | null = null
 
+// Captured before the stub below replaces it, so the afterAll can put back exactly what was
+// here rather than an equivalent -- `globalThis.fetch` and `Bun.fetch` are distinct function
+// objects even in a pristine process, so restoring the latter would be a swap, not a restore.
+const pristineFetch = globalThis.fetch
+
 // A real fetch, answering the two routes this file touches. Nothing in client/ is replaced:
 // capabilities.ts parses the document it would parse in a browser, and api.ts builds and
 // sends the URL it would send.
+//
+// Installed at module load, which is what the tests below need -- but bun loads every test
+// file into one process, so without the afterAll at the bottom this stub stays live for every
+// file evaluated afterwards. It did: client/tiles/parity.test.ts captured it as its "real"
+// fetch and sent 13 dev-server requests into the fixture below, failing only in the full
+// suite and only after a merge changed the file ordering.
 globalThis.fetch = (async (input: URL | RequestInfo) => {
   const url = input instanceof URL ? input : new URL(String(input))
   requests.push(url)
@@ -73,6 +84,11 @@ type Level = Awaited<ReturnType<typeof fetchLevels>>[number]
 //
 // The rule itself is `freshness.test.ts`; what matters here is that the layer asks it with
 // the watermark for the right instrument.
+
+// Without this, the stub above stays live for every test file bun evaluates afterwards.
+afterAll(() => {
+  globalThis.fetch = pristineFetch
+})
 
 describe('staleAt', () => {
   test('the layer declares one', () => {
