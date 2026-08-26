@@ -17,7 +17,12 @@ const API = `http://localhost:${process.env.PORT0 ?? 25998}/ohlcv`
 const FIELDS = ['timestamp', 'open', 'high', 'low', 'close', 'volume'] as const
 
 let barsFromTiles: typeof import('./index').barsFromTiles
-const realFetch = globalThis.fetch
+// `Bun.fetch`, not `globalThis.fetch`: another test file in this suite replaces the global
+// at module load and never restores it, so by the time this module is evaluated the "real"
+// fetch is already somebody's stub — which silently routed every server request here into
+// their fixture and failed all 13 cases, but only when the whole suite ran. Taking the
+// engine's own handle makes this file independent of what any other file does to the global.
+const realFetch = Bun.fetch
 
 // Probed at module load, not in beforeAll: `test.skipIf` is evaluated while the file is
 // being collected, so a flag set later is always still false and every case silently skips.

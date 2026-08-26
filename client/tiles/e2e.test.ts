@@ -11,7 +11,6 @@ const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles'
 const ready = existsSync(`${ROOT}/v1/oanda/EURUSD/1m/manifest.json`)
 
 let barsFromTiles: typeof import('./index').barsFromTiles
-let realFetch: typeof globalThis.fetch
 
 // Narrows away the null that means "tiles cannot answer this", so assertions read as plain
 // values rather than non-null assertions.
@@ -24,7 +23,6 @@ beforeAll(async () => {
   // The modules read window.location on first use and fetch over HTTP; both are stubbed to
   // the local tile directory so this needs no server.
   ;(globalThis as { window?: unknown }).window = { location: { origin: 'http://tiles.test' } }
-  realFetch = globalThis.fetch
   globalThis.fetch = (async (input: string | URL | Request) => {
     const url = String(input)
     const file = Bun.file(`${ROOT}${new URL(url).pathname.replace(/^\/tiles/, '')}`)
@@ -35,7 +33,10 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
-  globalThis.fetch = realFetch
+  // Restore the engine's own fetch rather than whatever the global happened to hold on
+  // entry: another file in this suite stubs it permanently at module load, and putting
+  // that back would leak it onward to every later file.
+  globalThis.fetch = Bun.fetch
 })
 
 describe.skipIf(!ready)('barsFromTiles over the real tile store', () => {
