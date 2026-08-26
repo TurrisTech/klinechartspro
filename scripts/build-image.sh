@@ -2,7 +2,7 @@
 # Build the wdashboard client image (wdashboard-klinechartpro) LOCALLY and push to Gitea.
 #
 # This workstation has no Docker daemon and rootless container builders are blocked by seccomp
-# (see the server's bin/docker_build.sh for the full note), so we build the bundle NATIVELY --
+# (see the server's bin/build_image.sh for the full note), so we build the bundle NATIVELY --
 # the exact step the Dockerfile's builder stage runs -- then assemble the nginx image with
 # `crane` (github.com/google/go-containerregistry) and push. crane runs no container; it only
 # reads/writes registry blobs.
