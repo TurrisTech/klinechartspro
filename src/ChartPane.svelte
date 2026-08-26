@@ -88,6 +88,17 @@
   // the same click also hit a drawing; read-and-clear there.
   let overlayInteracted = false
 
+  // True while the pointer gesture in flight is the one that SELECTED this pane -- set in the
+  // root's pointerdown capture handler (below), which runs before any listener on the chart's
+  // own DOM because it is an ancestor's capture-phase handler. On a wall, the click that moves
+  // the selection to another pane is a selection gesture and nothing more: it must not also
+  // seek every other pane to whatever instant it happened to land on. `active` is read there
+  // rather than here because by the time the native 'click' fires this pane is already the
+  // active one -- onActivate has run. Assigned unconditionally on every pointerdown, so it can
+  // never go stale across a gesture that produces no click (a drag, a pointer released
+  // elsewhere, a click swallowed by one of the other guards).
+  let selectingPointerDown = false
+
   // Transient name -> klinecharts chartPaneId map for this pane's sub-indicators. Meaningless
   // once this chart is disposed, unlike `pane.subIndicatorNames` (the durable name list),
   // which is why this stays local component state rather than living on PaneState.
@@ -923,7 +934,13 @@
     // `convertFromPixel`, which extrapolates linearly outside the loaded range using this
     // chart's own period.
     //
-    // Three guards:
+    // Four guards:
+    // - `selectingPointerDown` rules out the click that moved the wall's selection to this
+    //   pane. Selecting a pane and pointing at an instant in it are two different intentions,
+    //   and a click on an unselected pane is unambiguously the first: the user is reaching for
+    //   a pane, not for a date, and having the rest of the wall jump away from where they left
+    //   it is a side effect they did not ask for. Once this pane IS the active one the next
+    //   click seeks as it always did.
     // - A pan-drag ending on the same element still fires a native 'click', so mousedown/click
     //   positions are compared against a 5px Manhattan-distance threshold, matching
     //   klinecharts' own `ManhattanDistance.CancelClick`.
@@ -931,7 +948,10 @@
     //   out a click that selected or started dragging an existing drawing. klinecharts
     //   resolves the whole click -- including every overlay's hit-test -- synchronously inside
     //   its own mouseup handling, which always finishes before this native 'click' event
-    //   fires, so the flag is already current by the time this runs.
+    //   fires, so the flag is already current by the time this runs. It is read-and-cleared
+    //   at the TOP of the handler, ahead of every guard: it describes this click, and any
+    //   guard returning with it still set would carry it into the next click and swallow that
+    //   seek instead.
     // - `currentStep !== -1` rules out a click that is placing a new drawing's point.
     const candleMain = widget.getDom('candle_pane', 'main')
     let clickDownX = 0
@@ -941,12 +961,17 @@
       clickDownY = event.clientY
     }
     const onCandleMainClick = (event: MouseEvent) => {
+      const hitOverlay = overlayInteracted
+      overlayInteracted = false
+      if (selectingPointerDown) {
+        console.debug('[sync] click ignored: selected this pane', { pane: pane.id })
+        return
+      }
       if (Math.abs(event.clientX - clickDownX) + Math.abs(event.clientY - clickDownY) >= 5) {
         console.debug('[sync] click ignored: exceeded drag threshold', { pane: pane.id })
         return
       }
-      if (overlayInteracted) {
-        overlayInteracted = false
+      if (hitOverlay) {
         console.debug('[sync] click ignored: hit an existing drawing', { pane: pane.id })
         return
       }
@@ -1095,7 +1120,13 @@
   data-pane-id={pane.id}
   style={`grid-area: ${pane.id};`}
   tabindex="-1"
-  onpointerdowncapture={() => onActivate(pane.id)}
+  onpointerdowncapture={() => {
+    // Captured BEFORE onActivate, which is what makes the answer meaningful -- see
+    // selectingPointerDown. Any pointerdown anywhere in the pane refreshes it, so the flag
+    // always describes the gesture actually in flight.
+    selectingPointerDown = !active
+    onActivate(pane.id)
+  }}
   onfocusin={() => onActivate(pane.id)}
 >
   <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
