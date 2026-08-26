@@ -85,30 +85,34 @@ export function manifestFor(
 }
 
 /**
- * Tiles overlapping `[from, to]`, in order, or null if they do not cover the whole window.
+ * Tiles answering as much of `[from, to]` as the tiled history reaches, in order.
  *
- * Partial coverage deliberately yields null rather than a partial answer. Tiles stop at the
- * last closed period, so any window touching the live edge is only partly tiled — and a
- * caller handed those bars would render a chart that silently ends early. /getbars covers
- * the whole window instead.
+ * Tiles hold every closed calendar period, so they answer any historical window in full.
+ * What they never hold is the *current, unfinished* period — the caller takes that from
+ * `/getbars` and joins it on, which is why this returns the boundary alongside the tiles
+ * rather than refusing a window that crosses it.
  *
- * The right edge is checked against `coveredTo` — the *period* boundary — and not against
- * the last bar's timestamp. Those differ, and the difference is the whole bug: comparing
- * against the last bar is vacuously true for any window reaching past it, which served a
- * seam-straddling window from tiles alone and dropped every bar after the seam.
+ * Null means tiles can contribute nothing: no manifest overlap, or a window that lies
+ * entirely inside the unfinished period.
  *
- * The left edge needs no check. `coveredFrom` is where the series itself begins, so a
- * window starting earlier is asking for bars that do not exist in any source — the chart
- * requests a fixed bar count, which at 1m reaches back further than some series go.
+ * Neither edge is clamped to a bar timestamp. `coveredTo` is the *period* boundary, and the
+ * split has to happen there: splitting at the last bar instead would hand the API a range
+ * starting inside an already-tiled period, and the join would double-count every bar
+ * between that bar and the period end.
+ *
+ * `to` is **exclusive**, matching `/getbars` — a bar stamped exactly `to` belongs to the next
+ * window. Getting this wrong is invisible in any check that only asks whether the API's bars
+ * are present in the tiles: the tiles simply carry one bar more than the API would return.
  */
-export function tilesCovering(
+export function tilesUpTo(
   manifest: TileManifest,
   from: number,
   to: number
-): TileEntry[] | null {
-  if (!(to < manifest.coveredTo)) return null
-  const hits = manifest.tiles.filter((t) => t.to >= from && t.from <= to)
-  return hits.length > 0 ? hits : null
+): { entries: TileEntry[]; coveredTo: number } | null {
+  if (from >= manifest.coveredTo) return null
+  const tileEnd = Math.min(to, manifest.coveredTo)
+  const entries = manifest.tiles.filter((t) => t.to >= from && t.from < tileEnd)
+  return entries.length > 0 ? { entries, coveredTo: manifest.coveredTo } : null
 }
 
 declare global {

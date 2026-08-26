@@ -17,21 +17,24 @@ async function fetchBars(
   to: number,
   limit: number | null
 ): Promise<KLineData[]> {
-  // Tiles first, when they cover the whole window. They only ever hold *closed* calendar
-  // periods, so anything reaching the live edge returns null here and is served below —
-  // which is the same path the forming bar and the websocket already use. A tile answer is
-  // byte-for-byte the same bars, so this is invisible to every caller above.
+  // Tiles first. They hold every closed calendar period, so they answer the historical part
+  // of any window; only the period currently forming is missing from them. When the window
+  // crosses that boundary the two halves are joined rather than the whole window being
+  // handed to the API — so a pan into recent history still costs no network for the part
+  // already on disk, and any gap left in the result is a real market gap.
   //
-  // `limit` still has to be honoured: it means "the last n bars", and the widening loop
-  // below depends on that anchoring. Trimming here rather than skipping tiles keeps a
-  // limited request cacheable.
+  // The split is exact: tiles run to `coveredTo` exclusive and the API is asked from
+  // `coveredTo`, so no bar can be served twice or dropped between them.
   const tiled = await barsFromTiles(vendorSymbol, resolution, from, to)
-  if (tiled !== null) return limit === null ? tiled : tiled.slice(-limit)
+  if (tiled !== null && tiled.coveredTo > to) {
+    // `limit` means "the last n bars", which the server would have applied for us.
+    return limit === null ? tiled.bars : tiled.bars.slice(-limit)
+  }
 
   const body = await apiGet<GetBarsResponse>('/getbars', {
     symbol: vendorSymbol,
     resolution,
-    from,
+    from: tiled === null ? from : tiled.coveredTo,
     to,
     // Bounding the reply by bar count rather than by range is what makes widening safe: a
     // widened window that turns out to straddle dense data would otherwise blow the
@@ -41,8 +44,12 @@ async function fetchBars(
     limit: limit === null ? undefined : Math.min(limit, capabilities().limits.maxBarsPerRequest)
   })
   // `no_data` is the documented empty answer; `[]` is never sent.
-  if (isNoData(body) || !Array.isArray(body)) return []
-  return body.map(barToKLineData)
+  const fetched = isNoData(body) || !Array.isArray(body) ? [] : body.map(barToKLineData)
+  if (tiled === null) return fetched
+  // The forming period can legitimately hold no bars yet (a request landing in a weekend,
+  // or moments after a period opens), which is not a reason to discard the tiled history.
+  const joined = tiled.bars.concat(fetched)
+  return limit === null ? joined : joined.slice(-limit)
 }
 
 // A history fetch covers one fixed-size window, and KLineChart Pro treats an empty response

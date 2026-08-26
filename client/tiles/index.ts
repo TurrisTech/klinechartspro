@@ -1,28 +1,39 @@
-// Serving a history window from tiles, when they cover it.
+// Serving history from tiles.
 //
-// This sits in front of /getbars, not instead of it. Tiles stop at the last *closed*
-// calendar period, so the live edge is never tiled and every window touching it falls
-// through to the API — which is also where the forming bar and the websocket updates come
-// from, so nothing about the live path changes.
+// Tiles hold every *closed* calendar period, so they answer historical reads in full. The
+// one thing they never hold is the period currently forming — that comes from /getbars,
+// which is where the forming bar and the websocket already come from, and the caller joins
+// the two at `coveredTo`.
+//
+// The join means a window crossing that boundary is answered from both, not abandoned to
+// the API wholesale. Any discontinuity left in the result is therefore a real market gap —
+// a weekend, a holiday — and never an artefact of where the tiles happen to stop.
 
 import type { KLineData } from 'klinecharts'
 import { barsForTile } from './cache'
-import { manifestFor, tilesCovering } from './manifest'
+import { manifestFor, tilesUpTo } from './manifest'
 
 export { tilesBaseUrl } from './manifest'
 
+export interface TiledBars {
+  bars: KLineData[]
+  /** Exclusive instant the tiles run to; `[coveredTo, to]` is the caller's to fetch. */
+  coveredTo: number
+}
+
 /**
- * Bars in `[from, to]` from tiles, or null when tiles cannot answer the window.
+ * Bars from tiles for as much of `[from, to]` as tiled history reaches.
  *
- * Null means "ask the server", never "no data" — the caller must fall through. Any failure
- * (no manifest, partial coverage, a fetch or decode error) returns null for that reason.
+ * Null means tiles can contribute nothing to this window and the caller should fetch the
+ * whole of it — never "no data". A non-null answer may still stop short of `to`, at
+ * `coveredTo`; the caller owns the remainder.
  */
 export async function barsFromTiles(
   vendorSymbol: string,
   resolution: string,
   from: number,
   to: number
-): Promise<KLineData[] | null> {
+): Promise<TiledBars | null> {
   const [vendor, symbol] = vendorSymbol.includes(':')
     ? vendorSymbol.split(':', 2)
     : ['oanda', vendorSymbol]
@@ -30,19 +41,23 @@ export async function barsFromTiles(
   const manifest = await manifestFor(vendor, symbol, resolution)
   if (manifest === null) return null
 
-  const entries = tilesCovering(manifest, from, to)
-  if (entries === null) return null
+  const span = tilesUpTo(manifest, from, to)
+  if (span === null) return null
 
-  const loaded = await Promise.all(entries.map((entry) => barsForTile(manifest, entry)))
+  const loaded = await Promise.all(span.entries.map((entry) => barsForTile(manifest, entry)))
+  // A tile that will not load is not a gap to paper over: fall back for the whole window
+  // rather than return a series with a hole in the middle of it.
   if (loaded.some((bars) => bars === null)) return null
 
-  // Tiles are written in order and never overlap, so concatenating them is already sorted;
-  // only the window edges need trimming.
+  // Tiles are written in order and never overlap, so concatenating is already sorted; only
+  // the window edges need trimming. `from` is inclusive and `to` exclusive, matching
+  // /getbars, and the right edge stops at the split boundary rather than `to`.
+  const tileEnd = Math.min(to, span.coveredTo)
   const bars: KLineData[] = []
   for (const tile of loaded) {
     for (const bar of tile as KLineData[]) {
-      if (bar.timestamp >= from && bar.timestamp <= to) bars.push(bar)
+      if (bar.timestamp >= from && bar.timestamp < tileEnd) bars.push(bar)
     }
   }
-  return bars
+  return { bars, coveredTo: span.coveredTo }
 }
