@@ -69,6 +69,15 @@ describe.skipIf(!ready || !serverUp)('tiles + API == /getbars', () => {
     ['straddles the 1h 5-year seam', 'oanda:EURUSD', '1h', Date.UTC(2024, 11, 30), Date.UTC(2025, 0, 3)],
     ['session-dated interval', 'oanda:EURUSD', '1D', Date.UTC(2024, 0, 1), Date.UTC(2024, 2, 1)],
     ['5s, one day', 'oanda:GBPUSD', '5s', Date.UTC(2024, 2, 4), Date.UTC(2024, 2, 4, 6)],
+    // Derived intervals: nothing for these is on disk, so the tiles were aggregated at
+    // build time by the same OHLCV app /getbars reads through. If that ever stops being
+    // true — a reimplemented rollup, a different market-hours source, a forming candle
+    // left in — these are where it shows.
+    ['15m, derived from 1m', 'oanda:EURUSD', '15m', Date.UTC(2024, 2, 4), Date.UTC(2024, 2, 8)],
+    ['5m, derived, across a weekend', 'oanda:EURUSD', '5m', Date.UTC(2026, 6, 17, 12), Date.UTC(2026, 6, 20, 12)],
+    ['4h, derived from 1h', 'oanda:EURUSD', '4h', Date.UTC(2020, 8, 13), Date.UTC(2020, 8, 20)],
+    ['1W, derived from 1D', 'oanda:EURUSD', '1W', Date.UTC(2024, 0, 1), Date.UTC(2024, 5, 1)],
+    ['1Y, derived from 1M', 'oanda:EURUSD', '1Y', Date.UTC(2010, 0, 1), Date.UTC(2020, 0, 1)],
   ]
 
   for (const [label, symbol, resolution, from, to] of cases) {
