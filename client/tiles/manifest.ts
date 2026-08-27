@@ -119,7 +119,15 @@ export function tilesUpTo(
   if (from >= manifest.coveredTo) return null
   const tileEnd = Math.min(to, manifest.coveredTo)
   const entries = manifest.tiles.filter((t) => t.to >= from && t.from < tileEnd)
-  return entries.length > 0 ? { entries, coveredTo: manifest.coveredTo } : null
+  if (entries.length > 0) return { entries, coveredTo: manifest.coveredTo }
+  // No tile overlaps the window. That is "tiles cannot help" only when the window reaches
+  // outside their coverage -- INSIDE it the tiles are the whole answer, and the answer is
+  // that there are no bars. Almost every such window is a market gap: a request landing in
+  // the FX weekend, which is two days out of every seven and which the pagination widener
+  // probes constantly while panning through history. Returning null there sent each probe
+  // to /getbars for a range the tiles had already settled, and the API agreed with them
+  // every time (`no_data`). `coveredFrom` is published for exactly this and was never read.
+  return from >= manifest.coveredFrom ? { entries: [], coveredTo: manifest.coveredTo } : null
 }
 
 declare global {
