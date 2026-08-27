@@ -10,7 +10,7 @@ import { symbolVendor } from '../symbols'
 import { simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { symbolKey } from '../trading/format'
-import { createControlStrip, openStartDialog } from './controls'
+import { createReplayControls, openStartDialog } from './controls'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
@@ -20,8 +20,8 @@ import { HttpBarSource, HttpSignalSource } from './source'
 import { STORED_LADDER, fromWireDate, intervalStart, nominalMs, sortByLength } from './timeframes'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
-// session bound to the shared trading dock, the control strip above it, and the wiring
-// that keeps the chart, the plugins and the levels layer on the replay's clock.
+// session bound to the shared trading dock, the floating control window over the chart, and
+// the wiring that keeps the chart, the plugins and the levels layer on the replay's clock.
 //
 // Entering or leaving replay rebuilds the wall (the datafeed differs), so the minimal
 // intent -- session id + cursor -- lives in page-level storage (persist.ts) and the app
@@ -31,10 +31,8 @@ import { STORED_LADDER, fromWireDate, intervalStart, nominalMs, sortByLength } f
 export const REPLAY_LOG = '[replay]'
 
 export interface BarReplayController {
-  toggle(): boolean
-  isOpen(): boolean
+  /** Resync the dock's overlays and the base check to the wall's panes. */
   sync(panes: ChartProPane[]): void
-  /** The pane datafeed factory for the replay wall (ChartProOptions.datafeed). */
   teardown(): void
 }
 
@@ -261,42 +259,51 @@ export async function mountBarReplay(
   })
   session.setIntervalsInUse(intervalsInUse())
 
-  const strip = createControlStrip({
-    controller: session,
-    intervalsInUse,
-    onExit: () => {
-      clearReplay()
-      ctx.rebuild()
-    },
-    onStop: (result) => {
-      if (result.events.length > 0) dock.panel.showTab(result.events.some((e) => e.kind === 'close') ? 'history' : 'positions')
-    }
-  })
-
   const dock: TradingDock = mountTradingDock(session, {
     chartPro,
     container,
     title: 'Replay account',
     tag: 'replay',
-    header: strip.element
+    // Whatever opens or closes the dock -- the Account toggle, or the panel's own close
+    // button -- redraws that toggle, so it never disagrees with what is on screen. Safe as a
+    // forward reference: nothing calls setOpen before the controls exist.
+    onOpenChange: () => controls.refresh()
   })
-  dock.setOpen(true)
+  // It starts CLOSED (mountTradingDock's default): the wall is what a replay is for, and the
+  // Account toggle is what opens the account, ticket and tables. An advance that produced
+  // events opens it by itself (below) -- a fill the user cannot see is worse than a panel
+  // they did not ask for.
+  //
   // The panes mounted while this function was awaiting the session (onPanesChange fired
   // before the controller existed), so the dock's overlays are synced here explicitly.
   dock.sync(chartPro.getPanes())
+
+  const controls = createReplayControls({
+    controller: session,
+    intervalsInUse,
+    bounds: container,
+    onExit: () => {
+      clearReplay()
+      ctx.rebuild()
+    },
+    onStop: (result) => {
+      if (result.events.length === 0) return
+      dock.setOpen(true)
+      dock.panel.showTab(result.events.some((e) => e.kind === 'close') ? 'history' : 'positions')
+    },
+    account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() }
+  })
   await session.primeQuote()
 
   return {
-    toggle: () => dock.toggle(),
-    isOpen: () => dock.isOpen(),
     sync(panes: ChartProPane[]): void {
       dock.sync(panes)
       const check = session.setIntervalsInUse(panes.map((p) => periodToResolution(p.getPeriod())))
       if (!check.ok) console.warn(`${REPLAY_LOG} base ${session.base} no longer fits the wall: ${check.reason}`)
-      strip.refresh()
+      controls.refresh()
     },
     teardown(): void {
-      strip.dispose()
+      controls.dispose()
       dock.teardown()
       session.dispose()
       hub.dumpAll()

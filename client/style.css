@@ -753,17 +753,132 @@ body.wd-has-dock > #app {
 
 /* --- Bar replay (client/replay) ------------------------------------------------------ */
 
-/* The control strip sits ABOVE the trading panel inside the same dock: the clock, the
-   advance control, the last stop, the base/pause settings, the signal list and Exit. */
-.wd-replay-strip {
+/* The controls float OVER the chart in a draggable window (client/replay/window.ts): a
+   title bar carrying the cursor, Step, collapse and Exit, then the advance row, the last
+   stop, and one panel at a time behind the Signals / Base / Account toggles. It is
+   `position: fixed` and body-level, so it is clamped into #app's rect rather than the
+   viewport's -- that is what keeps it off the trading dock when the dock opens. */
+.wd-float {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 40;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem 1rem;
-  padding: 0.375rem 0.75rem;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  min-width: 20rem;
+  max-width: min(30rem, 92vw);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in oklab, var(--background) 92%, transparent);
+  backdrop-filter: blur(6px);
+  color: var(--foreground);
   font-size: 0.75rem;
-  background: color-mix(in oklab, var(--primary) 6%, var(--background));
+  box-shadow: 0 8px 28px color-mix(in oklab, black 45%, transparent);
+  /* Placed on the first layout; until then it would flash in the top-left corner. */
+  visibility: hidden;
+}
+
+.wd-float.is-placed {
+  visibility: visible;
+}
+
+/* src/app.css's control reset is scoped to `:where(.klinecharts-pro)`, and these cards are
+   body-level siblings of the chart -- so they need their own, or every button in them renders
+   in the UA's grey ButtonFace. `:where()` keeps it at element weight (0,0,1): written as
+   `.wd-float button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background,
+   which is the exact trap app.css documents. */
+:where(.wd-float, .wd-replay-dialog) button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: inherit;
+}
+
+:where(.wd-float, .wd-replay-dialog) button,
+:where(.wd-float, .wd-replay-dialog) input,
+:where(.wd-float, .wd-replay-dialog) select {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.wd-float.is-dragging {
+  user-select: none;
+  box-shadow: 0 14px 40px color-mix(in oklab, black 55%, transparent);
+}
+
+.wd-float-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.375rem 0.25rem 0.5rem;
+  cursor: grab;
+  /* The drag is pointer-driven: without this a touch drag scrolls the page instead. */
+  touch-action: none;
+}
+
+.wd-float.is-dragging .wd-float-header {
+  cursor: grabbing;
+}
+
+.wd-float-grip {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1;
+}
+
+.wd-float-title {
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.wd-float-spacer {
+  flex: 1 1 auto;
+}
+
+.wd-float-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.wd-float.is-collapsed .wd-float-body {
+  display: none;
+}
+
+.wd-float.is-collapsed .wd-float-header {
+  padding-bottom: 0.25rem;
+}
+
+/* The window's own controls: everything in it is one size smaller than the chart's chrome,
+   which is what lets the whole thing sit in ~19rem x 8rem. */
+.wd-replay-window .kc-button {
+  height: 1.625rem;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-sm);
+}
+
+.wd-replay-window .kc-icon-button {
+  width: 1.625rem;
+  padding: 0;
+}
+
+.wd-replay-row,
+.wd-replay-toggles,
+.wd-replay-status {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-replay-toggles {
+  flex-wrap: wrap;
 }
 
 .wd-replay-label {
@@ -771,21 +886,12 @@ body.wd-has-dock > #app {
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  margin-right: 0.25rem;
 }
 
 .wd-replay-clock-value {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-}
-
-.wd-replay-advance,
-.wd-replay-settings,
-.wd-replay-signals,
-.wd-replay-stop {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
+  font-size: 0.8125rem;
 }
 
 .wd-replay-select,
@@ -800,23 +906,58 @@ body.wd-has-dock > #app {
 }
 
 .wd-replay-number {
-  width: 3.25rem;
+  width: 2.75rem;
   text-align: right;
+}
+
+/* One panel at a time hangs below the toggles: the signal list, or base + pause on fill. */
+.wd-replay-toggle {
+  border: 1px solid var(--border);
+  color: var(--muted-foreground);
+  gap: 0.25rem;
+}
+
+.wd-replay-toggle.is-on {
+  border-color: color-mix(in oklab, var(--primary) 55%, transparent);
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  color: var(--foreground);
+}
+
+.wd-replay-toggle.is-invalid {
+  border-color: var(--destructive, #ef5350);
+  color: var(--destructive, #ef5350);
+}
+
+.wd-replay-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1rem;
+  height: 1rem;
+  padding: 0 0.25rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--primary) 35%, transparent);
+  color: var(--foreground);
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-replay-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.375rem;
+  border-top: 1px solid var(--border);
 }
 
 .wd-replay-times {
   color: var(--muted-foreground);
 }
 
-.wd-replay-step,
-.wd-replay-next,
-.wd-replay-exit {
-  height: 1.625rem;
-  padding: 0 0.625rem;
-  font-size: 0.75rem;
-}
-
 .wd-replay-stop-reason {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   padding: 0.125rem 0.5rem;
   border-radius: var(--radius-sm);
   background: color-mix(in oklab, var(--foreground) 8%, transparent);
@@ -845,16 +986,33 @@ body.wd-has-dock > #app {
   color: var(--destructive, #ef5350);
 }
 
+/* A rejected base: three seconds at the foot of the card, where the eye already is. */
+.wd-replay-flash {
+  padding: 0.25rem 0.5rem 0.375rem;
+}
+
+/* The catalogue is long (five plugins x two sides today) and the window is narrow, so the
+   list scrolls inside the panel rather than growing the window past the chart. */
 .wd-replay-signal-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 11rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .wd-replay-signal {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+.wd-replay-signal-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wd-replay-star {
@@ -902,10 +1060,6 @@ body.wd-has-dock > #app {
 
 .wd-replay-muted {
   color: var(--muted-foreground);
-}
-
-.wd-replay-exit {
-  margin-left: auto;
 }
 
 /* The start dialog: a centred card over a backdrop, kc tokens throughout. */
@@ -966,7 +1120,5 @@ body.wd-has-dock > #app {
   gap: 0.5rem;
 }
 
-/* A replay dock is open by default and may take a little more of the wall. */
-.wd-trade-dock[data-mode='replay'] {
-  max-height: 48vh;
-}
+/* A replay's dock holds the account, ticket and tables alone -- the controls float over the
+   chart -- so it is the same height as the paper one and starts closed. */
