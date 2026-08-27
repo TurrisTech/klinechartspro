@@ -16,7 +16,11 @@ export function tilesBaseUrl(): string {
   return baseUrl
 }
 
-const LAYOUT_VERSION = 'v1'
+/** The tile layout this client reads. Bumped v1 -> v2 when the builder moved candles from
+ * calendar filing to canonical-date filing: a closed tile is served `immutable` for a year,
+ * so refiling had to change the URL rather than the bytes under a cached one. Exported so a
+ * test probing the store cannot drift from what the client actually requests. */
+export const LAYOUT_VERSION = 'v2'
 
 export interface TileEntry {
   name: string

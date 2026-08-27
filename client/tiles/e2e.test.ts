@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
+import { LAYOUT_VERSION } from './manifest'
 
 // End-to-end over the real tiles bin/build_chart_tiles.py wrote: manifest -> fetch -> decode
 // -> KLineData, through the same code the browser runs. The positive half of the contract;
@@ -8,7 +9,7 @@ import { existsSync } from 'node:fs'
 // Skipped when no tile store is present, so a checkout without /mnt/d still runs green.
 
 const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles'
-const ready = existsSync(`${ROOT}/v1/oanda/EURUSD/1m/manifest.json`)
+const ready = existsSync(`${ROOT}/${LAYOUT_VERSION}/oanda/EURUSD/1m/manifest.json`)
 
 let barsFromTiles: typeof import('./index').barsFromTiles
 

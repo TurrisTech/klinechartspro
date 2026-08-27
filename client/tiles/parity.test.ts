@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import type { KLineData } from 'klinecharts'
+import { LAYOUT_VERSION } from './manifest'
 
 // The contract this whole layer has to hold: for any window, tiles-plus-API must return
 // exactly what /getbars alone would have returned. Not a superset, not a prefix — the same
@@ -26,7 +27,7 @@ const realFetch = Bun.fetch
 
 // Probed at module load, not in beforeAll: `test.skipIf` is evaluated while the file is
 // being collected, so a flag set later is always still false and every case silently skips.
-const ready = existsSync(`${ROOT}/v1/oanda/EURUSD/1m/manifest.json`)
+const ready = existsSync(`${ROOT}/${LAYOUT_VERSION}/oanda/EURUSD/1m/manifest.json`)
 const serverUp = await realFetch(`${API}/capabilities`).then((r) => r.ok).catch(() => false)
 if (ready && !serverUp) console.warn(`parity.test: no server at ${API}; skipping`)
 
@@ -81,6 +82,15 @@ describe.skipIf(!ready || !serverUp)('tiles + API == /getbars', () => {
     ['15m, derived from 1m', 'oanda:EURUSD', '15m', Date.UTC(2024, 2, 4), Date.UTC(2024, 2, 8)],
     ['5m, derived, across a weekend', 'oanda:EURUSD', '5m', Date.UTC(2026, 6, 17, 12), Date.UTC(2026, 6, 20, 12)],
     ['4h, derived from 1h', 'oanda:EURUSD', '4h', Date.UTC(2020, 8, 13), Date.UTC(2020, 8, 20)],
+    // Quarter seams on the quarter-granular intervals. These are where a candle opening at
+    // 17:00 runs past midnight into the next period, and filing it by the calendar date of
+    // its open put it in BOTH tiles, each holding half of it -- two bars on one timestamp,
+    // neither the real candle. Every case above missed it: the 4h one sits in mid-September,
+    // and there was no 8h case at all.
+    ['4h, straddles a quarter seam', 'oanda:EURUSD', '4h', Date.UTC(2026, 2, 30), Date.UTC(2026, 3, 2)],
+    ['8h, straddles a quarter seam', 'oanda:EURUSD', '8h', Date.UTC(2026, 2, 30), Date.UTC(2026, 3, 2)],
+    ['8h, straddles the mid-year seam', 'oanda:EURUSD', '8h', Date.UTC(2026, 5, 29), Date.UTC(2026, 6, 2)],
+    ['8h, a whole quarter', 'oanda:EURUSD', '8h', Date.UTC(2026, 0, 1), Date.UTC(2026, 3, 1)],
     ['1W, derived from 1D', 'oanda:EURUSD', '1W', Date.UTC(2024, 0, 1), Date.UTC(2024, 5, 1)],
     ['1Y, derived from 1M', 'oanda:EURUSD', '1Y', Date.UTC(2010, 0, 1), Date.UTC(2020, 0, 1)],
   ]
