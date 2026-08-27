@@ -44,7 +44,7 @@
     "dev:client:bg": "scripts/dev-client.sh",
     "build:client": "bun run scripts/build-client.ts",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "bun test client",
+    "test": "bun test client src",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "build-core": "bun run check && bun run scripts/build.ts",

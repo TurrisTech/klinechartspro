@@ -57,6 +57,12 @@ export interface SeekTarget {
 }
 
 const CENTER_FRACTION = 0.5
+// Where the newest bar sits when a pane is put back at the present: four fifths across, with
+// a clear fifth to its right, because a live candle is still forming and that room is where it
+// forms. ChartPane's jump-to-live control and positionAtLive use it, and so does
+// resolveSeekReach below -- one constant, so "the default position for the current bar" means
+// the same thing however the pane got there.
+export const LIVE_EDGE_FRACTION = 0.8
 // Where a higher-timeframe candle's own START lands when its full span doesn't fit the
 // target pane at its current zoom -- see resolveSeekTarget's last case.
 const SPAN_START_FRACTION = 0.2
@@ -138,4 +144,58 @@ export function visibleMidpointTimestamp(chart: Chart): number | null {
   ) as Array<Partial<Point>>
   const timestamp = points[0]?.timestamp
   return typeof timestamp === 'number' ? timestamp : null
+}
+
+// What a pane should do with a seek target it cannot reach by scrolling -- see ChartPane's
+// seekTo, its only caller. Everything here turns on ONE question the bus cannot answer for
+// itself: is `target` past the newest bar THERE IS, or merely past the newest bar this pane
+// happens to hold? Only the pane knows, because only the pane knows whether a seek has parked
+// its data short of the present (`parkedInHistory`).
+//
+// - 'reload': the target sits somewhere the pane could hold but doesn't -- older than its
+//   oldest bar, or newer than a tail that is itself parked in the past. Replace the data
+//   around it, which is what click-to-scroll has always done.
+// - 'stay' / 'live-edge': the target is past the live edge, so there is nothing there to
+//   scroll to and nothing to fetch. Scrolling anyway does not even produce the blank future
+//   it asks for: klinecharts clamps the view at `minVisibleBarCount.left` (two bars), so the
+//   pane lands with the newest bar jammed against the LEFT edge and a screenful of nothing
+//   after it. So the newest bar keeps the position it already had ('stay') -- but only when
+//   that position is one it can be left in, meaning at LIVE_EDGE_FRACTION or right of it.
+//   Anywhere left of that, including a pane already sitting in exactly the jammed state this
+//   is meant to prevent, comes back to the live edge ('live-edge'), which is as far forward as
+//   the pane can meaningfully go.
+export type SeekReach = 'reload' | 'stay' | 'live-edge'
+
+export function resolveSeekReach(
+  target: number,
+  newest: number | undefined,
+  parkedInHistory: boolean,
+  newestFraction: number | null
+): SeekReach {
+  // No data at all, or a target the pane's own history brackets or precedes: an ordinary
+  // reload, unchanged from before this existed.
+  if (newest === undefined || target <= newest) return 'reload'
+  // Past this pane's tail, but the tail is parked short of the present -- the target may well
+  // be real, and only a reload can reach it.
+  if (parkedInHistory) return 'reload'
+  // Past the live edge. Standing still is only the right answer when the current bar is
+  // ALREADY at rest: on screen, and no further left than where jump-to-live would put it.
+  // Both halves matter. "On screen" alone is not enough -- a pane left scrolled into the void
+  // has its current bar two bars from the LEFT edge (klinecharts' own clamp), which is on
+  // screen and is exactly the state this rule exists to undo, so a seek that arrives while the
+  // pane is already in it must repair it rather than confirm it. And "at or past the fraction"
+  // alone is not enough either -- a pane parked far enough back that its current bar is off to
+  // the RIGHT scores arbitrarily high and would be left showing history.
+  if (newestFraction === null) return 'live-edge'
+  return newestFraction >= LIVE_EDGE_FRACTION && newestFraction <= 1 ? 'stay' : 'live-edge'
+}
+
+// Where `timestamp` currently sits across the main pane, as a fraction of its width (0 = left
+// edge, 1 = right edge; outside 0..1 when it is off screen). The measurement resolveSeekReach
+// judges "at rest" by -- same convertToPixel path as isTimestampVisible, so the two agree.
+export function timestampFraction(chart: Chart, timestamp: number): number | null {
+  const main = chart.getSize('candle_pane', 'main')
+  if (!main || main.width === 0) return null
+  const { x } = chart.convertToPixel({ timestamp }, { paneId: 'candle_pane' }) as Partial<Coordinate>
+  return typeof x === 'number' ? x / main.width : null
 }

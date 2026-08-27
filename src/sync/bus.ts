@@ -32,16 +32,19 @@ export interface SyncPane {
   // Reloads this pane's data anchored on `timestamp` instead of "now" -- see
   // ChartPane.svelte's seekTo. What seekPane calls when the target is outside this pane's
   // own loaded history, replacing the old scroll-and-page walk (see git history on this
-  // file for that approach and why it fell short at distance). `timestamp`/`fraction` are
-  // where the VIEW lands (resolveSeekTarget's span-centring case computes these as a span's
-  // midpoint, which is not necessarily an instant that exists); `crosshair` is what to mark
-  // once landed -- usually the same instant, but not always, so kept separate rather than
-  // assumed equal. Carried through so the implementation can apply it once its own reload
-  // lands -- resetData() wipes klinecharts' internal crosshair state, so without this the
-  // target pane would jump to the right place but show no crosshair marking it. `null` for an
-  // auto-sync pan (broadcastPan below): a pan is not a pointing gesture, so there is no instant
-  // to mark, and the pane should land carrying no crosshair rather than one at an arbitrary
-  // point of its new view.
+  // file for that approach and why it fell short at distance). A target past the LIVE EDGE
+  // reloads nothing: the pane keeps its current bar where it is, or brings it back on
+  // screen -- resolveSeekReach (src/sync/seek.ts) is the whole rule.
+  //
+  // `timestamp`/`fraction` are where the VIEW lands (resolveSeekTarget's span-centring case
+  // computes these as a span's midpoint, which is not necessarily an instant that exists);
+  // `crosshair` is what to mark once landed -- usually the same instant, but not always, so
+  // kept separate rather than assumed equal. Carried through so the implementation can apply
+  // it once its own reload lands -- resetData() wipes klinecharts' internal crosshair state,
+  // so without this the target pane would jump to the right place but show no crosshair
+  // marking it. `null` for an auto-sync pan (broadcastPan below): a pan is not a pointing
+  // gesture, so there is no instant to mark, and the pane should land carrying no crosshair
+  // rather than one at an arbitrary point of its new view.
   seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint | null): void
 }
 
@@ -262,11 +265,14 @@ export class SyncBus {
       return
     }
 
-    // Outside the loaded range in either direction -- reload this pane's data anchored on
-    // the target instead of trying to scroll/page there. seekToTimestamp for the actual
-    // on-screen placement, and re-applying the crosshair, both happen inside that reload once
-    // the target is loaded (resetData() wipes any crosshair this pane had).
-    console.debug('[sync] seekPane: reloading pane at target', { pane: pane.id, target })
+    // Outside the loaded range in either direction -- hand the target to the pane, which
+    // reloads its data anchored on it instead of trying to scroll/page there. seekToTimestamp
+    // for the actual on-screen placement, and re-applying the crosshair, both happen inside
+    // that reload once the target is loaded (resetData() wipes any crosshair this pane had).
+    // Not every such target IS reachable, though: past the live edge there is nothing to
+    // fetch, and only the pane can tell that from a tail merely parked in the past -- see
+    // resolveSeekReach (src/sync/seek.ts).
+    console.debug('[sync] seekPane: handing the target to the pane', { pane: pane.id, target })
     pane.seekTo(target.timestamp, target.fraction, crosshairTarget)
   }
 
