@@ -66,6 +66,8 @@ export function createMtfPlugin(): IndicatorPlugin {
       // The same key the AREV plugin would give arev21 at this interval: a sub-pane and
       // the overlay reading the same votes share one store.
       key: arevSourceKey(MTF_GENERATION, ctx.vendor, ctx.ticker, interval),
+      // The SOURCE timeframe, not the chart's: this is what its points are dated on.
+      resolution: interval,
       createStore: (key) => new MtfStore(key),
       /** The chart's loaded span, converted out of the chart's wire clock and into the
        * source timeframe's, padded at both ends. Both conversions are needed and they

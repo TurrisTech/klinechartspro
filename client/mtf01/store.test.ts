@@ -65,6 +65,39 @@ describe('Mtf01Store', () => {
     expect(s.missing({ from: 0, to: 3000 })).toEqual([{ from: 2000, to: 3000 }])
   })
 
+  test('forgetAfter drops the rows a stale clock could not have answered, and their coverage', () => {
+    const s = new Mtf01Store('k')
+    s.ingest([event({ date: 1000 }), event({ date: 4000, barDate: 9 })], { from: 0, to: 5000 }, { trades: [trade({ date: 2000 }), trade({ date: 4500, barDate: 9 })] })
+    s.forgetAfter(3000)
+    expect([...s.events.keys()]).toEqual([1000])
+    expect([...s.trades.keys()]).toEqual([2000])
+    expect(s.missing({ from: 0, to: 5000 })).toEqual([{ from: 3000, to: 5000 }])
+  })
+
+  test('a forgotten row comes BACK on the refetch -- its dedup key went with it', () => {
+    // The trap this method exists around: `seen` is keyed by the row's own candle, not by
+    // the bar it draws on. Leave the key behind and the refetch is deduplicated away, so
+    // the row is gone from the chart for good -- worse than the hole being fixed.
+    const s = new Mtf01Store('k')
+    s.ingest([event({ date: 4000, barDate: 9 })], { from: 0, to: 5000 }, { trades: [trade({ date: 4500, barDate: 9 })] })
+    s.forgetAfter(3000)
+    s.ingest([event({ date: 4000, barDate: 9 })], { from: 3000, to: 5000 }, { trades: [trade({ date: 4500, barDate: 9 })] })
+    expect(s.events.get(4000)).toHaveLength(1)
+    expect(s.trades.get(4500)).toHaveLength(1)
+    expect(s.missing({ from: 0, to: 5000 })).toEqual([])
+  })
+
+  test('forgetAfter keeps a row on a bar that had closed, and every earlier window', () => {
+    const s = new Mtf01Store('k')
+    s.ingest([event({ date: 1000 })], { from: 0, to: 2000 })
+    s.ingest([event({ date: 2500, barDate: 7 })], { from: 2000, to: 5000 })
+    const before = s.rev
+    s.forgetAfter(2400)
+    expect([...s.events.keys()]).toEqual([1000])
+    expect(s.missing({ from: 0, to: 2400 })).toEqual([])
+    expect(s.rev).toBeGreaterThan(before)
+  })
+
   test('rev bumps on every change, so the template redraws', () => {
     const s = new Mtf01Store('k')
     const before = s.rev

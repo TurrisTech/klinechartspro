@@ -31,8 +31,13 @@ A replay has a **cursor**. `config.ts`'s `setReadClock(cursor)` makes `apiUrl` a
 `asof=<cursor>` to *every* read the client makes — bars, indicator values, plugin points,
 levels, signals — in one place. The server (`services/asof.py`) answers only what had closed
 by then, plus the forming bar rebuilt from finer stored rows. After a step, `index.ts` moves
-the clock, pushes bars, then `pluginHost.invalidateFrom(...)` so every store forgets coverage
-that was fetched under the old clock. **Levels are refetched only when the cursor crosses a
+the clock, pushes bars, then `pluginHost.invalidateFrom(oldCursor)` so every plugin store
+forgets the coverage that clock made incomplete. **Each source forgets from its own interval's
+horizon, not from the cursor** (`plugins/horizon.ts`): the answer it got was final only through
+the bar IT had forming, so a stop at 11:15 leaves a 15m source whole and a 1h source one bar
+short. Forgetting from the cursor instead left every coarser pane's forming bar filed as
+fetched-and-empty for good — a permanent blank column in its sub-pane, one per stop.
+**Levels are refetched only when the cursor crosses a
 daily boundary**: they are computed on 1W/1M, so one can only appear or be spent at a 17:00
 market-day close. Invalidating them every step cost three slow `/levels` reads per 15-minute
 step, which saturated the browser's six-connection budget and starved the panes' own history

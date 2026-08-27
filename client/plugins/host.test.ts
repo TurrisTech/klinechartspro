@@ -253,6 +253,83 @@ describe('createPluginHost', () => {
     expect(fc.overrides[fc.overrides.length - 1]?.shortName).toBe('SLOW · ready')
   })
 
+  // The replay's read clock (services/asof.py) answers only what had CLOSED by the cursor,
+  // so an answer taken at the cursor is missing the bar each source still has forming. The
+  // host has to forget that much and no less, PER SOURCE, or that bar stays filed as
+  // fetched-and-empty and draws as a permanent hole -- one per stop. It shows only when the
+  // cursor stops off the source's own grid, which is every stop for a source coarser than
+  // the finest armed signal: at 11:15 a 15m source is whole and a 1h one is a bar short.
+  test('a step forgets each source through ITS OWN forming bar, not through the cursor', async () => {
+    const HOUR = 3_600_000
+    const NY = (day: number, hour: number, minute = 0) => Date.UTC(2024, 2, day, hour + 5, minute)
+    // Every 1h bar of Wednesday's session, from the 17:00 open.
+    const all: Point[] = Array.from({ length: 24 }, (_, i) => ({ date: NY(5, 17) + i * HOUR, v: i }))
+
+    let clock = NY(6, 9)
+    const plugin: IndicatorPlugin = {
+      id: 'clamped',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'CLAMPED',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'clamped|1h',
+            resolution: '1h',
+            fetch: async (range): Promise<Page<Point>> => ({
+              // The server's clamp: a point exists once its bar has closed.
+              points: all.filter((p) => p.date >= range.from && p.date < range.to && p.date + HOUR <= clock),
+              nextFrom: null
+            })
+          }
+        ],
+        label: () => 'CLAMPED'
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    // The chart holds every closed bar plus the one forming at the cursor.
+    const bars = (at: number) => all.filter((p) => p.date <= at).map((p) => ({ timestamp: p.date }))
+    fc.data = bars(clock)
+    fc.indicators = [fakeIndicator('CLAMPED', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+
+    // Two "next signal" stops, each on a 15m boundary and so mid-hour for this source.
+    for (const stop of [NY(6, 11, 15), NY(6, 14, 30)]) {
+      const before = clock
+      clock = stop
+      fc.data = bars(clock)
+      host.invalidateFrom(before)
+      await flush()
+    }
+
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>('clamped|1h')
+    const held = [...(store?.values.keys() ?? [])].sort((a, b) => a - b)
+    // 11:00 is the bar the first stop had forming: covered by that fetch, answered by
+    // nothing, and never asked for again unless the invalidation reaches back to it.
+    expect(held).toEqual(all.filter((p) => p.date + HOUR <= clock).map((p) => p.date))
+    expect(held).toContain(NY(6, 11))
+  })
+
+  test('a source that declares no resolution is still forgotten from the cursor', async () => {
+    const { plugin } = pointsPlugin([{ date: 10, v: 1 }])
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [{ timestamp: 5 }, { timestamp: 10 }, { timestamp: 20 }]
+    fc.indicators = [fakeIndicator('PTS', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>('pts|EURUSD|1h|[]')
+    expect(store?.covers({ from: 5, to: 21 })).toBe(true)
+    host.invalidateFrom(10)
+    expect(store?.covers({ from: 5, to: 11 })).toBe(false)
+    expect(store?.covers({ from: 5, to: 10 })).toBe(true)
+  })
+
   test('settings, validation and pane state are dispatched to the plugin that claims the name', async () => {
     const state: Record<number, unknown> = {}
     const plugin: IndicatorPlugin = {

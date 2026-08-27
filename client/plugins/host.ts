@@ -1,6 +1,7 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck } from '../../src'
-import { dropStore, forgetAllAfter, storeFor, WindowStore } from './store'
+import { knownThrough } from './horizon'
+import { dropStore, liveStores, storeFor, WindowStore } from './store'
 import type {
   BindContext,
   BindingSpec,
@@ -74,9 +75,9 @@ export interface PluginHost {
   readonly validateParams: ((request: ValidateRequest) => Promise<IndicatorParamsCheck>) | null
   /** Per-plugin, per-pane document state -- what the wall document persists. */
   paneState(): Record<string, Record<number, unknown>>
-  /** The read clock moved forward past `from` (a replay step): forget every store's
-   * coverage from there and re-cover every binding. */
-  invalidateFrom(from: number): void
+  /** The read clock moved forward off `clock` (a replay step): forget the coverage that
+   * `clock` made incomplete and re-cover every binding. */
+  invalidateFrom(clock: number): void
   teardown(): void
 }
 
@@ -460,11 +461,28 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       for (const p of plugins) if (p.paneState) out[p.id] = p.paneState.snapshot()
       return out
     },
-    invalidateFrom(from: number): void {
-      // The read clock moved (a replay step): values at or after `from` that were not
-      // knowable under the old clock may be now. Forget that coverage in every store and
-      // re-cover every binding, which refetches exactly the forgotten windows.
-      forgetAllAfter(from)
+    invalidateFrom(clock: number): void {
+      // The read clock moved (a replay step): everything the OLD clock made unknowable may
+      // be knowable now. Each source forgets from its OWN horizon under that clock -- the
+      // bar it had forming at it -- and not from the cursor, because a source is dated on
+      // its own interval: at a cursor of 06:15 a 15m source's last answer was final through
+      // 06:15, a 1h source's only through 06:00, and a 1D source's only through the
+      // session's date. Forgetting from the cursor leaves each coarser source's forming bar
+      // filed as fetched-and-empty for good, which draws as a permanent hole in the series
+      // -- one per stop (`horizon.ts`, and notes/architecture/freshness-horizons.md).
+      const seen = new Set<string>()
+      for (const entry of wired.values()) {
+        for (const b of entry.bindings.values()) {
+          if (b.disposed) continue
+          for (const s of b.sources) {
+            seen.add(s.key)
+            s.store.forgetAfter?.(knownThrough(s.spec.resolution, clock))
+          }
+        }
+      }
+      // Any store the registry still holds that no live binding reads (a rebind in flight)
+      // gets the weakest true statement: nothing past the cursor was knowable.
+      for (const [key, store] of liveStores()) if (!seen.has(key)) store.forgetAfter?.(clock)
       for (const entry of wired.values()) coverAll(entry)
     },
     teardown(): void {

@@ -26,6 +26,7 @@ const plugin: IndicatorPlugin = {
     sources: [{
       id: 'v',
       key: `mine|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,   // shared across panes
+      resolution: ctx.interval,                                  // what its points are dated on
       fetch: (range, limit) => facilities.points({ pluginId: 'mine', legacyPath: '/mine/values', ... }),
       // optional: window(chartRange), createStore(key), subscribe(store, notify)
     }],
@@ -43,6 +44,35 @@ settings panel, `paneInfo`, `requestReconcile`, `requestPersist`, and `signals` 
 A template's `calc` reads its store back: `peekStore<WindowStore<P, V>>(indicator.extendData.seriesKey)`
 (`seriesKeys[id]` for a multi-source binding). The host bumps `extendData.rev` on every store
 change, so `shouldUpdate` compares it.
+
+## Under a replay's read clock
+
+Declare `resolution` on every source. A replay clamps every read to its cursor
+(`services/asof.py`): **a point exists once its bar has closed**, so an answer fetched at the
+cursor is missing the bar that source still had forming — and the host must not record that
+bar's window as covered. `resolution` is what lets it work out how far the answer was final
+(`horizon.ts` `knownThrough`), per source rather than per wall, and forget exactly that much
+when the cursor moves (`invalidateFrom`).
+
+Getting this wrong is invisible until you look for it. Forgetting from the **cursor** is
+right only for a source dated on the cursor's own grid: at a stop of 11:15 a 15m source is
+whole, a 1h source is one bar short, and a 1D source is short the whole session. The bar that
+is not refetched stays filed as fetched-and-empty for the rest of the session, which draws as
+a permanent blank column — one per stop, widest on the coarsest pane. The measurement, on a
+3m+15m+1h+4h+8h+1D wall jumping between armed arev21 signals: eight jumps left 5 holes on the
+1h pane, 3 on the 4h and 1 on the 8h, with 15m and 3m clean, because every stop landed on a
+15m boundary. Tests: `horizon.test.ts`, and the invalidation cases in `host.test.ts`.
+
+A source dated on a **wire clock** (daily-and-coarser bars are `open + 7h`,
+`services/wiredate.py`) needs nothing extra — `knownThrough` answers on the same clock the
+store's keys and windows use.
+
+A **custom store** must implement `forgetAfter` (the interface makes it optional, and a store
+without one simply keeps whatever it fetched — `Mtf01Store` did, and never revisited a window).
+`plugins/store.ts` exports `missingRanges`/`mergeRange`/`truncate` so a custom store shares the
+coverage arithmetic instead of copying it. If it dedups rows, **prune the dedup keys with the
+rows it drops** — otherwise the refetch is deduplicated away and the row never comes back,
+which is worse than the hole.
 
 ## Signals
 

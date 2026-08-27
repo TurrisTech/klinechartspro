@@ -33,6 +33,7 @@ export function createKrevPlugin(): IndicatorPlugin {
           {
             id: KREV_GENERATION,
             key: krevSourceKey(ctx.vendor, ctx.ticker, ctx.interval),
+            resolution: ctx.interval,
             createStore: (key) =>
               new WindowStore<KrevPoint, BarPoints>(key, (point, existing) => ({ ...(existing ?? {}), [point.side]: point })),
             fetch: (range, limit) =>

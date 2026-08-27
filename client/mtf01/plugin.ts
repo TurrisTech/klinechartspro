@@ -43,6 +43,7 @@ export function createMtf01Plugin(): IndicatorPlugin {
           {
             id: MTF01_GENERATION,
             key: mtf01SourceKey(ctx.vendor, ctx.ticker, ctx.interval, cascade),
+            resolution: ctx.interval,
             createStore: (key) => new Mtf01Store(key),
             fetch: (range, limit) =>
               f.points<Mtf01Event>({

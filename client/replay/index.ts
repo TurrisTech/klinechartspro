@@ -239,14 +239,17 @@ export async function mountBarReplay(
     onAdvanced: async (result: AdvanceResult) => {
       // The one place the clock moves for the chart: every read from here on is clamped
       // to the new cursor, the panes are brought up to it, and everything that fetched
-      // under the old clock forgets its coverage past the old cursor.
+      // under the OLD clock forgets the coverage that clock made incomplete. The old cursor
+      // is what is handed over, not a margin off it: each source's answer was final only
+      // through the bar IT had forming at that instant, which the host works out per source
+      // from its own interval (plugins/horizon.ts).
       setReadClock(result.to)
       hub.cursor = result.to
       hub.setBase(session.base)
       const reports = await hub.push(chartPro.getPanes(), result.from)
       const problems = reports.filter((r) => r.problem)
       if (problems.length > 0) console.error(`${REPLAY_LOG} pane contiguity problems`, problems)
-      ctx.pluginHost.invalidateFrom(result.from - nominalMs(session.base))
+      ctx.pluginHost.invalidateFrom(result.from)
       // Levels are computed on 1W/1M, so one can only appear -- or be spent -- when a candle
       // of those intervals closes, and every such close is at 17:00 on a market day, i.e. a
       // DAILY boundary. Refetching on every step instead cost three slow reads per 15-minute
