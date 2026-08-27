@@ -79,4 +79,30 @@ describe('tilesUpTo', () => {
   test('returns null when no tile overlaps at all', () => {
     expect(tilesUpTo(manifest, Date.UTC(2019, 0, 1), Date.UTC(2019, 1, 1))).toBeNull()
   })
+
+  test('a gap INSIDE coverage is answered, emptily, rather than handed to the API', () => {
+    // The FX weekend, which is two days in every seven and which the pagination widener
+    // probes constantly while panning back through history. No tile overlaps it, but the
+    // tiles cover it and their answer is definite: no bars. Returning null here sent every
+    // such probe to /getbars for a range already settled -- and the API said `no_data` each
+    // time. Measured on the live 3m series: a window of Fri 20:57:00.001Z -> Sat 21:57Z,
+    // sitting between the June tile's last bar and the July tile's first.
+    const weekend = tilesUpTo(manifest, Date.UTC(2026, 5, 30, 20, 59) + 1, JUL_1 - MIN)
+    expect(present(weekend, 'an authoritative empty span').entries).toEqual([])
+    expect(present(weekend, 'an authoritative empty span').coveredTo).toBe(AUG_1)
+  })
+
+  test('but a gap reaching BEFORE coverage still falls back', () => {
+    // Part of this window predates the tiles, so they are not the whole answer and the
+    // caller has to ask.
+    expect(tilesUpTo(manifest, Date.UTC(2026, 4, 1), Date.UTC(2026, 4, 20))).toBeNull()
+  })
+
+  test('an empty window whose tail runs past coverage still splits at the boundary', () => {
+    // Nothing tiled to serve, but the caller must still pick up from coveredTo rather than
+    // from its own `from`, or the forming period is fetched twice.
+    const span = tilesUpTo(manifest, JUL_31_LAST_BAR + 1, AUG_1 + 10 * MIN)
+    expect(present(span, 'a span').entries).toEqual([])
+    expect(present(span, 'a span').coveredTo).toBe(AUG_1)
+  })
 })
