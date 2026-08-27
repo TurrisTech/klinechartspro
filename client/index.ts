@@ -400,7 +400,6 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     paper,
     {
       inReplay: replayBoot !== null,
-      controller: replay,
       rebuild: options.rebuild
     }
   )
@@ -442,7 +441,7 @@ function mountChartExtras(
   layerControllers: ReturnType<typeof createLayerController>[],
   switcher: ReturnType<typeof createWorkspaceSwitcher>,
   paper: PaperTradingController | null,
-  replay: { inReplay: boolean; controller: BarReplayController | null; rebuild: () => void }
+  replay: { inReplay: boolean; rebuild: () => void }
 ): () => void {
   const footer = document.createElement('div')
   footer.className = 'wd-rail-footer-content'

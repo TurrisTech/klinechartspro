@@ -2,51 +2,132 @@ import type { SignalCatalogueEntry } from '../plugins/types'
 import { formatInstant } from '../trading/format'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, sortByLength, validateBase } from './timeframes'
+import { createFloatingWindow } from './window'
 
-// GLUE (DOM). The replay control strip and the start dialog: plain DOM in the house style
+// GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
 // (`kc-*` tokens, `wd-*` classes), driven by a `ReplayController` they do not implement.
 //
-// The strip: the cursor instant, the advance control (timeframe picker x multiple + Step),
-// the signal list (star + arm), Next signal, the last stop reason, pause-on-fill, the base
-// timeframe, and Exit.
+// The controls are a FLOATING WINDOW over the chart (window.ts), not a strip inside the
+// trading dock. Only what is used on every step is on screen:
+//
+//   title bar   the cursor, Step, collapse, Exit -- and the drag handle
+//   advance     the timeframe picker x a multiple, and Next signal
+//   last stop   why the last advance stopped (absent until one has)
+//   toggles     Signals / Base / Account, one panel open at a time
+//
+// The signal list, the base timeframe and pause-on-fill are all one click away instead of
+// permanently on screen, and the account dock is opened from here rather than taking half
+// the wall from the moment replay starts.
 
-export interface ControlStripOptions {
+/** Where the window's position and collapsed state are remembered (per browser). */
+const PLACEMENT_KEY = 'wd.replay.window'
+
+type PanelId = 'signals' | 'settings' | null
+
+export interface ReplayControlsOptions {
   controller: ReplayController
   /** The wall's pane intervals, for the advance picker and the base validation. */
   intervalsInUse: () => string[]
+  /** The element the window stays inside: the chart's container, which shrinks when the
+   * trading dock opens below it. */
+  bounds: HTMLElement
   onExit: () => void
   /** The panel scrolls the stop's event into view. */
   onStop?: (result: AdvanceResult) => void
+  /** The trading dock the Account toggle shows and hides. */
+  account?: { isOpen: () => boolean; toggle: () => boolean }
 }
 
-export interface ControlStrip {
+export interface ReplayControls {
   readonly element: HTMLElement
-  /** Re-render (a pane change altered the intervals in use). */
+  /** Re-render: the intervals in use changed, or the dock was opened from outside. */
   refresh(): void
   dispose(): void
 }
 
-export function createControlStrip(options: ControlStripOptions): ControlStrip {
+export function createReplayControls(options: ReplayControlsOptions): ReplayControls {
   const { controller } = options
-  const root = el('div', 'wd-replay-strip')
+  const win = createFloatingWindow({
+    className: 'wd-replay-window',
+    storageKey: PLACEMENT_KEY,
+    bounds: options.bounds,
+    theme: chartTheme()
+  })
+  let panel: PanelId = null
+  // The signal list is the only scrollable thing here and every step re-renders the body,
+  // so its scroll position is carried across a render rather than snapping back to the top.
+  let signalScroll = 0
   const unsubscribe = controller.onControlChange(() => render())
 
   function render(): void {
-    root.innerHTML = ''
+    renderHeader()
+    renderBody()
+  }
+
+  // -- the title bar (visible collapsed, and the drag handle) -----------------------------
+
+  function renderHeader(): void {
+    const head = win.header
+    head.innerHTML = ''
     const busy = controller.busy
 
-    // 1. The clock.
-    const clock = el('div', 'wd-replay-clock')
-    const clockLabel = el('span', 'wd-replay-label')
-    clockLabel.textContent = 'Cursor'
-    const clockValue = el('span', 'wd-replay-clock-value')
-    clockValue.textContent = formatInstant(controller.cursor)
-    clockValue.title = new Date(controller.cursor).toISOString()
-    clock.append(clockLabel, clockValue)
-    root.appendChild(clock)
+    const grip = el('span', 'wd-float-grip')
+    grip.textContent = '⠿'
+    grip.setAttribute('aria-hidden', 'true')
+    const title = el('span', 'wd-float-title')
+    title.textContent = 'Replay'
+    const clock = el('span', 'wd-replay-clock-value')
+    clock.textContent = formatInstant(controller.cursor)
+    clock.title = new Date(controller.cursor).toISOString()
 
-    // 2. The advance control: any timeframe x a multiple, and Step.
-    const advance = el('div', 'wd-replay-advance')
+    // Step lives in the title bar, not the body: it is the one control used on every single
+    // interaction, so it stays reachable with the window rolled up.
+    const step = button('kc-button kc-button-primary wd-replay-step', busy ? '…' : 'Step', () => {
+      void controller.step().then((r) => r && options.onStop?.(r))
+    })
+    step.disabled = busy
+    step.title = `Advance ${controller.advance.multiple} × ${controller.advance.interval}`
+
+    const collapse = button('kc-button kc-icon-button wd-float-collapse', win.collapsed ? '▾' : '▴', () => {
+      win.setCollapsed(!win.collapsed)
+      renderHeader()
+    })
+    collapse.title = win.collapsed ? 'Show the controls' : 'Roll up to the title bar'
+
+    const exit = button('kc-button wd-replay-exit', 'Exit', () => options.onExit())
+    exit.disabled = busy
+    exit.title = 'Leave replay and return to the live wall'
+
+    head.append(grip, title, clock, el('span', 'wd-float-spacer'), step, collapse, exit)
+  }
+
+  // -- the body ----------------------------------------------------------------------------
+
+  function renderBody(): void {
+    const body = win.body
+    body.innerHTML = ''
+    body.appendChild(renderAdvance())
+    const last = controller.lastStop
+    if (last) {
+      // Absent until an advance has stopped: an empty row is a row of height for nothing.
+      const stop = el('div', 'wd-replay-status')
+      const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
+      reason.textContent = describeStop(last, controller.signals.catalogue)
+      reason.title = reason.textContent
+      stop.appendChild(reason)
+      body.appendChild(stop)
+    }
+    body.appendChild(renderToggles())
+    if (panel === 'signals') body.appendChild(renderSignals())
+    if (panel === 'settings') body.appendChild(renderSettings())
+    win.reflow()
+  }
+
+  function renderAdvance(): HTMLElement {
+    const row = el('div', 'wd-replay-row')
+    const busy = controller.busy
+    const label = el('span', 'wd-replay-label')
+    label.textContent = 'Advance'
     const choices = advanceChoices(controller, options.intervalsInUse())
     const picker = select(
       choices.map((c) => ({ value: c, label: c })),
@@ -54,6 +135,7 @@ export function createControlStrip(options: ControlStripOptions): ControlStrip {
       (value) => controller.setAdvance({ interval: value, multiple: controller.advance.multiple })
     )
     picker.title = 'Advance timeframe'
+    picker.disabled = busy
     const times = el('span', 'wd-replay-times')
     times.textContent = '×'
     const multiple = numberInput(String(controller.advance.multiple), (raw) => {
@@ -61,69 +143,141 @@ export function createControlStrip(options: ControlStripOptions): ControlStrip {
       controller.setAdvance({ interval: controller.advance.interval, multiple: n })
     })
     multiple.title = 'How many candles'
-    const step = button('kc-button kc-button-primary wd-replay-step', busy ? 'Stepping…' : 'Step', () => {
-      void controller.step().then((r) => r && options.onStop?.(r))
-    })
-    step.disabled = busy
+    multiple.disabled = busy
     const next = button('kc-button kc-button-outline wd-replay-next', 'Next signal', () => {
       void controller.nextSignal().then((r) => r && options.onStop?.(r))
     })
     next.disabled = busy || controller.signals.armed.length === 0
     next.title = controller.signals.armed.length === 0 ? 'Arm a signal first' : 'Advance to the next armed signal'
-    advance.append(picker, times, multiple, step, next)
-    root.appendChild(advance)
+    row.append(label, picker, times, multiple, next)
+    return row
+  }
 
-    // 3. The last stop reason.
-    const stop = el('div', 'wd-replay-stop')
-    const last = controller.lastStop
-    if (last) {
-      const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
-      reason.textContent = describeStop(last, controller.signals.catalogue)
-      stop.appendChild(reason)
+  function renderToggles(): HTMLElement {
+    const row = el('div', 'wd-replay-toggles')
+    const book = controller.signals
+    const published = book.catalogue.filter((e) => e.available).length
+    const armed = book.armed.length
+
+    const signals = toggleButton('Signals', armed > 0 ? String(armed) : '', panel === 'signals', () => showPanel('signals'))
+    signals.disabled = published === 0
+    signals.title = published === 0 ? 'No signal plugin publishes on this wall' : `${published} available, ${armed} armed`
+
+    // The base is on the toggle itself: it decides how accurately every fill is priced, so
+    // it should be legible without opening anything.
+    const baseCheck = validateBase(controller.base, controller.intervalsInUse, controller.storedIntervals)
+    const settings = toggleButton(`Base ${controller.base}`, '', panel === 'settings', () => showPanel('settings'))
+    settings.classList.toggle('is-invalid', !baseCheck.ok)
+    settings.title = baseCheck.ok ? 'Base timeframe and pause on fill' : (baseCheck.reason ?? '')
+    row.append(signals, settings)
+
+    if (options.account) {
+      const account = options.account
+      const open = account.isOpen()
+      const toggle = toggleButton('Account', '', open, () => {
+        account.toggle()
+        renderBody()
+      })
+      toggle.title = open ? 'Hide the account, ticket and tables' : 'Show the account, ticket and tables'
+      row.appendChild(toggle)
     }
-    root.appendChild(stop)
+    return row
+  }
 
-    // 4. Base timeframe + pause on fill.
-    const settings = el('div', 'wd-replay-settings')
-    const baseLabel = el('span', 'wd-replay-label')
-    baseLabel.textContent = 'Base'
+  function showPanel(next: PanelId): void {
+    panel = panel === next ? null : next
+    renderBody()
+  }
+
+  function renderSettings(): HTMLElement {
+    const box = el('div', 'wd-replay-panel')
+    const row = el('div', 'wd-replay-row')
+    const label = el('span', 'wd-replay-label')
+    label.textContent = 'Base'
     const baseCheck = validateBase(controller.base, controller.intervalsInUse, controller.storedIntervals)
     const basePicker = select(
       controller.storedIntervals.map((s) => ({ value: s, label: s })),
       controller.base,
       (value) => {
         const check = controller.setBase(value)
-        if (!check.ok) flash(root, check.reason ?? 'Invalid base')
+        if (!check.ok) flash(win.element, check.reason ?? 'Invalid base')
       }
     )
-    basePicker.disabled = busy
-    basePicker.title = baseCheck.ok ? 'The interval the engine walks; finer = more accurate fills, more bars' : (baseCheck.reason ?? '')
+    basePicker.disabled = controller.busy
+    basePicker.title = baseCheck.ok
+      ? 'The interval the engine walks; finer = more accurate fills, more bars'
+      : (baseCheck.reason ?? '')
     basePicker.classList.toggle('is-invalid', !baseCheck.ok)
-    const pause = checkbox('Pause on fill', controller.pauseOnFill, (on) => controller.setPauseOnFill(on))
-    settings.append(baseLabel, basePicker, pause)
+    row.append(label, basePicker, checkbox('Pause on fill', controller.pauseOnFill, (on) => controller.setPauseOnFill(on)))
+    box.appendChild(row)
     if (!baseCheck.ok) {
-      const warn = el('span', 'wd-replay-warning')
+      const warn = el('div', 'wd-replay-warning')
       warn.textContent = baseCheck.reason ?? ''
-      settings.appendChild(warn)
+      box.appendChild(warn)
     }
-    root.appendChild(settings)
+    return box
+  }
 
-    // 5. Signals: star + arm.
-    root.appendChild(renderSignals(controller, options.intervalsInUse()))
-
-    // 6. Exit.
-    const exit = button('kc-button kc-button-outline wd-replay-exit', 'Exit replay', () => options.onExit())
-    exit.disabled = busy
-    root.appendChild(exit)
+  function renderSignals(): HTMLElement {
+    const box = el('div', 'wd-replay-panel')
+    const book = controller.signals
+    const available = book.catalogue.filter((e) => e.available)
+    if (available.length === 0) {
+      const none = el('span', 'wd-replay-muted')
+      none.textContent = 'none published'
+      box.appendChild(none)
+      return box
+    }
+    const list = el('div', 'wd-replay-signal-list')
+    list.addEventListener('scroll', () => {
+      signalScroll = list.scrollTop
+    })
+    // Starred first (the working shortlist), then the rest of the catalogue.
+    const ordered = [...available].sort((a, b) => Number(book.isStarred(b.ref)) - Number(book.isStarred(a.ref)))
+    const resolutions = sortByLength([...new Set(options.intervalsInUse())])
+    for (const entry of ordered) {
+      const row = el('div', 'wd-replay-signal')
+      const starred = book.isStarred(entry.ref)
+      const star = button(`wd-replay-star ${starred ? 'is-on' : ''}`, starred ? '★' : '☆', () => {
+        book.star(entry.ref, !starred)
+        controller.persist()
+        renderBody()
+      })
+      star.title = starred ? 'Unstar' : 'Star (shortlist)'
+      const name = el('span', `wd-replay-signal-name is-${entry.side ?? 'none'}`)
+      name.textContent = `${entry.title}${entry.variant ? ` ${entry.variant}` : ''} · ${entry.label}`
+      name.title = entry.description || entry.ref
+      row.append(star, name)
+      if (starred) {
+        const arms = el('span', 'wd-replay-arms')
+        for (const res of resolutions) {
+          const armed = book.isArmed(entry.ref, res)
+          const arm = button(`wd-replay-arm ${armed ? 'is-on' : ''}`, res, () => {
+            book.arm(entry.ref, res, !armed)
+            controller.persist()
+            renderBody()
+          })
+          arm.title = armed ? `Armed on ${res}: click to disarm` : `Arm as a pause point on ${res}`
+          arms.appendChild(arm)
+        }
+        row.appendChild(arms)
+      }
+      list.appendChild(row)
+    }
+    box.appendChild(list)
+    // Assigned after the list is built but before it is on screen; the browser applies it on
+    // the first layout, so re-rendering under the pointer does not jump the list.
+    list.scrollTop = signalScroll
+    return box
   }
 
   render()
   return {
-    element: root,
+    element: win.element,
     refresh: render,
     dispose(): void {
       unsubscribe()
-      root.remove()
+      win.dispose()
     }
   }
 }
@@ -150,59 +304,6 @@ function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogue
         ? `Advanced ${result.bars.length} bar${result.bars.length === 1 ? '' : 's'}`
         : 'Jumped — nothing working'
   }
-}
-
-function renderSignals(controller: ReplayController, inUse: string[]): HTMLElement {
-  const box = el('div', 'wd-replay-signals')
-  const book = controller.signals
-  const head = el('span', 'wd-replay-label')
-  head.textContent = 'Signals'
-  box.appendChild(head)
-  const available = book.catalogue.filter((e) => e.available)
-  if (available.length === 0) {
-    const none = el('span', 'wd-replay-muted')
-    none.textContent = 'none published'
-    box.appendChild(none)
-    return box
-  }
-  const list = el('div', 'wd-replay-signal-list')
-  // Starred first (the working shortlist), then the rest of the catalogue.
-  const ordered = [...available].sort((a, b) => Number(book.isStarred(b.ref)) - Number(book.isStarred(a.ref)))
-  const resolutions = sortByLength([...new Set(inUse)])
-  for (const entry of ordered) {
-    const row = el('div', 'wd-replay-signal')
-    const star = button(`wd-replay-star ${book.isStarred(entry.ref) ? 'is-on' : ''}`, book.isStarred(entry.ref) ? '★' : '☆', () => {
-      book.star(entry.ref, !book.isStarred(entry.ref))
-      controller.persist()
-      rerender()
-    })
-    star.title = book.isStarred(entry.ref) ? 'Unstar' : 'Star (shortlist)'
-    const name = el('span', `wd-replay-signal-name is-${entry.side ?? 'none'}`)
-    name.textContent = `${entry.title}${entry.variant ? ` ${entry.variant}` : ''} · ${entry.label}`
-    name.title = entry.description || entry.ref
-    row.append(star, name)
-    if (book.isStarred(entry.ref)) {
-      const arms = el('span', 'wd-replay-arms')
-      for (const res of resolutions) {
-        const armed = book.isArmed(entry.ref, res)
-        const arm = button(`wd-replay-arm ${armed ? 'is-on' : ''}`, res, () => {
-          book.arm(entry.ref, res, !armed)
-          controller.persist()
-          rerender()
-        })
-        arm.title = armed ? `Armed on ${res}: click to disarm` : `Arm as a pause point on ${res}`
-        arms.appendChild(arm)
-      }
-      row.appendChild(arms)
-    }
-    list.appendChild(row)
-  }
-  box.appendChild(list)
-  function rerender(): void {
-    const fresh = renderSignals(controller, inUse)
-    box.replaceWith(fresh)
-  }
-  return box
 }
 
 // -- the start dialog ------------------------------------------------------------------------
@@ -362,6 +463,18 @@ function button(className: string, text: string, onClick: () => void): HTMLButto
   b.className = className
   b.textContent = text
   b.addEventListener('click', onClick)
+  return b
+}
+
+/** A toggle in the window's footer: label, optional count badge, on/off. */
+function toggleButton(label: string, badge: string, on: boolean, onClick: () => void): HTMLButtonElement {
+  const b = button(`kc-button wd-replay-toggle${on ? ' is-on' : ''}`, label, onClick)
+  b.setAttribute('aria-pressed', String(on))
+  if (badge) {
+    const count = el('span', 'wd-replay-badge')
+    count.textContent = badge
+    b.appendChild(count)
+  }
   return b
 }
 

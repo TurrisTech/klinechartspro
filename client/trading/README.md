@@ -42,7 +42,8 @@ mode only for its title.
 - `format.ts` — pure price / pip / P&L helpers.
 - `dock.ts` — `mountTradingDock(session, opts)`: the mode-agnostic dock — panel, overlays,
   the dock element below the chart (minimized by default, removed from layout), open/close,
-  teardown; `opts.header` mounts extra chrome above the panel (the replay's control strip).
+  teardown. A replay's controls are not in it: they float over the chart and toggle this dock
+  from their own Account button (`client/replay/window.ts`).
 - `index.ts` — `mountPaperTrading(chartPro, container)`: a `PaperTradingSession` on the dock;
   returns `{ toggle, isOpen, sync, teardown }`. The "Paper" button in the drawing rail's
   footer (`client/index.ts` `mountChartExtras`) calls `toggle`; "Replay" beside it is

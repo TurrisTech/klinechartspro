@@ -10,7 +10,9 @@ import type { TradingSession } from './session'
 // does NOT depend on whether the session is a paper account or a replay. Both
 // `mountPaperTrading` (index.ts) and `mountBarReplay` (client/replay/index.ts) build on it;
 // the panel, ticket, tables and overlays are reused verbatim, bound to whichever
-// `TradingSession` is handed in.
+// `TradingSession` is handed in. A replay's own controls are NOT in here: they float over
+// the chart (client/replay/window.ts) and drive this dock's open/close from their Account
+// toggle.
 
 export interface DockOptions {
   chartPro: KLineChartPro
@@ -20,8 +22,9 @@ export interface DockOptions {
   title: string
   /** Console-prefix tag ('paper', 'replay'). */
   tag: string
-  /** Extra chrome mounted ABOVE the panel inside the dock (the replay's control strip). */
-  header?: HTMLElement
+  /** Told whenever the dock is shown or hidden, by whatever did it -- a rail button, the
+   * replay's Account toggle, or the panel's own close button. */
+  onOpenChange?: (open: boolean) => void
 }
 
 export interface TradingDock {
@@ -74,7 +77,6 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     onClose: () => setOpen(false),
     title: options.title
   })
-  if (options.header) dock.appendChild(options.header)
   dock.appendChild(panel.element)
 
   // The dock takes its own row below the chart: #app flexes to fill the space above it, the
@@ -90,6 +92,7 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
   function setOpen(next: boolean): boolean {
     open = next
     dock.classList.toggle('is-hidden', !open)
+    options.onOpenChange?.(open)
     return open
   }
 
