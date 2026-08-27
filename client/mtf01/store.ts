@@ -1,3 +1,4 @@
+import { mergeRange, missingRanges, truncate } from '../plugins/store'
 import type { Phase, Range, SourceStore } from '../plugins/types'
 import type { Mtf01Event, Mtf01Trade } from './api'
 
@@ -57,34 +58,40 @@ export class Mtf01Store implements SourceStore<Mtf01Event> {
     this.rev++
   }
 
-  /** The parts of `window` not yet fetched (0..2 sub-windows, in order). */
+  /** The parts of `window` not yet fetched. Shared with `WindowStore` -- this store differs
+   * in what a bar HOLDS, never in how coverage is tracked, and two copies of that arithmetic
+   * only gave the two stores a way to disagree. */
   missing(window: Range): Range[] {
-    let gaps: Range[] = [{ ...window }]
-    for (const r of this.ranges) {
-      const next: Range[] = []
-      for (const g of gaps) {
-        if (r.to <= g.from || r.from >= g.to) {
-          next.push(g)
-          continue
-        }
-        if (r.from > g.from) next.push({ from: g.from, to: r.from })
-        if (r.to < g.to) next.push({ from: r.to, to: g.to })
-      }
-      gaps = next
-    }
-    return gaps
+    return missingRanges(this.ranges, window)
   }
 
   addRange(range: Range): void {
-    const merged: Range[] = []
-    let cur = { ...range }
-    for (const r of this.ranges) {
-      if (r.to < cur.from || r.from > cur.to) merged.push(r)
-      else cur = { from: Math.min(r.from, cur.from), to: Math.max(r.to, cur.to) }
+    this.ranges = mergeRange(this.ranges, range)
+  }
+
+  /** Drop coverage at or after `from`, and both kinds of row held there -- the replay's
+   * cursor moved, so a window fetched under the old clock held nothing for bars that had
+   * not closed yet (`WindowStore.forgetAfter`, and `plugins/horizon.ts` for what `from` is).
+   *
+   * The dedup set has to be pruned WITH the rows, and it is the only part of this that is
+   * not mechanical: `seen` is keyed by a row's OWN candle (`stage|interval|barDate`), not by
+   * the bar it draws on, which is what the maps are keyed by. Drop a row and leave its key
+   * behind and the refetch is deduplicated away -- the row is gone from the chart for good,
+   * which is a worse bug than the one this method exists to fix. So the keys are rebuilt
+   * from the rows actually being dropped, never guessed from the map key. */
+  forgetAfter(from: number): void {
+    this.ranges = truncate(this.ranges, from)
+    for (const [date, rows] of [...this.events]) {
+      if (date < from) continue
+      for (const e of rows) this.seen.delete(eventKey(e))
+      this.events.delete(date)
     }
-    merged.push(cur)
-    merged.sort((a, b) => a.from - b.from)
-    this.ranges = merged
+    for (const [date, rows] of [...this.trades]) {
+      if (date < from) continue
+      for (const t of rows) this.seen.delete(tradeKey(t))
+      this.trades.delete(date)
+    }
+    this.rev++
   }
 
   setCascade(cascade: string | null): void {

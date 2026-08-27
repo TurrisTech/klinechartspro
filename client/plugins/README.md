@@ -67,6 +67,13 @@ A source dated on a **wire clock** (daily-and-coarser bars are `open + 7h`,
 `services/wiredate.py`) needs nothing extra — `knownThrough` answers on the same clock the
 store's keys and windows use.
 
+A **custom store** must implement `forgetAfter` (the interface makes it optional, and a store
+without one simply keeps whatever it fetched — `Mtf01Store` did, and never revisited a window).
+`plugins/store.ts` exports `missingRanges`/`mergeRange`/`truncate` so a custom store shares the
+coverage arithmetic instead of copying it. If it dedups rows, **prune the dedup keys with the
+rows it drops** — otherwise the refetch is deduplicated away and the row never comes back,
+which is worse than the hole.
+
 ## Signals
 
 A plugin whose points carry discrete events **labels** them on the server

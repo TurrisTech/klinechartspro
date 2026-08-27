@@ -60,12 +60,7 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
    * forming, on the wire clock its points are dated on -- and NOT the cursor, which for
    * anything coarser than the cursor's own grid sits after the bar that needs refetching. */
   forgetAfter(from: number): void {
-    const kept: Range[] = []
-    for (const r of this.ranges) {
-      if (r.to <= from) kept.push(r)
-      else if (r.from < from) kept.push({ from: r.from, to: from })
-    }
-    this.ranges = kept
+    this.ranges = truncate(this.ranges, from)
     for (const t of [...this.values.keys()]) if (t >= from) this.values.delete(t)
     this.rev++
   }
@@ -102,6 +97,17 @@ export function missingRanges(ranges: readonly Range[], window: Range): Range[] 
     gaps = next
   }
   return gaps
+}
+
+/** `ranges` with everything at or after `from` dropped; a window straddling `from` keeps only
+ * the part before it. Shared with `Mtf01Store`, which forgets the same coverage. */
+export function truncate(ranges: readonly Range[], from: number): Range[] {
+  const kept: Range[] = []
+  for (const r of ranges) {
+    if (r.to <= from) kept.push(r)
+    else if (r.from < from) kept.push({ from: r.from, to: from })
+  }
+  return kept
 }
 
 /** `ranges` with `range` merged in: overlapping or touching windows become one. */
