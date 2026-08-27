@@ -45,6 +45,25 @@ A template's `calc` reads its store back: `peekStore<WindowStore<P, V>>(indicato
 (`seriesKeys[id]` for a multi-source binding). The host bumps `extendData.rev` on every store
 change, so `shouldUpdate` compares it.
 
+## Two bindings on one key
+
+Sources with the same `key` share one store — that is the point (a 15m, a 3m and a 1h pane
+all overlaying 4h arev21 pay for one fetch, not three). But `storeFor(key, create)` runs
+`create` only when the key is **absent**, so the binding that arrives first decides the class
+and the second silently gets it. Two rules follow, and both are load-bearing:
+
+- **Name the same factory.** Not an equivalent closure — the same module-level function, so
+  there is one place to look. `arev/store.ts`'s `arevStore` is the pattern.
+- **Write the same row.** Anything a source needs that is *not* that row is an auxiliary
+  array on the same window (`Page.arrays`), never a second kind of value. The AREV21 MTF
+  overlay ships its bar grid that way; mtf01 ships its trades that way.
+
+Break either and the failure is silent and order-dependent: the overlay's rows overwrote the
+sub-pane's votes with rows carrying no `p`, so the sub-pane drew gaps, and the overlay then
+read back a store with no `grid()` and drew nothing at all. Measured before the fix, one 1h
+pane carrying both: 0 of 266 votes drawn and 0 markers. Tests: `arev/store.test.ts`, which
+asserts the two specs agree on key, resolution and factory by reference.
+
 ## Under a replay's read clock
 
 Declare `resolution` on every source. A replay clamps every read to its cursor
