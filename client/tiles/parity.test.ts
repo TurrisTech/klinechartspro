@@ -67,7 +67,11 @@ afterAll(() => {
 
 
 describe.skipIf(!ready || !serverUp)('tiles + API == /getbars', () => {
-  const cases: Array<[string, string, string, number, number]> = [
+  // `tiles` is how many bars came from the tile store. A case that names an interval whose
+  // tiles are missing falls back to /getbars for the whole window and then compares the API
+  // against itself -- green, and testing nothing. That is the same silent-pass this suite
+  // already failed at once, so the seam cases below REQUIRE tiles to have contributed.
+  const cases: Array<[string, string, string, number, number, boolean?]> = [
     ['wholly historical', 'oanda:EURUSD', '1m', Date.UTC(2026, 6, 20), Date.UTC(2026, 6, 22)],
     ['straddles the 1m month seam', 'oanda:EURUSD', '1m', Date.UTC(2026, 6, 30), Date.UTC(2026, 7, 2)],
     ['straddles, 3-decimal instrument', 'oanda:USDJPY', '1m', Date.UTC(2026, 6, 31), Date.UTC(2026, 7, 3)],
@@ -87,18 +91,19 @@ describe.skipIf(!ready || !serverUp)('tiles + API == /getbars', () => {
     // its open put it in BOTH tiles, each holding half of it -- two bars on one timestamp,
     // neither the real candle. Every case above missed it: the 4h one sits in mid-September,
     // and there was no 8h case at all.
-    ['4h, straddles a quarter seam', 'oanda:EURUSD', '4h', Date.UTC(2026, 2, 30), Date.UTC(2026, 3, 2)],
-    ['8h, straddles a quarter seam', 'oanda:EURUSD', '8h', Date.UTC(2026, 2, 30), Date.UTC(2026, 3, 2)],
-    ['8h, straddles the mid-year seam', 'oanda:EURUSD', '8h', Date.UTC(2026, 5, 29), Date.UTC(2026, 6, 2)],
-    ['8h, a whole quarter', 'oanda:EURUSD', '8h', Date.UTC(2026, 0, 1), Date.UTC(2026, 3, 1)],
+    ['4h, straddles a quarter seam', 'oanda:EURUSD', '4h', Date.UTC(2026, 2, 30), Date.UTC(2026, 3, 2), true],
+    ['8h, straddles a quarter seam', 'oanda:EURUSD', '8h', Date.UTC(2026, 2, 30), Date.UTC(2026, 3, 2), true],
+    ['8h, straddles the mid-year seam', 'oanda:EURUSD', '8h', Date.UTC(2026, 5, 29), Date.UTC(2026, 6, 2), true],
+    ['8h, a whole quarter', 'oanda:EURUSD', '8h', Date.UTC(2026, 0, 1), Date.UTC(2026, 3, 1), true],
     ['1W, derived from 1D', 'oanda:EURUSD', '1W', Date.UTC(2024, 0, 1), Date.UTC(2024, 5, 1)],
     ['1Y, derived from 1M', 'oanda:EURUSD', '1Y', Date.UTC(2010, 0, 1), Date.UTC(2020, 0, 1)],
   ]
 
-  for (const [label, symbol, resolution, from, to] of cases) {
+  for (const [label, symbol, resolution, from, to, mustUseTiles] of cases) {
     test(label, async () => {
       const expected = await getbars(symbol, resolution, from, to)
-      const { bars } = await tiledThenApi(symbol, resolution, from, to)
+      const { bars, tiles } = await tiledThenApi(symbol, resolution, from, to)
+      if (mustUseTiles) expect(tiles).toBeGreaterThan(0)
       expect(bars.length).toBe(expected.length)
       for (let i = 0; i < expected.length; i++) {
         // `volume` is optional on KLineData. Compare presence first so a value missing on
