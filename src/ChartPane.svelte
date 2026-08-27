@@ -31,7 +31,14 @@
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
   import { applyCrosshairAt, crosshairPoint, type CrosshairPoint } from './sync/crosshair'
-  import { isTimestampVisible, seekToTimestamp, visibleMidpointTimestamp } from './sync/seek'
+  import {
+    isTimestampVisible,
+    LIVE_EDGE_FRACTION,
+    resolveSeekReach,
+    seekToTimestamp,
+    timestampFraction,
+    visibleMidpointTimestamp
+  } from './sync/seek'
 
   type IndicatorFeatureClick = {
     paneId: string
@@ -154,7 +161,13 @@
   const SEEK_WINDOW_BARS = 500
   function seekWindow(currentPeriod: Period, target: number, count: number) {
     const span = count * periodDurationMs(currentPeriod)
-    return [target - span, target + span] as const
+    // A target in the future has no bars to bracket -- `target - span` can itself be later
+    // than the last close, and the window then comes back EMPTY, leaving the pane with no
+    // data at all. Bracket the present instead, so the reload still returns the live tail;
+    // where the view then lands is the loader's business (see the 'init' branch, which
+    // positions a past-the-tail seek at the live edge rather than scrolling into the blank).
+    const anchor = Math.min(target, Date.now())
+    return [anchor - span, anchor + span] as const
   }
 
   // One page of newer-in-time bars once a seek has parked this pane's data mid-history --
@@ -310,17 +323,32 @@
   // a span's midpoint but still marks the instant that was actually clicked.
   function seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint | null): void {
     if (!widget) return
+    // A target past the live edge is not somewhere this pane can go -- see resolveSeekReach
+    // for the whole rule and why chasing it puts the newest bar two bars from the LEFT edge.
+    // No reload, since there is nothing there to fetch: the current bar keeps the position it
+    // already had if that is one it can be left in, and otherwise comes back to the default
+    // position -- which is also how a pane already sitting jammed at the left gets out of it.
+    // The crosshair is still applied: it marks the instant the wall aligned on, wherever on
+    // this pane's scale that falls, exactly as the hover sync does.
+    const newest = widget.getDataList().at(-1)?.timestamp
+    const reach = resolveSeekReach(
+      timestamp,
+      newest,
+      parkedInHistory,
+      newest === undefined ? null : timestampFraction(widget, newest)
+    )
+    if (reach !== 'reload') {
+      console.debug('[sync] seek target is past the live edge', { pane: pane.id, reach, timestamp })
+      if (reach === 'live-edge') positionAtLive(widget)
+      if (crosshair) applyCrosshairAt(widget, crosshair)
+      return
+    }
     pendingLive = null
     pendingSeek = { timestamp, fraction, crosshair }
     widget.resetData()
   }
 
   // --- Jump to live ----------------------------------------------------------------------
-
-  // Where the newest bar lands when the jump-to-live control is used: four fifths of the way
-  // across the price area, leaving a fifth of empty chart to its right. Not flush against the
-  // right edge -- a live candle is still forming, and the room ahead of it is where it forms.
-  const LIVE_EDGE_FRACTION = 0.8
 
   // Whether the newest bar there is, is on screen. False in two different ways, both of which
   // the control has to offer to fix: this pane is scrolled away from a tail it does hold, or
@@ -602,8 +630,15 @@
           // once it runs dry. That is also exactly when this pane's data is parked in the
           // past, and a plain init -- mount, symbol change, period change -- is exactly when
           // it is not: the window it just loaded ends at `now`.
-          parkedInHistory = Boolean(seek)
-          callback(data, { forward: data.length > 0, backward: Boolean(seek) })
+          //
+          // A seek is the third case: one whose target is newer than anything the reload came
+          // back with has caught UP with the present rather than parking short of it, because
+          // seekWindow brackets `now` for a future target. Nothing newer to page toward, and
+          // live bars belong on this tail -- so it is not parked either.
+          const pastLiveEdge =
+            seek !== null && data.length > 0 && seek.timestamp > data[data.length - 1].timestamp
+          parkedInHistory = Boolean(seek) && !pastLiveEdge
+          callback(data, { forward: data.length > 0, backward: parkedInHistory })
           if (seek?.restore && data.length === 0) {
             // The saved anchor no longer has bars around it -- history was trimmed, or the
             // instrument's data moved. Left as it is the pane would sit empty AND offer no way
@@ -616,7 +651,12 @@
             return
           }
           if (seek && data.length > 0 && widget) {
-            seekToTimestamp(widget, seek.timestamp, seek.fraction, 0)
+            // Past the live edge there is no `seek.timestamp` on the chart to scroll to, and
+            // asking anyway leaves the newest bar jammed two bars from the left with a screen
+            // of nothing after it (resolveSeekReach spells that out). Land at the live edge,
+            // which is as far forward as this pane goes.
+            if (pastLiveEdge) positionAtLive(widget)
+            else seekToTimestamp(widget, seek.timestamp, seek.fraction, 0)
             // resetData() cleared this pane's crosshair along with its data (see
             // _clearData in klinecharts) -- without this, the pane lands in the right
             // place but shows no crosshair marking where every other pane just aligned to.
