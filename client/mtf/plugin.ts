@@ -1,10 +1,10 @@
 import type { IndicatorGroup } from '../../src'
 import { arevSourceKey } from '../arev/plugin'
+import { GRID_ARRAY, arevStore } from '../arev/store'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
-import { MTF_GENERATION, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
+import { MTF_GENERATION, type ArevPoint, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
 import { MTF_DEFAULTS, MTF_FIELDS, enabledIntervals, type MtfConfig } from './config'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
-import { MtfStore, type MtfItem } from './store'
 import { TEMPLATE_NAME, isMtfIndicator, registerMtfIndicators } from './templates'
 
 // The AREV21 multi-timeframe overlay as a client plugin. Where the AREV plugin binds one
@@ -58,17 +58,21 @@ export function createMtfPlugin(): IndicatorPlugin {
   const drawable = (config: MtfConfig, chartInterval: string): MtfInterval[] =>
     enabledIntervals(config).filter((interval) => !isFinerThan(interval, chartInterval))
 
-  const source = (f: PluginFacilities, ctx: BindContext, interval: MtfInterval): SourceSpec<MtfItem> => {
+  const source = (f: PluginFacilities, ctx: BindContext, interval: MtfInterval): SourceSpec<ArevPoint> => {
     const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
     const chunk = GRID_CHUNK_BARS * f.resolutionDurationMs(interval)
     return {
       id: interval,
       // The same key the AREV plugin would give arev21 at this interval: a sub-pane and
-      // the overlay reading the same votes share one store.
+      // the overlay reading the same votes share one store. Sharing a key means sharing
+      // the row type and the factory as well -- see arev/store.ts for what went wrong when
+      // these two wrote different things under it.
       key: arevSourceKey(MTF_GENERATION, ctx.vendor, ctx.ticker, interval),
-      // The SOURCE timeframe, not the chart's: this is what its points are dated on.
+      // The SOURCE timeframe, not the chart's: this is what its points are dated on. The
+      // AREV sub-pane's spec for this key says the same, so a replay step forgets one
+      // amount rather than two (plugins/horizon.ts).
       resolution: interval,
-      createStore: (key) => new MtfStore(key),
+      createStore: arevStore,
       /** The chart's loaded span, converted out of the chart's wire clock and into the
        * source timeframe's, padded at both ends. Both conversions are needed and they
        * differ whenever exactly one of the two intervals is daily-or-coarser. */
@@ -80,17 +84,22 @@ export function createMtfPlugin(): IndicatorPlugin {
       },
       // Votes and grid together, over one chunk, so a single range covers both in the
       // store. Concurrently, because neither depends on the other.
+      //
+      // The votes are the page's POINTS -- the same `ArevPoint` the sub-pane on this key
+      // stores -- and the grid rides beside them as an auxiliary array, which is what that
+      // mechanism is for: a different kind of row on the same window, not more of the same
+      // one. It therefore has no cursor of its own; `nextFrom` is driven by the chunk.
       fetch: async (range, limit) => {
         const to = Math.min(range.to, range.from + chunk)
         const [points, grid] = await Promise.all([
           fetchMtfPoints(vendorSymbol, interval, range.from, to, limit),
           fetchMtfBarGrid(vendorSymbol, interval, range.from, to)
         ])
-        const items: MtfItem[] = [
-          ...points.map((point): MtfItem => ({ kind: 'vote', date: point.date, point })),
-          ...grid.map((date): MtfItem => ({ kind: 'bar', date }))
-        ]
-        return { points: items, nextFrom: to < range.to ? to : null }
+        return {
+          points,
+          nextFrom: to < range.to ? to : null,
+          arrays: { [GRID_ARRAY]: grid.map((date) => ({ date })) }
+        }
       }
     }
   }

@@ -4,7 +4,7 @@ import { MTF_GENERATION, type MtfInterval } from './api'
 import { MTF_DEFAULTS, enabledIntervals, type MtfConfig, type MtfTimeframeStyle } from './config'
 import { shiftSignals, type ShiftedSignal } from './shift'
 import { peekStore } from '../plugins/store'
-import type { MtfStore } from './store'
+import type { ArevStore } from '../arev/store'
 
 // ONE klinecharts indicator template, on the price pane, drawing arev21's signals from as
 // many timeframes as the user has switched on.
@@ -82,7 +82,7 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
   const byBar = new Map<number, Marked[]>()
   intervals.forEach((interval, lane) => {
     const key = extend.seriesKeys[interval]
-    const store = peekStore<MtfStore>(key)
+    const store = peekStore<ArevStore>(key)
     if (!store) return
     const placed = shiftSignals({
       sourceInterval: interval,

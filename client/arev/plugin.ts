@@ -1,6 +1,7 @@
 import type { IndicatorGroup } from '../../src'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import { AREV_GENERATIONS, type ArevPoint } from './api'
+import { arevStore } from './store'
 import { parseTemplateName, registerArevIndicators, TEMPLATE_PREFIX } from './templates'
 
 // AREV as a client plugin: one sub-pane template per model generation, each reading one
@@ -29,6 +30,9 @@ export function arevSource(facilities: PluginFacilities, generation: string, ven
     id: generation,
     key: arevSourceKey(generation, vendor, ticker, interval),
     resolution: interval,
+    // The one factory for this key -- the MTF overlay names the same one, so whichever
+    // binding arrives first the class is the same (arev/store.ts).
+    createStore: arevStore,
     fetch: (range, limit) =>
       facilities.points<ArevPoint>({
         pluginId: 'arev',
