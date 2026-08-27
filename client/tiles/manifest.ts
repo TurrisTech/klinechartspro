@@ -36,7 +36,10 @@ export interface TileManifest {
   vendor: string
   symbol: string
   interval: string
-  granularity: 'week' | 'month' | '5y' | 'all'
+  /** Every period length the builder emits (`GRANULARITY` in build_chart_tiles.py).
+   * `quarter` was missing here while 2h/4h/8h have been quarter-granular all along — the
+   * field is only ever read back off a JSON cast, so nothing caught it. */
+  granularity: 'week' | 'month' | 'quarter' | 'year' | '5y' | 'all'
   /** Prices in a tile are integers scaled by 10**precision. */
   precision: number
   sessionDated: boolean
