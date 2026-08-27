@@ -55,7 +55,10 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
 
   /** Drop coverage at or after `from`, and the values held there. The replay's cursor
    * moved forward: a window fetched under the old clock held no values for bars that had
-   * not closed yet, and those bars must be fetched again under the new clock. */
+   * not closed yet, and those bars must be fetched again under the new clock. `from` is the
+   * source's own knowability horizon under that clock (`horizon.ts`) -- the bar it had
+   * forming, on the wire clock its points are dated on -- and NOT the cursor, which for
+   * anything coarser than the cursor's own grid sits after the bar that needs refetching. */
   forgetAfter(from: number): void {
     const kept: Range[] = []
     for (const r of this.ranges) {
@@ -138,9 +141,4 @@ export function dropStore(key: string): void {
 
 export function liveStores(): ReadonlyMap<string, SourceStore> {
   return stores
-}
-
-/** Every live store forgets its coverage at or after `from` (see `WindowStore.forgetAfter`). */
-export function forgetAllAfter(from: number): void {
-  for (const s of stores.values()) s.forgetAfter?.(from)
 }

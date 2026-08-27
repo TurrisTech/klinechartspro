@@ -60,7 +60,9 @@ export interface SourceStore<P = unknown> {
   /** The parts of `window` not yet fetched. */
   missing(window: Range): Range[]
   /** Forget coverage at or after `from` (the replay's cursor moved: values that were not
-   * knowable then may be now). Optional; a store without it is refetched whole. */
+   * knowable then may be now). The host passes the source's own knowability horizon under
+   * the OLD clock, not the cursor -- see `horizon.ts`. Optional; a store without it keeps
+   * whatever it fetched. */
   forgetAfter?(from: number): void
   setPhase(phase: Phase, progress?: number | null, error?: string | null): void
 }
@@ -80,6 +82,13 @@ export interface SourceSpec<P = unknown> {
   /** Store identity across the wall. Everything that decides the data, nothing else. */
   key: string
   fetch(range: Range, limit: number): Promise<Page<P>>
+  /** The interval this source's points are dated on -- usually the chart's, but not for a
+   * multi-timeframe source that reads another. The host needs it to know how far an answer
+   * fetched under a replay's read clock is FINAL (`horizon.ts`): a point exists once its bar
+   * has closed, so the bar forming at the cursor is missing from every answer taken at it
+   * and its window must not be recorded as covered. Omit it and the source is refetched only
+   * from the cursor, which leaves that bar permanently blank. */
+  resolution?: string
   /** The window to cover, from the range of bars the chart holds. Defaults to it. */
   window?(chartRange: Range): Range | null
   /** A custom store (must accept what `fetch` yields). Defaults to a `WindowStore`. */

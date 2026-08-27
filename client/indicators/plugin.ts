@@ -76,6 +76,7 @@ export function createIndicatorsPlugin(): IndicatorPlugin {
           {
             id: 'value',
             key,
+            resolution: ctx.interval,
             createStore: (k) => new WindowStore<IndicatorPoint, number | null>(k, (p) => p.value),
             fetch: async (range, limit) => {
               const url = apiUrl('/indicators/values', {

@@ -28,6 +28,7 @@ export function arevSource(facilities: PluginFacilities, generation: string, ven
   return {
     id: generation,
     key: arevSourceKey(generation, vendor, ticker, interval),
+    resolution: interval,
     fetch: (range, limit) =>
       facilities.points<ArevPoint>({
         pluginId: 'arev',
