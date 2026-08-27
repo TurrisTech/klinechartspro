@@ -10,7 +10,14 @@ import { barsFromTiles } from './tiles'
 // own: ~22 days of lookback at 1m, decades at 1D. A fixed wall-clock cap cannot do both.
 const MAX_WIDENING_ATTEMPTS = 6
 
-async function fetchBars(
+/**
+ * One window of bars: tiles for the closed part, the API for whatever is left.
+ *
+ * Exported because the AREV21 MTF overlay needs the same thing for its bar GRID and used to
+ * ask `/getbars` directly, which meant panning through tiled history still hit the API once
+ * per grid window per source timeframe.
+ */
+export async function fetchBars(
   vendorSymbol: string,
   resolution: string,
   from: number,

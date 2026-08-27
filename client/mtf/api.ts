@@ -1,6 +1,5 @@
 import type { KLineData } from 'klinecharts'
-import { apiGet } from '../config'
-import { isNoData, type GetBarsResponse } from '../ohlcv'
+import { fetchBars } from '../history'
 import { fetchArevValues, type ArevPoint } from '../arev/api'
 
 // The multi-timeframe AREV21 overlay's data layer. It reads two things per source
@@ -8,9 +7,10 @@ import { fetchArevValues, type ArevPoint } from '../arev/api'
 //
 //   * the arev21 votes for that timeframe, off `GET /arev/values` — the same wire the
 //     AREV sub-panes use, asked at an interval that is NOT the chart's;
-//   * that timeframe's own BAR GRID, off `GET /getbars` — because a vote has to be drawn
-//     at the bar after the one it was cast on (see shift.ts), and "the bar after" is a
-//     question only the server's candle boundaries can answer.
+//   * that timeframe's own BAR GRID, through the ordinary tiled history path
+//     (`history.ts`, tiles first and the API only for the forming period) — because a vote
+//     has to be drawn at the bar after the one it was cast on (see shift.ts), and "the bar
+//     after" is a question only the server's candle boundaries can answer.
 //
 // The second fetch is the whole reason this module exists rather than reusing
 // arev/api.ts as-is. A source bar's successor cannot be computed here: a 4h bar opening
@@ -77,15 +77,13 @@ export async function fetchMtfBarGrid(
   from: number,
   to: number
 ): Promise<number[]> {
-  const body = await apiGet<GetBarsResponse>('/getbars', {
-    symbol: vendorSymbol,
-    resolution: interval,
-    from,
-    to
-  })
-  // `no_data` is the documented empty answer; `[]` is never sent.
-  if (isNoData(body) || !Array.isArray(body)) return []
-  return body.map((bar) => bar.date)
+  // Through the tiled path, not `/getbars` directly. The grid is ordinary bar history --
+  // exactly what tiles hold -- and asking the API for it meant panning back through fully
+  // tiled history still cost one request per grid window per enabled source timeframe.
+  // Observed as `resolution=1h&from=…&to=…` firing on a 15m or 3m chart, where 1h is not
+  // the pane's own interval and so could only have come from here.
+  const bars = await fetchBars(vendorSymbol, interval, from, to, null)
+  return bars.map((bar) => bar.timestamp)
 }
 
 export type { KLineData }
