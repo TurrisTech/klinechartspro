@@ -492,9 +492,9 @@ function mountChartExtras(
     paperButton.className = 'wd-rail-button'
     paperButton.textContent = 'Paper'
     paperButton.title = 'Paper trading'
-    paperButton.addEventListener('click', () => {
-      paperButton.classList.toggle('is-on', paper.toggle())
-    })
+    paperButton.addEventListener('click', () => paper.toggle())
+    // Driven by the window, not by the click: it can also be closed from its own title bar.
+    paper.onOpenChange((open) => paperButton.classList.toggle('is-on', open))
     footer.appendChild(paperButton)
   }
 

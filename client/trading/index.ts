@@ -18,6 +18,9 @@ export interface PaperTradingController {
   /** Show/hide the panel; returns whether it is now open. */
   toggle(): boolean
   isOpen(): boolean
+  /** Told whenever the window is shown or hidden, by whatever did it: the rail button, or
+   * the window's own close. */
+  onOpenChange(listener: (open: boolean) => void): void
   /** Resync overlays and the ticket to the current wall panes (the wall's onPanesChange). */
   sync(panes: ChartProPane[]): void
   teardown(): void
@@ -27,7 +30,14 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
   if (!hasFeature('sim')) return null
 
   const session = new PaperTradingSession()
-  const dock = mountTradingDock(session, { chartPro, container, title: 'Paper account', tag: 'paper' })
+  let onOpenChange: (open: boolean) => void = () => {}
+  const dock = mountTradingDock(session, {
+    chartPro,
+    container,
+    title: 'Paper account',
+    tag: 'paper',
+    onOpenChange: (open) => onOpenChange(open)
+  })
 
   // Load the account and bring the active instrument in at once, so the ticket has a quote
   // and the overlays draw whatever is already open. The panel shows a connecting state until
@@ -40,6 +50,9 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
   return {
     toggle: () => dock.toggle(),
     isOpen: () => dock.isOpen(),
+    onOpenChange(listener: (open: boolean) => void): void {
+      onOpenChange = listener
+    },
     sync(panes: ChartProPane[]): void {
       dock.sync(panes)
       void session.watch(dock.activeKey()).catch(() => {})

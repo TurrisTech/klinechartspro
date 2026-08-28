@@ -1,26 +1,31 @@
 import type { SignalCatalogueEntry } from '../plugins/types'
 import { formatInstant } from '../trading/format'
+import { defaultRange, randomStart, type StartRange } from './pick'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, sortByLength, validateBase } from './timeframes'
-import { createFloatingWindow } from './window'
+import { createDockableWindow } from '../chrome/window'
 
 // GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
 // (`kc-*` tokens, `wd-*` classes), driven by a `ReplayController` they do not implement.
 //
-// The controls are a FLOATING WINDOW over the chart (window.ts), not a strip inside the
-// trading dock. Only what is used on every step is on screen:
+// The controls live in a DOCKABLE WINDOW (../chrome/window.ts) — floating over the chart by
+// default, docked below it on request — not in a strip nailed inside the trading panel. Only
+// what is used on every step is on screen:
 //
-//   title bar   the cursor, Step, collapse, Exit -- and the drag handle
+//   title bar   the cursor, Step, collapse, dock/float, Exit -- and the drag handle
 //   advance     the timeframe picker x a multiple, and Next signal
 //   last stop   why the last advance stopped (absent until one has)
 //   toggles     Signals / Base / Account, one panel open at a time
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
-// permanently on screen, and the account dock is opened from here rather than taking half
+// permanently on screen, and the account window is opened from here rather than taking half
 // the wall from the moment replay starts.
 
-/** Where the window's position and collapsed state are remembered (per browser). */
-const PLACEMENT_KEY = 'wd.replay.window'
+/** Identity of the window: its stored placement, and `data-window` on the card. */
+const WINDOW_KEY = 'replay'
+
+/** The controls sit ABOVE the account when both are docked. */
+const DOCK_ORDER = 10
 
 type PanelId = 'signals' | 'settings' | null
 
@@ -47,11 +52,18 @@ export interface ReplayControls {
 
 export function createReplayControls(options: ReplayControlsOptions): ReplayControls {
   const { controller } = options
-  const win = createFloatingWindow({
+  const win = createDockableWindow({
+    key: WINDOW_KEY,
     className: 'wd-replay-window',
-    storageKey: PLACEMENT_KEY,
+    title: 'Replay',
     bounds: options.bounds,
-    theme: chartTheme()
+    theme: chartTheme(),
+    defaultMode: 'float',
+    order: DOCK_ORDER,
+    // Docked, the rows lay out along one line instead of stacking, so the strip costs the
+    // wall a single row rather than three (the CSS branches on `data-mode`); the toggles'
+    // labels shorten to match.
+    onModeChange: () => render()
   })
   let panel: PanelId = null
   // The signal list is the only scrollable thing here and every step re-renders the body,
@@ -67,38 +79,27 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // -- the title bar (visible collapsed, and the drag handle) -----------------------------
 
   function renderHeader(): void {
-    const head = win.header
-    head.innerHTML = ''
     const busy = controller.busy
-
-    const grip = el('span', 'wd-float-grip')
-    grip.textContent = '⠿'
-    grip.setAttribute('aria-hidden', 'true')
-    const title = el('span', 'wd-float-title')
-    title.textContent = 'Replay'
+    win.titleSlot.innerHTML = ''
     const clock = el('span', 'wd-replay-clock-value')
     clock.textContent = formatInstant(controller.cursor)
     clock.title = new Date(controller.cursor).toISOString()
+    win.titleSlot.appendChild(clock)
 
     // Step lives in the title bar, not the body: it is the one control used on every single
-    // interaction, so it stays reachable with the window rolled up.
+    // interaction, so it stays reachable with the window rolled up to that bar.
+    win.actions.innerHTML = ''
     const step = button('kc-button kc-button-primary wd-replay-step', busy ? '…' : 'Step', () => {
       void controller.step().then((r) => r && options.onStop?.(r))
     })
     step.disabled = busy
     step.title = `Advance ${controller.advance.multiple} × ${controller.advance.interval}`
 
-    const collapse = button('kc-button kc-icon-button wd-float-collapse', win.collapsed ? '▾' : '▴', () => {
-      win.setCollapsed(!win.collapsed)
-      renderHeader()
-    })
-    collapse.title = win.collapsed ? 'Show the controls' : 'Roll up to the title bar'
-
     const exit = button('kc-button wd-replay-exit', 'Exit', () => options.onExit())
     exit.disabled = busy
     exit.title = 'Leave replay and return to the live wall'
 
-    head.append(grip, title, clock, el('span', 'wd-float-spacer'), step, collapse, exit)
+    win.actions.append(step, exit)
   }
 
   // -- the body ----------------------------------------------------------------------------
@@ -338,16 +339,70 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
   dialog.appendChild(info)
 
-  // Default start: a week before the newest bar, at 17:00 New York (a session open).
+  // Default start: a week before the newest bar.
   const defaultStart = options.latest - 7 * 86_400_000
   const startField = field('Start (New York time)')
-  const startInput = document.createElement('input')
-  startInput.type = 'datetime-local'
-  startInput.className = 'kc-input wd-replay-input'
-  startInput.value = toLocalInputValue(defaultStart)
-  startInput.step = '60'
-  startField.appendChild(startInput)
+  const startRow = el('div', 'wd-replay-dialog-row')
+  const startInput = dateInput(toLocalInputValue(defaultStart))
+  startInput.max = toLocalInputValue(options.latest)
+  // Random draws from the range below; it is the one control here that changes the start
+  // without the user typing a date, so it sits next to the field it writes.
+  const random = button('kc-button kc-button-outline wd-replay-random', 'Random', () => roll())
+  random.title = 'Pick a random start date from the range'
+  startRow.append(startInput, random)
+  startField.appendChild(startRow)
   dialog.appendChild(startField)
+
+  // -- the range Random draws from (optional; hidden until asked for) ---------------------
+
+  const initialRange = defaultRange(options.latest)
+  const rangeField = el('div', 'wd-replay-field')
+  const rangeBody = el('div', 'wd-replay-dialog-range')
+  rangeBody.hidden = true
+  const rangeError = el('div', 'kc-field-error wd-replay-dialog-error')
+  rangeField.appendChild(
+    checkbox('Draw from a date range', false, (on) => {
+      rangeBody.hidden = !on
+      rangeError.textContent = ''
+    })
+  )
+  // Day granularity: a draw range does not need a time of day, and two datetime-locals side
+  // by side in a 28rem dialog render their value under the picker icon.
+  const fromInput = dayInput(toDayInputValue(initialRange.from))
+  const toInput = dayInput(toDayInputValue(initialRange.to))
+  toInput.max = toDayInputValue(options.latest)
+  rangeBody.append(labelled('From', fromInput), labelled('To', toInput))
+  rangeField.appendChild(rangeBody)
+  const rangeNote = el('div', 'wd-replay-dialog-note')
+  rangeNote.textContent = 'Random picks a candle open inside this range. Unchecked, it draws from the last two years.'
+  rangeField.appendChild(rangeNote)
+  rangeField.appendChild(rangeError)
+  dialog.appendChild(rangeField)
+
+  /** The range Random draws from: the two inputs when they are showing, else the default. */
+  function drawRange(): StartRange | null {
+    if (rangeBody.hidden) return defaultRange(options.latest)
+    // From is that day's first instant, To its last: the range reads as inclusive of both days.
+    const from = fromLocalInputValue(`${fromInput.value}T00:00`)
+    const to = fromLocalInputValue(`${toInput.value}T23:59`)
+    if (from === null || to === null) {
+      rangeError.textContent = 'Enter both range dates'
+      return null
+    }
+    if (to <= from) {
+      rangeError.textContent = 'The range ends before it starts'
+      return null
+    }
+    return { from, to: Math.min(to, options.latest) }
+  }
+
+  function roll(): void {
+    const range = drawRange()
+    if (!range) return
+    rangeError.textContent = ''
+    startInput.value = toLocalInputValue(randomStart(range, basePicker.value))
+    baseError.textContent = ''
+  }
 
   const balanceField = field('Starting balance')
   const balanceInput = numberInput('10000', () => {})
@@ -425,6 +480,11 @@ const nyParts = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit'
 })
+
+/** The New York calendar date of an instant, for a `type=date` input. */
+function toDayInputValue(ms: number): string {
+  return toLocalInputValue(ms).slice(0, 10)
+}
 
 function toLocalInputValue(ms: number): string {
   const p = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
@@ -511,6 +571,32 @@ function checkbox(label: string, checked: boolean, onChange: (on: boolean) => vo
   const text = el('span', '')
   text.textContent = label
   wrap.append(input, text)
+  return wrap
+}
+
+function dateInput(value: string): HTMLInputElement {
+  const input = document.createElement('input')
+  input.type = 'datetime-local'
+  input.className = 'kc-input wd-replay-input'
+  input.step = '60'
+  input.value = value
+  return input
+}
+
+function dayInput(value: string): HTMLInputElement {
+  const input = document.createElement('input')
+  input.type = 'date'
+  input.className = 'kc-input wd-replay-input'
+  input.value = value
+  return input
+}
+
+/** A caption above a control, for the two range inputs sitting side by side. */
+function labelled(text: string, control: HTMLElement): HTMLElement {
+  const wrap = el('label', 'wd-replay-field')
+  const l = el('span', 'wd-replay-label')
+  l.textContent = text
+  wrap.append(l, control)
   return wrap
 }
 

@@ -17,40 +17,58 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `clock.ts` | PURE. `planAdvance(cursor, request, armed)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `hasWorking`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
 | `signals.ts` | `SignalBook`: catalogue, starred set, armed set (a signal is armed *on a resolution*), `nextSignalAt` over an injected `SignalSource`, keyed off `effective`. |
+| `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split) and `HttpSignalSource` (`/plugins/{id}/signals`). The only module here that fetches. Both read past the page-wide read clock on purpose (`asof: null`). |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
-| `window.ts` | A floating window: a fixed card dragged by its title bar, collapsible to it, clamped into the CHART's rect (so it never lands on the trading dock) and remembered in `localStorage`. Its geometry (`clampPosition`, `defaultPosition`) is pure and tested. |
-| `controls.ts` | The controls that fill that window, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
+| `controls.ts` | The controls that fill the window (`../chrome/window.ts`), and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
 | `index.ts` | `mountBarReplay` — mirrors `mountPaperTrading` on the shared `mountTradingDock`; `startReplayFlow`, `bootReplay`, `clearReplay`. |
 
 ## The controls
 
-They float OVER the chart instead of taking a strip inside the dock: a strip cost the wall
-~90px of height it never gave back, and the wall is the thing being replayed. On screen there
-is only what every step uses.
+A **dockable window** (`../chrome/window.ts`), floating over the chart by default — a strip
+nailed inside the account panel cost the wall ~90px it never gave back, and the wall is the
+thing being replayed. On screen there is only what every step uses:
 
 ```
-+---------------------------------------------+
-| ::  REPLAY  Aug 20, 19:00   [Step]  ^  Exit |   the title bar is the drag handle
-+---------------------------------------------+
-| ADVANCE [1h v] x [1]   [Next signal]        |
-| Advanced 1 bar                              |   only once an advance has stopped
-| [Signals 2] [Base 1h] [Account]             |   one panel open at a time
-+---------------------------------------------+
++-------------------------------------------------+
+| ::  REPLAY  Aug 20, 19:00  [Step] [Exit]  ^ ⇲   |   the title bar is the drag handle
++-------------------------------------------------+
+| ADVANCE [1h v] x [1]   [Next signal]            |
+| Advanced 1 bar                                  |   only once an advance has stopped
+| [Signals 2] [Base 1h] [Account]                 |   one panel open at a time
++-------------------------------------------------+
 ```
 
 Step is in the TITLE BAR, so the window rolled up to that bar alone (36px tall) still steps.
 The signal list, the base timeframe and pause-on-fill are behind their toggles; **Account**
-shows and hides the trading dock, which now starts **closed** — an advance that produced
-events (a fill, a close) opens it itself, on the tab the event landed in.
+shows and hides the account window, which starts **closed** — an advance that produced events
+(a fill, a close) opens it itself, on the tab the event landed in.
 
-An undragged window stays anchored to the bottom centre of the chart, above the time axis, so
-opening a panel grows it upward rather than pushing it into the axis. Drag it once and the
-position is yours, and is remembered (`localStorage`, with the collapsed state). Either way it
-is clamped into `#app`'s rect — which is what keeps it clear of the dock when the dock opens.
+**Docked** (the ⇲ control, or dragged onto the bottom of the chart) the rows lay out along one
+line instead of stacking, and the controls sit *above* the account window in the column
+(`order` 10 against 20). Everything else about the two modes — the drag, the roll-up, the
+persistence — belongs to the window, not here.
+
+## Choosing where to start
+
+The start dialog takes a date, a balance and a base. Next to the date is **Random**, and under
+it an optional **date range** it draws from — unchecked, that is the last two years ending a
+day before the newest bar.
+
+A draw is `from + random() * span` floored to a `base` candle open, and nothing else. It is
+**not** filtered to market-open instants and the store is **not** probed first: a draw in the
+weekend snaps onto the candle that most recently opened, which is what the wall draws for any
+such instant anyway, and a draw the store has no bars for opens an empty wall you press Random
+again on. Both are cases the client already handles, so neither is worth carrying here.
+
+The range's two bounds are **days**, inclusive of both (From is that day's first instant, To
+its last): a draw range does not need a time of day, and two `datetime-local`s side by side in
+a 28rem dialog render their value under the picker icon.
+
+Because the snap is a floor, a pick can sit up to one candle before the range's own start.
 
 ## The clock
 
