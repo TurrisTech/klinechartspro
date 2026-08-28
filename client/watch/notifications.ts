@@ -1,3 +1,4 @@
+import { getToken } from '../auth'
 import { apiSend } from '../config'
 import type { NotificationBackend, RemoteNotification } from '../notifications'
 import type { NotificationWire } from '../ohlcv'
@@ -45,7 +46,13 @@ export interface RemoteNotifications extends NotificationBackend {
 export function createRemoteNotifications(
   onPush: (row: RemoteNotification) => void
 ): RemoteNotifications {
-  const unsubscribe = stream.subscribeNotifications(ownerToken(), (row) => onPush(toRemote(row)))
+  // Both identities: the bearer where the user is signed in (dev), the owner token
+  // otherwise. The server resolves them in that order, exactly as the REST routes do -- see
+  // stream.ts's subscribeNotifications for why the bearer cannot be a header here.
+  const unsubscribe = stream.subscribeNotifications(
+    { owner: ownerToken(), token: getToken() },
+    (row) => onPush(toRemote(row))
+  )
 
   // Acknowledgements are batched: clicking the bell marks every unseen row at once, and the
   // centre reports them one call per gesture, not one per row.

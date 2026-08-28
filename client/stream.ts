@@ -99,9 +99,9 @@ class StreamClient {
   // but scheduled to actually leave -- and to send the real `unsubscribe` frame -- only if
   // nothing revives them first. See UNSUBSCRIBE_LINGER_MS above.
   private readonly lingering = new Map<string, ReturnType<typeof setTimeout>>()
-  //: The owner this connection has asked for notifications as, and who wants them. One
+  //: Who this connection has asked for notifications as, and who wants them. One
   //: subscription per socket, not per listener: the server keys delivery by connection.
-  private notificationsOwner: string | null = null
+  private notificationsIdentity: { owner: string; token?: string | null } | null = null
   private readonly notificationListeners = new Set<NotificationListener>()
   private status: StreamStatus = 'offline'
   private readonly statusListeners = new Set<StatusListener>()
@@ -174,19 +174,40 @@ class StreamClient {
     this.lingering.set(key, timer)
   }
 
-  /** Ask for this owner's notifications on this socket. Returns an unsubscribe. */
-  subscribeNotifications(owner: string, listener: NotificationListener): () => void {
+  /** Ask for this owner's notifications on this socket. Returns an unsubscribe.
+   *
+   * `token` is the session bearer, when there is one. It rides in the FRAME because the
+   * WebSocket API gives a browser no way to set a request header: without it, on a
+   * deployment with auth on, this client's REST calls resolve to the signed-in user while
+   * its socket resolves to the anonymous owner token, the two never match, and every live
+   * push is delivered to nobody -- notifications then appear only on the next page load. */
+  subscribeNotifications(
+    identity: { owner: string; token?: string | null },
+    listener: NotificationListener
+  ): () => void {
     this.notificationListeners.add(listener)
-    if (this.notificationsOwner !== owner) {
-      this.notificationsOwner = owner
-      this.send({ action: 'subscribe', notifications: true, owner })
+    if (this.notificationsIdentity?.owner !== identity.owner) {
+      this.notificationsIdentity = identity
+      this.send(this.notificationsFrame(identity))
     }
     this.connect()
     return () => {
       this.notificationListeners.delete(listener)
       if (this.notificationListeners.size > 0) return
-      this.notificationsOwner = null
+      this.notificationsIdentity = null
       this.send({ action: 'unsubscribe', notifications: true })
+    }
+  }
+
+  private notificationsFrame(identity: {
+    owner: string
+    token?: string | null
+  }): StreamClientMessage {
+    return {
+      action: 'subscribe',
+      notifications: true,
+      owner: identity.owner,
+      ...(identity.token ? { token: identity.token } : {})
     }
   }
 
@@ -353,14 +374,8 @@ class StreamClient {
     // A reconnected server remembers no subscription, this one included. Anything raised
     // during the outage is not replayed here and does not need to be -- it is in the store,
     // and the notification centre re-reads that whenever the socket comes back.
-    if (this.notificationsOwner !== null) {
-      this.ws?.send(
-        JSON.stringify({
-          action: 'subscribe',
-          notifications: true,
-          owner: this.notificationsOwner
-        })
-      )
+    if (this.notificationsIdentity !== null) {
+      this.ws?.send(JSON.stringify(this.notificationsFrame(this.notificationsIdentity)))
     }
   }
 
@@ -369,7 +384,7 @@ class StreamClient {
       this.reconnectTimer ||
       (this.subscriptions.size === 0 &&
         this.indicatorSubscriptions.size === 0 &&
-        this.notificationsOwner === null)
+        this.notificationsIdentity === null)
     ) {
       return
     }

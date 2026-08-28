@@ -220,9 +220,11 @@ export type StreamClientMessage =
       backfill?: number
     }
   | { action: 'unsubscribe'; vendor: string; symbol: string; interval: string; indicator?: SeriesDoc }
-  // The owner rides in the frame because a websocket carries no per-frame headers; the
-  // server prefers the handshake's Authorization when there is one.
-  | { action: 'subscribe'; notifications: true; owner: string }
+  // Both identities ride in the frame: a browser cannot set a header on a WebSocket
+  // handshake, so `token` (the session bearer, when signed in) is the only way to present
+  // it, and `owner` is the anonymous fallback. The server prefers the handshake's
+  // Authorization if a non-browser client set one, then `token`, then `owner`.
+  | { action: 'subscribe'; notifications: true; owner: string; token?: string }
   | { action: 'unsubscribe'; notifications: true }
   | { action: 'ping'; id?: string }
 
