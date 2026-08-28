@@ -1,8 +1,8 @@
 import { registerOverlay, utils } from 'klinecharts'
 import type { OverlayFigure, OverlayTemplate } from 'klinecharts'
-import type { AlertStatus } from './types'
+import type { WatchStatus } from './types'
 
-// The chart figure a price alert IS: one horizontal line across the pane, and a persistent
+// The chart figure a price watch IS: one horizontal line across the pane, and a persistent
 // price tag on the price axis.
 //
 // It has to be a REGISTERED template rather than a built-in with per-instance overrides,
@@ -16,38 +16,38 @@ import type { AlertStatus } from './types'
 // Draggable comes for free and deliberately: the line figure carries events (no
 // `ignoreEvent`), so pressing it routes to `eventPressedOtherMove`, which applies the
 // pointer's delta to the point's value. `onPressedMoveEnd` on the instance is what
-// client/alerts/overlays.ts turns into the edit dialog.
+// client/watch/overlays.ts turns into the edit dialog.
 
-export const ALERT_OVERLAY_NAME = 'wdPriceAlert'
+export const WATCH_OVERLAY_NAME = 'wdPriceWatch'
 
-/** What one alert overlay carries. The controller reads it back on every event. */
-export interface AlertOverlayData {
+/** What one watch overlay carries. The controller reads it back on every event. */
+export interface WatchOverlayData {
   wd: {
     id: string
-    status: AlertStatus
-    /** Drawn beside the line. The alert's note, or empty. */
+    status: WatchStatus
+    /** Drawn beside the line. The watch's note, or empty. */
     label: string
   }
 }
 
-function datumOf(extendData: unknown): AlertOverlayData['wd'] | null {
-  const data = extendData as AlertOverlayData | undefined
+function datumOf(extendData: unknown): WatchOverlayData['wd'] | null {
+  const data = extendData as WatchOverlayData | undefined
   return data?.wd ?? null
 }
 
 /** The axis tag reads the instrument's own display precision, exactly as the axis ticks and
- * the crosshair do — an alert at 1.16500 must not render as 1.165. */
+ * the crosshair do — a level of 1.16500 must not render as 1.165. */
 function priceText(precision: number, value: number): string {
   return utils.formatPrecision(value, precision)
 }
 
-const template: OverlayTemplate<AlertOverlayData> = {
-  name: ALERT_OVERLAY_NAME,
+const template: OverlayTemplate<WatchOverlayData> = {
+  name: WATCH_OVERLAY_NAME,
   // One point, placed programmatically: these are never drawn by hand from the drawing bar,
   // so `totalStep: 2` (one click) is only ever reached through `createOverlay`.
   totalStep: 2,
   // No handle circles. The line itself is the drag target, and a permanent dot on every
-  // alert would read as a chart artefact rather than as a control.
+  // line would read as a chart artefact rather than as a control.
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
@@ -105,7 +105,7 @@ const template: OverlayTemplate<AlertOverlayData> = {
 let registered = false
 
 /** Idempotent: every wall mount calls it, and klinecharts' registry is process-global. */
-export function registerAlertOverlay(): void {
+export function registerWatchOverlay(): void {
   if (registered) return
   registered = true
   registerOverlay(template)

@@ -1,5 +1,5 @@
-// The right-click menu. Small enough to be generic, so the "create an alert at …" list and
-// the "this alert" list are the same component with different rows -- there is one place
+// The right-click menu. Small enough to be generic, so the "watch this price" list and
+// the "this watch" list are the same component with different rows -- there is one place
 // that knows how a menu is placed, dismissed and keyboard-closed.
 //
 // Positioned `position: fixed` at the pointer and appended into the themed chart root, for
@@ -8,7 +8,7 @@
 
 export interface MenuItem {
   label: string
-  /** Right-aligned secondary text — the price a row would create the alert at. */
+  /** Right-aligned secondary text — the price a row would create the watch at. */
   detail?: string
   danger?: boolean
   disabled?: boolean
@@ -35,12 +35,12 @@ const EDGE_MARGIN = 8
 export function openContextMenu(options: ContextMenuOptions): ContextMenu {
   const root = options.host.closest('.klinecharts-pro') ?? document.body
   const menu = document.createElement('div')
-  menu.className = 'kc-popover wd-alert-menu'
+  menu.className = 'kc-popover wd-watch-menu'
   menu.setAttribute('role', 'menu')
 
   if (options.header) {
     const header = document.createElement('div')
-    header.className = 'kc-popover-header wd-alert-menu-header'
+    header.className = 'kc-popover-header wd-watch-menu-header'
     header.textContent = options.header
     menu.appendChild(header)
   }
@@ -48,16 +48,16 @@ export function openContextMenu(options: ContextMenuOptions): ContextMenu {
   for (const item of options.items) {
     const row = document.createElement('button')
     row.type = 'button'
-    row.className = `wd-alert-menu-item${item.danger ? ' is-danger' : ''}`
+    row.className = `wd-watch-menu-item${item.danger ? ' is-danger' : ''}`
     row.setAttribute('role', 'menuitem')
     row.disabled = item.disabled ?? false
     const label = document.createElement('span')
-    label.className = 'wd-alert-menu-label'
+    label.className = 'wd-watch-menu-label'
     label.textContent = item.label
     row.appendChild(label)
     if (item.detail) {
       const detail = document.createElement('span')
-      detail.className = 'wd-alert-menu-detail'
+      detail.className = 'wd-watch-menu-detail'
       detail.textContent = item.detail
       row.appendChild(detail)
     }

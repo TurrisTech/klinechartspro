@@ -56,6 +56,23 @@ export function isErrorBody(body: unknown): body is ErrorBody {
 
 // --- WS /stream frames --------------------------------------------------------
 
+/** One row of the server's notification store, as `GET /notifications` and the `notification`
+ * stream frame both state it (wdashboard-server `wdashboard_server/notify`). */
+export interface NotificationWire {
+  id: string
+  at: number
+  title: string
+  level: 'info' | 'success' | 'warning' | 'alert'
+  body: string
+  /** Which producer raised it — `watch` today. */
+  source: string
+  /** Opaque payload the producer attached; for a watch, the watch id, its target and the
+   * readings that fired it. */
+  data: Record<string, unknown>
+  seen: boolean
+}
+
+
 export interface StreamSubscribed {
   type: 'subscribed'
   vendor: string
@@ -158,8 +175,22 @@ export interface StreamIndicatorUnsubscribed {
   seriesKey: string
 }
 
+export interface StreamNotificationsSubscribed {
+  type: 'notifications_subscribed'
+  unseen: number
+  serverTime: number
+}
+
+export interface StreamNotification {
+  type: 'notification'
+  notification: NotificationWire
+  serverTime: number
+}
+
 export type StreamServerMessage =
   | StreamSubscribed
+  | StreamNotificationsSubscribed
+  | StreamNotification
   | StreamUnsubscribed
   | StreamBackfill
   | StreamBar
@@ -189,6 +220,10 @@ export type StreamClientMessage =
       backfill?: number
     }
   | { action: 'unsubscribe'; vendor: string; symbol: string; interval: string; indicator?: SeriesDoc }
+  // The owner rides in the frame because a websocket carries no per-frame headers; the
+  // server prefers the handshake's Authorization when there is one.
+  | { action: 'subscribe'; notifications: true; owner: string }
+  | { action: 'unsubscribe'; notifications: true }
   | { action: 'ping'; id?: string }
 
 export function barToKLineData(bar: OHLCVBar): KLineData {

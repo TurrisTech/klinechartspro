@@ -5,7 +5,14 @@ import { createNotificationBell } from './bell'
 
 export { NotificationCenter, notifications, MAX_NOTIFICATIONS } from './center'
 export { createNotificationBell, relativeTime } from './bell'
-export type { Notification, NotificationLevel, NotificationSink, NotificationSpec } from './types'
+export type {
+  Notification,
+  NotificationBackend,
+  NotificationLevel,
+  NotificationSink,
+  NotificationSpec,
+  RemoteNotification
+} from './types'
 
 export interface MountedNotificationCenter {
   teardown(): void

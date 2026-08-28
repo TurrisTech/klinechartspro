@@ -1,7 +1,12 @@
 import { capabilities, hasFeature } from './capabilities'
 import { STREAM_URL } from './config'
 import type { IndicatorPoint, SeriesDoc } from './indicators/api'
-import type { OHLCVBar, StreamClientMessage, StreamServerMessage } from './ohlcv'
+import type {
+  NotificationWire,
+  OHLCVBar,
+  StreamClientMessage,
+  StreamServerMessage
+} from './ohlcv'
 
 // Reconnect backoff. A dropped stream is usually a proxy idle-timeout or a server rollout,
 // so the first retry is fast; the ceiling stops a server that is genuinely down from being
@@ -50,6 +55,12 @@ export interface IndicatorListener {
 // Values requested on an indicator subscribe to bridge history and live (server default 200).
 const INDICATOR_BACKFILL_COUNT = 200
 
+// The server pushes a notification the moment a watch fires (wdashboard_server/notify). It
+// is a fast path and never the record: the row is stored before it is sent, so a tab that was
+// closed catches up from `GET /notifications` on its next boot and nothing here has to queue,
+// retry, or survive a reconnect gap.
+export type NotificationListener = (notification: NotificationWire) => void
+
 export type StreamStatus = 'connected' | 'connecting' | 'offline'
 export type StatusListener = (status: StreamStatus) => void
 
@@ -88,6 +99,10 @@ class StreamClient {
   // but scheduled to actually leave -- and to send the real `unsubscribe` frame -- only if
   // nothing revives them first. See UNSUBSCRIBE_LINGER_MS above.
   private readonly lingering = new Map<string, ReturnType<typeof setTimeout>>()
+  //: The owner this connection has asked for notifications as, and who wants them. One
+  //: subscription per socket, not per listener: the server keys delivery by connection.
+  private notificationsOwner: string | null = null
+  private readonly notificationListeners = new Set<NotificationListener>()
   private status: StreamStatus = 'offline'
   private readonly statusListeners = new Set<StatusListener>()
   private reconnectAttempts = 0
@@ -157,6 +172,22 @@ class StreamClient {
       this.send({ action: 'unsubscribe', vendor, symbol, interval })
     }, UNSUBSCRIBE_LINGER_MS)
     this.lingering.set(key, timer)
+  }
+
+  /** Ask for this owner's notifications on this socket. Returns an unsubscribe. */
+  subscribeNotifications(owner: string, listener: NotificationListener): () => void {
+    this.notificationListeners.add(listener)
+    if (this.notificationsOwner !== owner) {
+      this.notificationsOwner = owner
+      this.send({ action: 'subscribe', notifications: true, owner })
+    }
+    this.connect()
+    return () => {
+      this.notificationListeners.delete(listener)
+      if (this.notificationListeners.size > 0) return
+      this.notificationsOwner = null
+      this.send({ action: 'unsubscribe', notifications: true })
+    }
   }
 
   subscribeIndicator(
@@ -319,10 +350,29 @@ class StreamClient {
       if (this.indicatorLingering.has(key)) continue
       this.ws?.send(JSON.stringify(this.indicatorSubscribeFrame(sub.vendor, sub.symbol, sub.interval, sub.series)))
     }
+    // A reconnected server remembers no subscription, this one included. Anything raised
+    // during the outage is not replayed here and does not need to be -- it is in the store,
+    // and the notification centre re-reads that whenever the socket comes back.
+    if (this.notificationsOwner !== null) {
+      this.ws?.send(
+        JSON.stringify({
+          action: 'subscribe',
+          notifications: true,
+          owner: this.notificationsOwner
+        })
+      )
+    }
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer || (this.subscriptions.size === 0 && this.indicatorSubscriptions.size === 0)) return
+    if (
+      this.reconnectTimer ||
+      (this.subscriptions.size === 0 &&
+        this.indicatorSubscriptions.size === 0 &&
+        this.notificationsOwner === null)
+    ) {
+      return
+    }
     const delay = Math.min(
       RECONNECT_MAX_MS,
       RECONNECT_BASE_MS * 2 ** Math.min(this.reconnectAttempts, 5)
@@ -414,6 +464,12 @@ class StreamClient {
         const sub = this.indicatorSubscriptions.get(message.seriesKey)
         if (!sub) return
         for (const listener of sub.listeners) listener.onPoint(message.point)
+        return
+      }
+      case 'notifications_subscribed':
+        return
+      case 'notification': {
+        for (const listener of this.notificationListeners) listener(message.notification)
         return
       }
       case 'indicator_status': {

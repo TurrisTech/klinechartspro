@@ -1,5 +1,5 @@
-import { authHeaders } from '../auth'
 import { apiSend } from '../config'
+import { ownerHeaders } from '../owner'
 
 // The `/sim` wire (wdashboard-server wdashboard_server/sim/api.py), the paper-trading route
 // set. Every mutating call answers with the whole session snapshot plus the engine events it
@@ -109,35 +109,13 @@ export interface TradePatch {
   takeProfit?: number | null
 }
 
-const OWNER_KEY = 'wd.sim.owner'
-
-// Without a signed-in user the server scopes sessions by this token; it is minted once per
-// browser and kept, so a reload finds the same account. With auth on (dev), the bearer token
-// identifies the user and this header is ignored server-side -- sent regardless, so one
-// client works against both.
-function owner(): string {
-  try {
-    let token = localStorage.getItem(OWNER_KEY)
-    if (!token) {
-      token = crypto.randomUUID()
-      localStorage.setItem(OWNER_KEY, token)
-    }
-    return token
-  } catch {
-    return 'anonymous'
-  }
-}
-
-function headers(): Record<string, string> {
-  return { ...authHeaders(), 'X-Sim-Owner': owner() }
-}
 
 async function call<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH',
   path: string,
   body?: unknown
 ): Promise<T> {
-  const { data } = await apiSend<T>(method, path, { body, headers: headers() })
+  const { data } = await apiSend<T>(method, path, { body, headers: ownerHeaders() })
   return data
 }
 

@@ -56,6 +56,15 @@ export type Feature =
   | 'auth'
   // GET/PUT /preferences — dev only, requires 'auth'.
   | 'preferences'
+  // GET /notifications, POST /notifications/{seen,clear}, and `notification` frames on
+  // WS /stream — what the server has raised for this owner (wdashboard_server/notify).
+  // Stored server-side, so a notification raised while every tab was closed is still there.
+  | 'notifications'
+  // GET /watch/sources and the /watch CRUD — server-side conditions on live events
+  // (wdashboard_server/watch). The client only mounts price watches when advertised: on an
+  // older server there is nothing to hold them, and a browser-side monitor is not a
+  // substitute (it cannot fire with the tab closed, which is the whole feature).
+  | 'watch'
 
 export interface CapabilityLimits {
   maxBarsPerRequest: number

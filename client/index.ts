@@ -1,5 +1,4 @@
 import { KLineChartPro, type ChartProPane } from '../src'
-import { mountPriceAlerts, type PriceAlertsController } from './alerts'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
@@ -32,6 +31,8 @@ import {
 } from './replay'
 import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
+import { mountPriceWatches, type PriceWatchesController } from './watch'
+import { createRemoteNotifications } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
 
@@ -295,9 +296,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // onPanesChange, which never fires before the constructor returns.
   let paper: PaperTradingController | null = null
   let replay: BarReplayController | null = null
-  // Assigned after the chart exists (it needs the pane handles and reads the stored alerts
-  // asynchronously); onPanesChange guards on it for the frames before that.
-  let alerts: PriceAlertsController | null = null
+  // Assigned after the chart exists (it needs the pane handles and reads this owner's
+  // watches asynchronously); onPanesChange guards on it for the frames before that.
+  let watches: PriceWatchesController | null = null
   const persist = (): void => {
     const cp = chartPro
     if (!cp || !persistEnabled) return
@@ -367,7 +368,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       pluginHost.sync(panes)
       paper?.sync(panes)
       replay?.sync(panes)
-      alerts?.sync(panes)
+      watches?.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
@@ -399,19 +400,26 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     paper = mountPaperTrading(chartPro, container)
   }
 
-  // Price alerts: lines on every pane showing their instrument, and a live watch that
-  // notifies through the Notification Center. Both are modules of their own -- the alerts
-  // know nothing about the centre beyond `notify` (client/alerts/types.ts AlertNotifier),
-  // and the centre knows nothing about alerts -- and this is the only place they meet.
-  //
-  // `live: false` on a replay wall for the same reason the plugins get `inertStream` there:
-  // the chart is under a read clock and the alert monitor's feed is the live market. The
-  // lines stay drawn, draggable and editable; only the watching stops.
-  alerts = await mountPriceAlerts(chartPro, { notifier: notifications, live: replayBoot === null })
-  // The panes mounted before `alerts` resolved, so the first sync is made here rather than
+  // PRICE WATCHES: a line per level on every pane showing its instrument. The watching
+  // itself happens in the SERVER (`wdashboard_server/watch`), which is what lets one fire
+  // with this tab closed -- so nothing here evaluates anything, a replay wall needs no
+  // special case, and the lines are simply a view of `/watch`.
+  watches = await mountPriceWatches(chartPro)
+  // The panes mounted before `watches` resolved, so the first sync is made here rather than
   // waited for from onPanesChange -- which does not fire again until the layout changes.
-  alerts.sync(chartPro.getPanes())
+  watches?.sync(chartPro.getPanes())
 
+  // The Notification Center, and the server store behind it. The two modules meet only
+  // here: `client/watch/notifications.ts` is a `NotificationBackend` (client/notifications
+  // knows nothing about watches), and a row arriving live also means a watch just changed
+  // status server-side, which is the one thing that tells this tab to re-read its lines.
+  const remoteNotifications = hasFeature('notifications')
+    ? createRemoteNotifications((row) => {
+        notifications.accept(row)
+        if (row.source === 'watch') watches?.refresh()
+      })
+    : null
+  if (remoteNotifications) void notifications.attach(remoteNotifications)
   const notificationCenter = mountNotificationCenter(chartPro)
 
   const detachExtras = mountChartExtras(
@@ -439,9 +447,13 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // component (and its panes) is unmounted below.
       paper?.teardown()
       replay?.teardown()
-      alerts?.teardown()
-      alerts = null
+      watches?.teardown()
+      watches = null
       notificationCenter.teardown()
+      if (remoteNotifications) {
+        notifications.detach(remoteNotifications)
+        remoteNotifications.dispose()
+      }
       levelsController.detach()
       levels2Controller.detach()
       detachExtras()

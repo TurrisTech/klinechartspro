@@ -786,9 +786,9 @@ body.wd-has-dock > #app {
    body-level siblings of the chart -- so they need their own, or every button in them renders
    in the UA's grey ButtonFace. `:where()` keeps it at element weight (0,0,1): written as
    `.wd-float button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background
-   and colour, which is the exact trap app.css documents -- and which the alert dialog walked
+   and colour, which is the exact trap app.css documents -- and which the watch dialog walked
    straight into before it was added here. */
-:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) button {
+:where(.wd-float, .wd-replay-dialog, .wd-watch-dialog) button {
   appearance: none;
   border: 0;
   background: transparent;
@@ -796,9 +796,9 @@ body.wd-has-dock > #app {
   text-align: inherit;
 }
 
-:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) button,
-:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) input,
-:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) select {
+:where(.wd-float, .wd-replay-dialog, .wd-watch-dialog) button,
+:where(.wd-float, .wd-replay-dialog, .wd-watch-dialog) input,
+:where(.wd-float, .wd-replay-dialog, .wd-watch-dialog) select {
   margin: 0;
   font: inherit;
   color: inherit;
@@ -1338,20 +1338,20 @@ body.wd-has-dock > #app {
   cursor: default;
 }
 
-/* --- Price alerts (client/alerts) ------------------------------------------------------ */
+/* --- Price watches (client/watch) ------------------------------------------------------ */
 
 /* The right-click menu. Compound selector so it wins over `.kc-popover`'s own padding. */
-.kc-popover.wd-alert-menu {
+.kc-popover.wd-watch-menu {
   z-index: 65;
   min-width: 13rem;
   padding: 0.25rem;
 }
 
-.wd-alert-menu-header {
+.wd-watch-menu-header {
   padding: 0.25rem 0.5rem 0.375rem;
 }
 
-.wd-alert-menu-item {
+.wd-watch-menu-item {
   display: flex;
   width: 100%;
   align-items: baseline;
@@ -1368,27 +1368,28 @@ body.wd-has-dock > #app {
   cursor: pointer;
 }
 
-.wd-alert-menu-item:hover:not(:disabled) {
+.wd-watch-menu-item:hover:not(:disabled) {
   background: var(--muted);
 }
 
-.wd-alert-menu-item:disabled {
+.wd-watch-menu-item:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
-.wd-alert-menu-item.is-danger {
+.wd-watch-menu-item.is-danger {
   color: var(--destructive, #ef5350);
 }
 
-.wd-alert-menu-detail {
+.wd-watch-menu-detail {
   color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
 }
 
-/* The edit dialog, shared by "create at this price" and "a line was dropped here". Modelled
-   on the replay start dialog; a body-level card, so it carries the theme class itself. */
-.wd-alert-backdrop {
+/* The set-a-price dialog, shared by "watch this price" and "a line was dropped here".
+   Modelled on the replay start dialog; a body-level card, so it carries the theme class
+   itself. */
+.wd-watch-backdrop {
   position: fixed;
   inset: 0;
   z-index: 70;
@@ -1398,7 +1399,7 @@ body.wd-has-dock > #app {
   background: color-mix(in oklab, var(--background) 60%, transparent);
 }
 
-.wd-alert-dialog {
+.wd-watch-dialog {
   display: flex;
   width: min(22rem, 92vw);
   flex-direction: column;
@@ -1412,31 +1413,31 @@ body.wd-has-dock > #app {
   box-shadow: 0 12px 40px color-mix(in oklab, black 40%, transparent);
 }
 
-.wd-alert-dialog-title {
+.wd-watch-dialog-title {
   font-weight: 600;
   font-size: 0.9375rem;
 }
 
-.wd-alert-dialog-info {
+.wd-watch-dialog-info {
   color: var(--muted-foreground);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
 }
 
-.wd-alert-field {
+.wd-watch-field {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.wd-alert-label {
+.wd-watch-label {
   color: var(--muted-foreground);
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
-.wd-alert-input {
+.wd-watch-input {
   width: 100%;
   height: 1.875rem;
   padding: 0 0.375rem;
@@ -1444,24 +1445,33 @@ body.wd-has-dock > #app {
   font-variant-numeric: tabular-nums;
 }
 
-.wd-alert-dialog-error {
+.wd-watch-check {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.wd-watch-dialog-error {
   min-height: 1em;
 }
 
-.wd-alert-dialog-actions {
+.wd-watch-dialog-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.wd-alert-dialog-spacer {
+.wd-watch-dialog-spacer {
   flex: 1;
 }
 
-.wd-alert-delete {
+.wd-watch-delete {
   color: var(--destructive, #ef5350);
 }
 
-.wd-alert-delete:hover {
+.wd-watch-delete:hover {
   background: color-mix(in oklab, var(--destructive, #ef5350) 16%, transparent);
 }
