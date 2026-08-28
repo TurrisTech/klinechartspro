@@ -17,9 +17,15 @@ import {
 import type { InstrumentInfo } from './instrument'
 import type { TradingSession } from './session'
 
-// The trading panel: a bottom drawer with an account strip, an order ticket, and the
-// working-orders / open-positions / history tables. It reads and acts ONLY through the
-// `TradingSession` interface, so the same panel serves a later replay mode unchanged.
+// The trading panel: an account strip, an order ticket, and the working-orders /
+// open-positions / history tables. It reads and acts ONLY through the `TradingSession`
+// interface, so the same panel serves a replay unchanged.
+//
+// It does not own its chrome: the title bar, close, dock/float and the drag live on the
+// window it is mounted in (../chrome/window.ts). What it does own is its own SHAPE -- the
+// three-area grid needs width, so below `NARROW_PANEL` (a floating window dragged small, or
+// a narrow screen) it stacks into one column instead. That is measured from the panel's own
+// box, not the viewport's, because the two now differ.
 //
 // Hand-built plain DOM, the house style for app-side chrome (client/chartlayers/settings.ts):
 // the library owns Svelte, the app owns the chrome around it, and the panel reuses the
@@ -30,11 +36,10 @@ export interface PanelContext {
   activeSymbol: () => SymbolInfo
   /** Instrument facts (precision + pip size) for a key, from the config cache. */
   instrumentFor: (key: string) => InstrumentInfo
-  /** Hide the panel (the header's close button; mirrors the rail toggle). */
-  onClose: () => void
-  /** The header title; defaults by mode ('Paper account' / 'Replay account'). */
-  title?: string
 }
+
+/** Below this width the ticket stops sharing a row with the tables. */
+const NARROW_PANEL = 620
 
 type Tab = 'positions' | 'orders' | 'history'
 
@@ -47,13 +52,13 @@ export class TradingPanel {
   private tabsBar: HTMLElement
   private tab: Tab = 'positions'
   private unsub: () => void
+  private shape: ResizeObserver
 
   constructor(
     private session: TradingSession,
     private ctx: PanelContext
   ) {
     this.element = el('div', 'wd-trade-panel')
-    this.element.appendChild(this.buildHeader())
     this.body = el('div', 'wd-trade-panel-body')
     this.element.appendChild(this.body)
 
@@ -69,7 +74,20 @@ export class TradingPanel {
     this.body.appendChild(this.tablesHost)
 
     this.unsub = session.subscribe(() => this.render())
+    // The panel is as wide as whatever window it is in, which the user can resize; the
+    // layout follows the box rather than the page.
+    this.shape = new ResizeObserver(() => this.syncShape())
+    this.shape.observe(this.element)
     this.render()
+  }
+
+  /** Re-read the panel's own width and lay out for it. Driven by the observer above in a
+   * painting tab, and called outright by the window on a resize or a mode change -- an
+   * occluded tab delivers no observer callbacks, and a panel stuck in the wrong layout is
+   * worse than one that measures twice. */
+  syncShape(): void {
+    const width = this.element.offsetWidth
+    if (width > 0) this.element.classList.toggle('is-narrow', width < NARROW_PANEL)
   }
 
   /** Switch to a tab (the replay scrolls a stop's event into view). */
@@ -82,17 +100,6 @@ export class TradingPanel {
   syncInstrument(): void {
     this.ticket.syncInstrument()
     this.render()
-  }
-
-  private buildHeader(): HTMLElement {
-    const header = el('div', 'wd-trade-panel-header')
-    const title = el('span', 'wd-trade-panel-title')
-    title.textContent = this.ctx.title ?? (this.session.mode === 'replay' ? 'Replay account' : 'Paper account')
-    const spacer = el('span', 'wd-trade-panel-spacer')
-    const close = button('kc-icon-button wd-trade-close-panel', '×', () => this.ctx.onClose())
-    close.title = 'Hide the trading panel'
-    header.append(title, spacer, close)
-    return header
   }
 
   private buildTabs(): HTMLElement {
@@ -292,6 +299,7 @@ export class TradingPanel {
 
   dispose(): void {
     this.unsub()
+    this.shape.disconnect()
     this.ticket.dispose()
   }
 }

@@ -2,25 +2,29 @@ import type { SignalCatalogueEntry } from '../plugins/types'
 import { formatInstant } from '../trading/format'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, sortByLength, validateBase } from './timeframes'
-import { createFloatingWindow } from './window'
+import { createDockableWindow } from '../chrome/window'
 
 // GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
 // (`kc-*` tokens, `wd-*` classes), driven by a `ReplayController` they do not implement.
 //
-// The controls are a FLOATING WINDOW over the chart (window.ts), not a strip inside the
-// trading dock. Only what is used on every step is on screen:
+// The controls live in a DOCKABLE WINDOW (../chrome/window.ts) — floating over the chart by
+// default, docked below it on request — not in a strip nailed inside the trading panel. Only
+// what is used on every step is on screen:
 //
-//   title bar   the cursor, Step, collapse, Exit -- and the drag handle
+//   title bar   the cursor, Step, collapse, dock/float, Exit -- and the drag handle
 //   advance     the timeframe picker x a multiple, and Next signal
 //   last stop   why the last advance stopped (absent until one has)
 //   toggles     Signals / Base / Account, one panel open at a time
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
-// permanently on screen, and the account dock is opened from here rather than taking half
+// permanently on screen, and the account window is opened from here rather than taking half
 // the wall from the moment replay starts.
 
-/** Where the window's position and collapsed state are remembered (per browser). */
-const PLACEMENT_KEY = 'wd.replay.window'
+/** Identity of the window: its stored placement, and `data-window` on the card. */
+const WINDOW_KEY = 'replay'
+
+/** The controls sit ABOVE the account when both are docked. */
+const DOCK_ORDER = 10
 
 type PanelId = 'signals' | 'settings' | null
 
@@ -47,11 +51,18 @@ export interface ReplayControls {
 
 export function createReplayControls(options: ReplayControlsOptions): ReplayControls {
   const { controller } = options
-  const win = createFloatingWindow({
+  const win = createDockableWindow({
+    key: WINDOW_KEY,
     className: 'wd-replay-window',
-    storageKey: PLACEMENT_KEY,
+    title: 'Replay',
     bounds: options.bounds,
-    theme: chartTheme()
+    theme: chartTheme(),
+    defaultMode: 'float',
+    order: DOCK_ORDER,
+    // Docked, the rows lay out along one line instead of stacking, so the strip costs the
+    // wall a single row rather than three (the CSS branches on `data-mode`); the toggles'
+    // labels shorten to match.
+    onModeChange: () => render()
   })
   let panel: PanelId = null
   // The signal list is the only scrollable thing here and every step re-renders the body,
@@ -67,38 +78,27 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // -- the title bar (visible collapsed, and the drag handle) -----------------------------
 
   function renderHeader(): void {
-    const head = win.header
-    head.innerHTML = ''
     const busy = controller.busy
-
-    const grip = el('span', 'wd-float-grip')
-    grip.textContent = '⠿'
-    grip.setAttribute('aria-hidden', 'true')
-    const title = el('span', 'wd-float-title')
-    title.textContent = 'Replay'
+    win.titleSlot.innerHTML = ''
     const clock = el('span', 'wd-replay-clock-value')
     clock.textContent = formatInstant(controller.cursor)
     clock.title = new Date(controller.cursor).toISOString()
+    win.titleSlot.appendChild(clock)
 
     // Step lives in the title bar, not the body: it is the one control used on every single
-    // interaction, so it stays reachable with the window rolled up.
+    // interaction, so it stays reachable with the window rolled up to that bar.
+    win.actions.innerHTML = ''
     const step = button('kc-button kc-button-primary wd-replay-step', busy ? '…' : 'Step', () => {
       void controller.step().then((r) => r && options.onStop?.(r))
     })
     step.disabled = busy
     step.title = `Advance ${controller.advance.multiple} × ${controller.advance.interval}`
 
-    const collapse = button('kc-button kc-icon-button wd-float-collapse', win.collapsed ? '▾' : '▴', () => {
-      win.setCollapsed(!win.collapsed)
-      renderHeader()
-    })
-    collapse.title = win.collapsed ? 'Show the controls' : 'Roll up to the title bar'
-
     const exit = button('kc-button wd-replay-exit', 'Exit', () => options.onExit())
     exit.disabled = busy
     exit.title = 'Leave replay and return to the live wall'
 
-    head.append(grip, title, clock, el('span', 'wd-float-spacer'), step, collapse, exit)
+    win.actions.append(step, exit)
   }
 
   // -- the body ----------------------------------------------------------------------------
