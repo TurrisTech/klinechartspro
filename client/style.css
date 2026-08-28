@@ -785,9 +785,10 @@ body.wd-has-dock > #app {
 /* src/app.css's control reset is scoped to `:where(.klinecharts-pro)`, and these cards are
    body-level siblings of the chart -- so they need their own, or every button in them renders
    in the UA's grey ButtonFace. `:where()` keeps it at element weight (0,0,1): written as
-   `.wd-float button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background,
-   which is the exact trap app.css documents. */
-:where(.wd-float, .wd-replay-dialog) button {
+   `.wd-float button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background
+   and colour, which is the exact trap app.css documents -- and which the alert dialog walked
+   straight into before it was added here. */
+:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) button {
   appearance: none;
   border: 0;
   background: transparent;
@@ -795,9 +796,9 @@ body.wd-has-dock > #app {
   text-align: inherit;
 }
 
-:where(.wd-float, .wd-replay-dialog) button,
-:where(.wd-float, .wd-replay-dialog) input,
-:where(.wd-float, .wd-replay-dialog) select {
+:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) button,
+:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) input,
+:where(.wd-float, .wd-replay-dialog, .wd-alert-dialog) select {
   margin: 0;
   font: inherit;
   color: inherit;
@@ -1122,3 +1123,345 @@ body.wd-has-dock > #app {
 
 /* A replay's dock holds the account, ticket and tables alone -- the controls float over the
    chart -- so it is the same height as the paper one and starts closed. */
+
+/* --- Notification Center (client/notifications) --------------------------------------- */
+
+/* The bell and its caret live in the library's `toolbar-right` slot (src/types.ts
+   ChartProSlot), which is the one element in the top rail that claims the leftover width --
+   so this file styles the pair, and src/app.css owns where they sit. */
+
+.wd-notify {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+}
+
+.wd-notify-bell,
+.wd-notify-caret {
+  height: 1.875rem;
+  padding: 0 0.375rem;
+  color: var(--muted-foreground);
+}
+
+.wd-notify-bell {
+  position: relative;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.wd-notify-caret {
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  font-size: 0.625rem;
+}
+
+.wd-notify-caret.is-active {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.wd-notify-icon {
+  font-size: 0.875rem;
+  line-height: 1;
+  /* The emoji renders in colour on every platform we support; the blink is carried by the
+     button's own colour and background, so drain the glyph to a monochrome mark first. */
+  filter: grayscale(1);
+}
+
+.wd-notify-badge {
+  position: absolute;
+  top: 0.125rem;
+  right: 0;
+  min-width: 0.875rem;
+  border-radius: 999px;
+  background: #ff9800;
+  padding: 0 0.1875rem;
+  color: #1a1a1a;
+  font-size: 0.5625rem;
+  font-weight: 700;
+  line-height: 0.875rem;
+  text-align: center;
+}
+
+/* "Fade blink orange": opacity and colour, not a hard on/off — a hard blink in the corner of
+   a trading wall is the kind of thing people turn off. It runs only while something is
+   unseen, and clicking the bell (markAllSeen) is what removes `is-blinking`. */
+@keyframes wd-notify-blink {
+  0%,
+  100% {
+    background: transparent;
+    color: #ff9800;
+  }
+  50% {
+    background: color-mix(in oklab, #ff9800 28%, transparent);
+    color: #ffcc80;
+  }
+}
+
+.wd-notify.is-blinking .wd-notify-bell {
+  animation: wd-notify-blink 1.4s ease-in-out infinite;
+  color: #ff9800;
+}
+
+.wd-notify.is-blinking .wd-notify-icon {
+  filter: none;
+}
+
+/* Respect the OS setting rather than blinking anyway: the badge and the colour still say
+   there is something unseen. */
+@media (prefers-reduced-motion: reduce) {
+  .wd-notify.is-blinking .wd-notify-bell {
+    animation: none;
+    background: color-mix(in oklab, #ff9800 22%, transparent);
+  }
+}
+
+/* Compound, for the same cascade reason as .wd-layer-panel above. */
+.kc-popover.wd-notify-panel {
+  z-index: 60;
+  display: flex;
+  max-height: min(26rem, 70vh);
+  flex-direction: column;
+  padding: 0;
+}
+
+.wd-notify-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wd-notify-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.wd-notify-empty {
+  padding: 1rem 0.75rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+.wd-notify-row {
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1.5rem 0.5rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.wd-notify-row:last-child {
+  border-bottom: 0;
+}
+
+/* A left rule rather than a tinted row: several unread rows tinted end up as a solid block
+   with no way to see where one stops. */
+.wd-notify-row.is-unseen {
+  box-shadow: inset 2px 0 0 #ff9800;
+}
+
+.wd-notify-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.wd-notify-row-title {
+  font-weight: 600;
+}
+
+.wd-notify-row.is-alert .wd-notify-row-title {
+  color: #ffb74d;
+}
+
+.wd-notify-row.is-warning .wd-notify-row-title {
+  color: #f0b90b;
+}
+
+.wd-notify-row-time {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-notify-row-body {
+  margin-top: 0.125rem;
+  color: var(--muted-foreground);
+}
+
+.wd-notify-row-source {
+  display: inline-block;
+  margin-top: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 0.375rem;
+  color: var(--muted-foreground);
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wd-notify-dismiss {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 0 0.25rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.wd-notify-dismiss:hover {
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.wd-notify-footer {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding: 0.375rem 0.5rem;
+}
+
+.wd-notify-clear {
+  height: 1.75rem;
+  padding: 0 0.625rem;
+  font-size: 0.75rem;
+}
+
+.wd-notify-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* --- Price alerts (client/alerts) ------------------------------------------------------ */
+
+/* The right-click menu. Compound selector so it wins over `.kc-popover`'s own padding. */
+.kc-popover.wd-alert-menu {
+  z-index: 65;
+  min-width: 13rem;
+  padding: 0.25rem;
+}
+
+.wd-alert-menu-header {
+  padding: 0.25rem 0.5rem 0.375rem;
+}
+
+.wd-alert-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 0.3125rem 0.5rem;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wd-alert-menu-item:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+.wd-alert-menu-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wd-alert-menu-item.is-danger {
+  color: var(--destructive, #ef5350);
+}
+
+.wd-alert-menu-detail {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The edit dialog, shared by "create at this price" and "a line was dropped here". Modelled
+   on the replay start dialog; a body-level card, so it carries the theme class itself. */
+.wd-alert-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--background) 60%, transparent);
+}
+
+.wd-alert-dialog {
+  display: flex;
+  width: min(22rem, 92vw);
+  flex-direction: column;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--background);
+  padding: 1rem;
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  box-shadow: 0 12px 40px color-mix(in oklab, black 40%, transparent);
+}
+
+.wd-alert-dialog-title {
+  font-weight: 600;
+  font-size: 0.9375rem;
+}
+
+.wd-alert-dialog-info {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-alert-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wd-alert-label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wd-alert-input {
+  width: 100%;
+  height: 1.875rem;
+  padding: 0 0.375rem;
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-alert-dialog-error {
+  min-height: 1em;
+}
+
+.wd-alert-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-alert-dialog-spacer {
+  flex: 1;
+}
+
+.wd-alert-delete {
+  color: var(--destructive, #ef5350);
+}
+
+.wd-alert-delete:hover {
+  background: color-mix(in oklab, var(--destructive, #ef5350) 16%, transparent);
+}

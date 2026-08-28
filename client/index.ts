@@ -1,4 +1,5 @@
 import { KLineChartPro, type ChartProPane } from '../src'
+import { mountPriceAlerts, type PriceAlertsController } from './alerts'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
@@ -13,6 +14,7 @@ import {
 import { levelsLayer } from './levels/layer'
 import { levels2Layer } from './levels2/layer'
 import type { MtfConfig } from './mtf/config'
+import { mountNotificationCenter, notifications } from './notifications'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
 import { availablePeriods } from './periods'
@@ -293,6 +295,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // onPanesChange, which never fires before the constructor returns.
   let paper: PaperTradingController | null = null
   let replay: BarReplayController | null = null
+  // Assigned after the chart exists (it needs the pane handles and reads the stored alerts
+  // asynchronously); onPanesChange guards on it for the frames before that.
+  let alerts: PriceAlertsController | null = null
   const persist = (): void => {
     const cp = chartPro
     if (!cp || !persistEnabled) return
@@ -362,6 +367,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       pluginHost.sync(panes)
       paper?.sync(panes)
       replay?.sync(panes)
+      alerts?.sync(panes)
     },
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
@@ -393,6 +399,21 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     paper = mountPaperTrading(chartPro, container)
   }
 
+  // Price alerts: lines on every pane showing their instrument, and a live watch that
+  // notifies through the Notification Center. Both are modules of their own -- the alerts
+  // know nothing about the centre beyond `notify` (client/alerts/types.ts AlertNotifier),
+  // and the centre knows nothing about alerts -- and this is the only place they meet.
+  //
+  // `live: false` on a replay wall for the same reason the plugins get `inertStream` there:
+  // the chart is under a read clock and the alert monitor's feed is the live market. The
+  // lines stay drawn, draggable and editable; only the watching stops.
+  alerts = await mountPriceAlerts(chartPro, { notifier: notifications, live: replayBoot === null })
+  // The panes mounted before `alerts` resolved, so the first sync is made here rather than
+  // waited for from onPanesChange -- which does not fire again until the layout changes.
+  alerts.sync(chartPro.getPanes())
+
+  const notificationCenter = mountNotificationCenter(chartPro)
+
   const detachExtras = mountChartExtras(
     chartPro,
     [levelsController, levels2Controller],
@@ -418,6 +439,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // component (and its panes) is unmounted below.
       paper?.teardown()
       replay?.teardown()
+      alerts?.teardown()
+      alerts = null
+      notificationCenter.teardown()
       levelsController.detach()
       levels2Controller.detach()
       detachExtras()
