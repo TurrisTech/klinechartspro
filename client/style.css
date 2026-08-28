@@ -1110,6 +1110,42 @@ body.wd-has-dock > #app {
   height: 1.875rem;
 }
 
+/* The start field and its Random button share a line; the button keeps its own width so the
+   date input takes whatever is left. */
+.wd-replay-dialog-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-replay-dialog-row .wd-replay-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wd-replay-random {
+  flex: 0 0 auto;
+  height: 1.875rem;
+  padding: 0 0.625rem;
+  white-space: nowrap;
+}
+
+/* The optional draw range: two dates side by side, revealed by the checkbox above them. */
+.wd-replay-dialog-range {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.375rem;
+}
+
+.wd-replay-dialog-range > .wd-replay-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.wd-replay-dialog-range[hidden] {
+  display: none;
+}
+
 .wd-replay-dialog-error {
   min-height: 1em;
 }

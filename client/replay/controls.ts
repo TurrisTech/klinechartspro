@@ -1,5 +1,6 @@
 import type { SignalCatalogueEntry } from '../plugins/types'
 import { formatInstant } from '../trading/format'
+import { defaultRange, randomStart, type StartRange } from './pick'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, sortByLength, validateBase } from './timeframes'
 import { createFloatingWindow } from './window'
@@ -338,16 +339,70 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
   dialog.appendChild(info)
 
-  // Default start: a week before the newest bar, at 17:00 New York (a session open).
+  // Default start: a week before the newest bar.
   const defaultStart = options.latest - 7 * 86_400_000
   const startField = field('Start (New York time)')
-  const startInput = document.createElement('input')
-  startInput.type = 'datetime-local'
-  startInput.className = 'kc-input wd-replay-input'
-  startInput.value = toLocalInputValue(defaultStart)
-  startInput.step = '60'
-  startField.appendChild(startInput)
+  const startRow = el('div', 'wd-replay-dialog-row')
+  const startInput = dateInput(toLocalInputValue(defaultStart))
+  startInput.max = toLocalInputValue(options.latest)
+  // Random draws from the range below; it is the one control here that changes the start
+  // without the user typing a date, so it sits next to the field it writes.
+  const random = button('kc-button kc-button-outline wd-replay-random', 'Random', () => roll())
+  random.title = 'Pick a random start date from the range'
+  startRow.append(startInput, random)
+  startField.appendChild(startRow)
   dialog.appendChild(startField)
+
+  // -- the range Random draws from (optional; hidden until asked for) ---------------------
+
+  const initialRange = defaultRange(options.latest)
+  const rangeField = el('div', 'wd-replay-field')
+  const rangeBody = el('div', 'wd-replay-dialog-range')
+  rangeBody.hidden = true
+  const rangeError = el('div', 'kc-field-error wd-replay-dialog-error')
+  rangeField.appendChild(
+    checkbox('Draw from a date range', false, (on) => {
+      rangeBody.hidden = !on
+      rangeError.textContent = ''
+    })
+  )
+  // Day granularity: a draw range does not need a time of day, and two datetime-locals side
+  // by side in a 28rem dialog render their value under the picker icon.
+  const fromInput = dayInput(toDayInputValue(initialRange.from))
+  const toInput = dayInput(toDayInputValue(initialRange.to))
+  toInput.max = toDayInputValue(options.latest)
+  rangeBody.append(labelled('From', fromInput), labelled('To', toInput))
+  rangeField.appendChild(rangeBody)
+  const rangeNote = el('div', 'wd-replay-dialog-note')
+  rangeNote.textContent = 'Random picks a candle open inside this range. Unchecked, it draws from the last two years.'
+  rangeField.appendChild(rangeNote)
+  rangeField.appendChild(rangeError)
+  dialog.appendChild(rangeField)
+
+  /** The range Random draws from: the two inputs when they are showing, else the default. */
+  function drawRange(): StartRange | null {
+    if (rangeBody.hidden) return defaultRange(options.latest)
+    // From is that day's first instant, To its last: the range reads as inclusive of both days.
+    const from = fromLocalInputValue(`${fromInput.value}T00:00`)
+    const to = fromLocalInputValue(`${toInput.value}T23:59`)
+    if (from === null || to === null) {
+      rangeError.textContent = 'Enter both range dates'
+      return null
+    }
+    if (to <= from) {
+      rangeError.textContent = 'The range ends before it starts'
+      return null
+    }
+    return { from, to: Math.min(to, options.latest) }
+  }
+
+  function roll(): void {
+    const range = drawRange()
+    if (!range) return
+    rangeError.textContent = ''
+    startInput.value = toLocalInputValue(randomStart(range, basePicker.value))
+    baseError.textContent = ''
+  }
 
   const balanceField = field('Starting balance')
   const balanceInput = numberInput('10000', () => {})
@@ -425,6 +480,11 @@ const nyParts = new Intl.DateTimeFormat('en-US', {
   hour: '2-digit',
   minute: '2-digit'
 })
+
+/** The New York calendar date of an instant, for a `type=date` input. */
+function toDayInputValue(ms: number): string {
+  return toLocalInputValue(ms).slice(0, 10)
+}
 
 function toLocalInputValue(ms: number): string {
   const p = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
@@ -511,6 +571,32 @@ function checkbox(label: string, checked: boolean, onChange: (on: boolean) => vo
   const text = el('span', '')
   text.textContent = label
   wrap.append(input, text)
+  return wrap
+}
+
+function dateInput(value: string): HTMLInputElement {
+  const input = document.createElement('input')
+  input.type = 'datetime-local'
+  input.className = 'kc-input wd-replay-input'
+  input.step = '60'
+  input.value = value
+  return input
+}
+
+function dayInput(value: string): HTMLInputElement {
+  const input = document.createElement('input')
+  input.type = 'date'
+  input.className = 'kc-input wd-replay-input'
+  input.value = value
+  return input
+}
+
+/** A caption above a control, for the two range inputs sitting side by side. */
+function labelled(text: string, control: HTMLElement): HTMLElement {
+  const wrap = el('label', 'wd-replay-field')
+  const l = el('span', 'wd-replay-label')
+  l.textContent = text
+  wrap.append(l, control)
   return wrap
 }
 

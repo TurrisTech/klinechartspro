@@ -17,6 +17,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `clock.ts` | PURE. `planAdvance(cursor, request, armed)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `hasWorking`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
 | `signals.ts` | `SignalBook`: catalogue, starred set, armed set (a signal is armed *on a resolution*), `nextSignalAt` over an injected `SignalSource`, keyed off `effective`. |
+| `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split) and `HttpSignalSource` (`/plugins/{id}/signals`). The only module here that fetches. Both read past the page-wide read clock on purpose (`asof: null`). |
@@ -51,6 +52,24 @@ An undragged window stays anchored to the bottom centre of the chart, above the 
 opening a panel grows it upward rather than pushing it into the axis. Drag it once and the
 position is yours, and is remembered (`localStorage`, with the collapsed state). Either way it
 is clamped into `#app`'s rect — which is what keeps it clear of the dock when the dock opens.
+
+## Choosing where to start
+
+The start dialog takes a date, a balance and a base. Next to the date is **Random**, and under
+it an optional **date range** it draws from — unchecked, that is the last two years ending a
+day before the newest bar.
+
+A draw is `from + random() * span` floored to a `base` candle open, and nothing else. It is
+**not** filtered to market-open instants and the store is **not** probed first: a draw in the
+weekend snaps onto the candle that most recently opened, which is what the wall draws for any
+such instant anyway, and a draw the store has no bars for opens an empty wall you press Random
+again on. Both are cases the client already handles, so neither is worth carrying here.
+
+The range's two bounds are **days**, inclusive of both (From is that day's first instant, To
+its last): a draw range does not need a time of day, and two `datetime-local`s side by side in
+a 28rem dialog render their value under the picker icon.
+
+Because the snap is a floor, a pick can sit up to one candle before the range's own start.
 
 ## The clock
 
