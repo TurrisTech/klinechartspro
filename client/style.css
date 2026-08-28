@@ -429,11 +429,12 @@ body {
   color: var(--foreground);
 }
 
-/* The dock is a sibling of #app (client/trading/index.ts), so it takes its own row below the
-   wall. When a dock is present the page becomes a flex column: #app flexes to fill the space
-   above, the dock takes its height below. `body.wd-has-dock > #app` outweighs src/app.css's
-   `#app { height: 100% }` (id + class + tag beats a bare id). A hidden dock (`display: none`)
-   collapses to nothing, so the chart uses the whole wall when the panel is minimized. */
+/* The dock column is a sibling of #app (client/chrome/window.ts), so it takes its own row
+   below the wall. When it holds a visible window the page becomes a flex column: #app flexes
+   to fill the space above, the column takes its height below. `body.wd-has-dock > #app`
+   outweighs src/app.css's `#app { height: 100% }` (id + class + tag beats a bare id). An
+   empty column is `display: none`, so the chart uses the whole page whenever everything is
+   floating, hidden, or both. */
 body.wd-has-dock {
   display: flex;
   flex-direction: column;
@@ -445,47 +446,252 @@ body.wd-has-dock > #app {
   height: auto;
 }
 
-.wd-trade-dock {
+.wd-dockhost {
   display: flex;
   flex-direction: column;
   flex: 0 0 auto;
+  min-height: 0;
+  /* Two docked windows can ask for more than the column may take (each is clamped only
+     against the viewport). The column holds the line and the windows below shrink into it,
+     rather than the last one hanging off the bottom of the page. */
+  max-height: 70vh;
+  overflow: hidden;
   background: var(--background);
-  border-top: 1px solid var(--border);
   color: var(--foreground);
-  font-size: 0.8125rem;
-  max-height: 40vh;
 }
 
-.wd-trade-dock.is-hidden {
+.wd-dockhost.is-empty {
   display: none;
+}
+
+/* --- Dockable windows (client/chrome/window.ts) --------------------------------------- */
+
+/* One card, two modes. Docked it is a plain row in the column above; floating it is a
+   fixed-position card over the chart with a shadow, a corner to resize and a z-index that
+   rises when it is touched. Everything else -- the title bar, the roll-up, the body -- is
+   the same object in both, which is the point. */
+.wd-window {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+}
+
+.wd-window.is-hidden {
+  display: none;
+}
+
+.wd-window[data-mode='dock'] {
+  position: relative;
+  flex: 0 1 auto;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.wd-window[data-mode='float'] {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 40;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 28px color-mix(in oklab, black 45%, transparent);
+  /* Placed on the first layout; until then it would flash in the top-left corner. */
+  visibility: hidden;
+}
+
+.wd-window[data-mode='float'].is-placed {
+  visibility: visible;
+}
+
+.wd-window.is-dragging {
+  user-select: none;
+}
+
+.wd-window[data-mode='float'].is-dragging {
+  box-shadow: 0 14px 40px color-mix(in oklab, black 55%, transparent);
+}
+
+.wd-window.is-resizing {
+  user-select: none;
+}
+
+/* src/app.css's control reset is scoped to `:where(.klinecharts-pro)`, and these cards are
+   body-level siblings of the chart -- so they need their own, or every button in them renders
+   in the UA's grey ButtonFace. `:where()` keeps it at element weight (0,0,1): written as
+   `.wd-window button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background,
+   which is the exact trap app.css documents. */
+:where(.wd-window, .wd-replay-dialog) button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: inherit;
+}
+
+:where(.wd-window, .wd-replay-dialog) button,
+:where(.wd-window, .wd-replay-dialog) input,
+:where(.wd-window, .wd-replay-dialog) select {
+  margin: 0;
+  font: inherit;
+  color: inherit;
+}
+
+.wd-window-header {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: 0 0 auto;
+  padding: 0.25rem 0.375rem 0.25rem 0.5rem;
+  cursor: grab;
+  /* The drag is pointer-driven: without this a touch drag scrolls the page instead. */
+  touch-action: none;
+}
+
+.wd-window[data-mode='dock'] > .wd-window-header {
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-window.is-dragging .wd-window-header {
+  cursor: grabbing;
+}
+
+.wd-window-grip {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  line-height: 1;
+}
+
+.wd-window-title {
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.wd-window-title-slot,
+.wd-window-actions,
+.wd-window-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-window-spacer {
+  flex: 1 1 auto;
+}
+
+.wd-window .kc-button {
+  height: 1.625rem;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+  border-radius: var(--radius-sm);
+}
+
+.wd-window .kc-icon-button {
+  width: 1.625rem;
+  padding: 0;
+}
+
+.wd-window-control {
+  color: var(--muted-foreground);
+}
+
+.wd-window-control:hover {
+  color: var(--foreground);
+}
+
+.wd-window-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0.375rem 0.5rem 0.5rem;
+}
+
+/* The two resize affordances: a corner while floating, the top edge while docked (which is
+   the column's height). Each is inert in the other mode. */
+.wd-window-corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+  cursor: nwse-resize;
+  touch-action: none;
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0 45%,
+      color-mix(in oklab, var(--muted-foreground) 60%, transparent) 45% 55%,
+      transparent 55% 70%,
+      color-mix(in oklab, var(--muted-foreground) 60%, transparent) 70% 80%,
+      transparent 80%
+    );
+}
+
+.wd-window[data-mode='dock'] .wd-window-corner {
+  display: none;
+}
+
+.wd-window-edge {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  height: 5px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+.wd-window-edge:hover {
+  background: color-mix(in oklab, var(--primary) 45%, transparent);
+}
+
+.wd-window[data-mode='float'] .wd-window-edge {
+  display: none;
+}
+
+/* Rolled up to its title bar. A docked window's height is cleared in JS at the same time
+   (window.ts `reflow`), so the column shrinks to the bar rather than keeping its old row. */
+.wd-window.is-collapsed > .wd-window-body,
+.wd-window.is-collapsed > .wd-window-corner,
+.wd-window.is-collapsed > .wd-window-edge {
+  display: none;
+}
+
+/* The drag-to-dock target: the strip along the bottom of the chart, lit while a dragged
+   window is over it. */
+.wd-window-drop {
+  position: fixed;
+  z-index: 39;
+  pointer-events: none;
+  border-top: 2px solid var(--primary);
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+}
+
+/* The account window's body is the panel itself, so it brings no padding of its own. */
+.wd-trade-window > .wd-window-body {
+  padding: 0;
 }
 
 .wd-trade-panel {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   overflow: hidden;
   min-height: 0;
 }
 
-.wd-trade-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0.75rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.wd-trade-panel-title {
-  font-weight: 600;
-}
-
-.wd-trade-panel-spacer {
-  flex: 1;
-}
-
 .wd-trade-panel-body {
   display: grid;
-  grid-template-columns: 18rem 1fr;
+  grid-template-columns: 17rem 1fr;
   grid-template-rows: auto auto 1fr;
   grid-template-areas:
     'account account'
@@ -497,13 +703,56 @@ body.wd-has-dock > #app {
   min-height: 0;
 }
 
+/* Floated small (or on a narrow screen) the three areas stop sharing rows: ticket above
+   tables, each scrolling on its own, so nothing is cut off at any size the window allows. */
+.wd-trade-panel.is-narrow .wd-trade-panel-body {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto auto 1fr;
+  grid-template-areas:
+    'account'
+    'ticket'
+    'tabs'
+    'tables';
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
 .wd-trade-account {
   grid-area: account;
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
   padding-bottom: 0.375rem;
   border-bottom: 1px solid var(--border);
+}
+
+/* The title-bar readout: what the account window still tells you rolled up to that bar. */
+.wd-trade-summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-summary-equity {
+  font-weight: 600;
+}
+
+.wd-trade-summary-pnl.is-up {
+  color: #26a69a;
+}
+
+.wd-trade-summary-pnl.is-down {
+  color: #ef5350;
+}
+
+.wd-trade-summary-open {
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
 }
 
 .wd-trade-stat {
@@ -753,120 +1002,22 @@ body.wd-has-dock > #app {
 
 /* --- Bar replay (client/replay) ------------------------------------------------------ */
 
-/* The controls float OVER the chart in a draggable window (client/replay/window.ts): a
-   title bar carrying the cursor, Step, collapse and Exit, then the advance row, the last
-   stop, and one panel at a time behind the Signals / Base / Account toggles. It is
-   `position: fixed` and body-level, so it is clamped into #app's rect rather than the
-   viewport's -- that is what keeps it off the trading dock when the dock opens. */
-.wd-float {
-  position: fixed;
-  left: 0;
-  top: 0;
-  z-index: 40;
-  display: flex;
-  flex-direction: column;
+/* The replay's controls are a dockable window (../chrome/window.ts) whose body sizes itself
+   to its content, so the card gets its width from here rather than from a stored size. */
+.wd-replay-window[data-mode='float'] {
   min-width: 20rem;
   max-width: min(30rem, 92vw);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md, 0.5rem);
-  background: color-mix(in oklab, var(--background) 92%, transparent);
-  backdrop-filter: blur(6px);
-  color: var(--foreground);
   font-size: 0.75rem;
-  box-shadow: 0 8px 28px color-mix(in oklab, black 45%, transparent);
-  /* Placed on the first layout; until then it would flash in the top-left corner. */
-  visibility: hidden;
 }
 
-.wd-float.is-placed {
-  visibility: visible;
-}
-
-/* src/app.css's control reset is scoped to `:where(.klinecharts-pro)`, and these cards are
-   body-level siblings of the chart -- so they need their own, or every button in them renders
-   in the UA's grey ButtonFace. `:where()` keeps it at element weight (0,0,1): written as
-   `.wd-float button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background,
-   which is the exact trap app.css documents. */
-:where(.wd-float, .wd-replay-dialog) button {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 0;
-  text-align: inherit;
-}
-
-:where(.wd-float, .wd-replay-dialog) button,
-:where(.wd-float, .wd-replay-dialog) input,
-:where(.wd-float, .wd-replay-dialog) select {
-  margin: 0;
-  font: inherit;
-  color: inherit;
-}
-
-.wd-float.is-dragging {
-  user-select: none;
-  box-shadow: 0 14px 40px color-mix(in oklab, black 55%, transparent);
-}
-
-.wd-float-header {
-  display: flex;
+/* Docked, the wall pays for every row: the advance controls, the last stop and the toggles
+   share ONE line, and an open panel wraps below them. */
+.wd-replay-window[data-mode='dock'] > .wd-window-body {
+  flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.25rem 0.375rem 0.25rem 0.5rem;
-  cursor: grab;
-  /* The drag is pointer-driven: without this a touch drag scrolls the page instead. */
-  touch-action: none;
-}
-
-.wd-float.is-dragging .wd-float-header {
-  cursor: grabbing;
-}
-
-.wd-float-grip {
-  color: var(--muted-foreground);
-  font-size: 0.8125rem;
-  line-height: 1;
-}
-
-.wd-float-title {
-  color: var(--muted-foreground);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.wd-float-spacer {
-  flex: 1 1 auto;
-}
-
-.wd-float-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  padding: 0.375rem 0.5rem 0.5rem;
-  border-top: 1px solid var(--border);
-}
-
-.wd-float.is-collapsed .wd-float-body {
-  display: none;
-}
-
-.wd-float.is-collapsed .wd-float-header {
-  padding-bottom: 0.25rem;
-}
-
-/* The window's own controls: everything in it is one size smaller than the chart's chrome,
-   which is what lets the whole thing sit in ~19rem x 8rem. */
-.wd-replay-window .kc-button {
-  height: 1.625rem;
-  padding: 0 0.5rem;
+  gap: 0.5rem 1.25rem;
   font-size: 0.75rem;
-  border-radius: var(--radius-sm);
-}
-
-.wd-replay-window .kc-icon-button {
-  width: 1.625rem;
-  padding: 0;
 }
 
 .wd-replay-row,
@@ -1060,6 +1211,21 @@ body.wd-has-dock > #app {
 
 .wd-replay-muted {
   color: var(--muted-foreground);
+}
+
+/* Docked, an open panel wraps onto its own line under the controls, and the signal list
+   spreads across the width it has instead of scrolling in a narrow column. */
+.wd-replay-window[data-mode='dock'] .wd-replay-panel {
+  flex-basis: 100%;
+  border-top: none;
+  padding-top: 0;
+}
+
+.wd-replay-window[data-mode='dock'] .wd-replay-signal-list {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  max-height: 7rem;
 }
 
 /* The start dialog: a centred card over a backdrop, kc tokens throughout. */
