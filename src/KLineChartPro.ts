@@ -12,6 +12,7 @@ import type {
   ChartPro,
   ChartProOptions,
   ChartProPane,
+  ChartProSlot,
   Period,
   SymbolInfo
 } from './types'
@@ -153,7 +154,7 @@ export default class KLineChartPro implements ChartPro {
     return this.component.getPeriod()
   }
 
-  getSlot(name: 'toolbar' | 'rail-footer'): Nullable<HTMLElement> {
+  getSlot(name: ChartProSlot): Nullable<HTMLElement> {
     return this.component.getSlot(name)
   }
 

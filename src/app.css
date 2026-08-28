@@ -428,6 +428,19 @@
 	gap: 0.25rem;
 }
 
+/* The one thing in the rail that claims the leftover width, so whatever an app mounts here
+   sits against the right edge however wide the symbol, period and toolbar slots grow.
+   Everything before it is `flex-shrink: 0` and content-sized, which is why a right-hand
+   position needs a slot of its own rather than a class on the app's own element. */
+.kc-toolbar-right-slot {
+	display: inline-flex;
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 0.25rem;
+	margin-left: auto;
+}
+
 .kc-drawing-toolbar {
 	display: flex;
 	width: 3rem;

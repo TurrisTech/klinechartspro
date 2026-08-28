@@ -1,5 +1,5 @@
 import type { Chart } from 'klinecharts'
-import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
+import type { ChartProPane, ChartProSlot, KLineChartPro, SymbolInfo } from '../../src'
 import { symbolVendor } from '../symbols'
 import { overlaySignature } from './paint'
 import { openSettingsPanel, type SettingsPanelHandle } from './settings'
@@ -45,8 +45,8 @@ const MAX_DEBOUNCE_MS = 2_000
 // change says so instead and is not re-fetched on a timer at all — see types.ts.
 const CACHE_TTL_MS = 5 * 60_000
 
-// Puts `element` in one of the library's two slots (src/types.ts ChartPro.getSlot) and
-// keeps it there. Both slots stay wall-global, not per-pane. There are two separate timing
+// Puts `element` in one of the library's slots (src/types.ts ChartProSlot) and keeps it
+// there. Every slot stays wall-global, not per-pane. There are two separate timing
 // problems here, and conflating them is what silently detaches a control for good.
 //
 // Getting it there the first time is a WAIT, not a mutation. Every caller runs in the same
@@ -68,7 +68,7 @@ const CACHE_TTL_MS = 5 * 60_000
  * to a chart that no longer exists. */
 export function attachToSlot(
   chartPro: KLineChartPro,
-  slotName: 'toolbar' | 'rail-footer',
+  slotName: ChartProSlot,
   element: HTMLElement
 ): () => void {
   let detached = false

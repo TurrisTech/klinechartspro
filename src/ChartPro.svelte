@@ -55,6 +55,7 @@
   import type {
     ChartProOptions,
     ChartProPane,
+    ChartProSlot,
     Datafeed,
     DatafeedFactory,
     IndicatorParamsCheck,
@@ -130,6 +131,8 @@
 
   let rootElement = $state<HTMLDivElement>()
   let toolbarSlot = $state<HTMLDivElement>()
+  // Pinned to the right edge of the same rail -- see ChartProSlot in src/types.ts.
+  let toolbarRightSlot = $state<HTMLDivElement>()
   let railFooterSlot = $state<HTMLDivElement>()
 
   let selectedPeriodText = $state('')
@@ -464,8 +467,12 @@
     onPeriodChange(wall.active.id, value)
   }
   export function getPeriod() { return wall.active.period }
-  export function getSlot(name: 'toolbar' | 'rail-footer') {
-    return (name === 'toolbar' ? toolbarSlot : railFooterSlot) ?? null
+  export function getSlot(name: ChartProSlot) {
+    switch (name) {
+      case 'toolbar': return toolbarSlot ?? null
+      case 'toolbar-right': return toolbarRightSlot ?? null
+      default: return railFooterSlot ?? null
+    }
   }
 
   export function getPanes(): ChartProPane[] {
@@ -692,6 +699,8 @@
           </Tooltip.Portal>
         </Tooltip.Root>
       </div>
+
+      <div class="kc-toolbar-right-slot" bind:this={toolbarRightSlot}></div>
     </header>
 
     <div class="klinecharts-pro-chart-area">

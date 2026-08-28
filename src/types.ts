@@ -200,6 +200,19 @@ export type IndicatorSettingsHandler = (request: {
   calcParams: unknown[]
 }) => boolean
 
+/** Where an app may mount its own chrome inside the chart shell.
+ *
+ * - `toolbar` — the top rail, immediately after the timeframe controls, so what an app adds
+ *   reads left-to-right with the symbol and period the library owns.
+ * - `toolbar-right` — the far RIGHT end of the same rail (`margin-left: auto`), for chrome
+ *   that is about the session rather than about what this wall is showing: a notification
+ *   bell, a connection badge, an account chip. Nothing else in the rail grows, so this is
+ *   the only position that stays pinned to the right edge whatever the rail holds.
+ * - `rail-footer` — the bottom of the left drawing rail. Present only while that rail is
+ *   shown, and its element is destroyed and rebuilt each time it is toggled.
+ */
+export type ChartProSlot = 'toolbar' | 'toolbar-right' | 'rail-footer'
+
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>
@@ -297,11 +310,11 @@ export interface ChartPro {
   getPeriod(): Period
   /**
    * An empty anchor element inside the chart shell that a consuming app can mount its own
-   * controls into — the top-rail toolbar (after the timeframe rail) or the bottom of the
-   * left drawing rail. Returns null before mount, and null for 'rail-footer' whenever the
-   * drawing rail is hidden (drawingBarVisible: false), since that footer lives inside it.
+   * controls into — see ChartProSlot for where each one is. Returns null before mount, and
+   * null for 'rail-footer' whenever the drawing rail is hidden (drawingBarVisible: false),
+   * since that footer lives inside it.
    */
-  getSlot(name: 'toolbar' | 'rail-footer'): Nullable<HTMLElement>
+  getSlot(name: ChartProSlot): Nullable<HTMLElement>
 
   /** Every currently-live pane (i.e. shown by the active layout preset), in pane order. */
   getPanes(): ChartProPane[]

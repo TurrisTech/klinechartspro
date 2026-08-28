@@ -30,6 +30,7 @@ export type {
   ChartPro,
   ChartProOptions,
   ChartProPane,
+  ChartProSlot,
   Datafeed,
   DatafeedFactory,
   DatafeedSubscribeCallback,
