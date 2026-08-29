@@ -2,6 +2,7 @@ import type { ChartProPane, Datafeed, KLineChartPro } from '../../src'
 import { capabilities, hasFeature } from '../capabilities'
 import type { LayerController } from '../chartlayers/controller'
 import { apiGet, OhlcvApiError, setReadClock } from '../config'
+import type { NotificationSink } from '../notifications'
 import { isNoData, type OHLCVBar } from '../ohlcv'
 import { loadSignalCatalogue } from '../plugins/api'
 import type { PluginHost } from '../plugins/host'
@@ -17,6 +18,7 @@ import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
 import { SignalBook } from './signals'
 import { HttpBarSource, HttpSignalSource } from './source'
+import { ReplayWatches } from './watches'
 import { STORED_LADDER, fromWireDate, intervalStart, nominalMs, sortByLength } from './timeframes'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
@@ -33,12 +35,19 @@ export const REPLAY_LOG = '[replay]'
 export interface BarReplayController {
   /** Resync the dock's overlays and the base check to the wall's panes. */
   sync(panes: ChartProPane[]): void
+  /** The replay's own price watches, for `mountPriceWatches` to draw. A replay's market
+   * exists only in this tab, so its watches are evaluated here, against the base bars the
+   * walk consumes. */
+  watches: ReplayWatches
   teardown(): void
 }
 
 export interface ReplayWallContext {
   pluginHost: PluginHost
   levelsController: LayerController
+  /** Where a fired replay watch is announced. Supplied by client/index.ts, the one module
+   * that knows the Notification Center and the watches exist together. */
+  notify: NotificationSink
   /** Rebuild the wall (leaving replay). */
   rebuild: () => void
 }
@@ -153,6 +162,8 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
           dataEnd: () => latest,
           save: async () => {},
           onAdvanced: () => {}
+          // No observer: this session exists only to write the opening blob, which starts
+          // with no watches.
         }).toState()
         await simApi.putState(session.id, session.rev, state)
         writeIntent(safeStorage(), { sessionId: session.id, cursor })
@@ -202,6 +213,12 @@ export async function mountBarReplay(
 
   const intervalsInUse = (): string[] => sortByLength([...new Set(chartPro.getPanes().map((p) => periodToResolution(p.getPeriod())))])
 
+  // The replay's price watches. Built before the session because the session takes it as its
+  // observer, and bound to the session (`attach`) straight after -- the two cannot both be
+  // constructed first.
+  const watches = new ReplayWatches({ symbol: stored.symbol, notify: ctx.notify })
+  watches.restore(stored.watches)
+
   const session = new ReplayTradingSession({
     id: answer.session.id,
     name: answer.session.name,
@@ -216,6 +233,7 @@ export async function mountBarReplay(
     storedIntervals: storedIntervals.length > 0 ? storedIntervals : [stored.base],
     engine: Engine.fromState(stored.engine),
     signals,
+    observer: watches,
     barSource: new HttpBarSource(),
     dataEnd: () => latest,
     save: async (state) => {
@@ -255,9 +273,14 @@ export async function mountBarReplay(
       // history loads (measured: 31 `/levels` reads, the slowest 4.5s, during a short run).
       if (intervalStart('1D', result.from) !== intervalStart('1D', result.to)) ctx.levelsController.invalidate()
       dock.overlays.update(session.snapshot)
+      // A pane that was reloaded at the new cursor (a long jump) has a new oldest bar, which
+      // is what every watch line is anchored to; re-emitting redraws them against it.
+      watches.refresh()
     }
   })
   session.setIntervalsInUse(intervalsInUse())
+  watches.attach(session)
+  await watches.load()
 
   const dock: TradingDock = mountTradingDock(session, {
     chartPro,
@@ -296,6 +319,7 @@ export async function mountBarReplay(
   await session.primeQuote()
 
   return {
+    watches,
     sync(panes: ChartProPane[]): void {
       dock.sync(panes)
       const check = session.setIntervalsInUse(panes.map((p) => periodToResolution(p.getPeriod())))

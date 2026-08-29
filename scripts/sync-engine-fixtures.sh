@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
-# Vendor the fill-engine parity fixtures from wdashboard-server into the client, or check
-# that the two copies are identical (`--check`, what `bun test` runs through
-# client/replay/fixtures.test.ts when the server repo is reachable).
+# Vendor the parity fixtures from wdashboard-server into the client, or check that the two
+# copies are identical (`--check`, what `bun test` runs through client/replay/fixtures.test.ts
+# and client/watch/fixtures.test.ts when the server repo is reachable).
 #
 #   scripts/sync-engine-fixtures.sh            copy
 #   scripts/sync-engine-fixtures.sh --check    exit 1 if any file differs
 #
-# SERVER_FIXTURES overrides the source directory (default: the sibling wdashboard-server
-# main worktree's tests/sim/fixtures). The files are generated there --
-# gen_engine_cases.py (engine_cases.json, the fill rules as data) and gen_boundaries.py
-# (boundaries.json, candle boundaries from wmarkettypes) -- never edited here.
+# SERVER_ROOT overrides the server worktree (default: the sibling wdashboard-server main
+# worktree); SERVER_FIXTURES still overrides the sim fixture directory on its own. Every file
+# is GENERATED there and never edited here:
+#
+#   tests/sim/fixtures    engine_cases.json  the fill rules as data (gen_engine_cases.py)
+#                         boundaries.json    candle boundaries from wmarkettypes
+#   tests/watch/fixtures  watch_cases.json   when a watch fires (gen_watch_cases.py) -- the
+#                                            rule a bar replay evaluates in the browser
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
-src=${SERVER_FIXTURES:-$here/../../wdashboard-server/main/tests/sim/fixtures}
-dst=$here/client/replay/fixtures
-files=(engine_cases.json boundaries.json)
-if [[ ! -d "$src" ]]; then
-  echo "sync-engine-fixtures: source directory not found: $src" >&2
-  exit 2
-fi
+root=${SERVER_ROOT:-$here/../../wdashboard-server/main}
+sim=${SERVER_FIXTURES:-$root/tests/sim/fixtures}
+# "<source dir>|<destination dir>|<file>"
+pairs=(
+  "$sim|$here/client/replay/fixtures|engine_cases.json"
+  "$sim|$here/client/replay/fixtures|boundaries.json"
+  "$root/tests/watch/fixtures|$here/client/watch/fixtures|watch_cases.json"
+)
 status=0
-for f in "${files[@]}"; do
+for pair in "${pairs[@]}"; do
+  IFS='|' read -r src dst f <<<"$pair"
+  if [[ ! -d "$src" ]]; then
+    echo "sync-engine-fixtures: source directory not found: $src" >&2
+    exit 2
+  fi
   if [[ "${1:-}" == "--check" ]]; then
     if ! cmp -s "$src/$f" "$dst/$f"; then
       echo "sync-engine-fixtures: $f differs between $src and $dst" >&2

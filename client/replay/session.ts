@@ -1,4 +1,5 @@
 import { OhlcvApiError } from '../config'
+import type { LocalWatchState } from '../watch/local'
 import type { OrderPatch, OrderRequest, SimAnswer, SimEvent, SimSnapshot, TradePatch } from '../trading/api'
 import type { SessionListener, TradingSession } from '../trading/session'
 import { BarCache, type BarSource, type ReplayBar } from './cache'
@@ -28,6 +29,27 @@ export interface AdvanceResult {
   /** False when the advance seeked instead of walking (nothing could fill), so `bars` is
    * empty by design rather than because the span held none. */
   walked: boolean
+}
+
+/** Something that wants to see the walk as it happens.
+ *
+ * The engine is not the only consumer of a base bar: a price watch placed on a replay wall
+ * is answered by the same bars, at the same granularity, in the same order
+ * (`client/replay/watches.ts`). This is the whole of that seam — the session knows there is
+ * an observer, and nothing about what it does with a bar. */
+export interface ReplayObserver {
+  /** True when an advance must WALK base bars even though the account cannot change. An
+   * armed watch is such a reason: without this the seek shortcut would step over the whole
+   * span it was placed to see. */
+  needsBars(): boolean
+  /** One base bar the engine has just consumed, in walk order. Always the BASE bar, never a
+   * refinement's finer parts: whether an order happens to be resting must not change what an
+   * observer sees. */
+  onBar(bar: ReplayBar): void
+  /** The cursor moved without a walk — nothing between was examined. */
+  seeked(): void
+  /** Whatever this observer keeps in the replay's state blob. */
+  toState(): LocalWatchState[]
 }
 
 export interface ReplayController {
@@ -74,6 +96,8 @@ export interface ReplaySessionOptions {
   dataEnd: () => number
   save: (state: ReplayState) => Promise<void>
   onAdvanced: (result: AdvanceResult) => Promise<void> | void
+  /** Fed every base bar the walk consumes, and asked whether the walk is needed at all. */
+  observer?: ReplayObserver
 }
 
 export class ReplayTradingSession implements TradingSession, ReplayController {
@@ -232,6 +256,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       pauseOnFill: this.pauseOnFill,
       starred: this.signals.starred,
       armed: this.signals.armed,
+      watches: this.opts.observer?.toState() ?? [],
       engine: this.engine.toState()
     })
   }
@@ -250,11 +275,13 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     this.saveChain = this.saveChain.then(() => this.opts.save(state)).catch((err) => console.warn('[replay] save failed', err))
   }
 
-  /** Feed the engine the closing quote of the last base bar that closed at or before `at`.
-   * Primes the ticket before the first step, and lands a seek (an advance that consumed no
-   * bars) on a real price. Widens the probe when the window is empty -- a cursor just after
-   * a weekend has no bars a few minutes behind it. */
-  private async quoteAt(at: number): Promise<boolean> {
+  /** The last base bar that closed at or before `at`. Widens the probe when the window is
+   * empty -- a cursor just after a weekend has no bars a few minutes behind it.
+   *
+   * Public because it is also how an observer gets a reading for an instant the walk never
+   * passed through: a watch armed before the first step has to be seeded from the bar the
+   * cursor is standing on, and this is the one place that knows how to find it. */
+  async barAt(at: number): Promise<ReplayBar | null> {
     let span = QUOTE_PROBE_BARS * nominalMs(this.base)
     for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
       const probe = new BarCache(this.opts.barSource, this.symbol, this.base, 'all')
@@ -264,12 +291,19 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         .slice(at - span, at)
         .filter((b) => b.end <= at)
         .at(-1)
-      if (!last) continue
-      const bar = toBidAsk(last, this.symbol)
-      this.engine.onQuote({ symbol: this.symbol, time: at, bid: bar.bidClose, ask: bar.askClose })
-      return true
+      if (last) return last
     }
-    return false
+    return null
+  }
+
+  /** Feed the engine the closing quote at `at`. Primes the ticket before the first step, and
+   * lands a seek (an advance that consumed no bars) on a real price. */
+  private async quoteAt(at: number): Promise<boolean> {
+    const last = await this.barAt(at)
+    if (!last) return false
+    const bar = toBidAsk(last, this.symbol)
+    this.engine.onQuote({ symbol: this.symbol, time: at, bid: bar.bidClose, ask: bar.askClose })
+    return true
   }
 
   /** Before the first step the engine has no quote: take the base bar closing at the cursor
@@ -360,7 +394,12 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // resting and nothing protected the account cannot change however the price moves, so
       // the advance SEEKS: the cursor lands on the same instant, the engine takes the closing
       // quote there, and a months-long jump costs one read instead of a hundred thousand bars.
-      const walked = canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
+      // ...or when an observer needs the bars. A watch armed on this wall is answered by the
+      // walk, so it is as good a reason to walk as a resting order is: seeking past the span
+      // would step over the very move it was placed to see.
+      const walked =
+        canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol) ||
+        (this.opts.observer?.needsBars() ?? false)
       if (walked) {
         for (;;) {
           await this.baseCache.ensure(stopAt, this.cursor)
@@ -370,6 +409,9 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
           consumed.push(bar)
           const produced = await this.consume(bar, this.base)
           events.push(...produced)
+          // After the engine, so anything an observer raises sees the account as this bar
+          // left it -- and the BASE bar, not the refinement's parts.
+          this.opts.observer?.onBar(bar)
           this.cursor = bar.end
           if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
             paused = true
@@ -379,6 +421,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       } else {
         this.baseCache.seek(stopAt)
         await this.quoteAt(stopAt)
+        this.opts.observer?.seeked()
       }
       if (paused) reason = 'fill'
       else this.cursor = stopAt

@@ -394,17 +394,26 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     replay = await mountBarReplay(chartPro, container, replayBoot, {
       pluginHost,
       levelsController,
+      // The replay raises its watch alerts into the same centre a live wall's server-side
+      // ones arrive in; this is the only place that hands it over.
+      notify: notifications,
       rebuild: options.rebuild
     })
   } else {
     paper = mountPaperTrading(chartPro, container)
   }
 
-  // PRICE WATCHES: a line per level on every pane showing its instrument. The watching
-  // itself happens in the SERVER (`wdashboard_server/watch`), which is what lets one fire
-  // with this tab closed -- so nothing here evaluates anything, a replay wall needs no
-  // special case, and the lines are simply a view of `/watch`.
-  watches = await mountPriceWatches(chartPro)
+  // PRICE WATCHES: a line per level on every pane showing its instrument. One view, two
+  // backends. On a LIVE wall the watching happens in the SERVER
+  // (`wdashboard_server/watch`), which is what lets one fire with this tab closed. A REPLAY
+  // wall has no server-side market -- its clock is the cursor and its prices are stored bars
+  // -- so it hands in its own backend, which evaluates the same watch documents against the
+  // base bars the replay walks (`client/replay/watches.ts`). Everything the user touches is
+  // the same either way.
+  watches = await mountPriceWatches(
+    chartPro,
+    replay ? { store: replay.watches.store, canWatch: (target) => replay?.watches.canWatch(target) ?? null } : {}
+  )
   // The panes mounted before `watches` resolved, so the first sync is made here rather than
   // waited for from onPanesChange -- which does not fire again until the layout changes.
   watches?.sync(chartPro.getPanes())
