@@ -46,8 +46,23 @@ export type { Condition, PriceDirection, Watch, WatchDraft, WatchSource } from '
 // is a perfectly good watch that this chart layer simply has no line for (`priceLevel`
 // returns null and it is skipped). The notifications they raise are the Notification
 // Center's business, not this module's: it never imports it.
+//
+// The BACKEND is an argument. By default it is this browser's view of the server's watches;
+// a BAR REPLAY hands in one that evaluates in this tab against the bars the replay walks
+// (client/replay/watches.ts), because no server-side source can see a replay's market. Both
+// are a `WatchStore` over a `WatchApi`, so everything below -- the gestures, the dialog, the
+// lines, the axis tags -- is the same code either way.
 
 const CANDLE_PANE = 'candle_pane'
+
+export interface PriceWatchesOptions {
+  /** The watches to draw. Default: this browser's view of the SERVER's (`loadWatches`). */
+  store?: WatchStore
+  /** Why this instrument cannot be watched on this wall, or null when it can. A replay walks
+   * one instrument, so its other panes get a reason instead of rows that would create a watch
+   * nothing will ever evaluate. */
+  canWatch?: (target: string) => string | null
+}
 
 export interface PriceWatchesController {
   /** From the wall's onPanesChange. */
@@ -63,14 +78,16 @@ declare global {
   }
 }
 
-/** Null when the server has no watch service: an older server cannot hold a watch, and a
- * browser-side monitor is not a substitute for one -- it cannot fire with the tab closed,
- * which is the whole feature. */
+/** Null when there is nothing to draw watches from: with no `store` of its own this is a
+ * view of the server's, and an older server cannot hold a watch. A browser-side monitor is
+ * not a substitute for one on a LIVE wall -- it cannot fire with the tab closed, which is the
+ * whole feature -- but it is exactly right for a replay, whose market only exists here. */
 export async function mountPriceWatches(
-  chartPro: KLineChartPro
+  chartPro: KLineChartPro,
+  options: PriceWatchesOptions = {}
 ): Promise<PriceWatchesController | null> {
-  if (!hasFeature('watch')) return null
-  const store: WatchStore = await loadWatches()
+  if (!options.store && !hasFeature('watch')) return null
+  const store: WatchStore = options.store ?? (await loadWatches())
   const overlays = new WatchOverlays({
     onDragEnd: (watch, price) => openMoveDialog(watch, price)
   })
@@ -203,10 +220,16 @@ export async function mountPriceWatches(
     y: number,
     precision: number
   ): MenuItem[] {
+    const symbol = pane.getSymbol()
+    const target = instrumentTarget(symbolVendor(symbol), symbol.ticker)
+    const refusal = options.canWatch?.(target) ?? null
+    // One disabled row rather than six that lead nowhere: a wall can show instruments this
+    // backend does not watch, and silently accepting a watch on one is the failure this
+    // avoids.
+    if (refusal !== null) return [{ label: refusal, disabled: true, onSelect: () => {} }]
     const cursor = priceAt(chart, y)
     const bar = barAt(chart, x)
-    const symbol = pane.getSymbol()
-    const market = marketPrice(instrumentTarget(symbolVendor(symbol), symbol.ticker))
+    const market = marketPrice(target)
     const rows: Array<{ label: string; price: number | null }> = [
       { label: 'At cursor', price: cursor },
       { label: 'Current price', price: market },
