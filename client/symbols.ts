@@ -38,7 +38,8 @@ export interface InstrumentConfig {
   instrumentType: string
   assetClass: string
   displayPrecision: number
-  forexPipLocation: number
+  // null for an asset class with no pips (crypto).
+  forexPipLocation: number | null
   tradeUnitsPrecision: number
   minimumTradeSize: number | null
   maximumOrderUnits: number | null
@@ -95,7 +96,12 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
     name: config?.displayName ?? result.description,
     pricePrecision: resolvePrecision(config, symbol),
     // Not configuration: the OHLCV contract declares volume integer-valued on every path.
-    volumePrecision: 0
+    volumePrecision: 0,
+    // The market's own clock, from the effective schedule the server resolved. A pane
+    // showing this instrument displays on it (UTC for a Coinbase pair), and its
+    // daily-and-coarser session dates are read on it -- the FX +7h/-New-York rules do
+    // not apply to a market whose days run midnight to midnight.
+    timezone: config?.marketHours?.timezone
   }
 }
 

@@ -26,6 +26,10 @@ export interface SymbolInfo {
   priceCurrency?: string
   type?: string
   logo?: string
+  // The instrument's own market timezone (IANA name). A pane displays on this clock
+  // when it is stated -- a crypto instrument reads UTC -- and falls back to the
+  // app-level timezone otherwise. Daily-and-coarser session-date labels read on it too.
+  timezone?: string
 }
 
 export interface Period {
