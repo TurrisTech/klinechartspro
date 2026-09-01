@@ -130,5 +130,6 @@ normalise it with the server's own rule). Tests: `signals.test.ts`.
 | `arev/plugin.ts` | `AREV:<generation>` | one per template | no live stream |
 | `krev/plugin.ts` | `KREV:krev01:p` | one, folded by side | |
 | `mtf/plugin.ts` | `MTF:arev21` | one per enabled source timeframe (`MtfStore`: votes + bar grid) | per-pane settings, own panel; shares arev21 stores with the AREV plugin |
+| `books/plugin.ts` | `BOOK:depth:*`, `BOOK:view:*`, `BOOK:sentiment:*`, `BOOK:flow` | one per binding; depth + view share one profile store per kind | the OANDA 20-minute books: depth draws every snapshot on the price pane at its own instant, view follows the crosshair, sentiment/flow are sub-pane series |
 
 Tests: `bun test client` (`*.test.ts` here, with `testing.ts`'s fake chart).
