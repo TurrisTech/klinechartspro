@@ -841,8 +841,8 @@
             <Command.Group class="kc-command-group" value={i18n('symbol_search', locale)}>
               <Command.GroupHeading class="kc-command-heading">{i18n('symbol_search', locale)}</Command.GroupHeading>
               <Command.GroupItems>
-                {#each symbolResults as item (item.ticker)}
-                  <Command.Item class="kc-command-item" value={item.ticker} onclick={() => {
+                {#each symbolResults as item (`${item.exchange ?? ''}:${item.ticker}`)}
+                  <Command.Item class="kc-command-item" value={`${item.exchange ?? ''}:${item.ticker}`} onclick={() => {
                     wall.active.symbol = item
                     onSymbolChange(wall.active.id, item)
                     symbolDialogOpen = false
