@@ -132,11 +132,25 @@ export function isPersistedLayout(value: unknown): value is PersistedLayout {
 // both sync toggles on. Deliberately the same thing the client mounted before any layout was
 // ever persisted, so "New workspace" and "first ever visit" land on the same chart.
 export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): PersistedLayout {
+  // A deep link may qualify the ticker with its vendor ('coinbase:BTCUSD'); a persisted
+  // pane keeps the two apart (`s` is the bare ticker, `v` the non-default vendor), so
+  // split here rather than letting the whole string read as an oanda ticker.
+  const [vendor, bare] = ticker.includes(':')
+    ? (ticker.split(':', 2) as [string, string])
+    : [undefined, ticker]
   return {
     version: LAYOUT_VERSION,
     preset: '1',
     active: 0,
-    panes: [{ s: ticker, p: defaultPeriod(availablePeriods()).text, mi: ['MA'], si: ['VOL'] }],
+    panes: [
+      {
+        s: bare,
+        ...(vendor && vendor !== 'oanda' ? { v: vendor } : {}),
+        p: defaultPeriod(availablePeriods()).text,
+        mi: ['MA'],
+        si: ['VOL']
+      }
+    ],
     sync: { crosshair: true, time: true, auto: false }
   }
 }
