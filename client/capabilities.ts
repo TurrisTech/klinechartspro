@@ -50,6 +50,10 @@ export type Feature =
   // GET /levels2 — support/resistance zones (wdashboard-server services/levels2.py),
   // served from the file store. The client only mounts the Zones layer when advertised.
   | 'levels2'
+  // GET /plugins/books/values — OANDA order/position book snapshots read from the
+  // Parquet book store (wdashboard-server services/books.py). The client registers its
+  // BOOK templates and picker entries only when advertised.
+  | 'books'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.

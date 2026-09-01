@@ -1,4 +1,5 @@
 import { createArevPlugin } from '../arev/plugin'
+import { createBooksPlugin } from '../books/plugin'
 import { createIndicatorsPlugin } from '../indicators/plugin'
 import { createKrevPlugin } from '../krev/plugin'
 import { createMtf01Plugin } from '../mtf01/plugin'
@@ -10,5 +11,5 @@ import type { IndicatorPlugin } from './types'
 // mount (each holds per-pane state), which is why this is a factory and not a constant.
 
 export function builtinPlugins(): IndicatorPlugin[] {
-  return [createIndicatorsPlugin(), createArevPlugin(), createKrevPlugin(), createMtfPlugin(), createMtf01Plugin()]
+  return [createIndicatorsPlugin(), createArevPlugin(), createKrevPlugin(), createMtfPlugin(), createMtf01Plugin(), createBooksPlugin()]
 }
