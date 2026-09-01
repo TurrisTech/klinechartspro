@@ -175,21 +175,30 @@
   const BACKWARD_PAGE_BARS = 500
 
   // Daily and coarser candles ARRIVE dated by their market session -- the server states
-  // them as canonical dates (00:00 New York of the session), not as the 17:00-the-evening-
-  // before opens the store keys them under, so there is nothing to shift here any more.
-  // What remains is which clock to READ them on: New York, regardless of the display
-  // timezone, because a session date is the market's calendar and not the viewer's. Read
-  // in a browser west of New York the same instant would fall on the previous date.
-  const sessionDateFormat = new Intl.DateTimeFormat('en', {
-    timeZone: 'America/New_York',
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  })
+  // them as canonical dates (00:00 of the session on the MARKET'S OWN calendar), not as
+  // the opens the store keys them under, so there is nothing to shift here any more.
+  // What remains is which clock to READ them on: the instrument's own market timezone,
+  // regardless of the display timezone, because a session date is the market's calendar
+  // and not the viewer's. For an instrument stating no zone that is New York (FX); a
+  // crypto instrument states UTC and its dates read on UTC midnight.
+  const sessionDateFormat = $derived(
+    new Intl.DateTimeFormat('en', {
+      timeZone: pane.symbol?.timezone ?? 'America/New_York',
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  )
+
+  // The clock the pane DISPLAYS on: the instrument's own market timezone when it states
+  // one (a Coinbase pane reads UTC -- its bars open on the UTC grid, and any other zone
+  // splits its days mid-bar), else the app-level timezone prop (New York, the market
+  // clock of every FX instrument here).
+  const displayTimezone = $derived(pane.symbol?.timezone ?? timezone)
 
   function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
     if (pane.period.timespan === 'minute') {
@@ -885,7 +894,7 @@
   $effect(() => {
     if (!mounted || !widget) return
     widget.setLocale(locale)
-    widget.setTimezone(timezone)
+    widget.setTimezone(displayTimezone)
   })
 
   $effect(() => {
@@ -1096,7 +1105,7 @@
     widget.setStyles(theme)
     widget.setStyles(styles)
     widget.setLocale(locale)
-    widget.setTimezone(timezone)
+    widget.setTimezone(displayTimezone)
     applyIndicatorIcons()
     defaultStyles = clone(widget.getStyles())
     mounted = true
