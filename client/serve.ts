@@ -55,8 +55,9 @@ function forwardHeaders(req: Request): Headers {
   return headers
 }
 
-// Tiles are immutable by construction -- build_chart_tiles.py only writes a period once
-// the source holds a bar at or past its end, and whole-history tiles are content-addressed.
+// Tiles are immutable by construction -- build_chart_tiles.py (bars) and build_book_tiles.py
+// (the books, under `books/v1/`) only write a period once the source holds a row at or past
+// its end, and everything still growing is content-addressed.
 // So they get a year of `immutable`, which is what makes a scroll-back cost no network at
 // all. The manifest is the mutable index that points at them, so it must never be cached:
 // it is how the client learns that a new tile exists. Same split as client/nginx.conf uses
