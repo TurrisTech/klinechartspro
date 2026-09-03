@@ -1,4 +1,5 @@
 import type { Page, PluginFacilities, SourceSpec } from '../plugins/types'
+import { isTiledMetric, pointsFromTiles } from './tiles'
 
 // The client half of the server's `books` plugin (`GET /plugins/books/values`,
 // wdashboard-server services/books.py): OANDA's 20-minute client order/position book
@@ -62,7 +63,7 @@ function fetchBooks<P extends { date: number }>(
   interval: string,
   params: Record<string, unknown>
 ): (range: { from: number; to: number }, limit: number) => Promise<Page<P>> {
-  return (range, limit) =>
+  const fromApi = (range: { from: number; to: number }, limit: number) =>
     facilities.points<P>({
       pluginId: 'books',
       vendorSymbol: `${vendor}:${ticker}`,
@@ -73,6 +74,40 @@ function fetchBooks<P extends { date: number }>(
       variant: kind,
       params
     })
+
+  const metric = String(params.metric ?? 'totals')
+  // `near` is a sum over a radius the tiles do not carry, so it stays on the API outright
+  // rather than half-answering from tiles.
+  if (!isTiledMetric(metric)) return fromApi
+
+  // Tiles first, the same join `client/history.ts` makes for bars. Tiles hold every closed
+  // period, so they answer the historical part of any window and only the period currently
+  // forming is missing; when the window crosses that boundary the two halves are joined
+  // rather than the whole window being handed back to the API. The split is exact — tiles
+  // run to `coveredTo` exclusive and the API is asked from `coveredTo` — so no point can
+  // be served twice or dropped between them.
+  return async (range, limit) => {
+    const tiled = await pointsFromTiles<P & (BookTotalsPoint | BookProfilePoint)>(
+      metric,
+      kind,
+      vendor,
+      ticker,
+      interval,
+      range.from,
+      range.to
+    )
+    if (tiled === null) return fromApi(range, limit)
+    const points = tiled.points as unknown as P[]
+    if (tiled.coveredTo >= range.to) {
+      // `limit` is the server's cap on one page; applying it here keeps a tiled read and
+      // an API read paging identically, and `nextFrom` continues from the last point.
+      const capped = points.slice(0, limit)
+      const more = capped.length < points.length
+      return { points: capped, nextFrom: more ? capped[capped.length - 1].date + 1 : null }
+    }
+    const rest = await fromApi({ from: tiled.coveredTo, to: range.to }, limit)
+    return { ...rest, points: [...points, ...rest.points] }
+  }
 }
 
 /** The profile source for one kind on one instrument/interval — shared by the depth
