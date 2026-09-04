@@ -117,6 +117,7 @@ const FALLBACK: Capabilities = {
     '3m',
     '5m',
     '15m',
+    '20m',
     '30m',
     '1h',
     '2h',

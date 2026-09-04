@@ -11,6 +11,10 @@ import {
   intervalStart,
   isMarketOpen,
   nextIntervalStart,
+  scheduleIntervalEnd,
+  scheduleIntervalStart,
+  scheduleIsMarketOpen,
+  scheduleNextIntervalStart,
   toWall,
   toWireDate,
   validateBase
@@ -48,6 +52,9 @@ describe('boundaries match wmarkettypes (fixtures/boundaries.json)', () => {
   const rows = boundaries.rows as Array<{
     at: number
     wall: string
+    schedule: string
+    tz: string
+    day: { open: number; close: number; everyDay: boolean }
     interval: string
     start: number
     end: number
@@ -57,12 +64,31 @@ describe('boundaries match wmarkettypes (fixtures/boundaries.json)', () => {
   test('fixture is present', () => {
     expect(rows.length).toBeGreaterThan(100)
   })
+  // Both schedules the store carries and this port claims to walk. The fx-week rows also go
+  // through the unparameterised functions, which are what the replay uses and must keep
+  // behaving exactly as they did.
+  test('the fixture covers all three schedules the store carries', () => {
+    expect(new Set(rows.map((r) => r.schedule))).toEqual(
+      new Set(['fx-week', 'continuous', 'session'])
+    )
+  })
   for (const row of rows) {
-    test(`${row.interval} at ${row.wall}`, () => {
-      expect(intervalStart(row.interval, row.at, TZ)).toBe(row.start)
-      expect(intervalEnd(row.interval, row.at, TZ)).toBe(row.end)
-      expect(nextIntervalStart(row.interval, row.at, TZ)).toBe(row.next)
-      expect(isMarketOpen(row.at, TZ)).toBe(row.marketOpen)
+    const day = {
+      openOffset: row.day.open,
+      closeOffset: row.day.close,
+      everyDayTrades: row.day.everyDay
+    }
+    test(`${row.schedule} ${row.interval} at ${row.wall}`, () => {
+      expect(scheduleIntervalStart(row.interval, row.at, row.tz, day)).toBe(row.start)
+      expect(scheduleIntervalEnd(row.interval, row.at, row.tz, day)).toBe(row.end)
+      expect(scheduleNextIntervalStart(row.interval, row.at, row.tz, day)).toBe(row.next)
+      expect(scheduleIsMarketOpen(row.at, row.tz, day)).toBe(row.marketOpen)
+      if (row.schedule === 'fx-week') {
+        expect(intervalStart(row.interval, row.at, TZ)).toBe(row.start)
+        expect(intervalEnd(row.interval, row.at, TZ)).toBe(row.end)
+        expect(nextIntervalStart(row.interval, row.at, TZ)).toBe(row.next)
+        expect(isMarketOpen(row.at, TZ)).toBe(row.marketOpen)
+      }
     })
   }
 })
@@ -113,6 +139,12 @@ describe('divisibility and the base timeframe', () => {
     expect(divides('1M', '1Y')).toBe(true)
     expect(divides('1h', '1W')).toBe(true)
     expect(divides('1D', '4h')).toBe(false)
+    // 20m: 20 divides 60, so 1m tiles it and it tiles the hour -- the property that lets it
+    // replay off a stored 1m base like every other minute multiple.
+    expect(divides('1m', '20m')).toBe(true)
+    expect(divides('20m', '1h')).toBe(true)
+    expect(divides('20m', '1D')).toBe(true)
+    expect(divides('15m', '20m')).toBe(false)
   })
   test('the table from the prompt', () => {
     const stored = ['5s', '1m', '1h', '1D']
@@ -122,6 +154,9 @@ describe('divisibility and the base timeframe', () => {
     expect(defaultBase(['1h', '4h'], stored)).toBe('1h')
     expect(gcdInterval(['15m', '1h'])).toBe('15m')
     expect(defaultBase(['15m', '1h'], stored)).toBe('1m')
+    expect(gcdInterval(['20m', '1h'])).toBe('20m')
+    expect(defaultBase(['20m', '1h'], stored)).toBe('1m')
+    expect(gcdInterval(['15m', '20m'])).toBe('5m')
     expect(gcdInterval(['1D', '1W'])).toBe('1D')
     expect(defaultBase(['1D', '1W'], stored)).toBe('1D')
     expect(defaultBase(['15m', '1h', '4h'], stored)).toBe('1m')

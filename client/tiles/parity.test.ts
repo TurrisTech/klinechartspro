@@ -79,10 +79,18 @@ describe.skipIf(!ready || !serverUp)('tiles + API == /getbars', () => {
     ['straddles the 1h 5-year seam', 'oanda:EURUSD', '1h', Date.UTC(2024, 11, 30), Date.UTC(2025, 0, 3)],
     ['session-dated interval', 'oanda:EURUSD', '1D', Date.UTC(2024, 0, 1), Date.UTC(2024, 2, 1)],
     ['5s, one day', 'oanda:GBPUSD', '5s', Date.UTC(2024, 2, 4), Date.UTC(2024, 2, 4, 6)],
-    // Derived intervals: nothing for these is on disk, so the tiles were aggregated at
-    // build time by the same OHLCV app /getbars reads through. If that ever stops being
-    // true — a reimplemented rollup, a different market-hours source, a forming candle
-    // left in — these are where it shows.
+    // Derived intervals: nothing for these is tiled, so the client FOLDS them out of the
+    // base interval's tiles as it draws them (client/tiles/derive.ts). These cases are the
+    // whole proof of that fold — every candle boundary, the market-closed filter and the
+    // coverage seam, checked against the answer /getbars gives for the same window.
+    //
+    // One way for these to fail that is NOT the fold: the tile and the API can be reading
+    // two different ingests of the same bars. On this workstation the 1h tiles for June–July
+    // 2026 were rebuilt with --from-postgres while the dev server reads the file store, and
+    // six 1h rows in that window differ by 1–4 in volume — so an 8h or 4h case landing there
+    // reports a volume difference of exactly that. The check that separates the two is
+    // folding the API's OWN source bars: `fold('8h', '1h', await getbars(...,'1h'))` equals
+    // the API's 8h answer exactly, which is what was measured when this was first seen.
     ['15m, derived from 1m', 'oanda:EURUSD', '15m', Date.UTC(2024, 2, 4), Date.UTC(2024, 2, 8)],
     ['5m, derived, across a weekend', 'oanda:EURUSD', '5m', Date.UTC(2026, 6, 17, 12), Date.UTC(2026, 6, 20, 12)],
     ['4h, derived from 1h', 'oanda:EURUSD', '4h', Date.UTC(2020, 8, 13), Date.UTC(2020, 8, 20)],
