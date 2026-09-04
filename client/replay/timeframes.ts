@@ -56,8 +56,15 @@ export function isIntraday(code: string): boolean {
   return unit === 's' || unit === 'm' || unit === 'h'
 }
 
-/** Daily-and-coarser bars are dated on the wire by their canonical date (00:00 New York of
- * the session): open + 7h. Intraday bars are dated by their open. (`services/wiredate.py`.) */
+/** Daily-and-coarser bars are dated on the wire by their canonical date (00:00 of the session
+ * in the instrument's own zone). For the FX week that is open + 7h. (`services/wiredate.py`.)
+ *
+ * **This constant is the forex value**, and `toWireDate`/`fromWireDate` below are its
+ * unparameterised form -- correct for every OANDA instrument and wrong for the others: a
+ * crypto day is already dated by its open (0h) and a US equity day opens 9h into its date
+ * (-9h). `scheduleWireShift` is the schedule-aware form; it is what the tile fold uses, and
+ * what these two should become once replay and the MTF overlay carry an instrument's
+ * `DayGeometry` rather than assuming one. */
 export const SESSION_DATE_OFFSET_MS = 7 * 3_600_000
 
 export function sessionDated(code: string): boolean {
@@ -115,6 +122,7 @@ export const CANDIDATE_LADDER: readonly string[] = [
   '5m',
   '10m',
   '15m',
+  '20m',
   '30m',
   '1h',
   '2h',
@@ -582,4 +590,200 @@ export function advanceTarget(code: string, cursor: number, count: number, tz: s
 /** Whether `ms` is on the candle grid of `code` (an open). */
 export function isBoundary(code: string, ms: number, tz: string = MARKET_TZ): boolean {
   return intervalStart(code, ms, tz) === ms
+}
+
+
+// --- schedules ------------------------------------------------------------------------------
+//
+// Everything above is the FX week: 17:00 New York, shut from Friday 17:00 to Sunday 17:00.
+// That is one of three schedules the store carries, and the boundary rules differ between
+// them -- so anything folding one interval out of another has to be told which it is walking.
+//
+// It is told as **data, not as a name**. A schedule's day is two offsets from the midnight
+// that dates a session, plus whether every calendar day is a market day, and every rule below
+// is built from those three values (wmarkettypes' `DayGeometry`, published on each tile
+// manifest). The three the store holds today:
+//
+//   forex       (-7, +17)  the day opens 17:00 the evening before its date, closes 17:00 on it
+//   crypto      ( 0, +24)  every day trades; the close IS the next open
+//   equities    (+9, +16)  opens 09:00, closes 16:00 -- the overnight belongs to no candle
+//
+// The equity anchor is 09:00 while the market opens at 09:30, because the anchor is the hour
+// containing the session open. The first candle of the day is a real candle carrying half an
+// hour less data; an 09:30 anchor would put every later boundary on the half hour too.
+//
+// A market with another anchor needs no change here at all -- which is the point of carrying
+// the geometry rather than a list of asset classes.
+
+export interface DayGeometry {
+  /** Hours from the midnight that dates a session to that day's open. */
+  openOffset: number
+  /** Hours from that midnight to the day's close. */
+  closeOffset: number
+  /** Whether every calendar day is a market day (a continuous market only). */
+  everyDayTrades: boolean
+}
+
+export const FX_DAY: DayGeometry = {
+  openOffset: SESSION_ANCHOR_HOUR - 24,
+  closeOffset: SESSION_ANCHOR_HOUR,
+  everyDayTrades: false
+}
+export const CONTINUOUS_DAY: DayGeometry = { openOffset: 0, closeOffset: 24, everyDayTrades: true }
+
+/** The anchor hour the intraday grid runs on: 17, 0 or 9. */
+function anchorHour(day: DayGeometry): number {
+  return ((day.openOffset % 24) + 24) % 24
+}
+
+/** Does a day's close sit exactly on the next day's open? True for a whole-day market
+ * (forex within its week, crypto always); false for a partial-day one, whose overnight
+ * belongs to neither candle -- the FX weekend's rule applied nightly. */
+function contiguous(day: DayGeometry): boolean {
+  return day.closeOffset - day.openOffset >= 24
+}
+
+/** Midnight (naive wall clock) of the session date this instant belongs to. One expression
+ * for every schedule: subtract the day's open offset and floor. An equity 08:00 lands on the
+ * previous trading day, which has closed -- not on the one that has not opened. */
+function sessionDateFor(wall: number, day: DayGeometry): number {
+  return floorDay(wall - day.openOffset * HOUR)
+}
+
+function dayOpen(sessionDay: number, day: DayGeometry): number {
+  return sessionDay + day.openOffset * HOUR
+}
+
+function dayClose(sessionDay: number, day: DayGeometry): number {
+  return sessionDay + day.closeOffset * HOUR
+}
+
+/** The session date that NAMES the bucket `sessionDay` falls in, for a market-day market.
+ * `unitStartForSessionDate` answers with that bucket's FOREX open, so adding the FX offset
+ * back off it leaves the midnight the bucket is named for -- the half of the answer that is
+ * the same for every weekday market. The schedule's own open is then applied to it. */
+function bucketSessionDay(iv: IntervalSpec, sessionDay: number): number {
+  return unitStartForSessionDate(iv, sessionDay, iv.number) - FX_DAY.openOffset * HOUR
+}
+
+function unitStartFor(iv: IntervalSpec, sessionDay: number, day: DayGeometry): number {
+  if (day.everyDayTrades) {
+    switch (iv.unit) {
+      case 'D':
+        return sessionDay - (daysSinceEpoch(sessionDay) % iv.number) * DAY
+      case 'W': {
+        let monday = weekMonday(sessionDay)
+        if (iv.number > 1) monday -= 7 * (Math.floor(daysSinceEpoch(monday) / 7) % iv.number) * DAY
+        return monday
+      }
+      case 'M': {
+        const at = new Date(sessionDay)
+        let index = at.getUTCFullYear() * 12 + at.getUTCMonth()
+        index -= index % iv.number
+        return Date.UTC(Math.floor(index / 12), index % 12, 1)
+      }
+      default: {
+        const year = new Date(sessionDay).getUTCFullYear()
+        return Date.UTC(year - (year % iv.number), 0, 1)
+      }
+    }
+  }
+  // Market-day buckets -- shared by forex and equities, which differ only in where the day
+  // opens within the date that names the bucket.
+  return dayOpen(bucketSessionDay(iv, sessionDay), day)
+}
+
+function unitStepFor(iv: IntervalSpec, sessionDay: number, count: number, day: DayGeometry): number {
+  if (day.everyDayTrades) {
+    switch (iv.unit) {
+      case 'D':
+        return sessionDay + count * iv.number * DAY
+      case 'W':
+        return sessionDay + count * iv.number * 7 * DAY
+      case 'M': {
+        const at = new Date(sessionDay)
+        const index = at.getUTCFullYear() * 12 + at.getUTCMonth() + count * iv.number
+        return Date.UTC(Math.floor(index / 12), index % 12, 1)
+      }
+      default:
+        return Date.UTC(new Date(sessionDay).getUTCFullYear() + count * iv.number, 0, 1)
+    }
+  }
+  const stepped = shiftStart(iv, dayOpen(sessionDay, FX_DAY), count)
+  return dayOpen(stepped - FX_DAY.openOffset * HOUR, day)
+}
+
+/** `intervalStart` under `day`. */
+export function scheduleIntervalStart(code: string, ms: number, tz: string, day: DayGeometry): number {
+  const iv = parseInterval(code)
+  if (iv.unit === 'D' || iv.unit === 'W' || iv.unit === 'M' || iv.unit === 'Y') {
+    return fromWall(unitStartFor(iv, sessionDateFor(toWall(ms, tz), day), day), tz)
+  }
+  const wall = toWall(ms, tz)
+  const len = unitLength(iv.unit)
+  const start = ms - (wall - Math.floor(wall / len) * len)
+  if (iv.number === 1) return start
+  if (iv.unit === 's' || iv.unit === 'm') {
+    const wallStart = toWall(start, tz)
+    const within = iv.unit === 's' ? Math.floor(wallStart / 1000) % 60 : Math.floor(wallStart / 60_000) % 60
+    return start - (within % iv.number) * len
+  }
+  // Hours, anchored on the schedule's own open hour; stepped on the wall clock so the grid
+  // is DST-safe in both directions.
+  const wallStart = toWall(start, tz)
+  const hour = Math.floor(wallStart / HOUR) % 24
+  const past = (((hour - anchorHour(day)) % iv.number) + iv.number) % iv.number
+  return fromWall(wallStart - past * HOUR, tz)
+}
+
+/** `intervalEnd` under `day`: the day's own close for a partial-day market, the next open
+ * for a whole-day one. */
+export function scheduleIntervalEnd(code: string, ms: number, tz: string, day: DayGeometry): number {
+  const iv = parseInterval(code)
+  const start = scheduleIntervalStart(code, ms, tz, day)
+  if (iv.unit === 's' || iv.unit === 'm' || iv.unit === 'h') return start + nominalMs(code)
+  if (day.everyDayTrades) {
+    return fromWall(unitStepFor(iv, sessionDateFor(toWall(start, tz), day), 1, day), tz)
+  }
+  // Market-day units: the period's LAST market day, closed where this schedule's day closes.
+  // Which day that is -- the last weekday of the month, Friday of the week -- is schedule
+  // independent, so the FX path computes it and only the closing instant differs. Its answer
+  // is that day's 17:00, and the instant before it is inside the day itself.
+  const asFx = fromWall(dayOpen(sessionDateFor(toWall(start, tz), day), FX_DAY), tz)
+  const lastDay = sessionDateFor(toWall(intervalEnd(code, asFx, tz), tz) - 1, FX_DAY)
+  return fromWall(dayClose(lastDay, day), tz)
+}
+
+/** `nextIntervalStart` under `day`. */
+export function scheduleNextIntervalStart(code: string, ms: number, tz: string, day: DayGeometry): number {
+  if (day.everyDayTrades) return scheduleIntervalEnd(code, ms, tz, day)
+  const iv = parseInterval(code)
+  const start = scheduleIntervalStart(code, ms, tz, day)
+  if (iv.unit === 'D' || iv.unit === 'W' || iv.unit === 'M' || iv.unit === 'Y') {
+    return fromWall(unitStepFor(iv, sessionDateFor(toWall(start, tz), day), 1, day), tz)
+  }
+  let cursor = start
+  for (;;) {
+    cursor = nextIntradayStart(code, cursor, tz)
+    if (scheduleIsMarketOpen(cursor, tz, day)) return cursor
+  }
+}
+
+/** `isMarketOpen` under `day` -- the BOUNDARY notion, which is not the schedule's own: an
+ * equity day is boundary-open from 09:00 because that is where its grid is anchored, while
+ * the session (and therefore the rows) starts at 09:30. */
+export function scheduleIsMarketOpen(ms: number, tz: string, day: DayGeometry): boolean {
+  if (day.everyDayTrades) return true
+  const wall = toWall(ms, tz)
+  const sessionDay = sessionDateFor(wall, day)
+  if (weekday(sessionDay) >= 5) return false
+  if (contiguous(day)) return true
+  return dayOpen(sessionDay, day) <= wall && wall < dayClose(sessionDay, day)
+}
+
+/** The wire offset for daily-and-coarser bars under `day`: the negation of its open offset,
+ * so a bar's label is the midnight that dates its session. +7h forex, 0 crypto, -9h equities
+ * -- `wdashboard_server/services/wiredate.py` computes the identical number. */
+export function scheduleWireShift(code: string, day: DayGeometry): number {
+  return sessionDated(code) ? -day.openOffset * HOUR : 0
 }

@@ -43,6 +43,21 @@ export interface TileManifest {
   /** Prices in a tile are integers scaled by 10**precision. */
   precision: number
   sessionDated: boolean
+  /** The instrument's own timezone, and which trading week it keeps. Published because a
+   * DERIVED timeframe is folded out of these tiles by the reader (`derive.ts`), and every
+   * candle boundary in that fold is a wall clock in `tz` -- a continuous (crypto) schedule
+   * buckets on calendar boundaries instead, and this client's boundary port implements only
+   * the FX week. Both are absent on a manifest written before the fold existed, which reads
+   * as "do not fold": the base tiles still serve their own interval, and a derived one falls
+   * back to /getbars until the tree is next built. */
+  tz?: string
+  schedule?: 'fx-week' | 'continuous' | 'session'
+  /** The schedule's DAY, as the two offsets every candle boundary is built from: hours from
+   * the midnight that dates a session to that day's open and close, and whether every
+   * calendar day is a market day. Forex is (-7, 17), crypto (0, 24, everyDay), US equities
+   * (9, 16) -- a 09:00 anchor on a market that opens at 09:30. Carried as numbers rather
+   * than as an asset-class name so a market with another anchor needs no client change. */
+  day?: { open: number; close: number; everyDay: boolean }
   /** Half-open window [coveredFrom, coveredTo) these tiles answer in full. */
   coveredFrom: number
   coveredTo: number

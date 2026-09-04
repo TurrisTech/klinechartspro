@@ -1,5 +1,6 @@
 import type { KLineData } from 'klinecharts'
 import { resolutionDurationMs, resolutionToPeriod } from '../periods'
+import { SESSION_DATE_OFFSET_MS as FX_SESSION_DATE_OFFSET_MS } from '../replay/timeframes'
 import { arevSignal, type ArevPoint } from '../arev/api'
 
 // Where a higher-timeframe vote belongs on a lower-timeframe chart.
@@ -30,12 +31,17 @@ import { arevSignal, type ArevPoint } from '../arev/api'
 // read back off the chart's own array. Comparing wire dates directly is the bug this
 // exists to make impossible; it would put every daily signal seven hours late.
 
-/** 17:00 (the session anchor a daily-or-coarser candle opens at) to 00:00. Mirrors
- * wdashboard-server's `wiredate.SESSION_DATE_OFFSET_MS`, mirrored rather than derived
- * for the same reason the server states it as a constant: US DST transitions happen at
- * 02:00 local and never inside a 17:00 -> 00:00 window, so the offset is exact in
- * absolute time and there is no zone to look up. */
-const SESSION_DATE_OFFSET_MS = 7 * 3_600_000
+/** The FX week's wire offset, imported rather than re-declared: this file held a second
+ * copy of the same 7h, which is one more place for it to disagree.
+ *
+ * **It is the forex default, and the MTF overlay has no schedule to consult.** A crypto
+ * instrument's daily candle opens at 00:00 of its own session, so its offset is 0, and a US
+ * equity's is -9h -- both wrong here. The overlay runs on the chart's current instrument
+ * without being told which market that is, so making this schedule-aware means threading the
+ * instrument's `DayGeometry` through it (`timeframes.ts`'s `scheduleWireShift` is the
+ * schedule-aware form, used by the tile fold). Until then this is right for forex, which is
+ * every instrument the overlay is used on, and wrong by seven hours for the others. */
+const SESSION_DATE_OFFSET_MS = FX_SESSION_DATE_OFFSET_MS
 
 /** Whether this interval's bars are dated by canonical date on the wire. Mirrors
  * `wiredate.session_dated`: the `D`/`W`/`M`/`Y` units, never the intraday ones. */
