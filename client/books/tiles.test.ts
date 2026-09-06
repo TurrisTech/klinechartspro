@@ -9,7 +9,7 @@ import { LAYOUT_VERSION, type BookTileManifest, tilesUpTo } from './tiles'
 // that only asks whether the API's points appear in the tiles. The decode half needs a
 // built store and is skipped without one, the same way client/tiles/parity.test.ts is.
 
-const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles'
+const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
 const SERIES = `${ROOT}/books/${LAYOUT_VERSION}/position/oanda/EURUSD/1h`
 
 function manifest(over: Partial<BookTileManifest> = {}): BookTileManifest {
