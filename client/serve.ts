@@ -17,7 +17,7 @@ import index from './index.html'
 // Where build_chart_tiles.py (wmarketdata) wrote its output. Serving these here is a
 // stand-in for the object store they will eventually live in: the bytes and the cache
 // headers are the same either way, so the client path does not change when they move.
-const TILES_ROOT = (process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles').replace(/\/+$/, '')
+const TILES_ROOT = (process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles').replace(/\/+$/, '')
 
 const PORT = Number(process.env.CLIENT_PORT ?? process.env.PORT0 ?? process.env.PORT ?? 3000)
 

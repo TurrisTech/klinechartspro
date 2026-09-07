@@ -13,7 +13,7 @@ import { LAYOUT_VERSION } from './manifest'
 //
 // Needs the dev stack (bin/dev-stack.sh) and a built tile store; skipped without either.
 
-const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles'
+const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
 const API = `http://localhost:${process.env.PORT0 ?? 25998}/ohlcv`
 const FIELDS = ['timestamp', 'open', 'high', 'low', 'close', 'volume'] as const
 

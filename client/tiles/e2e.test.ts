@@ -8,7 +8,7 @@ import { LAYOUT_VERSION } from './manifest'
 //
 // Skipped when no tile store is present, so a checkout without /mnt/d still runs green.
 
-const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/tiles'
+const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
 const ready = existsSync(`${ROOT}/${LAYOUT_VERSION}/oanda/EURUSD/1m/manifest.json`)
 
 let barsFromTiles: typeof import('./index').barsFromTiles
