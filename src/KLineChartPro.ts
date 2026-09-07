@@ -30,12 +30,6 @@ const DEFAULT_PERIODS: Period[] = [
   { multiplier: 1, timespan: 'year', text: 'Y' }
 ]
 
-const DEFAULT_WATERMARK = `
-  <div class="klinecharts-pro-brand-mark" aria-hidden="true">
-    <strong>KLINE</strong><span>CHART PRO</span>
-  </div>
-`
-
 export default class KLineChartPro implements ChartPro {
   private readonly container: HTMLElement
   private readonly component: ChartPro
@@ -64,7 +58,6 @@ export default class KLineChartPro implements ChartPro {
       target: this.container,
       props: {
         styles: options.styles ?? {},
-        watermark: options.watermark ?? DEFAULT_WATERMARK,
         theme,
         locale: options.locale ?? 'zh-CN',
         drawingBarVisible: options.drawingBarVisible ?? true,

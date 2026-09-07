@@ -59,7 +59,6 @@
     styles,
     locale,
     timezone,
-    watermark,
     periods,
     bus,
     onActivate,
@@ -72,7 +71,6 @@
     styles: DeepPartial<Styles>
     locale: string
     timezone: string
-    watermark: string | Node
     periods: Period[]
     bus: SyncBus
     onActivate: (paneId: string) => void
@@ -907,17 +905,6 @@
     const chart = init(widgetElement, { formatter: { formatDate } })
     if (!chart) throw new Error('Unable to initialize KLineChart')
     widget = chart
-
-    const watermarkContainer = widget.getDom('candle_pane', 'main')
-    if (watermarkContainer) {
-      const element = document.createElement('div')
-      element.className = 'klinecharts-pro-watermark'
-      if (typeof watermark === 'string') element.innerHTML = watermark.trim()
-      // A DOM Node has exactly one parent -- with N panes sharing the same watermark Node,
-      // each pane must clone it rather than move the caller's original.
-      else element.appendChild((watermark as Node).cloneNode(true))
-      watermarkContainer.appendChild(element)
-    }
 
     priceUnitElement = document.createElement('span')
     priceUnitElement.className = 'klinecharts-pro-price-unit'

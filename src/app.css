@@ -938,43 +938,6 @@
 	flex: 1;
 }
 
-.klinecharts-pro-watermark {
-	pointer-events: none;
-	position: absolute;
-	top: 50%;
-	left: 50%;
-	transform: translate(-50%, -50%);
-	color: var(--muted-foreground);
-	opacity: 0.16;
-}
-
-.klinecharts-pro-brand-mark {
-	display: flex;
-	align-items: baseline;
-	gap: 0.5rem;
-	white-space: nowrap;
-}
-
-.klinecharts-pro-brand-mark strong {
-	font-size: 2rem;
-	letter-spacing: 0.08em;
-}
-
-.klinecharts-pro-brand-mark span {
-	font-size: 0.75rem;
-	letter-spacing: 0.16em;
-}
-
-/* The default watermark's 2rem brand mark dominates anything smaller than a full-width
-   chart; shrink it once the wall holds more than one pane. */
-.klinecharts-pro-grid:not([data-pane-count='1']) .klinecharts-pro-brand-mark strong {
-	font-size: 1.1rem;
-}
-
-.klinecharts-pro-grid:not([data-pane-count='1']) .klinecharts-pro-brand-mark span {
-	font-size: 0.5rem;
-}
-
 .klinecharts-pro-price-unit {
 	position: absolute;
 	top: 0.25rem;

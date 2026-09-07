@@ -97,7 +97,6 @@
 
   let {
     styles,
-    watermark,
     theme,
     locale,
     drawingBarVisible,
@@ -790,7 +789,6 @@
             {styles}
             {locale}
             {timezone}
-            {watermark}
             {periods}
             {bus}
             onActivate={(id) => wall.activate(id)}

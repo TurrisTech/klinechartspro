@@ -220,7 +220,6 @@ export type ChartProSlot = 'toolbar' | 'toolbar-right' | 'rail-footer'
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>
-  watermark?: string | Node
   theme?: string
   locale?: string
   drawingBarVisible?: boolean
