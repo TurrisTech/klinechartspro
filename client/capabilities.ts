@@ -4,6 +4,8 @@ import { apiGet } from './config'
 // probing for 400s. Mirrors the `Capabilities` model in schemas.py.
 
 export type Feature =
+  // `baseIntervals` on /capabilities: the stored intervals per vendor.
+  | 'baseIntervals'
   | 'getbars.columns'
   | 'getbars.batch'
   | 'getbars.limit'
@@ -103,6 +105,24 @@ export interface Capabilities {
   /** Absent on servers older than the levels2 route — read through levels2CoverageFor,
    * which treats missing as empty. */
   levels2?: LevelsCoverage[]
+  /** Per vendor, the intervals that are physically stored and therefore tiled. Absent on a
+   * server that does not advertise `baseIntervals`; read through `baseIntervalsFor`, which
+   * falls back to the shape every vendor had before the field existed. */
+  baseIntervals?: Record<string, string[]>
+}
+
+/** The stored (tiled) intervals for one vendor, from the server.
+ *
+ * The client does NOT keep this list. It differs per vendor -- schwab stores 30m and no 1h
+ * where oanda stores 1h and no 30m -- so a hardcoded set folds one vendor from a tile tree
+ * the other does not have, which is exactly what made schwab's 1h and 4h fall back to the
+ * API: the client concluded 1h was tiled itself and asked for a tree that does not exist.
+ *
+ * The fallback is oanda's shape, which is what every vendor was assumed to be before the
+ * server advertised anything, so an older server behaves exactly as it did. */
+export function baseIntervalsFor(vendor: string): string[] {
+  const advertised = capabilities().baseIntervals?.[vendor]
+  return advertised && advertised.length > 0 ? advertised : ['5s', '1m', '1h', '1D', '1M']
 }
 
 // Used when /capabilities is unreachable. Deliberately the conservative reading of the

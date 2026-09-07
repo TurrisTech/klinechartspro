@@ -51,35 +51,81 @@ import {
 } from '../replay/timeframes'
 import type { TileManifest } from './manifest'
 
-/** The tiled intervals, in the store's own terms: the vendor's minimum intraday interval plus
- * 1m/1h/1D/1M. Mirrors `wmarketdata.apps.ohlcv.source_interval`, which is the single statement
- * of what is stored -- if that gains an interval, this is the other place to say so. */
-const STORED = new Set(['5s', '1m', '1h', '1D', '1M'])
-
 const PATTERN = /^([1-9][0-9]*)([smhDWMY])$/
+
+/** Unit -> [family, size in that family's own base unit]. Divisibility is only meaningful
+ * inside a family: a day is not a fixed number of hours (24 for forex, seven for a US equity
+ * session) and a month is not a fixed number of days. Mirrors `wmarketdata.baseintervals`. */
+const UNIT: Record<string, [string, number]> = {
+  s: ['intraday', 1],
+  m: ['intraday', 60],
+  h: ['intraday', 3600],
+  D: ['day', 1],
+  W: ['day', 7],
+  M: ['month', 1],
+  Y: ['month', 12]
+}
+
+/** Coarsest family first: an interval with no divisor in its own family folds from the
+ * coarsest base of the next family down -- a monthly candle from daily bars. */
+const FAMILIES = ['month', 'day', 'intraday']
+
+function span(code: string): [string, number] | null {
+  const m = PATTERN.exec(code)
+  if (!m) return null
+  const unit = UNIT[m[2]]
+  if (unit === undefined) return null
+  return [unit[0], Number(m[1]) * unit[1]]
+}
 
 /**
  * The tiled interval `code` folds from, or null when it is tiled itself.
  *
- * The mapping is `source_interval`'s: weeks and n-day from `1D`, years from `1M`, and any
- * other multiple from `1` of its own unit.
+ * `bases` is THIS VENDOR's stored intervals, from `/capabilities`. The client keeps no list
+ * of its own: the shape differs per vendor -- schwab stores 30m and no 1h where oanda stores
+ * 1h and no 30m -- so an assumed list folds one vendor from a tree the other does not have.
+ * That is precisely what sent schwab's 1h and 4h to the API: `1h` looked stored, so the
+ * client asked for a schwab 1h tile tree that has never existed.
  *
- * Sub-minute multiples (`10s`, `30s`) answer null rather than `5s`, because the seconds floor
- * is the VENDOR's (OANDA has no `1s`) and a tile manifest does not carry it. Nothing selects
- * one today — `/capabilities` advertises no seconds interval — and a fold that guessed the
- * floor would be wrong for the first vendor with a different one.
+ * Mirrors `wmarketdata.baseintervals.source_interval`. The RULE is duplicated here because
+ * the browser folds without the server; the DATA is not.
  */
-export function sourceInterval(code: string): string | null {
-  if (STORED.has(code)) return null
-  const m = PATTERN.exec(code)
-  if (!m) return null
-  const number = Number(m[1])
-  const unit = m[2]
-  if (unit === 'W') return '1D'
-  if (unit === 'Y') return '1M'
-  if (number > 1) {
-    const base = `1${unit}`
-    return STORED.has(base) ? base : null
+export function sourceInterval(code: string, bases: string[]): string | null {
+  if (bases.includes(code)) return null
+  const target = span(code)
+  if (target === null) return null
+  const [family, length] = target
+
+  // The HIGHEST base that divides it, not the finest. Both give identical candles -- a
+  // divisor is a divisor -- but they differ in how far back they reach, and by a lot:
+  // schwab's 30m covers ~9 months where its 1m covers ~48 days, so folding 1h from 30m is
+  // six times the history for the same bars.
+  let best: string | null = null
+  let bestLength = 0
+  for (const base of bases) {
+    const s = span(base)
+    if (s === null || s[0] !== family) continue
+    if (s[1] < length && length % s[1] === 0 && s[1] > bestLength) {
+      best = base
+      bestLength = s[1]
+    }
+  }
+  if (best !== null) return best
+
+  // No divisor in its own family: take the coarsest base of the next family down. Every
+  // month boundary is a day boundary, so the fold is exact even though the ratio is not.
+  for (const finer of FAMILIES.slice(FAMILIES.indexOf(family) + 1)) {
+    let coarsest: string | null = null
+    let coarsestLength = 0
+    for (const base of bases) {
+      const s = span(base)
+      if (s === null || s[0] !== finer) continue
+      if (s[1] > coarsestLength) {
+        coarsest = base
+        coarsestLength = s[1]
+      }
+    }
+    if (coarsest !== null) return coarsest
   }
   return null
 }

@@ -9,11 +9,15 @@
 // the API wholesale. Any discontinuity left in the result is therefore a real market gap —
 // a weekend, a holiday — and never an artefact of where the tiles happen to stop.
 //
-// Only the intervals the store physically holds are tiled (5s/1m/1h/1D/1M). Everything else
-// is folded here out of its source's tiles rather than fetched as a tree of its own — see
-// `derive.ts`, which carries the two rules that fold has to keep.
+// Only the intervals the store physically holds are tiled, and WHICH those are depends on
+// the vendor — oanda stores 1h and no 30m, schwab stores 30m and no 1h. The list comes from
+// /capabilities (`baseIntervalsFor`), never from a constant here: assuming one vendor's shape
+// folds the other from a tile tree that does not exist, which is what sent schwab's 1h and 4h
+// to the API. Everything not in that list is folded out of its source's tiles rather than
+// fetched as a tree of its own — see `derive.ts`, which carries the two rules fold must keep.
 
 import type { KLineData } from 'klinecharts'
+import { baseIntervalsFor } from '../capabilities'
 import { barsForTile } from './cache'
 import { fold, foldedCoveredTo, manifestDay, manifestTz, sourceInterval, sourceWindow } from './derive'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
@@ -91,7 +95,7 @@ async function foldedFromTiles(
   from: number,
   to: number
 ): Promise<TiledBars | null> {
-  const code = sourceInterval(resolution)
+  const code = sourceInterval(resolution, baseIntervalsFor(vendor))
   if (code === null) return null
   const manifest = await manifestFor(vendor, symbol, code)
   if (manifest === null) return null

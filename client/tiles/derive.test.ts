@@ -42,21 +42,53 @@ function manifest(extra: Partial<TileManifest> = {}): TileManifest {
   }
 }
 
+const OANDA = ['5s', '1m', '1h', '1D', '1M']
+const SCHWAB = ['1m', '30m', '1D']
+
 describe('which tiled series answers a timeframe', () => {
   test('a stored interval folds from nothing — it has tiles of its own', () => {
-    for (const code of ['5s', '1m', '1h', '1D', '1M']) expect(sourceInterval(code)).toBeNull()
+    for (const code of OANDA) expect(sourceInterval(code, OANDA)).toBeNull()
   })
   test('every other timeframe names the interval it derives from', () => {
-    expect(sourceInterval('3m')).toBe('1m')
-    expect(sourceInterval('20m')).toBe('1m')
-    expect(sourceInterval('30m')).toBe('1m')
-    expect(sourceInterval('4h')).toBe('1h')
-    expect(sourceInterval('8h')).toBe('1h')
-    expect(sourceInterval('3D')).toBe('1D')
-    expect(sourceInterval('1W')).toBe('1D')
-    expect(sourceInterval('2W')).toBe('1D')
-    expect(sourceInterval('3M')).toBe('1M')
-    expect(sourceInterval('1Y')).toBe('1M')
+    expect(sourceInterval('3m', OANDA)).toBe('1m')
+    expect(sourceInterval('20m', OANDA)).toBe('1m')
+    expect(sourceInterval('30m', OANDA)).toBe('1m')
+    expect(sourceInterval('4h', OANDA)).toBe('1h')
+    expect(sourceInterval('8h', OANDA)).toBe('1h')
+    expect(sourceInterval('3D', OANDA)).toBe('1D')
+    expect(sourceInterval('1W', OANDA)).toBe('1D')
+    expect(sourceInterval('2W', OANDA)).toBe('1D')
+    expect(sourceInterval('3M', OANDA)).toBe('1M')
+    expect(sourceInterval('1Y', OANDA)).toBe('1M')
+  })
+
+  // The case the vendor parameter exists for. schwab stores 30m and NO 1h, so the oanda
+  // answers are wrong for it in both directions: 1h is not tiled itself, and 4h cannot fold
+  // from a 1h tree that does not exist. Both used to send the browser to a 404 and back to
+  // the API.
+  test('a vendor with different bases folds differently', () => {
+    expect(sourceInterval('1h', SCHWAB)).toBe('30m')
+    expect(sourceInterval('2h', SCHWAB)).toBe('30m')
+    expect(sourceInterval('4h', SCHWAB)).toBe('30m')
+    expect(sourceInterval('8h', SCHWAB)).toBe('30m')
+    // 30m IS a base here, so it has tiles of its own.
+    expect(sourceInterval('30m', SCHWAB)).toBeNull()
+    // Not divisible by 30m, so the finer base answers.
+    expect(sourceInterval('5m', SCHWAB)).toBe('1m')
+    expect(sourceInterval('15m', SCHWAB)).toBe('1m')
+  })
+
+  test('the highest divisor wins, not the finest', () => {
+    // Both 1m and 30m divide 60 minutes. 30m is chosen because it reaches ~9 months where
+    // 1m reaches ~48 days -- identical candles, six times the history.
+    expect(sourceInterval('1h', SCHWAB)).toBe('30m')
+  })
+
+  test('a coarser family falls back to the finer one below it', () => {
+    // schwab stores no monthly, so a month folds from daily rather than answering null.
+    expect(sourceInterval('1M', SCHWAB)).toBe('1D')
+    expect(sourceInterval('1Y', SCHWAB)).toBe('1D')
+    expect(sourceInterval('1W', SCHWAB)).toBe('1D')
   })
 })
 
