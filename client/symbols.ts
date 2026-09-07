@@ -112,7 +112,16 @@ export function symbolVendor(symbol: SymbolInfo): string {
 // GET /search requires the `query` param even when empty (empty string = list everything),
 // so always set it.
 export async function fetchSymbols(search = ''): Promise<SymbolInfo[]> {
-  const results = await apiGet<SearchResult[]>('/search', { query: search })
+  // `vendor: ''` means EVERY vendor. /search takes a single vendor and defaults it to
+  // 'oanda', so omitting the parameter did not mean "all" — it meant "oanda only", and the
+  // picker could therefore never find a coinbase or schwab instrument. Searching "BTC"
+  // returned nothing while coinbase:BTCUSD was sitting in the store, and the same for
+  // schwab:$SPX; both were reachable by deep link, which is why it went unnoticed.
+  //
+  // The server side already supports this — its vendor filter is applied only `if vendor`,
+  // so an empty string skips it and searches the vendor table whole. Nothing needed to
+  // change there.
+  const results = await apiGet<SearchResult[]>('/search', { query: search, vendor: '' })
   return Array.isArray(results) ? results.map(toSymbolInfo) : []
 }
 
