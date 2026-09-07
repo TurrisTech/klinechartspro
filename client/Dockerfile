@@ -26,5 +26,18 @@ RUN bun run scripts/build-client.ts
 FROM nginx:1.27-alpine
 LABEL app.wdashboard.base-path="${BASE_PATH}"
 COPY --from=builder /app/client-dist /usr/share/nginx/html
-COPY client/nginx.conf /etc/nginx/conf.d/default.conf
+
+# As a TEMPLATE, not a finished conf: nginx's entrypoint runs envsubst over
+# /etc/nginx/templates/*.template into /etc/nginx/conf.d/ at start, which is how the tiles
+# bucket becomes per-environment without a per-environment image.
+#
+# NGINX_ENVSUBST_FILTER is load-bearing. Without it envsubst would substitute EVERY defined
+# environment variable, and the config is full of nginx's own $host, $uri and $upstream_*
+# -- any collision with a variable Kubernetes injects (and it injects many) would blank them
+# out and the substitution failure would look like a routing bug.
+COPY client/nginx.conf /etc/nginx/templates/default.conf.template
+ENV NGINX_ENVSUBST_FILTER=^TILES_
+# Defaults to dev, by the same rule as the store root and the databases: nothing here may
+# default to production. The prod release sets this explicitly.
+ENV TILES_BUCKET=marketdata-tiles-dev
 EXPOSE 80
