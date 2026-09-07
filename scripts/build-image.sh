@@ -52,13 +52,21 @@ bun install --frozen-lockfile
 echo "==> building client bundle (BASE_PATH=$BASE_PATH)"
 BASE_PATH="$BASE_PATH" bun run scripts/build-client.ts
 
-# --- 2. assemble the image layer (mirrors the Dockerfile runtime stage's COPYs) -------------
+# The image default for the tiles bucket. Per-environment in practice -- the Helm chart sets
+# TILES_BUCKET on the container -- but an image must not default to production, so this is dev.
+TILES_BUCKET="${TILES_BUCKET:-marketdata-tiles-dev}"
+
+# --- 2. assemble the image layer (mirrors the Dockerfile runtime stage's COPYs and ENVs) ----
 echo "==> staging image layer"
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 STAGE="$WORK/stage"
-mkdir -p "$STAGE/usr/share/nginx/html" "$STAGE/etc/nginx/conf.d"
+mkdir -p "$STAGE/usr/share/nginx/html" "$STAGE/etc/nginx/templates"
 cp -r client-dist/. "$STAGE/usr/share/nginx/html/"
-cp client/nginx.conf "$STAGE/etc/nginx/conf.d/default.conf"
+# A TEMPLATE, not a finished conf -- nginx's entrypoint runs envsubst over
+# /etc/nginx/templates/*.template at start, which is how ${TILES_BUCKET} becomes
+# per-environment. Copying it to conf.d/ instead (as this did before the tiles split) ships
+# an image whose proxy_pass points at a bucket literally named ${TILES_BUCKET}.
+cp client/nginx.conf "$STAGE/etc/nginx/templates/default.conf.template"
 LAYER="$WORK/layer.tar"
 tar --owner=0 --group=0 -C "$STAGE" -cf "$LAYER" .
 
@@ -67,12 +75,14 @@ if [ -n "${OUTPUT:-}" ]; then
   echo "==> writing local image tarball $OUTPUT (no push)"
   "$CRANE" mutate "$BASE" --append "$LAYER" \
     --label "app.wdashboard.base-path=$BASE_PATH" --exposed-ports 80/tcp \
+    --env "NGINX_ENVSUBST_FILTER=^TILES_" --env "TILES_BUCKET=$TILES_BUCKET" \
     -t "$REF" -o "$OUTPUT"
   echo "==> wrote $OUTPUT (tagged $REF)"
 else
   echo "==> pushing $REF"
   "$CRANE" mutate "$BASE" --append "$LAYER" \
     --label "app.wdashboard.base-path=$BASE_PATH" --exposed-ports 80/tcp \
+    --env "NGINX_ENVSUBST_FILTER=^TILES_" --env "TILES_BUCKET=$TILES_BUCKET" \
     -t "$REF"
   echo "==> pushed $REF"
   "$CRANE" digest "$REF" | sed 's/^/    digest: /'
