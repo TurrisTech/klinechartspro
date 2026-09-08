@@ -1,10 +1,16 @@
 import type { Encoding, LinePattern } from '../chartlayers/encoding'
 import type { SettingsField } from '../chartlayers/settings'
 
-// Display order for the three intervals levels are computed on (wdashboard-server
-// levels.py: LEVELS_INTERVAL_ALLOWLIST = ["1M", "1W", "1D"]), short-to-long rather than the
+// Display order for the two intervals levels are computed on (wdashboard-server
+// levels.py: LEVELS_INTERVAL_ALLOWLIST = ["1M", "1W"]), short-to-long rather than the
 // server's long-to-short — this is a UI reading order, not the wire order.
-export const LEVELS_INTERVAL_ORDER = ['1D', '1W', '1M']
+//
+// 1D was dropped 2026-09-08: no levels have been computed on it since the indicator feed
+// took over (wtradingindicators feeds/levels_declare.py pins 1W and 1M), so a 1D toggle
+// asked for something the server silently ignored. Saved preferences may still carry
+// `intervals.1D` and `base.intervalColors.1D` — chartlayers/store.ts's mergeDefaults only
+// copies keys the defaults have, so those are dropped on load rather than resurrected.
+export const LEVELS_INTERVAL_ORDER = ['1W', '1M']
 
 // Metric names a Levels emphasis encoding can be pointed at (client/levels/layer.ts's
 // METRICS implements exactly these). Exported from here, not layer.ts, so config.ts (the
@@ -54,12 +60,10 @@ export interface LevelsConfig {
 // than solid so a level reads as an annotation over the candles rather than as price data,
 // and it stays distinct from the dashed pattern a spent level is drawn in.
 //
-// 1M and 1W on, 1D off: the weekly and monthly books are the ones the server computes for
-// every symbol (wtradingindicators feeds/levels_declare.py pins exactly those two), and 1D
-// is no longer computed at all — the code is still sent in `intervals=` and accepted by the
-// server, so it stays a toggle, just not a default one.
+// Every computed interval on: the weekly and monthly books are the ones the server computes
+// for every symbol (wtradingindicators feeds/levels_declare.py pins exactly those two).
 export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
-  intervals: Object.fromEntries(LEVELS_INTERVAL_ORDER.map((code) => [code, code !== '1D'])),
+  intervals: Object.fromEntries(LEVELS_INTERVAL_ORDER.map((code) => [code, true])),
   showSpent: false,
   base: {
     pattern: 'dotted',
@@ -67,7 +71,7 @@ export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
     opacity: 1,
     colorMode: 'server',
     directionColors: { support: '#089981', resistance: '#f23645' },
-    intervalColors: { '1D': '#00BCD4', '1W': '#089981', '1M': '#FFEB3B' },
+    intervalColors: { '1W': '#089981', '1M': '#FFEB3B' },
     // Small enough that one touch is a shading rather than a different color, and that a
     // level at the server's ten-invalidation ceiling still stops well short of the cap.
     darkenPerInvalidation: 0.05
@@ -106,7 +110,7 @@ const METRIC_LABELS: Record<LevelsMetricName, string> = {
   invalidations: 'Invalidation count',
   ageDays: 'Age (days since confirmed)',
   untouchedDays: 'Days since last touch',
-  intervalRank: 'Interval (1D < 1W < 1M)'
+  intervalRank: 'Interval (1W < 1M)'
 }
 
 const METRIC_OPTIONS = LEVELS_METRIC_NAMES.map((name) => ({ value: name, label: METRIC_LABELS[name] }))
