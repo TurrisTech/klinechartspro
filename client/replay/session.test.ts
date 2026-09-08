@@ -89,9 +89,9 @@ class SyntheticSource implements BarSource {
 // The synthetic series stays inside one Monday session, so the wall clock never crosses DST
 // and a 1h bucket is a plain floor of the wall clock.
 function toWallLocal(ms: number): number {
-  return ms + offset(ms)
+  return ms + offset()
 }
-function offset(ms: number): number {
+function offset(): number {
   return fromWall(0) === 0 ? 0 : -(fromWall(Date.UTC(2024, 2, 4, 9)) - Date.UTC(2024, 2, 4, 9))
 }
 function bucketLen(interval: string): number {
