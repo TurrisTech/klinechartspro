@@ -155,6 +155,11 @@
   let symbolQuery = $state('')
   let symbolResults = $state<SymbolInfo[]>([])
   let symbolSearching = $state(false)
+  // The search box itself, so opening the dialog can put the caret in it. The dialog's own
+  // open-focus lands on the first tabbable child, which is the close button -- the user has
+  // to click or Tab before typing, every time. Bound here rather than reached for with a
+  // querySelector because the dialog is portalled outside this component's DOM.
+  let symbolInput = $state<HTMLInputElement | null>(null)
   let settingsStyles = $state<Styles | null>(null)
   let indicatorSettings = $state<IndicatorSettingsState>({
     paneId: '',
@@ -823,14 +828,21 @@
     <Dialog.Root bind:open={symbolDialogOpen}>
       <Dialog.Portal {...portalProps}>
         <Dialog.Overlay class="kc-dialog-overlay" />
-        <Dialog.Content class="kc-dialog-content kc-dialog-lg">
+        <Dialog.Content class="kc-dialog-content kc-dialog-lg" onOpenAutoFocus={(event) => {
+          // Take over the dialog's default open-focus so the search box gets it. `select()`
+          // as well as focus: reopening keeps the previous query, and a query that is
+          // replaced by the first keystroke is friendlier than one the user must clear.
+          event.preventDefault()
+          symbolInput?.focus()
+          symbolInput?.select()
+        }}>
           <div class="kc-dialog-header">
           <Dialog.Title>{i18n('symbol_search', locale)}</Dialog.Title>
           <Dialog.Description>{i18n('symbol_code', locale)}</Dialog.Description>
           </div>
           <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
         <Command.Root shouldFilter={false} class="kc-command">
-          <div class="kc-command-input-wrap"><SearchIcon /><Command.Input class="kc-command-input" bind:value={symbolQuery} placeholder={i18n('symbol_code', locale)} /></div>
+          <div class="kc-command-input-wrap"><SearchIcon /><Command.Input class="kc-command-input" bind:ref={symbolInput} bind:value={symbolQuery} placeholder={i18n('symbol_code', locale)} /></div>
           <Command.List class="kc-command-list">
             {#if symbolSearching}<Command.Loading class="kc-command-loading"><LoaderCircleIcon class="kc-spinner" /></Command.Loading>{/if}
             {#if !symbolSearching && symbolResults.length === 0}
