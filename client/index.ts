@@ -355,6 +355,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     syncCrosshair: latestSync.crosshair,
     syncTime: latestSync.time,
     syncAuto: latestSync.auto,
+    // The wall-wide switches: while one is on, every pane follows the active pane's
+    // instrument / timeframe, including a pane a layout grow has just added.
+    syncSymbol: latestSync.symbol,
+    syncPeriod: latestSync.period,
     // The definitive "which panes are actually live" signal -- fires once per pane mount and
     // once per pane teardown (including every layout grow/shrink), never before a pane's
     // chart exists. Every mounted chart layer resyncs from this directly; nothing here polls

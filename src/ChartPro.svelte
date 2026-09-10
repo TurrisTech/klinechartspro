@@ -38,6 +38,8 @@
   import StarIcon from '@lucide/svelte/icons/star'
   import ChevronDownIcon from '@lucide/svelte/icons/chevron-down'
   import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right'
+  import CandlestickIcon from '@lucide/svelte/icons/chart-candlestick'
+  import ClockIcon from '@lucide/svelte/icons/clock'
   import {
     Avatar,
     Checkbox,
@@ -75,6 +77,7 @@
   import { Wall } from './state/wall.svelte'
   import { clone } from './utils/object'
   import { SyncBus } from './sync/bus'
+  import { samePeriod, sameSymbol } from './sync/follow'
   import SyncToggle from './SyncToggle.svelte'
 
   type ChartProps = Required<Omit<ChartProOptions, 'container'>>
@@ -119,6 +122,8 @@
     syncCrosshair,
     syncTime,
     syncAuto,
+    syncSymbol,
+    syncPeriod,
     onPaneLayoutChange,
     onActivePaneChange,
     onPaneStateChange,
@@ -143,6 +148,8 @@
   let syncCrosshairEnabled = $state(untrack(() => syncCrosshair))
   let syncTimeEnabled = $state(untrack(() => syncTime))
   let syncAutoEnabled = $state(untrack(() => syncAuto))
+  let syncSymbolEnabled = $state(untrack(() => syncSymbol))
+  let syncPeriodEnabled = $state(untrack(() => syncPeriod))
 
   let symbolDialogOpen = $state(false)
   let indicatorDialogOpen = $state(false)
@@ -544,7 +551,9 @@
     onSyncChange({
       crosshair: syncCrosshairEnabled,
       time: syncTimeEnabled,
-      auto: syncAutoEnabled
+      auto: syncAutoEnabled,
+      symbol: syncSymbolEnabled,
+      period: syncPeriodEnabled
     })
     const turnedOn = syncAutoEnabled && !syncAutoWas
     syncAutoWas = syncAutoEnabled
@@ -552,6 +561,45 @@
     // next drag would leave a mode called "sync" changing nothing at the moment it is turned
     // on, and leave the user to guess which pane the others will eventually follow.
     if (turnedOn) bus.alignTo(untrack(() => wall.activeId))
+  })
+
+  // Symbol and timeframe sync are INVARIANTS while on, not one-shot copies -- every visible
+  // pane shows what the ACTIVE one shows. Stated this way rather than as a fan-out at each
+  // toolbar click, one statement covers all four moments it has to hold at: the switch being
+  // turned on (which aligns the wall there and then, the sync_auto precedent), a symbol or
+  // timeframe picked afterwards, a layout GROW -- whose new panes would otherwise arrive on
+  // whatever they were last seeded with -- and a wall restored with the switch already on.
+  //
+  // The panes' own symbols are read inside `untrack`: what this effect writes is exactly what
+  // it would read back, so tracking them would re-run it on its own writes for a fixed point
+  // it has already reached. Only the SOURCE -- the active pane's symbol, and which panes are
+  // visible -- is tracked.
+  $effect(() => {
+    if (!syncSymbolEnabled) return
+    const panes = wall.visiblePanes
+    const symbol = wall.active.symbol
+    if (!symbol) return
+    untrack(() => {
+      for (const pane of panes) {
+        if (pane.id === wall.activeId || sameSymbol(pane.symbol, symbol)) continue
+        pane.symbol = symbol
+        onSymbolChange(pane.id, symbol)
+      }
+    })
+  })
+
+  $effect(() => {
+    if (!syncPeriodEnabled) return
+    const panes = wall.visiblePanes
+    const period = wall.active.period
+    if (!period) return
+    untrack(() => {
+      for (const pane of panes) {
+        if (pane.id === wall.activeId || samePeriod(pane.period, period)) continue
+        pane.period = period
+        onPeriodChange(pane.id, period)
+      }
+    })
   })
 
   $effect(() => {
@@ -658,19 +706,45 @@
 
       <div class="kc-toolbar-actions">
         <LayoutPicker {wall} {locale} {portalProps} />
-        <Tooltip.Root>
-          <Tooltip.Trigger
-            class={iconButtonClass(syncAutoEnabled)}
-            aria-pressed={syncAutoEnabled}
-            aria-label={i18n('sync_auto', locale)}
-            onclick={() => { syncAutoEnabled = !syncAutoEnabled }}
-          >
-            <ArrowLeftRightIcon />
-          </Tooltip.Trigger>
-          <Tooltip.Portal {...portalProps}>
-            <Tooltip.Content class="kc-tooltip">{i18n('sync_auto', locale)}</Tooltip.Content>
-          </Tooltip.Portal>
-        </Tooltip.Root>
+        <!-- The three wall-wide switches, in the order they narrow what a pane may differ by:
+             the instrument, then the timeframe, then where on the time axis it is looking.
+             The two in the popover beside them (crosshair, click to scroll) stay there --
+             those follow a POINTER, and are worth a click of their own to reach. -->
+        {#each [
+          {
+            label: i18n('sync_symbol', locale),
+            icon: CandlestickIcon,
+            active: syncSymbolEnabled,
+            toggle: () => { syncSymbolEnabled = !syncSymbolEnabled }
+          },
+          {
+            label: i18n('sync_period', locale),
+            icon: ClockIcon,
+            active: syncPeriodEnabled,
+            toggle: () => { syncPeriodEnabled = !syncPeriodEnabled }
+          },
+          {
+            label: i18n('sync_auto', locale),
+            icon: ArrowLeftRightIcon,
+            active: syncAutoEnabled,
+            toggle: () => { syncAutoEnabled = !syncAutoEnabled }
+          }
+        ] as item (item.label)}
+          {@const ToggleIcon = item.icon}
+          <Tooltip.Root>
+            <Tooltip.Trigger
+              class={iconButtonClass(item.active)}
+              aria-pressed={item.active}
+              aria-label={item.label}
+              onclick={item.toggle}
+            >
+              <ToggleIcon />
+            </Tooltip.Trigger>
+            <Tooltip.Portal {...portalProps}>
+              <Tooltip.Content class="kc-tooltip">{item.label}</Tooltip.Content>
+            </Tooltip.Portal>
+          </Tooltip.Root>
+        {/each}
         <SyncToggle
           bind:crosshair={syncCrosshairEnabled}
           bind:time={syncTimeEnabled}

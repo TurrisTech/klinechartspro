@@ -27,13 +27,16 @@ new KLineChartPro(
     activePane?: string;
     syncCrosshair?: boolean;
     syncTime?: boolean;
+    syncAuto?: boolean;
+    syncSymbol?: boolean;
+    syncPeriod?: boolean;
     onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void;
     onActivePaneChange?: (paneId: string) => void;
     onPaneStateChange?: (paneId: string) => void;
     onPanesChange?: (panes: ChartProPane[]) => void;
     onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void;
     onPeriodChange?: (paneId: string, period: Period) => void;
-    onSyncChange?: (options: { crosshair: boolean; time: boolean }) => void;
+    onSyncChange?: (options: SyncOptions) => void;
   }
 ) => KLineChartPro
 ```
@@ -72,6 +75,14 @@ compatible: omitting every option below still yields the original single chart.
 + `activePane` Which pane (`'p1'`..`'pN'`) starts active. Defaults to `'p1'`.
 + `syncCrosshair` / `syncTime` Initial state of the two sync toggles (toolbar's Sync popover).
   Both default `true`.
++ `syncAuto` Initial state of the auto-time-sync button beside that popover, default `false`.
+  While it is on every pane follows whichever one is being panned or zoomed, and
+  click-to-scroll (`syncTime`) is inert.
++ `syncSymbol` / `syncPeriod` Initial state of the wall-wide symbol and timeframe buttons,
+  both `false`. While one is on, every visible pane shows the ACTIVE pane's symbol / period:
+  turning it on aligns the wall at that moment, a pane added by a layout grow arrives aligned
+  too, and each pane it moves is reported through `onSymbolChange`/`onPeriodChange`. Turning
+  it off leaves the panes where it put them -- what a pane showed beforehand is not restored.
 + `onPaneLayoutChange` Fired when the layout preset changes, with every currently-visible
   pane's symbol/period/indicators -- the payload to persist if you want the wall to survive a
   reload.
@@ -89,7 +100,7 @@ compatible: omitting every option below still yields the original single chart.
   behaviour (e.g. price-level overlays) entirely from this callback's argument.
 + `onSymbolChange` / `onPeriodChange` Fired when a specific pane's symbol/period changes,
   whichever pane it was (not necessarily the active one, e.g. via `ChartProPane.setSymbol`).
-+ `onSyncChange` Fired when either sync toggle changes.
++ `onSyncChange` Fired when any sync switch changes, with all five as one record (`{ crosshair, time, auto, symbol, period }`).
 
 Symbol search, interval selection, indicator selection and the drawing tools in the shared
 toolbar always act on the **active** pane -- there is no cross-pane symbol/interval sync by

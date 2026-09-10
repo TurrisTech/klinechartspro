@@ -43,7 +43,8 @@ export type {
   PaneViewState,
   PaneYAxisRange,
   Period,
-  SymbolInfo
+  SymbolInfo,
+  SyncOptions
 } from './types'
 export type { LayoutPreset } from './config/layouts'
 export { getLayouts as getPaneLayouts, MAX_PANES } from './config/layouts'
