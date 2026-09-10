@@ -217,6 +217,16 @@ export type IndicatorSettingsHandler = (request: {
  */
 export type ChartProSlot = 'toolbar' | 'toolbar-right' | 'rail-footer'
 
+/** Every sync switch the toolbar owns, as one record -- what onSyncChange reports and what a
+ * caller persists. */
+export interface SyncOptions {
+  crosshair: boolean
+  time: boolean
+  auto: boolean
+  symbol: boolean
+  period: boolean
+}
+
 export interface ChartProOptions {
   container: string | HTMLElement
   styles?: DeepPartial<Styles>
@@ -260,6 +270,13 @@ export interface ChartProOptions {
   syncCrosshair?: boolean
   syncTime?: boolean
   syncAuto?: boolean
+  /** Initial state of the wall-wide symbol and timeframe switches, both false by default.
+   * While one is on every visible pane shows the ACTIVE pane's symbol / period -- including
+   * a pane a layout grow has just added, which is why this is an invariant rather than a
+   * one-shot copy. Turning one on aligns the wall at that moment, and turning it off leaves
+   * the panes where it put them: what a pane was showing beforehand is not remembered. */
+  syncSymbol?: boolean
+  syncPeriod?: boolean
   onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void
   onActivePaneChange?: (paneId: string) => void
   /** Fires whenever a pane's own durable state changes without the layout, the symbol or the
@@ -279,9 +296,14 @@ export interface ChartProOptions {
   onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void
   onPeriodChange?: (paneId: string, period: Period) => void
   /** Fires whenever any sync toggle changes -- the two in the toolbar's Sync popover, and the
-   * auto-sync button beside it. `auto` and `time` are alternatives, not additions: with `auto`
-   * on the wall follows every pan, and click-to-scroll is inert whatever `time` says. */
-  onSyncChange?: (options: { crosshair: boolean; time: boolean; auto: boolean }) => void
+   * three buttons beside it. `auto` and `time` are alternatives, not additions: with `auto`
+   * on the wall follows every pan, and click-to-scroll is inert whatever `time` says.
+   *
+   * `symbol` and `period` are about WHAT each pane shows rather than where it is looking, so
+   * they compose with all three: a wall can follow one instrument across four timeframes, or
+   * one timeframe across four instruments. Every fan-out they cause is also reported through
+   * onSymbolChange/onPeriodChange, once per pane it moved. */
+  onSyncChange?: (options: SyncOptions) => void
 }
 
 export interface ChartPro {

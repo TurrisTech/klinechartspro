@@ -4,7 +4,8 @@ import type {
   PaneViewState,
   PaneYAxisRange,
   Period,
-  SymbolInfo
+  SymbolInfo,
+  SyncOptions
 } from '../src'
 import { availablePeriods, defaultPeriod } from './periods'
 import { fromStoredMtfConfig, toStoredMtfConfig, type MtfConfig, type StoredMtfConfig } from './mtf/config'
@@ -66,10 +67,11 @@ export interface PersistedLayout {
   preset: string
   active: number // index into panes
   panes: PersistedPane[]
-  // `auto` is optional on the way IN and always written on the way out -- a document written
-  // before auto sync existed must still validate (see isPersistedLayout), and the honest
-  // answer for one is "auto sync was not on", which is also its default.
-  sync: { crosshair: boolean; time: boolean; auto?: boolean }
+  // `auto`, `symbol` and `period` are optional on the way IN and always written on the way
+  // out -- a document written before each of those switches existed must still validate (see
+  // isPersistedLayout), and the honest answer for one is "that switch was not on", which is
+  // also its default.
+  sync: { crosshair: boolean; time: boolean; auto?: boolean; symbol?: boolean; period?: boolean }
 }
 
 export interface HydratedPane {
@@ -87,7 +89,7 @@ export interface HydratedLayout {
   preset: string
   active: number
   panes: HydratedPane[]
-  sync: { crosshair: boolean; time: boolean; auto: boolean }
+  sync: SyncOptions
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -124,7 +126,9 @@ export function isPersistedLayout(value: unknown): value is PersistedLayout {
     typeof layout.sync === 'object' && layout.sync !== null &&
     typeof (layout.sync as Record<string, unknown>).crosshair === 'boolean' &&
     typeof (layout.sync as Record<string, unknown>).time === 'boolean' &&
-    ['boolean', 'undefined'].includes(typeof (layout.sync as Record<string, unknown>).auto)
+    ['auto', 'symbol', 'period'].every((key) =>
+      ['boolean', 'undefined'].includes(typeof (layout.sync as Record<string, unknown>)[key])
+    )
   )
 }
 
@@ -151,7 +155,7 @@ export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): Persisted
         si: ['VOL']
       }
     ],
-    sync: { crosshair: true, time: true, auto: false }
+    sync: { crosshair: true, time: true, auto: false, symbol: false, period: false }
   }
 }
 
@@ -284,7 +288,12 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     preset: layout.preset,
     active: Math.min(Math.max(layout.active, 0), panes.length - 1),
     panes,
-    sync: { ...layout.sync, auto: layout.sync.auto ?? false }
+    sync: {
+      ...layout.sync,
+      auto: layout.sync.auto ?? false,
+      symbol: layout.sync.symbol ?? false,
+      period: layout.sync.period ?? false
+    }
   }
 }
 
@@ -355,7 +364,7 @@ export function toPersistedLayout(
   preset: string,
   panes: PaneSnapshot[],
   active: number,
-  sync: { crosshair: boolean; time: boolean; auto: boolean },
+  sync: SyncOptions,
   mtfByPane: Record<number, MtfConfig> = {}
 ): PersistedLayout {
   return {

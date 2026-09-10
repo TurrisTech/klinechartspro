@@ -27,13 +27,16 @@ new KLineChartPro(
     activePane?: string;
     syncCrosshair?: boolean;
     syncTime?: boolean;
+    syncAuto?: boolean;
+    syncSymbol?: boolean;
+    syncPeriod?: boolean;
     onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void;
     onActivePaneChange?: (paneId: string) => void;
     onPaneStateChange?: (paneId: string) => void;
     onPanesChange?: (panes: ChartProPane[]) => void;
     onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void;
     onPeriodChange?: (paneId: string, period: Period) => void;
-    onSyncChange?: (options: { crosshair: boolean; time: boolean }) => void;
+    onSyncChange?: (options: SyncOptions) => void;
   }
 ) => KLineChartPro
 ```
@@ -61,12 +64,14 @@ new KLineChartPro(
 + `maxPanes` 子图数量上限，默认 `12`
 + `activePane` 初始激活的子图（`'p1'`..`'pN'`），默认 `'p1'`
 + `syncCrosshair` / `syncTime` 两个联动开关（工具栏的 Sync 弹出面板）的初始状态，均默认 `true`
++ `syncAuto` 弹出面板旁的自动时间联动按钮的初始状态，默认 `false`。开启时每个子图都跟随正在被平移/缩放的那一个，点击滚动（`syncTime`）随之失效
++ `syncSymbol` / `syncPeriod` 工具栏中标的联动与周期联动按钮的初始状态，均默认 `false`。开启时每个可见子图都显示**激活子图**的标的/周期：开启的瞬间即对齐整面墙，布局增加的新子图同样对齐，被改动的每个子图都会通过 `onSymbolChange`/`onPeriodChange` 上报；关闭后子图停留在原处，不会恢复此前显示的内容
 + `onPaneLayoutChange` 布局预设改变时触发，携带当前可见的每个子图的标的/周期/指标——如需让多图布局在刷新后保留，持久化的就是这份数据
 + `onActivePaneChange` 激活子图改变时触发
 + `onPaneStateChange` 其它回调都不覆盖的子图变化时触发：指标的增加、删除或参数修改，以及（在手势结束后去抖触发的）平移、缩放和手动缩放价格轴。参数只有子图 id，请重新读取 `getPaneSnapshots()`——其中的 `indicatorParams`（指标模板名 -> `calcParams`）与 `view`（`barSpace`、是否跟随最新K线、定位用的时间锚点与屏幕比例、y 轴类型/反转及手动价格区间）足以完整还原一个子图，回填到 `panes[].indicatorParams` / `panes[].view` 即可
 + `onPanesChange` 当前存活的子图集合发生变化时触发——某个子图的图表刚创建或刚销毁（包括每一次布局的增减）。任何依赖单个子图的外部逻辑（如价格关键位叠加层）都应完全依据此回调的参数重新绑定
 + `onSymbolChange` / `onPeriodChange` 某个具体子图的标的/周期改变时触发，不一定是当前激活的子图（例如通过 `ChartProPane.setSymbol` 触发）
-+ `onSyncChange` 任一联动开关改变时触发
++ `onSyncChange` 任一联动开关改变时触发，参数是五个开关的完整状态（`{ crosshair, time, auto, symbol, period }`）
 
 工具栏中的标的搜索、周期选择、指标选择与画线工具，始终作用于**激活**的子图——按设计不提供跨子图的标的/周期联动。
 
