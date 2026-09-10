@@ -46,11 +46,11 @@ describe('a tile whose volume column is INT64', () => {
 
   test('volumes arrive as numbers, not BigInt, so they survive arithmetic', async () => {
     const bars = await decodeTile(bytes(), PRECISION)
-    const big = bars.filter((b) => b.volume > 2_147_483_647)
+    const big = bars.filter((b) => (b.volume ?? 0) > 2_147_483_647)
     expect(big.length).toBe(26)
     for (const b of big) expect(typeof b.volume).toBe('number')
     // The operation that throws on a BigInt, and the one every volume pane does.
-    const total = bars.reduce((sum, b) => sum + b.volume, 0)
+    const total = bars.reduce((sum, b) => sum + (b.volume ?? 0), 0)
     expect(total).toBe(162_077_097_209)
   })
 
