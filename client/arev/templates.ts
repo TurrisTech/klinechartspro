@@ -8,9 +8,10 @@ import { peekStore, type WindowStore } from '../plugins/store'
 // Like the `S:` server-indicator templates (indicators/templates.ts), `calc` computes
 // nothing: it reads the points the controller fetched from `/arev/values`.
 //
-// What the pane draws is the probability the k-NN vote implies — the share of comparable
-// past samples that rose, which is P(the generation's own question: price up to the next
-// sample for arev19/20/21, body midpoint higher 10 bars on for arev22) — against a flat
+// What the pane draws is the probability the generation's estimator implies — the share of
+// comparable past samples that rose for the k-NN generations, a fitted logistic's output
+// for arev23, which is P(the generation's own question: price up to the next sample for
+// arev19/20/21/23, body midpoint higher 10 bars on for arev22) — against a flat
 // threshold either side of a coin flip, plus an arrow on every bar the server LABELS:
 // a green up arrow under a `long` point, a red down arrow over a `short` one. The label
 // is the server's published signal (`ArevPoint.signal`, read through `arevSignal`) —
@@ -33,14 +34,15 @@ import { peekStore, type WindowStore } from '../plugins/store'
 export const TEMPLATE_PREFIX = 'AREV:'
 
 // What distinguishes the generations, for the picker. arev19 and arev20 are the same
-// model built two ways; arev21 is the same model asked of different bars and arev22 the
-// same model asked a different question, which is why drawing either beside arev19 is
-// the point of having it.
+// model built two ways; arev21 is the same model asked of different bars, arev22 the same
+// model asked a different question and arev23 the same question answered by a different
+// estimator — which is why drawing any of them beside arev19 is the point of having it.
 const DESCRIPTIONS: Record<ArevGeneration, string> = {
   arev19: 'k-NN reversal prediction, single-pass generation (store-and-predict together)',
   arev20: 'k-NN reversal prediction, split train/predict generation',
   arev21: 'arev19 sampled at fresh price extremes instead of WMA crosses',
-  arev22: 'arev19 labelled by the body midpoint 10 bars ahead, sampled on a fixed stride'
+  arev22: 'arev19 labelled by the body midpoint 10 bars ahead, sampled on a fixed stride',
+  arev23: 'arev19 answered by a logistic fitted on the whole 5-year window, not a k-NN vote'
 }
 
 // Mirrors wdashboard-server's arev.SIGNAL_CONFIDENCE. Both drawn and applied here: the
