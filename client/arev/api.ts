@@ -17,30 +17,45 @@ import { apiGet } from '../config'
 // drawing it beside arev19 is a controlled read on that thing: arev21 the gate (fresh
 // price extremes instead of WMA crosses), arev22 the label (a fixed 10-bar body-midpoint
 // move instead of the path to the next sample — which is what then lets its gate be a
-// plain stride over the bars).
+// plain stride over the bars), arev23 the estimator (a logistic fitted on every leg in
+// the five-year window instead of a vote among the 200 nearest).
+//
+// arev23 is why `prediction` and `n` are documented below as a contract rather than as a
+// k-NN's internals. It has no neighbours: it writes `(2p - 1) * n` with `n` the number of
+// legs it fitted on, precisely so `p` is computed the same way for every generation and no
+// client needs to know which kind of model produced a row. Read `p`, never `prediction`.
 //
 // arev22 is served from the Parquet store rather than the algo DB (it is the first
 // generation written for that pipeline), so on a server running INDICATOR_BACKEND=postgres
 // its pane simply finds no data.
-export const AREV_GENERATIONS = ['arev19', 'arev20', 'arev21', 'arev22'] as const
+export const AREV_GENERATIONS = ['arev19', 'arev20', 'arev21', 'arev22', 'arev23'] as const
 export type ArevGeneration = (typeof AREV_GENERATIONS)[number]
 
 export interface ArevPoint {
   date: number
-  /** The raw ±1 vote sum over the k nearest past samples. */
+  /**
+   * The ±1 vote sum over the k nearest past samples, for the k-NN generations. arev23
+   * fits rather than votes and writes `(2p - 1) * n`, which satisfies the same relation
+   * to `p`. Not a number to draw or compare across generations — use `p`.
+   */
   prediction: number
-  /** How many samples the model's 5-year window held — the scale behind `prediction`. */
+  /**
+   * The scale behind `prediction`: how many samples the model's 5-year window held — the
+   * neighbours that voted, or for arev23 the legs the coefficients were fitted on.
+   */
   n: number
   /**
-   * `(prediction / n + 1) / 2` — the share of the k nearest past samples that rose, which
-   * is P(whatever the generation was trained to answer): price rises from here to the
-   * next sample for arev19/20/21, the body midpoint 10 bars ahead is higher for arev22.
+   * `(prediction / n + 1) / 2` — P(whatever the generation was trained to answer): price
+   * rises from here to the next sample for arev19/20/21/23, the body midpoint 10 bars
+   * ahead is higher for arev22. For the k-NN generations that is the share of the nearest
+   * past samples that rose; for arev23 it is a fitted logistic's output. The arithmetic is
+   * the same by construction, which is the point.
    */
   p: number
   /** `|p - 0.5|`: how far from a coin flip the neighbourhood is. */
   confidence: number
   /**
-   * Whether this bar is a sample point — a WMA cross for arev19/arev20, a fresh
+   * Whether this bar is a sample point — a WMA cross for arev19/arev20/arev23, a fresh
    * lookback-bar extreme for arev21, the stride landing on it for arev22. The model is
    * fitted only on such bars and has no edge off one. The wire name is arev19's and is
    * kept across generations.
