@@ -133,3 +133,54 @@ normalise it with the server's own rule). Tests: `signals.test.ts`.
 | `books/plugin.ts` | `BOOK:depth:*`, `BOOK:view:*`, `BOOK:sentiment:*`, `BOOK:flow` | one per binding; depth + view share one profile store per kind | the OANDA 20-minute books: depth draws every snapshot on the price pane at its own instant, view follows the crosshair, sentiment/flow are sub-pane series |
 
 Tests: `bun test client` (`*.test.ts` here, with `testing.ts`'s fake chart).
+
+## The registry plugin (2026-09-11, `feat/ts-registry`)
+
+`client/tsregistry/` is one plugin for **every** server indicator. It fetches
+`GET /indicators/registry` — the server's timeseries indicator registry — registers one
+klinecharts template per row, and binds each to the wire its row names. The chart knows no
+server indicator by name.
+
+It replaced three plugins and their template modules: `arev/`, `krev/` and `indicators/`,
+which were structural copies differing mostly in their colours and in constants the server
+also held. What is left beside it is what the registry deliberately does not cover: `mtf/`
+and `mtf01/`, whose sources read timeframes that are not the chart's, and `books/`, which is
+not a scalar-per-bar series at all.
+
+**Template names come from the row.** A saved wall document names its indicators by template,
+so `S:rsi@v0.0.2`, `AREV:arev21` and `KREV:krev01:p` are unchanged and every stored layout
+keeps working. Anything new is `TS:<name>`.
+
+**Two source builders**, chosen by `wire.plugin`:
+
+* `indicators` — the computable library: `calcParams` resolve to a node document, points come
+  from `/indicators/values`, and the series is **subscribed** at bind time so a live point
+  arriving during the history read is not lost. Store key
+  `S|vendor:ticker|interval|<series doc>`, unchanged.
+* anything else — the unified `GET /plugins/{id}/values?variant=`. Store key
+  `<name>|vendor:ticker|interval`, unchanged. Nothing to subscribe: the rows are written by
+  hand-run research scripts.
+
+**What the generic template can say**, which is exactly what the four it replaced needed:
+several lines with their own colours and dash styles; flat reference lines from a constant;
+`render: 'hold'`, which carries the last value forward over bars that have none; a `gate`
+that drops an uncalibrated number; a `fold_by` source whose two rows on one bar are filed
+under their own side, so a series key is two-part (`top.p`); and per-bar `marks` chosen by a
+predicate, each with a shape, an anchor (`series:<key>` or `bar:low|high|close`), an optional
+label field and an optional fill (solid / hollow / pending).
+
+Three klinecharts facts the row is turned into, each of which cost a bug before:
+
+* **`draw`'s return value is `isCover`**, and declared figures render only `if (!isCover)`.
+  A row with figures AND marks returns `false`; a marker-only row declares no figures and
+  returns `true`. The row decides, not the template's author.
+* **`minValue`/`maxValue` widen the y-axis, never narrow it**, so `valueRange` means "never
+  zoom inside this".
+* **A non-figure key does not enter the y-axis range**, which is where marker values and the
+  raw bar live.
+
+**The shared store.** `tsregistry/store.ts` holds the one class every registry-driven source
+uses. It always carries the auxiliary bar grid, and `storeFactory(foldBy)` is **memoised** —
+so the AREV21 pane and the MTF overlay pass the identical factory reference for the key they
+share, and `storeFor`'s first-binding-wins cannot make the class depend on mount order. See
+`store.test.ts`, which is the test that invariant came with.
