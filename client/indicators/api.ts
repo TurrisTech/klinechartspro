@@ -1,35 +1,19 @@
-import { apiGet, apiUrl, OhlcvApiError } from '../config'
+import { apiUrl } from '../config'
 
-// wdashboard-server's server-computed indicator surface (services/indicators.py). The
-// client never learns whether a series is ephemeral or persisted -- it asks for an indicator
-// on an instrument/interval and gets points; a `202 replaying` answer just means the server
-// is still building the series from the instrument's first bar and should be asked again.
+// What is left of the client's own knowledge of the server-computed indicator surface
+// (wdashboard-server services/indicators.py): the node document a series is addressed by,
+// the point it yields, and the one question the registry cannot answer.
+//
+// The catalogue that used to live here is gone -- the timeseries indicator registry
+// (client/tsregistry/) is the one list of server indicators now, and the generic plugin
+// fetches values itself. `resolveSeries` stays because it is about a CONCRETE series rather
+// than a catalogue entry: whether this instrument, this interval and these exact params can
+// be served at all, and what the lead-in costs. That depends on the params and on what the
+// store holds, so no registry row can hold the answer.
+//
+// The client never learns whether a series is ephemeral or persisted -- it asks for an
+// indicator on an instrument/interval and gets points.
 
-export interface ParamSpec {
-  name: string
-  type: 'int' | 'float'
-  default: number
-  min: number | null
-  max: number | null
-  description: string
-}
-
-export interface IndicatorSpec {
-  name: string
-  version: string
-  title: string
-  description: string
-  nInputs: number
-  inputLabels: string[]
-  params: ParamSpec[]
-  pane: 'main' | 'sub'
-  render: 'line' | 'marker'
-  valueRange: [number, number] | null
-  defaultInputs: Array<Record<string, unknown>>
-}
-
-// The node document the server resolves into a SeriesIdentity: which indicator, at which
-// version, with which scalar params, over which inputs (an OHLCV column or nested nodes).
 export interface SeriesDoc {
   name: string
   version?: string
@@ -42,22 +26,6 @@ export interface IndicatorPoint {
   value: number | null
 }
 
-export interface DiscoveryResponse {
-  indicators: IndicatorSpec[]
-  persisted: unknown[]
-  persistedEnabled: boolean
-  limits: { maxValuesPerRequest: number; maxBatchRequests: number; maxBackfillValues: number }
-  serverTime: number
-}
-
-export type ValuesResult =
-  | { s: 'ok'; seriesKey: string; points: IndicatorPoint[] }
-  | { s: 'no_data'; seriesKey: string }
-  | { s: 'replaying'; seriesKey: string; phase?: string; progress: number | null; retryAfterMs: number }
-
-// What the server can tell us about ONE fully-specified series -- the two questions the
-// catalogue cannot answer, because both depend on the params (and, for servability, on what
-// the store holds for this instrument). See wdashboard-server's GET /indicators/resolve.
 export interface ResolveResult {
   seriesKey: string
   describe: string
@@ -71,48 +39,6 @@ export interface ResolveResult {
   mode: 'persisted' | 'ephemeral'
   backfillState: string | null
   backfillProgress: number | null
-}
-
-let discovery: Promise<DiscoveryResponse> | null = null
-
-export function loadDiscovery(): Promise<DiscoveryResponse> {
-  if (!discovery) {
-    discovery = apiGet<DiscoveryResponse>('/indicators').catch((err) => {
-      discovery = null
-      throw err
-    })
-  }
-  return discovery
-}
-
-export async function fetchValues(
-  vendorSymbol: string,
-  resolution: string,
-  series: SeriesDoc,
-  from: number,
-  to: number,
-  limit: number | null
-): Promise<ValuesResult> {
-  const url = apiUrl('/indicators/values', {
-    symbol: vendorSymbol,
-    resolution,
-    series: JSON.stringify(series),
-    from,
-    to,
-    limit: limit ?? undefined
-  })
-  const response = await fetch(url)
-  const body: unknown = await response.json().catch(() => null)
-  if (!response.ok) {
-    const b = body as { code?: string; detail?: string; field?: string } | null
-    throw new OhlcvApiError(
-      response.status,
-      b?.code ?? 'internal',
-      b?.detail ?? `${response.status} from /indicators/values`,
-      b?.field
-    )
-  }
-  return body as ValuesResult
 }
 
 // One in-flight/settled answer per (instrument, interval, series) -- the params dialog asks

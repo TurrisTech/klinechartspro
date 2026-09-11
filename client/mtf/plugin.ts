@@ -1,6 +1,5 @@
 import type { IndicatorGroup } from '../../src'
-import { arevSourceKey } from '../arev/plugin'
-import { GRID_ARRAY, arevStore } from '../arev/store'
+import { GRID_ARRAY, registrySourceKey, storeFactory } from '../tsregistry/store'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
 import { MTF_GENERATION, type ArevPoint, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
 import { MTF_DEFAULTS, MTF_FIELDS, enabledIntervals, type MtfConfig } from './config'
@@ -65,14 +64,14 @@ export function createMtfPlugin(): IndicatorPlugin {
       id: interval,
       // The same key the AREV plugin would give arev21 at this interval: a sub-pane and
       // the overlay reading the same votes share one store. Sharing a key means sharing
-      // the row type and the factory as well -- see arev/store.ts for what went wrong when
+      // the row type and the factory as well -- see tsregistry/store.ts for what went wrong when
       // these two wrote different things under it.
-      key: arevSourceKey(MTF_GENERATION, ctx.vendor, ctx.ticker, interval),
+      key: registrySourceKey(MTF_GENERATION, ctx.vendor, ctx.ticker, interval),
       // The SOURCE timeframe, not the chart's: this is what its points are dated on. The
       // AREV sub-pane's spec for this key says the same, so a replay step forgets one
       // amount rather than two (plugins/horizon.ts).
       resolution: interval,
-      createStore: arevStore,
+      createStore: storeFactory(null),
       /** The chart's loaded span, converted out of the chart's wire clock and into the
        * source timeframe's, padded at both ends. Both conversions are needed and they
        * differ whenever exactly one of the two intervals is daily-or-coarser. */

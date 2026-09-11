@@ -165,7 +165,7 @@ export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): Persisted
 // picker no longer offers has no checkbox to untick.
 //
 // 'KREV:krev01' was the price-pane half of the KREV indicator, folded into the sub-pane
-// template 'KREV:krev01:p' (see client/krev/templates.ts).
+// template 'KREV:krev01:p' (the registry row's `template`, client/tsregistry/).
 const RETIRED_INDICATORS = new Set(['KREV:krev01'])
 
 // Templates that were replaced rather than retired, and whose saved names are MIGRATED so

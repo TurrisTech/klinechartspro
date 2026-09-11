@@ -1,5 +1,5 @@
 import type { IndicatorGroup } from '../../src'
-import { AXIS_GAP } from '../arev/plugin'
+import { AXIS_GAP } from '../plugins/draw'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities } from '../plugins/types'
 import { MTF01_GENERATION, type Mtf01Event } from './api'
 import { isMtf01Indicator, registerMtf01Indicators } from './templates'
