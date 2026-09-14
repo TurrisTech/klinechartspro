@@ -232,6 +232,9 @@ export interface ChartProOptions {
   styles?: DeepPartial<Styles>
   theme?: string
   locale?: string
+  /** Whether the drawing rail starts shown. Omitted, it is shown unless the container is
+   * narrower than a phone in landscape (`NARROW_SHELL_WIDTH`), where it starts hidden and,
+   * once toggled on, overlays the chart instead of taking a column from it. */
   drawingBarVisible?: boolean
   symbol: SymbolInfo
   period: Period

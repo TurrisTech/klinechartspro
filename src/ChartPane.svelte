@@ -63,10 +63,19 @@
     bus,
     onActivate,
     onIndicatorSettings,
-    onStateChange
+    onStateChange,
+    placement = undefined,
+    concealed = false
   }: {
     pane: PaneState
     active: boolean
+    /** Inline grid placement, when the wall is not drawing its preset as declared (see
+     *  src/config/fit.ts). Omitted, the pane takes its own named area. */
+    placement?: string
+    /** Mounted and live, but behind the active pane on a one-pane-at-a-time wall: invisible,
+     *  and `inert` so neither a pointer nor keyboard focus can reach -- or activate -- it. Its
+     *  chart keeps the size of the cell it shares, so showing it again costs no resize. */
+    concealed?: boolean
     theme: string
     styles: DeepPartial<Styles>
     locale: string
@@ -1154,7 +1163,10 @@
   class="klinecharts-pro-pane"
   data-active={active}
   data-pane-id={pane.id}
-  style={`grid-area: ${pane.id};`}
+  data-concealed={concealed || undefined}
+  inert={concealed}
+  aria-hidden={concealed || undefined}
+  style={placement ?? `grid-area: ${pane.id};`}
   tabindex="-1"
   onpointerdowncapture={() => {
     // Captured BEFORE onActivate, which is what makes the answer meaningful -- see

@@ -7,6 +7,7 @@ import { utils, type Chart, type DeepPartial, type Nullable, type Styles } from 
 
 import ChartProComponent from './ChartPro.svelte'
 import { MAX_PANES, smallestLayoutFor } from './config/layouts'
+import { NARROW_SHELL_WIDTH } from './config/responsive'
 import type { LayoutPreset } from './config/layouts'
 import type {
   ChartPro,
@@ -60,7 +61,10 @@ export default class KLineChartPro implements ChartPro {
         styles: options.styles ?? {},
         theme,
         locale: options.locale ?? 'zh-CN',
-        drawingBarVisible: options.drawingBarVisible ?? true,
+        // Measured before mount: an unlaid-out container (width 0) is not a narrow one.
+        drawingBarVisible:
+          options.drawingBarVisible ??
+          !(this.container.clientWidth > 0 && this.container.clientWidth < NARROW_SHELL_WIDTH),
         symbol: options.symbol,
         period: options.period,
         periods: options.periods ?? DEFAULT_PERIODS,

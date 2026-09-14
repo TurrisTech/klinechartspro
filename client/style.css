@@ -16,10 +16,43 @@ body,
   margin: 0;
 }
 
+html {
+  /* iOS inflates text it guesses is too small in landscape; the chart's type is sized on
+     purpose. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 body {
+  overflow: hidden;
+  /* The page never scrolls, so an overscroll is only ever a chart pan that reached its end
+     -- and on a phone that would bounce the whole page or pull it to refresh. */
+  overscroll-behavior: none;
+  /* index.html's viewport-fit=cover lets the page under the notch, the rounded corners and
+     the home indicator; the insets keep the chart and its controls out from under them. They
+     are 0 everywhere else. `* { box-sizing: border-box }` keeps the padding inside the
+     height. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
   background: #131722;
   font-family:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* The dynamic viewport: on a phone `100%` is the height with the browser's toolbars
+   collapsed, so the bottom of the wall sits under them until the page is scrolled -- which it
+   never is. */
+@supports (height: 100dvh) {
+  body {
+    height: 100dvh;
+  }
+}
+
+/* src/app.css gives an embedded chart a floor of 420px (520px under 720px wide), which is
+   taller than a landscape phone: the page would overflow its viewport by the difference. The
+   app is the whole page, so it is exactly as tall as the page. */
+#app {
+  min-height: 0;
 }
 
 /* live/version/logout mount into the library's own slots (src/types.ts ChartPro.getSlot) --
@@ -214,6 +247,11 @@ body {
   font-weight: 500;
 }
 
+/* A phone's rail cannot spare 12rem for a name: the chart's own controls come first. */
+.klinecharts-pro-shell[data-size='phone'] .wd-ws-button {
+  max-width: 7rem;
+}
+
 /* A `?symbol=` deep link mounts a wall belonging to no workspace and saving nothing; the
    dashed outline is what says the name in the button is a link, not a workspace. */
 .wd-ws-button.is-transient {
@@ -300,7 +338,8 @@ body {
 }
 
 /* Revealed on hover or keyboard focus rather than always shown: three icons per row, on up to
-   twelve rows, reads as clutter when what you came to do is switch. */
+   twelve rows, reads as clutter when what you came to do is switch. A touch screen has no
+   hover to reveal them with, so there they are always shown. */
 .wd-ws-actions {
   display: flex;
   gap: 0.125rem;
@@ -311,6 +350,12 @@ body {
 .wd-ws-row:hover .wd-ws-actions,
 .wd-ws-row:focus-within .wd-ws-actions {
   opacity: 1;
+}
+
+@media (hover: none) {
+  .wd-ws-actions {
+    opacity: 1;
+  }
 }
 
 .wd-ws-action {
@@ -707,7 +752,10 @@ body.wd-has-dock > #app {
 /* Floated small (or on a narrow screen) the three areas stop sharing rows: ticket above
    tables, each scrolling on its own, so nothing is cut off at any size the window allows. */
 .wd-trade-panel.is-narrow .wd-trade-panel-body {
-  grid-template-columns: 1fr;
+  /* minmax(0, ...), not 1fr: a bare fr track never shrinks below its content's min-content,
+     and the ticket's inputs have an intrinsic width -- on a phone the whole column was wider
+     than the screen, clipping Flatten, the quote and the submit button off the right. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto auto 1fr;
   grid-template-areas:
     'account'
@@ -801,8 +849,10 @@ body.wd-has-dock > #app {
 
 .wd-trade-ticket-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
+  gap: 0 0.5rem;
 }
 
 .wd-trade-ticket-symbol {
@@ -816,6 +866,7 @@ body.wd-has-dock > #app {
 
 .wd-trade-ticket-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -859,12 +910,13 @@ body.wd-has-dock > #app {
 
 .wd-trade-ticket-fields {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.375rem;
 }
 
 .wd-trade-field {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 0.125rem;
 }
@@ -875,6 +927,8 @@ body.wd-has-dock > #app {
 }
 
 .wd-trade-input {
+  width: 100%;
+  min-width: 0;
   height: 1.75rem;
   font-variant-numeric: tabular-nums;
 }
@@ -1676,4 +1730,108 @@ body.wd-has-dock > #app {
 
 .wd-watch-delete:hover {
   background: color-mix(in oklab, var(--destructive, #ef5350) 16%, transparent);
+}
+
+/* --- Touch ------------------------------------------------------------------------------ */
+
+/* The app's own controls at a fingertip's size, alongside src/app.css's `(pointer: coarse)`
+   block for the library's. Keyed off the pointer, not the width: a tablet is wide and still a
+   finger. */
+@media (pointer: coarse) {
+  .wd-rail-button {
+    padding: 0.375rem 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .wd-ws-pick {
+    padding-block: 0.625rem;
+  }
+
+  .wd-ws-action {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .wd-notify-dismiss {
+    padding: 0.25rem 0.5rem;
+    font-size: 1rem;
+  }
+
+  .wd-notify-row {
+    padding-right: 2.5rem;
+  }
+
+  .wd-window .kc-button,
+  .wd-window .kc-icon-button {
+    height: 2.25rem;
+  }
+
+  .wd-window .kc-icon-button {
+    width: 2.25rem;
+  }
+
+  .wd-window-corner {
+    width: 1.5rem;
+    height: 1.5rem;
+  }
+
+  .wd-window-edge {
+    top: -6px;
+    height: 12px;
+  }
+
+  .wd-trade-seg,
+  .wd-trade-tab {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .wd-trade-input,
+  .wd-replay-select,
+  .wd-replay-input,
+  .wd-replay-field .wd-replay-input,
+  .wd-replay-field .wd-replay-select,
+  .wd-watch-input {
+    height: 2.5rem;
+  }
+
+  .wd-watch-menu-item {
+    padding: 0.625rem 0.75rem;
+  }
+
+  /* iOS zooms the page into any focused input under 16px and leaves it zoomed -- see the same
+     rule for the library's inputs in src/app.css. `:root` lifts the whole list one class above
+     every compact size these inputs carry (each a single class, and the library's `.kc-input`
+     loads after this file), so the one size every one of them must be on a touch screen wins. */
+  :root
+    :is(
+      .wd-login-input,
+      .wd-ws-rename,
+      .wd-trade-input,
+      .wd-trade-cell-input,
+      .wd-replay-input,
+      .wd-replay-select,
+      .wd-watch-input,
+      .wd-layer-panel input,
+      .wd-layer-panel select
+    ) {
+    font-size: max(16px, 1rem);
+  }
+}
+
+/* --- Phone -------------------------------------------------------------------------------- */
+
+@media (max-width: 639px) {
+  /* The docked account on a phone: 70vh of an iPhone leaves the chart a sliver. */
+  .wd-dockhost {
+    max-height: 55dvh;
+  }
+
+  /* A floating window may be as wide as the screen, less its edge margins. */
+  .wd-window[data-mode='float'] {
+    max-width: calc(100vw - 16px);
+  }
+
+  .wd-replay-window[data-mode='float'] {
+    min-width: 0;
+  }
 }

@@ -133,13 +133,16 @@ export function createNotificationBell(center: NotificationCenter): Notification
     node.style.position = 'fixed'
     node.style.top = `${rect.bottom + 4}px`
     // Right-aligned to the caret, then clamped: the bell sits at the rail's right edge, so
-    // a left-aligned panel would hang off the viewport at every window width.
+    // a left-aligned panel would hang off the viewport at every window width. Narrower than
+    // its usual width only on a screen that cannot hold it (a phone), where it spans the
+    // screen less the margins.
+    const width = Math.min(PANEL_WIDTH, window.innerWidth - 2 * PANEL_MARGIN)
     const left = Math.min(
-      Math.max(PANEL_MARGIN, rect.right - PANEL_WIDTH),
-      Math.max(PANEL_MARGIN, window.innerWidth - PANEL_WIDTH - PANEL_MARGIN)
+      Math.max(PANEL_MARGIN, rect.right - width),
+      Math.max(PANEL_MARGIN, window.innerWidth - width - PANEL_MARGIN)
     )
     node.style.left = `${left}px`
-    node.style.width = `${PANEL_WIDTH}px`
+    node.style.width = `${width}px`
   }
 
   function renderPanel(node: HTMLElement): void {

@@ -16,6 +16,8 @@
 //
 // The geometry is pure and tested (window.test.ts); everything else here is DOM.
 
+import { focusCenter } from './focus'
+
 export type WindowMode = 'float' | 'dock'
 
 export interface Point {
@@ -66,11 +68,20 @@ export function clampPosition(pos: Point, size: Size, bounds: Bounds, margin = E
  * `bottom` is for a small window that belongs near the chart's own controls: centred on the
  * bottom, above the time axis — the least valuable strip of a chart, and where the eye is.
  * `center` is for a large one, which would otherwise cover exactly the strip the small ones
- * anchor to. Two windows sharing an anchor would open stacked on each other. */
+ * anchor to. Two windows sharing an anchor would open stacked on each other.
+ *
+ * `centerX`, when given, replaces the bounds' own horizontal centre: on a page spanning
+ * displays that is the active pane's (./focus.ts), not the bezel between two monitors. */
 export type FloatAnchor = 'bottom' | 'center'
 
-export function defaultPosition(size: Size, bounds: Bounds, anchor: FloatAnchor = 'bottom'): Point {
-  const x = bounds.left + (bounds.right - bounds.left - size.width) / 2
+export function defaultPosition(
+  size: Size,
+  bounds: Bounds,
+  anchor: FloatAnchor = 'bottom',
+  centerX?: number
+): Point {
+  const x =
+    centerX === undefined ? bounds.left + (bounds.right - bounds.left - size.width) / 2 : centerX - size.width / 2
   const y =
     anchor === 'center'
       ? bounds.top + (bounds.bottom - bounds.top - size.height) / 2
@@ -296,6 +307,10 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
       ? { width: stored.width, height: stored.height }
       : (options.floatSize ?? null)
   let dockHeight = stored?.dockHeight
+  // Where an anchored window centres on a page wide enough to span displays (./focus.ts).
+  // Read when it is shown or floated, never per reflow: a window must not jump to another
+  // monitor because a pane over there was clicked while it was open.
+  let focusX = focusCenter()
 
   const root = document.createElement('div')
   root.className = ['wd-window', options.className ?? '', options.theme ?? ''].filter(Boolean).join(' ')
@@ -386,7 +401,9 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
     const current = { width: root.offsetWidth, height: root.offsetHeight }
     if (current.width === 0 || current.height === 0) return
     applyPosition(
-      anchored || !position ? defaultPosition(current, box, options.floatAnchor) : clampPosition(position, current, box)
+      anchored || !position
+        ? defaultPosition(current, box, options.floatAnchor, focusX ?? undefined)
+        : clampPosition(position, current, box)
     )
     // Until it has been placed the card would render at (0, 0); the class is what reveals it.
     root.classList.add('is-placed')
@@ -437,6 +454,7 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
     // A window floated for the first time has no remembered spot, so it opens at the default
     // one rather than wherever it last was as a docked strip.
     if (mode === 'float' && !position) anchored = true
+    if (anchored) focusX = focusCenter()
     place()
     save()
     options.onModeChange?.(mode)
@@ -455,7 +473,10 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
     visible = next
     root.classList.toggle('is-hidden', !visible)
     currentDockHost()?.refresh()
-    if (visible) reflow()
+    if (visible) {
+      if (anchored) focusX = focusCenter()
+      reflow()
+    }
   }
 
   // -- dragging (and drag to dock / out of the dock) ---------------------------------------

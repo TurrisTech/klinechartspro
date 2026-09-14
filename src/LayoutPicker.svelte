@@ -5,10 +5,13 @@
   import i18n from './i18n'
   import type { Wall } from './state/wall.svelte'
 
-  let { wall, locale, portalProps }: {
+  let { wall, locale, portalProps, inline = false }: {
     wall: Wall
     locale: string
     portalProps: { to: HTMLElement } | undefined
+    /** Just the preset grid, for a menu that already is a popover (the toolbar's folded
+     *  "more" menu). Its options are still Popover.Close, so a pick closes THAT menu. */
+    inline?: boolean
   } = $props()
 
   // Each preset's mini-preview is built from the exact same `rows` its real grid renders
@@ -29,6 +32,28 @@
   }
 </script>
 
+{#snippet presetGrid()}
+  <div class="kc-layout-grid">
+    {#each wall.layouts as preset (preset.id)}
+      <Popover.Close
+        class="kc-layout-option"
+        aria-checked={preset.id === wall.layoutId}
+        aria-label={i18n(`layout_${preset.id}`, locale)}
+        onclick={() => wall.setLayout(preset.id)}
+      >
+        <div class="kc-layout-preview" style={previewStyle(preset.rows)}>
+          {#each previewCells(preset.rows) as cell (cell)}
+            <span class="kc-layout-cell" style={`grid-area: ${cell};`}></span>
+          {/each}
+        </div>
+      </Popover.Close>
+    {/each}
+  </div>
+{/snippet}
+
+{#if inline}
+  {@render presetGrid()}
+{:else}
 <Popover.Root>
   <Tooltip.Root>
     <Tooltip.Trigger>
@@ -45,22 +70,8 @@
   <Popover.Portal {...portalProps}>
     <Popover.Content align="end" sideOffset={4} class="kc-popover kc-layout-popover">
       <div class="kc-popover-header">{i18n('layout', locale)}</div>
-      <div class="kc-layout-grid">
-        {#each wall.layouts as preset (preset.id)}
-          <Popover.Close
-            class="kc-layout-option"
-            aria-checked={preset.id === wall.layoutId}
-            aria-label={i18n(`layout_${preset.id}`, locale)}
-            onclick={() => wall.setLayout(preset.id)}
-          >
-            <div class="kc-layout-preview" style={previewStyle(preset.rows)}>
-              {#each previewCells(preset.rows) as cell (cell)}
-                <span class="kc-layout-cell" style={`grid-area: ${cell};`}></span>
-              {/each}
-            </div>
-          </Popover.Close>
-        {/each}
-      </div>
+      {@render presetGrid()}
     </Popover.Content>
   </Popover.Portal>
 </Popover.Root>
+{/if}
