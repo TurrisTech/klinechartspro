@@ -1,3 +1,4 @@
+import type { TileHint } from '../indicatortiles/index'
 import { hasFeature } from '../capabilities'
 import { apiGet, apiUrl, OhlcvApiError } from '../config'
 import type { Page, PointsRequest, SignalCatalogueEntry, SignalPoint, SignalSpec, SignalsRequest } from './types'
@@ -144,6 +145,10 @@ export function toPage<P extends { date: number }>(
   const points = envelope.points
   const last = points[points.length - 1]
   const full = points.length >= limit
+  const hint = (envelope as { tiles?: TileHint }).tiles
+  if (hint !== undefined && typeof hint?.path === 'string') {
+    return { points, nextFrom: full && last ? last.date + 1 : null, ...extra, tiles: hint }
+  }
   // `nextFrom` is driven by `points` alone. An auxiliary array is a different kind of row,
   // not more of the same one, so it has no cursor of its own -- the server caps each array
   // independently and a capped `points` is what tells the host to come back for more.

@@ -40,4 +40,5 @@ ENV NGINX_ENVSUBST_FILTER=^TILES_
 # Defaults to dev, by the same rule as the store root and the databases: nothing here may
 # default to production. The prod release sets this explicitly.
 ENV TILES_BUCKET=marketdata-tiles-dev
+ENV TILES_INDICATORS_BUCKET=marketdata-indicators-dev
 EXPOSE 80

@@ -55,6 +55,7 @@ BASE_PATH="$BASE_PATH" bun run scripts/build-client.ts
 # The image default for the tiles bucket. Per-environment in practice -- the Helm chart sets
 # TILES_BUCKET on the container -- but an image must not default to production, so this is dev.
 TILES_BUCKET="${TILES_BUCKET:-marketdata-tiles-dev}"
+TILES_INDICATORS_BUCKET="${TILES_INDICATORS_BUCKET:-marketdata-indicators-dev}"
 
 # --- 2. assemble the image layer (mirrors the Dockerfile runtime stage's COPYs and ENVs) ----
 echo "==> staging image layer"
@@ -76,6 +77,7 @@ if [ -n "${OUTPUT:-}" ]; then
   "$CRANE" mutate "$BASE" --append "$LAYER" \
     --label "app.wdashboard.base-path=$BASE_PATH" --exposed-ports 80/tcp \
     --env "NGINX_ENVSUBST_FILTER=^TILES_" --env "TILES_BUCKET=$TILES_BUCKET" \
+    --env "TILES_INDICATORS_BUCKET=$TILES_INDICATORS_BUCKET" \
     -t "$REF" -o "$OUTPUT"
   echo "==> wrote $OUTPUT (tagged $REF)"
 else
@@ -83,6 +85,7 @@ else
   "$CRANE" mutate "$BASE" --append "$LAYER" \
     --label "app.wdashboard.base-path=$BASE_PATH" --exposed-ports 80/tcp \
     --env "NGINX_ENVSUBST_FILTER=^TILES_" --env "TILES_BUCKET=$TILES_BUCKET" \
+    --env "TILES_INDICATORS_BUCKET=$TILES_INDICATORS_BUCKET" \
     -t "$REF"
   echo "==> pushed $REF"
   "$CRANE" digest "$REF" | sed 's/^/    digest: /'
