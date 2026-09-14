@@ -3,6 +3,7 @@ import { formatInstant } from '../trading/format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, sortByLength, validateBase } from './timeframes'
+import { placeOverFocus } from '../chrome/focus'
 import { createDockableWindow } from '../chrome/window'
 
 // GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
@@ -461,6 +462,7 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
     if (e.target === overlay) close()
   })
   document.body.appendChild(overlay)
+  placeOverFocus(overlay, dialog)
   startInput.focus()
 
   function close(): void {

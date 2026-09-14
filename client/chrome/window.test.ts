@@ -64,6 +64,17 @@ describe('defaultPosition', () => {
     expect(pos.y).toBeGreaterThanOrEqual(short.top + EDGE_MARGIN)
     expect(pos.y + SIZE.height).toBeLessThanOrEqual(short.bottom)
   })
+
+  it('centres over a given focus instead -- the active pane on a page spanning displays', () => {
+    const spanning = { left: 0, top: 0, right: 3840, bottom: 1030 }
+    const pos = defaultPosition(SIZE, spanning, 'bottom', 2880)
+    expect(pos.x + SIZE.width / 2).toBe(2880)
+  })
+
+  it('keeps a focus-centred window inside its bounds', () => {
+    const spanning = { left: 0, top: 0, right: 3840, bottom: 1030 }
+    expect(defaultPosition(SIZE, spanning, 'center', 3830).x).toBe(3840 - EDGE_MARGIN - SIZE.width)
+  })
 })
 
 describe('clampSize', () => {

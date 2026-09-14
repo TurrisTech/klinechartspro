@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, untrack } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import {
     utils,
     type Chart,
@@ -40,6 +40,7 @@
   import ArrowLeftRightIcon from '@lucide/svelte/icons/arrow-left-right'
   import CandlestickIcon from '@lucide/svelte/icons/chart-candlestick'
   import ClockIcon from '@lucide/svelte/icons/clock'
+  import EllipsisIcon from '@lucide/svelte/icons/ellipsis'
   import {
     Avatar,
     Checkbox,
@@ -67,6 +68,8 @@
     SymbolInfo
   } from './types'
   import { indicatorSettingsFor } from './config/indicators'
+  import { fitWall, panePlacement } from './config/fit'
+  import { NARROW_SHELL_WIDTH, shellSize } from './config/responsive'
   import { getOptions } from './config/settings'
   import {
     createTimezoneSelectOptions,
@@ -235,6 +238,62 @@
     checkIndicatorParams(indicatorSettings)
   })
   let fullscreen = $state(false)
+  // iPhone Safari has no element fullscreen at all (only video), and a button that does
+  // nothing when tapped reads as broken.
+  const fullscreenSupported = typeof document !== 'undefined' && Boolean(document.fullscreenEnabled)
+
+  // -- Responsive layout ------------------------------------------------------------------
+  // Three measurements, each answering one question (see src/config/responsive.ts for why
+  // they are measured rather than container-queried):
+  //   the shell  -- which size class: how dialogs sit, whether the rail overlays the chart;
+  //   the wall   -- whether the layout preset can be drawn as declared (src/config/fit.ts);
+  //   the toolbar -- how much of it has to fold away, which depends on the app's own slots.
+  let shellWidth = $state(0)
+  let shellHeight = $state(0)
+  let wallElement = $state<HTMLDivElement>()
+  let wallWidth = $state(0)
+  let wallHeight = $state(0)
+  let toolbarElement = $state<HTMLElement>()
+  let paneStrip = $state<HTMLDivElement>()
+  const size = $derived(shellSize(shellWidth, shellHeight))
+  const narrow = $derived(shellWidth > 0 && shellWidth < NARROW_SHELL_WIDTH)
+
+  // How much of the toolbar is folded: 0 everything inline; 1 the icon actions (layout, the
+  // sync switches, indicators, timezone, settings, screenshot, fullscreen) move into one
+  // "more" menu; 2 the starred period chips go too -- the timeframe dropdown beside them
+  // still shows and picks the period -- and the symbol button shows only its ticker. Chosen
+  // as the least folding under which nothing overflows, by trying each in turn: the width
+  // the app's slots take (the workspace switcher's name, however many layer toggles) is not
+  // known to this component, and a fixed breakpoint would be wrong for every app but one.
+  // Past tier 2 the toolbar scrolls sideways rather than clipping (app.css).
+  const TOOLBAR_TIERS = 2
+  let toolbarTier = $state(0)
+  let toolbarFitSeq = 0
+  let toolbarMeasured = ''
+  async function fitToolbar(force = false): Promise<void> {
+    const element = toolbarElement
+    if (!element) return
+    // The loop guard: nothing in the slots is styled by tier, so if neither the toolbar's
+    // width nor either slot's has changed, the answer has not either. Without it a slot's
+    // own ResizeObserver notification would re-run the fit that caused it, every frame.
+    const key = `${element.clientWidth}:${toolbarSlot?.offsetWidth ?? 0}:${toolbarRightSlot?.offsetWidth ?? 0}`
+    if (!force && key === toolbarMeasured) return
+    toolbarMeasured = key
+    const seq = ++toolbarFitSeq
+    // Every step is a microtask, so the tiers tried and rejected here are laid out and
+    // measured but never painted.
+    for (let tier = 0; tier <= TOOLBAR_TIERS; tier++) {
+      toolbarTier = tier
+      await tick()
+      if (seq !== toolbarFitSeq) return
+      if (element.scrollWidth - element.clientWidth <= 1) return
+    }
+  }
+
+  // A shell wide enough to span displays opens its dialogs over the active pane (app.css,
+  // `[data-size='wide']`), measured when a dialog opens -- where the user is working is the
+  // pane they last touched, and the middle of a window across two monitors is the bezel.
+  let dialogAnchorX = $state<number | null>(null)
 
   let overlayMode = $state<OverlayMode>('normal')
   let overlaysLocked = $state(false)
@@ -348,6 +407,18 @@
   // `new KLineChartPro()` instances mounted on the same page.
   const bus = new SyncBus()
 
+  // How the wall's preset is drawn in the room it has now -- see src/config/fit.ts.
+  const fit = $derived(fitWall(wall.layout, wallWidth, wallHeight))
+  const gridStyle = $derived.by(() => {
+    if (fit.mode === 'preset') {
+      return `grid-template-areas: ${wall.layout.gridTemplateAreas}; grid-template-columns: ${wall.layout.gridTemplateColumns}; grid-template-rows: ${wall.layout.gridTemplateRows};`
+    }
+    if (fit.mode === 'reflow') {
+      return `grid-template-columns: repeat(${fit.columns}, minmax(0, 1fr)); grid-template-rows: repeat(${fit.rows}, minmax(0, 1fr));`
+    }
+    return 'grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);'
+  })
+
   function toChartProPane(pane: (typeof wall.panes)[number]): ChartProPane {
     return {
       id: pane.id,
@@ -370,6 +441,13 @@
   const portalProps = $derived(rootElement ? { to: rootElement } : undefined)
   const timezoneOptions = $derived(createTimezoneSelectOptions(locale))
   const settingOptions = $derived(getOptions(locale))
+
+  const toolbarActions = $derived([
+    { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
+    { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
+    { label: i18n('setting', locale), icon: SettingsIcon, action: openSettings },
+    { label: i18n('screenshot', locale), icon: CameraIcon, action: takeScreenshot }
+  ])
 
   const iconButtonClass = (active = false) => `kc-button kc-icon-button${active ? ' is-active' : ''}`
 
@@ -531,10 +609,68 @@
     const handleFullscreen = () => { fullscreen = Boolean(document.fullscreenElement) }
     document.addEventListener('fullscreenchange', handleFullscreen)
 
+    // One observer for every box the layout reads. None of what it writes resizes an
+    // observed box at the same depth or shallower -- the toolbar is a fixed height whatever
+    // its tier, and a fit change resizes the panes INSIDE the wall -- so it cannot feed a
+    // ResizeObserver loop.
+    const observer = new ResizeObserver(() => {
+      if (rootElement) {
+        shellWidth = rootElement.clientWidth
+        shellHeight = rootElement.clientHeight
+      }
+      if (wallElement) {
+        wallWidth = wallElement.clientWidth
+        wallHeight = wallElement.clientHeight
+      }
+      void fitToolbar()
+    })
+    for (const element of [rootElement, wallElement, toolbarElement, toolbarSlot, toolbarRightSlot]) {
+      if (element) observer.observe(element)
+    }
+
     return () => {
+      observer.disconnect()
       document.removeEventListener('fullscreenchange', handleFullscreen)
       bus.dispose()
     }
+  })
+
+  // What the observer cannot see: the symbol button and the period chips change width with
+  // the active pane's instrument and timeframe, and neither is observed (both are styled by
+  // tier, which is exactly what the guard in fitToolbar cannot allow).
+  $effect(() => {
+    void wall.active.symbol
+    void railPeriods.length
+    untrack(() => { void fitToolbar(true) })
+  })
+
+  // On a one-pane-at-a-time wall the strip scrolls sideways; keep the active tab in view,
+  // including after the active pane changed from somewhere else (a restored wall).
+  $effect(() => {
+    if (fit.mode !== 'single' || !paneStrip) return
+    const activeId = wall.activeId
+    untrack(() => {
+      paneStrip
+        ?.querySelector<HTMLElement>(`[data-pane-tab="${activeId}"]`)
+        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    })
+  })
+
+  $effect(() => {
+    const open = symbolDialogOpen || indicatorDialogOpen || timezoneDialogOpen ||
+      settingsDialogOpen || screenshotDialogOpen || indicatorSettingsOpen
+    if (!open || size !== 'wide') {
+      dialogAnchorX = null
+      return
+    }
+    const activeId = wall.activeId
+    untrack(() => {
+      const paneElement = rootElement?.querySelector<HTMLElement>(`.klinecharts-pro-pane[data-pane-id="${activeId}"]`)
+      if (!rootElement || !paneElement) return
+      const shell = rootElement.getBoundingClientRect()
+      const rect = paneElement.getBoundingClientRect()
+      dialogAnchorX = rect.left + rect.width / 2 - shell.left
+    })
   })
 
   // Tracks syncAutoEnabled's PREVIOUS value so the alignment below fires on the transition
@@ -617,9 +753,14 @@
   })
 </script>
 
-<div bind:this={rootElement} class="klinecharts-pro-shell">
+<div
+  bind:this={rootElement}
+  class="klinecharts-pro-shell"
+  data-size={size}
+  style={dialogAnchorX === null ? undefined : `--kc-dialog-anchor-x: ${dialogAnchorX}px;`}
+>
   <Tooltip.Provider delayDuration={250}>
-    <header class="kc-toolbar">
+    <header class="kc-toolbar" bind:this={toolbarElement} data-tier={toolbarTier}>
       <Tooltip.Root>
         <Tooltip.Trigger class={iconButtonClass()} onclick={() => {
           drawingBarVisible = !drawingBarVisible
@@ -636,10 +777,11 @@
           {#if wall.active.symbol.logo}<Avatar.Image class="kc-avatar-image" src={wall.active.symbol.logo} alt={wall.active.symbol.ticker} />{/if}
           <Avatar.Fallback class="kc-avatar-fallback">{wall.active.symbol.ticker.slice(0, 2).toUpperCase()}</Avatar.Fallback>
         </Avatar.Root>
-        <span class="kc-truncate">{wall.active.symbol.shortName ?? wall.active.symbol.name ?? wall.active.symbol.ticker}</span>
+        <span class="kc-truncate">{toolbarTier >= 2 ? wall.active.symbol.ticker : (wall.active.symbol.shortName ?? wall.active.symbol.name ?? wall.active.symbol.ticker)}</span>
         <SearchIcon />
       </button>
 
+      {#if toolbarTier < 2}
       <Separator.Root orientation="vertical" class="kc-separator kc-separator-vertical" />
       <div class="kc-period-scroller">
         <ToggleGroup.Root type="single" class="kc-toggle-group" bind:value={selectedPeriodText}>
@@ -657,6 +799,7 @@
           {/each}
         </ToggleGroup.Root>
       </div>
+      {/if}
 
       <Popover.Root>
         <Tooltip.Root>
@@ -702,8 +845,78 @@
         </Popover.Portal>
       </Popover.Root>
 
+      {#if toolbarTier >= 1}
+      <!-- The same controls, folded: the layout presets and every sync switch inline, the
+           dialogs and fullscreen as labelled rows. A label is affordable here and an icon
+           alone is not -- there is no hover to reveal a tooltip on the touch screens this is
+           most often shown on. Folded, it comes BEFORE the app's slot: on a phone the rail
+           may still have to scroll sideways, and what scrolls out of view should be the app's
+           extras rather than the menu holding the chart's own controls. -->
+      <Popover.Root>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <Popover.Trigger {...props} class={iconButtonClass(syncSymbolEnabled || syncPeriodEnabled || syncAutoEnabled)} aria-label={i18n('more', locale)}>
+                <EllipsisIcon />
+              </Popover.Trigger>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Portal {...portalProps}>
+            <Tooltip.Content class="kc-tooltip">{i18n('more', locale)}</Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
+        <Popover.Portal {...portalProps}>
+          <Popover.Content align="end" sideOffset={4} collisionPadding={8} class="kc-popover kc-more-popover">
+            <div class="kc-popover-header">{i18n('layout', locale)}</div>
+            <LayoutPicker {wall} {locale} {portalProps} inline />
+            <Separator.Root class="kc-separator kc-menu-separator" />
+            <div class="kc-popover-header">{i18n('sync', locale)}</div>
+            <div class="kc-field-group kc-menu-fields">
+              {#each [
+                { id: 'symbol', label: i18n('sync_symbol', locale), checked: syncSymbolEnabled, disabled: false, set: (on: boolean) => { syncSymbolEnabled = on } },
+                { id: 'period', label: i18n('sync_period', locale), checked: syncPeriodEnabled, disabled: false, set: (on: boolean) => { syncPeriodEnabled = on } },
+                { id: 'auto', label: i18n('sync_auto', locale), checked: syncAutoEnabled, disabled: false, set: (on: boolean) => { syncAutoEnabled = on } },
+                { id: 'crosshair', label: i18n('sync_crosshair', locale), checked: syncCrosshairEnabled, disabled: false, set: (on: boolean) => { syncCrosshairEnabled = on } },
+                { id: 'time', label: i18n('sync_time', locale), checked: syncTimeEnabled && !syncAutoEnabled, disabled: syncAutoEnabled, set: (on: boolean) => { syncTimeEnabled = on } }
+              ] as item (item.id)}
+                <div class="kc-field kc-field-horizontal">
+                  <label for={`more-sync-${item.id}`}>{item.label}</label>
+                  <Switch.Root class="kc-switch" id={`more-sync-${item.id}`} disabled={item.disabled} checked={item.checked} onCheckedChange={item.set}>
+                    <Switch.Thumb class="kc-switch-thumb" />
+                  </Switch.Root>
+                </div>
+              {/each}
+              {#if syncAutoEnabled}
+                <p class="kc-field-hint">{i18n('sync_time_auto_hint', locale)}</p>
+              {/if}
+            </div>
+            <Separator.Root class="kc-separator kc-menu-separator" />
+            <div class="kc-menu-list">
+              {#each toolbarActions as action (action.label)}
+                {@const ActionIcon = action.icon}
+                <!-- Closed first, then the dialog opened: a dialog opened while the popover
+                     is still dismissing has its open-focus taken back by the popover's
+                     return-focus to this trigger. -->
+                <Popover.Close class="kc-button kc-menu-item" onclick={() => { setTimeout(action.action, 0) }}>
+                  <ActionIcon />
+                  <span>{action.label}</span>
+                </Popover.Close>
+              {/each}
+              {#if fullscreenSupported}
+                <Popover.Close class="kc-button kc-menu-item" onclick={toggleFullscreen}>
+                  {#if fullscreen}<MinimizeIcon />{:else}<MaximizeIcon />{/if}
+                  <span>{i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}</span>
+                </Popover.Close>
+              {/if}
+            </div>
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+      {/if}
+
       <div class="kc-toolbar-slot" bind:this={toolbarSlot}></div>
 
+      {#if toolbarTier < 1}
       <div class="kc-toolbar-actions">
         <LayoutPicker {wall} {locale} {portalProps} />
         <!-- The three wall-wide switches, in the order they narrow what a pane may differ by:
@@ -752,12 +965,7 @@
           {locale}
           {portalProps}
         />
-        {#each [
-          { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
-          { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
-          { label: i18n('setting', locale), icon: SettingsIcon, action: openSettings },
-          { label: i18n('screenshot', locale), icon: CameraIcon, action: takeScreenshot }
-        ] as action (action.label)}
+        {#each toolbarActions as action (action.label)}
           {@const ActionIcon = action.icon}
           <Tooltip.Root>
             <Tooltip.Trigger class={iconButtonClass()} onclick={action.action} aria-label={action.label}>
@@ -768,6 +976,7 @@
             </Tooltip.Portal>
           </Tooltip.Root>
         {/each}
+        {#if fullscreenSupported}
         <Tooltip.Root>
           <Tooltip.Trigger class={iconButtonClass()} onclick={toggleFullscreen} aria-label={i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}>
             {#if fullscreen}<MinimizeIcon />{:else}<MaximizeIcon />{/if}
@@ -776,14 +985,19 @@
             <Tooltip.Content class="kc-tooltip">{i18n(fullscreen ? 'exit_full_screen' : 'full_screen', locale)}</Tooltip.Content>
           </Tooltip.Portal>
         </Tooltip.Root>
+        {/if}
       </div>
+      {/if}
 
       <div class="kc-toolbar-right-slot" bind:this={toolbarRightSlot}></div>
     </header>
 
     <div class="klinecharts-pro-chart-area">
       {#if drawingBarVisible}
-        <aside class="kc-drawing-toolbar">
+        <!-- On a narrow shell the rail overlays the chart rather than taking a column from
+             it: 48px of a 390px phone is an eighth of every pane, and toggling it would
+             otherwise resize -- and re-layout -- every chart on the wall. -->
+        <aside class={`kc-drawing-toolbar${narrow ? ' is-overlay' : ''}`}>
           {#each drawingGroups as group (group.labelKey)}
             {@const GroupIcon = group.icon}
             <Popover.Root>
@@ -855,15 +1069,40 @@
         </aside>
       {/if}
 
+      <div class="kc-wall" bind:this={wallElement}>
+      {#if fit.mode === 'single'}
+        <!-- One pane at a time (src/config/fit.ts): the others are still mounted and live
+             behind it, and a tab brings one forward by making it the active pane -- which is
+             also what every toolbar control already acts on. -->
+        <div class="kc-pane-strip" role="tablist" aria-label={i18n('panes', locale)} bind:this={paneStrip}>
+          {#each wall.visiblePanes as pane, index (pane.id)}
+            <button
+              type="button"
+              role="tab"
+              class="kc-pane-tab"
+              data-pane-tab={pane.id}
+              aria-selected={pane.id === wall.activeId}
+              onclick={() => wall.activate(pane.id)}
+            >
+              <span class="kc-pane-tab-index">{index + 1}</span>
+              <span class="kc-truncate">{pane.symbol?.shortName ?? pane.symbol?.ticker ?? ''}</span>
+              <span class="kc-pane-tab-period">{pane.period?.text ?? ''}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
       <div
         class="klinecharts-pro-grid"
         data-pane-count={wall.layout.paneCount}
-        style={`grid-template-areas: ${wall.layout.gridTemplateAreas}; grid-template-columns: ${wall.layout.gridTemplateColumns}; grid-template-rows: ${wall.layout.gridTemplateRows};`}
+        data-fit={fit.mode}
+        style={gridStyle}
       >
-        {#each wall.visiblePanes as pane (pane.id)}
+        {#each wall.visiblePanes as pane, index (pane.id)}
           <ChartPane
             {pane}
             active={pane.id === wall.activeId}
+            placement={fit.mode === 'preset' ? undefined : panePlacement(fit, index, wall.visiblePanes.length, pane.id)}
+            concealed={fit.mode === 'single' && pane.id !== wall.activeId}
             {theme}
             {styles}
             {locale}
@@ -896,6 +1135,7 @@
             }}
           />
         {/each}
+      </div>
       </div>
     </div>
 

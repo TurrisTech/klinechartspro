@@ -91,6 +91,17 @@
 	gap: 0.25rem;
 	border-bottom: 1px solid var(--border);
 	padding: 0 0.5rem;
+	/* The last resort, past the most folding ChartPro.svelte does (its `toolbarTier`): an app
+	   whose slots alone outgrow a phone gets a rail that scrolls sideways rather than one whose
+	   right-hand controls are clipped off and unreachable. No visible scrollbar -- it would
+	   take height from a rail that has none to give, and a swipe is how a phone scrolls. */
+	overflow-x: auto;
+	overflow-y: hidden;
+	scrollbar-width: none;
+}
+
+.kc-toolbar::-webkit-scrollbar {
+	display: none;
 }
 
 .kc-button {
@@ -147,6 +158,10 @@
 
 .kc-symbol-button {
 	max-width: 13rem;
+}
+
+.kc-toolbar[data-tier='2'] .kc-symbol-button {
+	max-width: 8rem;
 }
 
 .kc-avatar {
@@ -308,7 +323,9 @@
 
 .kc-timeframe-popover {
 	width: 14rem;
-	max-height: 24rem;
+	/* bits-ui publishes the room left between the trigger and the viewport edge; a landscape
+	   phone has less than 24rem of it. */
+	max-height: min(24rem, var(--bits-popover-content-available-height, 24rem));
 	overflow-y: auto;
 }
 
@@ -450,6 +467,25 @@
 	gap: 0.25rem;
 	border-right: 1px solid var(--border);
 	padding: 0.5rem 0;
+	/* Five tool groups, four toggles and the app's footer are taller than a landscape phone. */
+	overflow-x: hidden;
+	overflow-y: auto;
+	scrollbar-width: none;
+}
+
+.kc-drawing-toolbar::-webkit-scrollbar {
+	display: none;
+}
+
+/* Narrow shells (ChartPro.svelte `narrow`): over the chart, not beside it. */
+.kc-drawing-toolbar.is-overlay {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	z-index: 6;
+	background: var(--background);
+	box-shadow: 4px 0 16px rgb(0 0 0 / 0.24);
 }
 
 .kc-rail-footer {
@@ -487,6 +523,8 @@
 
 .kc-popover {
 	width: 16rem;
+	/* Every popover's declared width is a desktop width; none may be wider than the screen. */
+	max-width: calc(100vw - 1rem);
 	padding: 0.5rem;
 }
 
@@ -498,7 +536,7 @@
 
 .kc-tool-scroll-area {
 	position: relative;
-	max-height: 18rem;
+	max-height: min(18rem, calc(var(--bits-popover-content-available-height, 21rem) - 3rem));
 	overflow: hidden;
 }
 
@@ -578,19 +616,26 @@
 }
 
 .kc-dialog-sm {
-	max-width: 24rem;
+	--kc-dialog-width: 24rem;
 }
 
 .kc-dialog-lg {
-	max-width: 32rem;
+	--kc-dialog-width: 32rem;
 }
 
 .kc-dialog-xl {
-	max-width: 36rem;
+	--kc-dialog-width: 36rem;
 }
 
 .kc-dialog-2xl {
-	max-width: 42rem;
+	--kc-dialog-width: 42rem;
+}
+
+.kc-dialog-sm,
+.kc-dialog-lg,
+.kc-dialog-xl,
+.kc-dialog-2xl {
+	max-width: var(--kc-dialog-width);
 }
 
 .kc-dialog-header {
@@ -886,6 +931,15 @@
 	flex: 1;
 }
 
+/* The wall column: the pane strip (only while panes are shown one at a time) above the grid. */
+.kc-wall {
+	display: flex;
+	min-width: 0;
+	min-height: 0;
+	flex: 1;
+	flex-direction: column;
+}
+
 /* The wall: one CSS Grid holding every pane. Its grid-template-areas/-columns/-rows are set
    inline from the active layout preset (src/config/layouts.ts); each .klinecharts-pro-pane's
    own `grid-area` inline style is that pane's token ('p1'..'p12'). */
@@ -926,9 +980,17 @@
 	box-shadow: inset 0 0 0 2px var(--kc-active-pane);
 }
 
-/* A single-pane wall has nothing to disambiguate. */
-.klinecharts-pro-grid[data-pane-count='1'] .klinecharts-pro-pane::after {
+/* A single-pane wall has nothing to disambiguate, and neither does one showing its panes one
+   at a time -- the strip's selected tab already says which. */
+.klinecharts-pro-grid[data-pane-count='1'] .klinecharts-pro-pane::after,
+.klinecharts-pro-grid[data-fit='single'] .klinecharts-pro-pane::after {
 	display: none;
+}
+
+/* Behind the active pane in the same cell (src/config/fit.ts): laid out at full size, so it
+   keeps drawing at the size it will be shown at, but not painted. `inert` handles input. */
+.klinecharts-pro-pane[data-concealed] {
+	visibility: hidden;
 }
 
 .klinecharts-pro-widget {
@@ -1001,5 +1063,239 @@
 	.klinecharts-pro {
 		min-height: 520px;
 		border-radius: 0;
+	}
+}
+
+/* ---------------------------------------------------------------------------------------
+   Responsive: the pane strip, the folded toolbar menu, and the size classes ChartPro.svelte
+   stamps on the shell as `data-size` (src/config/responsive.ts).
+   --------------------------------------------------------------------------------------- */
+
+.kc-pane-strip {
+	display: flex;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 0.25rem;
+	overflow-x: auto;
+	border-bottom: 1px solid var(--border);
+	padding: 0.25rem 0.5rem;
+	scrollbar-width: none;
+}
+
+.kc-pane-strip::-webkit-scrollbar {
+	display: none;
+}
+
+.kc-pane-tab {
+	display: inline-flex;
+	height: 1.75rem;
+	max-width: 12rem;
+	flex-shrink: 0;
+	align-items: center;
+	gap: 0.375rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md);
+	padding: 0 0.5rem;
+	color: var(--muted-foreground);
+	font-size: 0.75rem;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.kc-pane-tab[aria-selected='true'] {
+	border-color: var(--kc-active-pane);
+	background: color-mix(in oklab, var(--kc-active-pane) 14%, transparent);
+	color: var(--foreground);
+}
+
+.kc-pane-tab-index {
+	color: var(--muted-foreground);
+	font-variant-numeric: tabular-nums;
+}
+
+.kc-pane-tab-period {
+	font-weight: 600;
+}
+
+.kc-more-popover {
+	width: 17rem;
+	max-height: min(40rem, var(--bits-popover-content-available-height, 40rem));
+	overflow-y: auto;
+	overscroll-behavior: contain;
+}
+
+.kc-menu-separator {
+	width: 100%;
+	height: 1px;
+	margin: 0.5rem 0;
+}
+
+.kc-more-popover .kc-layout-grid {
+	padding: 0 0.25rem;
+}
+
+.kc-menu-fields {
+	gap: 0.5rem;
+	padding: 0 0.5rem 0.25rem;
+}
+
+.kc-menu-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+}
+
+.kc-menu-item {
+	width: 100%;
+	justify-content: flex-start;
+}
+
+/* Phone (narrow, or too short for a centred card): every dialog is the whole shell. Its
+   content scrolls, its close button stays in the corner, and the confirm row sticks to the
+   bottom where a thumb is -- rather than scrolling out of view below a long form. */
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-content {
+	top: 0;
+	left: 0;
+	width: 100%;
+	max-width: none;
+	height: 100%;
+	max-height: none;
+	transform: none;
+	align-content: start;
+	border: 0;
+	border-radius: 0;
+	padding: 1rem 1rem 0;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-content > :last-child:not(.kc-dialog-footer) {
+	margin-bottom: 1rem;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-close {
+	top: 0.5rem;
+	right: 0.5rem;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-footer {
+	position: sticky;
+	bottom: 0;
+	background: var(--popover);
+	padding: 0.75rem 0 1rem;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-command-list {
+	max-height: none;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-indicator-scroll-area {
+	height: auto;
+	padding-right: 0;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-setting-select {
+	width: 9rem;
+}
+
+/* Wide (spanning displays): centred over the active pane's column, clamped inside the shell
+   -- ChartPro.svelte measures `--kc-dialog-anchor-x` when a dialog opens. At this width the
+   largest dialog always fits, so its width is its declared one. */
+.klinecharts-pro-shell[data-size='wide'] .kc-dialog-content {
+	left: clamp(
+		calc(var(--kc-dialog-width, 32rem) / 2 + 1rem),
+		var(--kc-dialog-anchor-x, 50%),
+		calc(100% - var(--kc-dialog-width, 32rem) / 2 - 1rem)
+	);
+}
+
+/* Touch: every control at least ~40px, the size a fingertip lands on without a second try.
+   Keyed off the pointer rather than the width -- a tablet is wide and still a finger, and a
+   narrow desktop window is still a mouse. */
+@media (pointer: coarse) {
+	.kc-toolbar {
+		height: 3.25rem;
+	}
+
+	.kc-button {
+		height: 2.5rem;
+	}
+
+	.kc-icon-button {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+
+	.kc-toggle-item {
+		height: 2.25rem;
+		padding: 0 0.75rem;
+	}
+
+	.kc-drawing-toolbar {
+		width: 3.25rem;
+	}
+
+	.kc-separator-horizontal {
+		width: 2.5rem;
+	}
+
+	.kc-star-toggle {
+		width: 2.5rem;
+		height: 2.5rem;
+	}
+
+	.kc-timeframe-item {
+		height: 2.5rem;
+	}
+
+	.kc-command-item {
+		padding: 0.75rem 0.5rem;
+	}
+
+	.kc-checkbox {
+		width: 1.25rem;
+		height: 1.25rem;
+	}
+
+	.kc-checkbox-field {
+		min-height: 2.25rem;
+	}
+
+	.kc-switch {
+		width: 2.5rem;
+		height: 1.5rem;
+	}
+
+	.kc-switch-thumb {
+		width: 1.375rem;
+		height: 1.375rem;
+	}
+
+	.kc-switch[data-state='checked'] .kc-switch-thumb,
+	.kc-switch[data-checked] .kc-switch-thumb {
+		transform: translateX(1rem);
+	}
+
+	.kc-field-horizontal {
+		min-height: 2.5rem;
+	}
+
+	.kc-layout-option {
+		padding: 0.5rem;
+	}
+
+	.kc-pane-tab {
+		height: 2.25rem;
+	}
+
+	.klinecharts-pro-live-jump {
+		width: 2.25rem;
+		height: 2.25rem;
+	}
+
+	/* iOS zooms the whole page into any input whose text is under 16px when it takes focus,
+	   and does not zoom back out -- the chart is left magnified until the user pinches. */
+	.kc-input,
+	.kc-select-trigger,
+	.kc-command-input {
+		font-size: max(16px, 1rem);
 	}
 }

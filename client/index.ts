@@ -2,6 +2,7 @@ import { KLineChartPro, type ChartProPane } from '../src'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot, createLayerController } from './chartlayers/controller'
+import { setFocusSource } from './chrome/focus'
 import { WdashboardDatafeed } from './datafeed'
 import {
   defaultLayout,
@@ -435,6 +436,13 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   if (remoteNotifications) void notifications.attach(remoteNotifications)
   const notificationCenter = mountNotificationCenter(chartPro)
 
+  // The pane the user last touched, which is where a body-level card opens on a page wide
+  // enough to span displays (client/chrome/focus.ts).
+  setFocusSource(() => {
+    const pane = chartPro?.getPane(chartPro.getActivePaneId())
+    return pane?.getChart()?.getDom()?.getBoundingClientRect() ?? null
+  })
+
   const detachExtras = mountChartExtras(
     chartPro,
     [levelsController, levels2Controller],
@@ -463,6 +471,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       watches?.teardown()
       watches = null
       notificationCenter.teardown()
+      setFocusSource(null)
       if (remoteNotifications) {
         notifications.detach(remoteNotifications)
         remoteNotifications.dispose()

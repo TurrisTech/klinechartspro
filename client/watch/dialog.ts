@@ -1,3 +1,4 @@
+import { placeOverFocus } from '../chrome/focus'
 import { PRICE_DIRECTIONS, type PriceDirection } from './types'
 
 // The one dialog the feature has: set a price, say which way, then apply. Both flows the
@@ -160,6 +161,7 @@ export function openWatchDialog(options: WatchDialogOptions): WatchDialog {
     if (event.target === backdrop) close()
   })
   document.body.appendChild(backdrop)
+  placeOverFocus(backdrop, card)
   priceInput.focus()
   priceInput.select()
 

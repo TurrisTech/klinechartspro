@@ -1,6 +1,7 @@
 # client/chrome — the app's own window furniture
 
-Chrome the *app* owns, as opposed to the chart the library owns. One module today.
+Chrome the *app* owns, as opposed to the chart the library owns. Two modules: `window.ts`
+(dockable windows) and `focus.ts` (where on a very wide page a body-level card opens).
 
 ## `window.ts` — dockable windows
 
@@ -67,3 +68,18 @@ taking the wall back uninvited.
 
 `bun test client/chrome` — the geometry only (`clampPosition`, `defaultPosition`, `clampSize`,
 `clampDockHeight`, `inDropZone`), which is pure. The rest is DOM and is verified in a browser.
+
+## `focus.ts` — the active pane on a page spanning displays
+
+A window stretched across two or three monitors has its centre on a bezel, and so did every
+dialog and floating window that opened "in the middle". At or above `WIDE_SHELL_WIDTH`
+(`src/config/responsive.ts`, 2400 CSS px — the same threshold the chart uses for its own
+dialogs) the replay start dialog, the watch dialog and every anchored floating window open
+centred over the **active pane** instead; below it nothing changes.
+
+The source is module-level, like `currentDockHost()`: `client/index.ts` sets it when a wall
+mounts and clears it on teardown. A floating window reads the focus when it is **shown or
+floated**, never per reflow — clicking a pane on another monitor must not make an open window
+jump there. It imports `src/config/responsive` directly rather than the `../../src` barrel:
+`window.test.ts` imports this file, and the barrel loads klinecharts, which reads `window` at
+import.

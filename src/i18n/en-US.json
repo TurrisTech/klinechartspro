@@ -28,6 +28,8 @@
   "layout_8h": "8 columns",
   "layout_9": "3 by 3 grid",
   "layout_12": "3 by 4 grid",
+  "more": "More",
+  "panes": "Panes",
   "sync": "Sync",
   "sync_crosshair": "Crosshair",
   "sync_time": "Click to scroll",
