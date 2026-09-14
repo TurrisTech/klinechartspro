@@ -1,5 +1,5 @@
 import type { IndicatorGroup } from '../../src'
-import { apiUrl } from '../config'
+import { apiUrl, getReadClock } from '../config'
 import { resolveSeries, type IndicatorPoint, type SeriesDoc } from '../indicators/api'
 import { fetchEnvelope, toPage } from '../plugins/api'
 import type {
@@ -15,6 +15,7 @@ import type {
 } from '../plugins/types'
 import type { Feature } from '../capabilities'
 import type { IndicatorListener } from '../stream'
+import { tieredFetch } from '../indicatortiles/source'
 import { loadRegistry, type RegistryIndicator } from './api'
 import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore } from './store'
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
@@ -121,16 +122,22 @@ export function storedSource(f: PluginFacilities, entry: RegistryIndicator, ctx:
     // whichever binding arrives first the class and the row shape are the same
     // (`store.ts`).
     createStore: storeFactory(entry.source.fold_by),
-    fetch: (range, limit) =>
-      f.points<RegistryPoint>({
-        pluginId: entry.wire.plugin,
-        vendorSymbol: `${ctx.vendor}:${ctx.ticker}`,
-        resolution: ctx.interval,
-        from: range.from,
-        to: range.to,
-        limit,
-        variant: entry.wire.variant ?? undefined
-      })
+    // Answered from indicator tiles wherever the server has said a series is tiered and the
+    // tiles cover the window (`client/indicatortiles/source.ts`); the server otherwise.
+    fetch: tieredFetch<RegistryPoint>(
+      `${entry.wire.plugin}|${entry.wire.variant ?? ''}|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,
+      (range, limit) =>
+        f.points<RegistryPoint>({
+          pluginId: entry.wire.plugin,
+          vendorSymbol: `${ctx.vendor}:${ctx.ticker}`,
+          resolution: ctx.interval,
+          from: range.from,
+          to: range.to,
+          limit,
+          variant: entry.wire.variant ?? undefined
+        }),
+      () => getReadClock() !== null
+    )
   }
 }
 

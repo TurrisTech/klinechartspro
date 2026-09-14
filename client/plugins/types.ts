@@ -1,3 +1,4 @@
+import type { TileHint } from '../indicatortiles/index'
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, Period, SymbolInfo } from '../../src'
 import type { Feature } from '../capabilities'
@@ -41,6 +42,9 @@ export interface Page<P> {
    * alone: an auxiliary array is a different kind of row and does not have its own
    * cursor. */
   arrays?: Record<string, { date: number }[]>
+  /** Where a tiered series' closed partitions can be read straight from the bucket, when the
+   * server says so (`client/indicatortiles/`). Absent for everything else. */
+  tiles?: TileHint
 }
 
 /** What the host needs from a store. `WindowStore` (store.ts) is the implementation
