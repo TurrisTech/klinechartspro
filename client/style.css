@@ -1276,6 +1276,47 @@ body.wd-has-dock > #app {
   display: none;
 }
 
+/* The draft: outlined where a working order is filled, dotted where it is solid, and in its own
+   column (its right offset is set by the layout, clear of the working orders' labels). */
+.wd-oc-tags.is-draft-column {
+  z-index: 1;
+}
+
+.wd-oc .wd-oc-tag.is-draft {
+  border-style: dashed;
+  background: color-mix(in oklab, var(--background) 96%, transparent);
+}
+
+.wd-oc-tag.is-draft .wd-oc-tag-name {
+  background: transparent;
+  color: var(--wd-oc-color);
+}
+
+.wd-oc .wd-oc-tag-btn.is-place {
+  background: var(--wd-oc-color);
+  color: #ffffff;
+}
+
+.wd-oc .wd-oc-tag-btn.is-place:disabled {
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: not-allowed;
+}
+
+.wd-oc .wd-oc-tag-btn.is-place.is-armed {
+  background: var(--kc-danger);
+}
+
+/* Composing a draft, what is already working recedes -- and comes back under the pointer, so it
+   can still be managed. */
+.wd-oc.is-drafting .wd-oc-tag:not(.is-draft):not(:hover) {
+  opacity: 0.45;
+}
+
+.wd-oc.is-drafting .wd-oc-row:not(.is-draft) {
+  opacity: 0.65;
+}
+
 /* The card. Bottom-left of the price area, clear of the jump-to-live control on the right. */
 .wd-oc-card {
   position: absolute;
@@ -1636,6 +1677,29 @@ body.wd-has-dock > #app {
 
 .wd-oc-btn.is-danger {
   color: var(--kc-danger);
+}
+
+/* The card's draft row: the thing being worked on, set apart from what is working. */
+.wd-oc-row.is-draft {
+  border-bottom: 1px dashed var(--border);
+  background: color-mix(in oklab, var(--primary) 6%, transparent);
+}
+
+.wd-oc-row.is-draft .wd-oc-row-main {
+  cursor: default;
+}
+
+.wd-oc-row.is-draft .wd-oc-row-main:hover {
+  background: transparent;
+}
+
+.wd-oc-draft-problem {
+  color: #f59e0b;
+}
+
+.wd-oc-btn.is-primary:not(:disabled) {
+  border-color: var(--foreground);
+  font-weight: 600;
 }
 
 .wd-oc-btn.is-armed {

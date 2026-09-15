@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
+import type { DraftOrder } from './lines'
 
 // format.ts -> symbols.ts -> config.ts reads `window` at import, so the DOM stub has to exist
 // before those load -- hence installWindow() then the dynamic imports (same as api.test.ts).
 installWindow()
 const { pipsToPrice, toPips, tradePips, tradePnl } = await import('./format')
 const { DEFAULT_COLORS, linesFor, overlaysFor } = await import('./overlays')
+const { isComposing } = await import('./lines')
 
 const KEY = 'oanda:EUR_USD'
 const SPAN = { first: 1_000, last: 2_000 }
@@ -127,6 +129,50 @@ describe('overlaysFor', () => {
       ['entry', false],
       ['stop', true]
     ])
+  })
+})
+
+describe('the draft', () => {
+  const draft = (over: Partial<DraftOrder> = {}): DraftOrder => ({
+    symbol: KEY,
+    side: 'buy',
+    type: 'market',
+    units: 10_000,
+    entry: 1.1,
+    stop: null,
+    target: null,
+    problem: null,
+    riskPercent: null,
+    ...over
+  })
+
+  test('a market draft with no levels is not drawn: it would only sit on the price line', () => {
+    expect(linesFor(snapshot(), KEY, draft())).toHaveLength(0)
+    expect(isComposing(draft())).toBe(false)
+  })
+
+  test('once it has a level it draws first, every line draggable, and only on its instrument', () => {
+    const d = draft({ type: 'limit', entry: 1.09, stop: 1.08, target: 1.11 })
+    const lines = linesFor(snapshot({ trades: [trade()] }), KEY, d)
+    expect(lines.slice(0, 3).map((l) => [l.owner, l.role, l.price, l.draggable])).toEqual([
+      ['draft', 'entry', 1.09, true],
+      ['draft', 'stop', 1.08, true],
+      ['draft', 'target', 1.11, true]
+    ])
+    expect(linesFor(snapshot(), 'oanda:GBP_USD', d)).toHaveLength(0)
+  })
+
+  test('while composing, working lines are dimmed and no working bracket is drawn selected', () => {
+    const s = snapshot({ trades: [trade({ stopLoss: 1.09 })] })
+    const d = draft({ stop: 1.095 })
+    const overlays = overlaysFor(s, KEY, SPAN, DEFAULT_COLORS, 't1', d)
+    const lineColors = overlays
+      .filter((o) => o.name === 'wdTradeLine')
+      .map((o) => [(o.extendData as { wd: { owner: string } }).wd.owner, (o.styles as { line: { color: string } }).line.color])
+    expect(lineColors.filter(([owner]) => owner === 'trade').every(([, c]) => c.startsWith('rgba'))).toBe(true)
+    expect(lineColors.filter(([owner]) => owner === 'draft').every(([, c]) => c.startsWith('#'))).toBe(true)
+    const brackets = overlays.filter((o) => o.name === 'wdTradeBracket').map((o) => (o.extendData as { wd: { owner: string; selected: boolean } }).wd)
+    expect(brackets).toEqual([expect.objectContaining({ owner: 'draft', selected: true }), expect.objectContaining({ owner: 'trade', selected: false })])
   })
 })
 

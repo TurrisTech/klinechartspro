@@ -2,6 +2,7 @@ import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { createDockableWindow } from '../chrome/window'
 import { formatPnl, symbolKey } from './format'
 import { instrumentInfo, seedInstrument, type InstrumentInfo } from './instrument'
+import type { DraftController } from './lines'
 import { TradingOverlays } from './overlays'
 import { TradingPanel } from './panel'
 import type { TradingSession } from './session'
@@ -52,6 +53,7 @@ const DOCK_ORDER = 20
 
 export function mountTradingDock(session: TradingSession, options: DockOptions): TradingDock {
   const { chartPro, container, tag } = options
+  let open = false
 
   const activePane = (): ChartProPane | null => {
     const id = chartPro.getActivePaneId()
@@ -62,7 +64,17 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
   // The lines, brackets, labels and order card on every candle pane. They show whether or not
   // this window is open: an order placed from the ticket appears on the chart at once, and the
   // window stays the place for the ticket and the history.
-  const overlays = new TradingOverlays({ session, tag, instrumentFor: (key) => instrumentFor(key) })
+  //
+  // While the window is open the ticket's order is on the chart as well, as a draft whose lines
+  // drag straight into the ticket's fields. Closed, there is no draft: an order nobody is writing
+  // should not sit on the chart.
+  const draft: DraftController = {
+    draft: () => (open ? panel.ticket.draft() : null),
+    setLevel: (role, price) => panel.ticket.setLevel(role, price),
+    clearLevel: (role) => panel.ticket.clearLevel(role),
+    place: () => panel.ticket.place()
+  }
+  const overlays = new TradingOverlays({ session, tag, instrumentFor: (key) => instrumentFor(key), draft })
 
   const instrumentFor = (key: string): InstrumentInfo =>
     instrumentInfo(key, () => {
@@ -71,6 +83,9 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     })
 
   const panel = new TradingPanel(session, { activeSymbol, instrumentFor })
+  panel.ticket.onDraftChange(() => {
+    if (open) overlays.draftChanged()
+  })
 
   // The kc tokens are scoped under `.klinecharts-pro.dark`; the window is a body-level
   // sibling of the chart, so it carries the theme class itself.
@@ -134,10 +149,10 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
   })
   renderSummary()
 
-  let open = false
   function setOpen(next: boolean): boolean {
     open = next
     win.setVisible(open)
+    overlays.draftChanged()
     options.onOpenChange?.(open)
     return open
   }

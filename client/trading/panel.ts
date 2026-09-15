@@ -45,7 +45,7 @@ export class TradingPanel {
   readonly element: HTMLElement
   private body: HTMLElement
   private accountStrip: HTMLElement
-  private ticket: OrderTicket
+  readonly ticket: OrderTicket
   private tablesHost: HTMLElement
   private tabsBar: HTMLElement
   private tab: Tab = 'positions'

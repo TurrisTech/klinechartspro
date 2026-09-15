@@ -5,6 +5,12 @@ import { formatPips, formatPrice, formatUnitsShort, symbolKey } from './format'
 import type { InstrumentInfo } from './instrument'
 import {
   DEFAULT_COLORS,
+  DRAFT_ID,
+  type DraftController,
+  type DraftOrder,
+  draftFor,
+  isComposing,
+  type LineOwner,
   type LineSpec,
   lineColor,
   lineKey,
@@ -15,6 +21,7 @@ import {
   TRADE_LINE,
   type TradeBracketData,
   type TradeLineData,
+  withAlpha,
   workingFor
 } from './lines'
 import { OnChartLayer } from './onchart'
@@ -42,6 +49,11 @@ import type { TradingSession } from './session'
 // overlay under the pointer, and one landing before the answer would snap the line back to the
 // old price for a frame. A refused amendment restores the canvas from the snapshot. Entry lines
 // stay locked: dragging one would imply the fill can move.
+//
+// THE DRAFT. While the account window is open, the order being written in the ticket is drawn
+// too (`ctx.draft`), finely dotted: its entry, stop and target, a bracket, labels and a row on
+// the card. Its lines drag like the rest, but a drag lands in the ticket's fields as it moves --
+// nothing is sent until it is placed, from the ticket or from the chart.
 
 export { DEFAULT_COLORS, linesFor, type LineSpec, type OverlayColors } from './lines'
 
@@ -54,9 +66,11 @@ export interface DataSpan {
   last: number
 }
 
-function lineOverlay(line: LineSpec, span: DataSpan, colors: OverlayColors): OverlayCreate<TradeLineData> {
-  const color = lineColor(line, colors)
-  const solid = line.role === 'entry'
+function lineOverlay(line: LineSpec, span: DataSpan, colors: OverlayColors, dim = false): OverlayCreate<TradeLineData> {
+  // While a draft is being composed, what is already working recedes, so the draft's lines are the
+  // ones that read -- still there, still draggable, just quieter.
+  const color = dim ? withAlpha(lineColor(line, colors), 0.4) : lineColor(line, colors)
+  const solid = line.role === 'entry' && line.owner !== 'draft'
   return {
     name: TRADE_LINE,
     paneId: CANDLE_PANE,
@@ -69,7 +83,8 @@ function lineOverlay(line: LineSpec, span: DataSpan, colors: OverlayColors): Ove
         color,
         size: line.role === 'order' ? 1.5 : 1,
         style: solid ? 'solid' : 'dashed',
-        dashedValue: line.role === 'order' ? [6, 3] : [4, 3]
+        // A draft is finely dotted: it is on the chart, but nothing has been sent.
+        dashedValue: line.owner === 'draft' ? [2, 3] : line.role === 'order' ? [6, 3] : [4, 3]
       },
       text: {
         color: '#ffffff',
@@ -91,7 +106,7 @@ function clampTime(t: number, span: DataSpan): number {
 }
 
 export function bracketDatum(
-  owner: 'trade' | 'order',
+  owner: LineOwner,
   id: string,
   side: SimSide,
   entry: number,
@@ -111,7 +126,7 @@ export function bracketDatum(
       lossColor: colors.stop,
       profitColor: colors.target,
       entryColor: side === 'buy' ? colors.buy : colors.sell,
-      pending: owner === 'order'
+      pending: owner !== 'trade'
     }
   }
 }
@@ -138,20 +153,30 @@ export function overlaysFor(
   key: string,
   span: DataSpan,
   colors: OverlayColors,
-  selected: string | null = null
+  selected: string | null = null,
+  draft: DraftOrder | null = null
 ): OverlayCreate[] {
   const { trades, orders } = workingFor(snapshot, key)
   const out: OverlayCreate[] = []
+  const d = draftFor(draft, key)
+  const drafting = isComposing(d)
+  if (drafting && (d.stop !== null || d.target !== null)) {
+    // Always drawn strongly -- it is what is being worked on -- and from the current bar.
+    const datum = bracketDatum('draft', DRAFT_ID, d.side, d.entry, d.stop, d.target, true, colors)
+    out.push(bracketOverlay(span.last, datum, span) as OverlayCreate)
+  }
   for (const order of orders) {
     if (order.stopLoss === null && order.takeProfit === null) continue
-    const datum = bracketDatum('order', order.id, order.side, order.price as number, order.stopLoss, order.takeProfit, order.id === selected, colors)
+    const datum = bracketDatum('order', order.id, order.side, order.price as number, order.stopLoss, order.takeProfit, !drafting && order.id === selected, colors)
     out.push(bracketOverlay(order.createdAt, datum, span) as OverlayCreate)
   }
   for (const trade of trades) {
-    const datum = bracketDatum('trade', trade.id, trade.side, trade.entryPrice, trade.stopLoss, trade.takeProfit, trade.id === selected, colors)
+    const datum = bracketDatum('trade', trade.id, trade.side, trade.entryPrice, trade.stopLoss, trade.takeProfit, !drafting && trade.id === selected, colors)
     out.push(bracketOverlay(trade.openedAt, datum, span) as OverlayCreate)
   }
-  for (const line of linesFor(snapshot, key)) out.push(lineOverlay(line, span, colors) as OverlayCreate)
+  for (const line of linesFor(snapshot, key, d)) {
+    out.push(lineOverlay(line, span, colors, drafting && line.owner !== 'draft') as OverlayCreate)
+  }
   return out
 }
 
@@ -161,6 +186,8 @@ export interface TradingOverlayContext {
   /** Console-prefix tag ('paper', 'replay'). */
   tag: string
   colors?: OverlayColors
+  /** The ticket's order, drawn as a draft while the account window is open. */
+  draft?: DraftController
 }
 
 interface PaneEntry {
@@ -235,6 +262,7 @@ export class TradingOverlays {
         hold: () => this.hold(entry),
         release: (restore) => this.release(entry, restore),
         commit: (line, price) => this.commit(line, price),
+        draft: this.ctx.draft,
         // One state for every pane (and every tab): rolled up on one, rolled up on all. Until the
         // user chooses, a phone-sized pane starts rolled up and a larger one open.
         isCollapsed: (compact) => tradePrefs().cardCollapsed ?? compact,
@@ -255,6 +283,14 @@ export class TradingOverlays {
     for (const entry of this.panes.values()) {
       this.redraw(entry)
       entry.layer.render(snapshot)
+    }
+  }
+
+  /** The draft changed, appeared or went: redraw every pane. */
+  draftChanged(): void {
+    for (const entry of this.panes.values()) {
+      this.redraw(entry)
+      entry.layer.render(this.snapshot)
     }
   }
 
@@ -364,7 +400,7 @@ export class TradingOverlays {
     const span = data.length === 0 ? null : { first: data[0].timestamp, last: data[data.length - 1].timestamp }
     entry.span = span
     const specs = this.snapshot && span && this.ctx.session.ready
-      ? overlaysFor(this.snapshot, symbolKey(pane.getSymbol()), span, this.colors, this.selected)
+      ? overlaysFor(this.snapshot, symbolKey(pane.getSymbol()), span, this.colors, this.selected, this.ctx.draft?.draft() ?? null)
       : []
     const signature = JSON.stringify(specs)
     if (!force && signature === entry.signature) return
@@ -379,7 +415,7 @@ export class TradingOverlays {
     if (spec.name === TRADE_LINE && line) {
       const find = (): LineSpec | null =>
         this.snapshot
-          ? (linesFor(this.snapshot, symbolKey(entry.pane.getSymbol())).find(
+          ? (linesFor(this.snapshot, symbolKey(entry.pane.getSymbol()), this.ctx.draft?.draft() ?? null).find(
               (l) => l.role === line.role && l.id === line.id
             ) ?? null)
           : null
@@ -387,8 +423,10 @@ export class TradingOverlays {
         const value = event.overlay.points?.[0]?.value
         return typeof value === 'number' ? value : null
       }
-      created.onClick = () => {
-        this.select(line.id)
+      if (line.owner !== 'draft') {
+        created.onClick = () => {
+          this.select(line.id)
+        }
       }
       // klinecharts REMOVES an overlay on right-click unless the default is prevented.
       created.onRightClick = (event) => {
@@ -433,11 +471,14 @@ export class TradingOverlays {
         const next = { ...datum }
         if (line.role === 'stop') next.stop = price
         else if (line.role === 'target') next.target = price
-        else if (line.role === 'order') next.entry = price
+        else if (line.role === 'order' || line.role === 'entry') next.entry = price
         entry.chart.overrideOverlay({
           id: bracketId,
           extendData: { wd: next },
-          points: line.role === 'order' ? [{ timestamp: bracket.points[0]?.timestamp, value: price }] : bracket.points
+          points:
+            line.role === 'order' || line.role === 'entry'
+              ? [{ timestamp: bracket.points[0]?.timestamp, value: price }]
+              : bracket.points
         })
       }
     } catch {
