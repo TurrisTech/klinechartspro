@@ -82,7 +82,19 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
       overlays.update(session.snapshot)
     })
 
-  const panel = new TradingPanel(session, { activeSymbol, instrumentFor })
+  const panel = new TradingPanel(session, {
+    activeSymbol,
+    instrumentFor,
+    // Table edits are confirmed through the same waiting change the chart shows.
+    amendments: {
+      current: () => overlays.currentAmendment(),
+      sending: () => overlays.isSending(),
+      propose: (change) => overlays.propose(change),
+      confirm: () => overlays.confirmAmendment(),
+      cancel: () => overlays.cancelAmendment(),
+      onChange: (listener) => overlays.onAmendmentChange(listener)
+    }
+  })
   panel.ticket.onDraftChange(() => {
     if (open) overlays.draftChanged()
   })

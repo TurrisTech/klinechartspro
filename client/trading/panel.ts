@@ -1,6 +1,6 @@
 import type { SymbolInfo } from '../../src'
 import { OhlcvApiError } from '../config'
-import type { SimOrder, SimSnapshot, SimTrade } from './api'
+import type { SimSnapshot } from './api'
 import {
   formatInstant,
   formatPips,
@@ -11,7 +11,9 @@ import {
   tradePips,
   tradePnl
 } from './format'
+import { amendmentRefusal, describeAmendment, type ProposedChange } from './amend'
 import type { InstrumentInfo } from './instrument'
+import { type Amendment, applyAmendment } from './lines'
 import type { TradingSession } from './session'
 import { OrderTicket } from './ticket'
 
@@ -25,6 +27,13 @@ import { OrderTicket } from './ticket'
 // a narrow screen) it stacks into one column instead. That is measured from the panel's own
 // box, not the viewport's, because the two now differ.
 //
+// EDITS IN THE TABLES are confirmed, like every other change to a working stop, target or pending
+// price (user, 2026-09-15): leaving an edited cell proposes the change through `amendments` -- the
+// same waiting change the chart shows -- and a bar above the table asks the question; Confirm sends
+// it. And a table is NOT rebuilt while one of its cells has focus: the panel re-renders on every
+// session notification (every two seconds while anything is working), which used to replace the
+// input under the cursor. It catches up when the focus leaves the table.
+//
 // Hand-built plain DOM, the house style for app-side chrome (client/chartlayers/settings.ts):
 // the library owns Svelte, the app owns the chrome around it, and the panel reuses the
 // library's own token classes (kc-button, kc-input, kc-field) so it reads as native.
@@ -34,6 +43,17 @@ export interface PanelContext {
   activeSymbol: () => SymbolInfo
   /** Instrument facts (precision + pip size) for a key, from the config cache. */
   instrumentFor: (key: string) => InstrumentInfo
+  /** The waiting change shared with the chart (TradingOverlays). */
+  amendments: PanelAmendments
+}
+
+export interface PanelAmendments {
+  current(): Amendment | null
+  sending(): boolean
+  propose(change: ProposedChange): boolean
+  confirm(): Promise<void>
+  cancel(): void
+  onChange(listener: () => void): () => void
 }
 
 /** Below this width the ticket stops sharing a row with the tables. */
@@ -47,6 +67,15 @@ export class TradingPanel {
   private accountStrip: HTMLElement
   readonly ticket: OrderTicket
   private tablesHost: HTMLElement
+  private tableContent: HTMLElement
+  private confirmBar: HTMLElement
+  private confirmTitle: HTMLElement
+  private confirmDetail: HTMLElement
+  private confirmButton: HTMLButtonElement
+  private tablesNotice: HTMLElement
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null
+  private renderTimer: ReturnType<typeof setTimeout> | null = null
+  private unsubAmendments: () => void
   private tabsBar: HTMLElement
   private tab: Tab = 'positions'
   private unsub: () => void
@@ -68,10 +97,31 @@ export class TradingPanel {
 
     this.tabsBar = this.buildTabs()
     this.tablesHost = el('div', 'wd-trade-tables')
+    this.confirmBar = el('div', 'wd-trade-confirm')
+    this.confirmBar.setAttribute('role', 'alertdialog')
+    this.confirmTitle = el('div', 'wd-trade-confirm-title')
+    this.confirmDetail = el('div', 'wd-trade-confirm-detail')
+    const answers = el('div', 'wd-trade-confirm-actions')
+    const cancel = button('kc-button kc-button-outline wd-trade-confirm-btn', 'Cancel', () => ctx.amendments.cancel())
+    this.confirmButton = button('kc-button kc-button-primary wd-trade-confirm-btn', 'Confirm', () => {
+      ctx.amendments.confirm().catch((err) => this.notice(err instanceof OhlcvApiError ? err.message : 'Request failed'))
+    })
+    answers.append(cancel, this.confirmButton)
+    const words = el('div', 'wd-trade-confirm-text')
+    words.append(this.confirmTitle, this.confirmDetail)
+    this.confirmBar.append(words, answers)
+    this.confirmBar.hidden = true
+    this.tablesNotice = el('div', 'kc-field-error wd-trade-tables-notice')
+    this.tablesNotice.hidden = true
+    this.tableContent = el('div', 'wd-trade-table-content')
+    this.tablesHost.append(this.confirmBar, this.tablesNotice, this.tableContent)
     this.body.appendChild(this.tabsBar)
     this.body.appendChild(this.tablesHost)
+    // The focus leaving a table settles whatever was skipped while it was there.
+    this.tablesHost.addEventListener('focusout', () => this.scheduleRender())
 
     this.unsub = session.subscribe(() => this.render())
+    this.unsubAmendments = ctx.amendments.onChange(() => this.scheduleRender())
     // The panel is as wide as whatever window it is in, which the user can resize; the
     // layout follows the box rather than the page.
     this.shape = new ResizeObserver(() => this.syncShape())
@@ -121,7 +171,8 @@ export class TradingPanel {
       this.accountStrip.appendChild(emptyRow(`Connecting to your ${this.session.mode ?? 'paper'} account…`))
       this.ticket.element.style.display = 'none'
       this.tabsBar.style.display = 'none'
-      this.tablesHost.innerHTML = ''
+      this.tableContent.innerHTML = ''
+      this.confirmBar.hidden = true
       return
     }
     this.ticket.element.style.display = ''
@@ -131,10 +182,58 @@ export class TradingPanel {
     for (const b of this.tabsBar.querySelectorAll<HTMLElement>('.wd-trade-tab')) {
       b.classList.toggle('is-active', b.dataset.tab === this.tab)
     }
-    this.tablesHost.innerHTML = ''
-    if (this.tab === 'positions') this.tablesHost.appendChild(this.renderPositions(s))
-    else if (this.tab === 'orders') this.tablesHost.appendChild(this.renderOrders(s))
-    else this.tablesHost.appendChild(this.renderHistory(s))
+    this.renderConfirm(s)
+    // Never under the cursor: while a cell is being edited the table waits for the focus to leave.
+    const active = document.activeElement
+    if (active instanceof HTMLInputElement && this.tableContent.contains(active)) return
+    // The tables show the waiting change as if confirmed, marked -- as the chart does.
+    const view = applyAmendment(s, this.ctx.amendments.current())
+    this.tableContent.innerHTML = ''
+    if (this.tab === 'positions') this.tableContent.appendChild(this.renderPositions(view))
+    else if (this.tab === 'orders') this.tableContent.appendChild(this.renderOrders(view))
+    else this.tableContent.appendChild(this.renderHistory(s))
+  }
+
+  /** After the focus has moved (a Tab from one cell to the next), not in the middle of it. */
+  private scheduleRender(): void {
+    if (this.renderTimer) return
+    this.renderTimer = setTimeout(() => {
+      this.renderTimer = null
+      this.render()
+    }, 0)
+  }
+
+  private renderConfirm(s: SimSnapshot): void {
+    const a = this.ctx.amendments.current()
+    const position = a ? (a.owner === 'trade' ? s.trades.find((t) => t.id === a.id) : s.orders.find((o) => o.id === a.id)) : undefined
+    const info = position ? this.ctx.instrumentFor(position.symbol) : null
+    const words = a && info ? describeAmendment(a, s, info) : null
+    this.confirmBar.hidden = !words
+    if (!a || !info || !words) return
+    const refusal = amendmentRefusal(a, s, info)
+    const sending = this.ctx.amendments.sending()
+    this.confirmTitle.textContent = words.title
+    this.confirmDetail.textContent = refusal ?? words.detail
+    this.confirmDetail.classList.toggle('is-warning', refusal !== null)
+    this.confirmButton.disabled = sending || refusal !== null
+    this.confirmButton.textContent = sending ? 'Sending…' : 'Confirm'
+  }
+
+  private notice(message: string): void {
+    this.tablesNotice.textContent = message
+    this.tablesNotice.hidden = false
+    if (this.noticeTimer) clearTimeout(this.noticeTimer)
+    this.noticeTimer = setTimeout(() => {
+      this.noticeTimer = null
+      this.tablesNotice.hidden = true
+    }, 5_000)
+  }
+
+  /** Whether a cell is the one the waiting change is about: 'move', 'remove', or null. */
+  private proposedState(owner: 'trade' | 'order', id: string, role: 'stop' | 'target' | 'order'): 'move' | 'remove' | null {
+    const a = this.ctx.amendments.current()
+    if (!a || a.owner !== owner || a.id !== id || a.role !== role) return null
+    return a.price === null ? 'remove' : 'move'
   }
 
   private renderAccount(s: SimSnapshot): void {
@@ -187,8 +286,8 @@ export class TradingPanel {
         cell(formatUnits(trade.units)),
         cell(formatPrice(trade.entryPrice, prec)),
         cell(formatPrice(mark, prec)),
-        editableCell(formatPrice(trade.stopLoss, prec), (raw) => this.editTrade(trade, 'stopLoss', raw)),
-        editableCell(formatPrice(trade.takeProfit, prec), (raw) => this.editTrade(trade, 'takeProfit', raw)),
+        editableCell(formatPrice(trade.stopLoss, prec), (raw) => this.edit('trade', trade.id, 'stop', raw), this.proposedState('trade', trade.id, 'stop')),
+        editableCell(formatPrice(trade.takeProfit, prec), (raw) => this.edit('trade', trade.id, 'target', raw), this.proposedState('trade', trade.id, 'target')),
         cell(formatPips(pips), dir),
         cell(formatPnl(pnl), dir),
         cell(
@@ -215,9 +314,9 @@ export class TradingPanel {
         cell(shortSymbol(order.symbol)),
         cell(order.type.toUpperCase()),
         cell(formatUnits(order.units)),
-        editableCell(formatPrice(order.price, prec), (raw) => this.editOrder(order, 'price', raw)),
-        editableCell(formatPrice(order.stopLoss, prec), (raw) => this.editOrder(order, 'stopLoss', raw)),
-        editableCell(formatPrice(order.takeProfit, prec), (raw) => this.editOrder(order, 'takeProfit', raw)),
+        editableCell(formatPrice(order.price, prec), (raw) => this.edit('order', order.id, 'order', raw), this.proposedState('order', order.id, 'order')),
+        editableCell(formatPrice(order.stopLoss, prec), (raw) => this.edit('order', order.id, 'stop', raw), this.proposedState('order', order.id, 'stop')),
+        editableCell(formatPrice(order.takeProfit, prec), (raw) => this.edit('order', order.id, 'target', raw), this.proposedState('order', order.id, 'target')),
         cell(
           button('kc-button kc-button-outline wd-trade-close', 'Cancel', () => {
             void this.session.cancelOrder(order.id).catch((err) => this.reportError(err))
@@ -267,24 +366,14 @@ export class TradingPanel {
     return table
   }
 
-  private async editTrade(trade: SimTrade, field: 'stopLoss' | 'takeProfit', raw: string): Promise<void> {
+  /** An edited cell proposes its change; nothing is sent until it is confirmed. A value that is not
+   * a price, an order left without one, or no change at all puts the cell back. */
+  private edit(owner: 'trade' | 'order', id: string, role: 'stop' | 'target' | 'order', raw: string): void {
     const value = parsePriceInput(raw)
-    if (value === undefined) return
-    try {
-      await this.session.modifyTrade(trade.id, { [field]: value })
-    } catch (err) {
-      this.reportError(err)
-    }
-  }
-
-  private async editOrder(order: SimOrder, field: 'price' | 'stopLoss' | 'takeProfit', raw: string): Promise<void> {
-    const value = parsePriceInput(raw)
-    if (value === undefined) return
-    if (field === 'price' && value === null) return // an order must keep a price
-    try {
-      await this.session.modifyOrder(order.id, { [field]: value })
-    } catch (err) {
-      this.reportError(err)
+    const refused = value === undefined ? 'Not a price' : role === 'order' && value === null ? 'An order must keep a price' : null
+    if (refused !== null || !this.ctx.amendments.propose({ owner, id, role, price: value ?? null })) {
+      if (refused) this.notice(refused)
+      this.scheduleRender()
     }
   }
 
@@ -297,6 +386,9 @@ export class TradingPanel {
 
   dispose(): void {
     this.unsub()
+    this.unsubAmendments()
+    if (this.renderTimer) clearTimeout(this.renderTimer)
+    if (this.noticeTimer) clearTimeout(this.noticeTimer)
     this.shape.disconnect()
     this.ticket.dispose()
   }
@@ -343,16 +435,21 @@ function cell(content: string | HTMLElement, cls = ''): HTMLTableCellElement {
   return td
 }
 
-function editableCell(value: string, onCommit: (raw: string) => void): HTMLTableCellElement {
+function editableCell(
+  value: string,
+  onCommit: (raw: string) => void,
+  proposed: 'move' | 'remove' | null = null
+): HTMLTableCellElement {
   const td = document.createElement('td')
   td.className = 'wd-trade-editable'
   const input = document.createElement('input')
   input.type = 'text'
   input.inputMode = 'decimal'
-  input.className = 'wd-trade-cell-input'
-  input.value = value === '—' ? '' : value
-  input.placeholder = '—'
-  const original = value === '—' ? '' : value
+  input.className = `wd-trade-cell-input ${proposed ? 'is-proposed' : ''}`
+  input.value = value === '—' || proposed === 'remove' ? '' : value
+  input.placeholder = proposed === 'remove' ? 'remove?' : '—'
+  if (proposed) input.title = 'Waiting for confirmation'
+  const original = input.value
   const commit = (): void => {
     if (input.value !== original) onCommit(input.value)
   }

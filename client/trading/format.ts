@@ -131,3 +131,12 @@ export function formatPercent(value: number | null | undefined, digits = 2): str
   const sign = Number(text) === 0 ? '' : value > 0 ? '+' : '−'
   return `${sign}${text}%`
 }
+
+/** A move in pips, or in percent for an instrument not priced in pips. */
+export function moveText(outcome: { pips: number | null; percent: number } | null, signed = true): string {
+  if (!outcome) return '—'
+  if (outcome.pips !== null) {
+    return signed ? `${formatPips(outcome.pips)}p` : `${Math.abs(outcome.pips).toFixed(1)}p`
+  }
+  return signed ? formatPercent(outcome.percent) : `${Math.abs(outcome.percent).toFixed(2)}%`
+}

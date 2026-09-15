@@ -1105,6 +1105,58 @@ body.wd-has-dock > #app {
   color: var(--muted-foreground);
 }
 
+/* A table edit waiting for confirmation: the question above the table, the cell marked. */
+.wd-trade-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  margin-bottom: 0.375rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid color-mix(in oklab, #f59e0b 45%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, #f59e0b 12%, transparent);
+  font-size: 0.75rem;
+}
+
+.wd-trade-confirm[hidden],
+.wd-trade-tables-notice[hidden] {
+  display: none;
+}
+
+.wd-trade-confirm-title {
+  font-weight: 600;
+}
+
+.wd-trade-confirm-detail {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-confirm-detail.is-warning {
+  color: #f59e0b;
+}
+
+.wd-trade-confirm-actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wd-trade-confirm-btn {
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+.wd-trade-tables-notice {
+  margin: 0 0 0.375rem;
+}
+
+:root .wd-trade-cell-input.is-proposed {
+  border-color: #f59e0b;
+  background: color-mix(in oklab, #f59e0b 14%, transparent);
+}
+
 /* --- On the price pane: line labels and the order card (client/trading/onchart.ts) --------- */
 
 /* Mounted inside klinecharts' price-area container, which is exactly the candles and clips to
