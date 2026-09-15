@@ -1180,6 +1180,12 @@ body.wd-has-dock > #app {
   color: var(--foreground);
 }
 
+/* The armed watch line's orange (client/watch/overlays.ts). */
+.wd-replay-stop-reason.is-watch {
+  background: color-mix(in oklab, #ff9800 18%, transparent);
+  color: var(--foreground);
+}
+
 .wd-replay-check {
   display: inline-flex;
   align-items: center;

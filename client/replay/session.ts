@@ -29,6 +29,15 @@ export interface AdvanceResult {
   /** False when the advance seeked instead of walking (nothing could fill), so `bars` is
    * empty by design rather than because the span held none. */
   walked: boolean
+  /** What the observer raised on the bar a `watch` stop landed on. Empty for any other
+   * reason. */
+  observed: ObserverStop[]
+}
+
+/** Something an observer raised on a bar that is worth stopping a "next signal" run for --
+ * a price watch firing. Only what the controls need to say why the run stopped. */
+export interface ObserverStop {
+  label: string
 }
 
 /** Something that wants to see the walk as it happens.
@@ -42,10 +51,13 @@ export interface ReplayObserver {
    * armed watch is such a reason: without this the seek shortcut would step over the whole
    * span it was placed to see. */
   needsBars(): boolean
+  /** How many armed things could stop a "next signal" run -- what lets that button work with
+   * no signal armed. */
+  armedStops(): number
   /** One base bar the engine has just consumed, in walk order. Always the BASE bar, never a
    * refinement's finer parts: whether an order happens to be resting must not change what an
-   * observer sees. */
-  onBar(bar: ReplayBar): void
+   * observer sees. Returns what it raised on this bar; a "next signal" run stops on any. */
+  onBar(bar: ReplayBar): ObserverStop[]
   /** The cursor moved without a walk — nothing between was examined. */
   seeked(): void
   /** Whatever this observer keeps in the replay's state blob. */
@@ -60,6 +72,8 @@ export interface ReplayController {
   readonly busy: boolean
   readonly lastStop: AdvanceResult | null
   readonly signals: SignalBook
+  /** Armed stops besides the signals (price watches): "next signal" stops at those too. */
+  readonly armedStops: number
   readonly storedIntervals: readonly string[]
   readonly intervalsInUse: readonly string[]
   readonly symbol: string
@@ -69,7 +83,8 @@ export interface ReplayController {
   /** Advance by the current advance setting. */
   step(): Promise<AdvanceResult | null>
   advanceBy(request: AdvanceRequest): Promise<AdvanceResult | null>
-  /** Advance to the next armed signal (to the end of the data if none). */
+  /** Advance to the next armed signal or firing price watch (to the end of the data if
+   * neither). */
   nextSignal(): Promise<AdvanceResult | null>
   onControlChange(listener: () => void): () => void
   /** Persist now (a star/arm change). */
@@ -334,6 +349,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     }
   }
 
+  get armedStops(): number {
+    return this.opts.observer?.armedStops() ?? 0
+  }
+
   setIntervalsInUse(list: readonly string[]): BaseCheck {
     this.intervalsInUse = [...new Set(list)]
     const check = validateBase(this.base, this.intervalsInUse, this.storedIntervals)
@@ -371,6 +390,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     return this.advanceBy({ interval: this.advance.interval, multiple: this.advance.multiple })
   }
 
+  /** An advance to the end of the data that stops at the first armed signal, or at the first
+   * bar an observer raises something on (a price watch firing). */
   nextSignal(): Promise<AdvanceResult | null> {
     return this.advanceBy({ toEnd: true, end: this.opts.dataEnd() })
   }
@@ -387,8 +408,12 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const plan = planAdvance(from, { toEnd: true, end }, occurrences)
       let reason: StopReason = plan.reason === 'signal' ? 'signal' : 'toEnd' in request || end < provisional.target ? 'end' : 'target'
       const stopAt = plan.stopAt
+      // A "next signal" run is a run to the next thing worth looking at, and a price watch
+      // firing is one. A Step is not: it asked for N candles and gets them.
+      const stopOnObserver = 'toEnd' in request
       const events: SimEvent[] = []
       const consumed: ReplayBar[] = []
+      let observed: ObserverStop[] = []
       let paused = false
       // Walk the base bars only when one of them could actually do something. With nothing
       // resting and nothing protected the account cannot change however the price moves, so
@@ -411,10 +436,14 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
           events.push(...produced)
           // After the engine, so anything an observer raises sees the account as this bar
           // left it -- and the BASE bar, not the refinement's parts.
-          this.opts.observer?.onBar(bar)
+          const raised = this.opts.observer?.onBar(bar) ?? []
           this.cursor = bar.end
           if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
             paused = true
+            break
+          }
+          if (stopOnObserver && raised.length > 0) {
+            observed = raised
             break
           }
         }
@@ -424,8 +453,13 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         this.opts.observer?.seeked()
       }
       if (paused) reason = 'fill'
-      else this.cursor = stopAt
-      const result: AdvanceResult = { from, to: this.cursor, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed, walked }
+      else if (observed.length === 0) this.cursor = stopAt
+      // A watch firing on the very bar the run was going to stop at anyway leaves a signal
+      // stop a signal stop: that is the one the user armed the run for, and the watch has
+      // its own row in the Notification Center. Against `end` it is the more useful answer.
+      else if (!(this.cursor === stopAt && reason === 'signal')) reason = 'watch'
+      if (reason !== 'watch') observed = []
+      const result: AdvanceResult = { from, to: this.cursor, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed, walked, observed }
       this.lastStop = result
       this.rev++
       this.snapshot = this.buildSnapshot()

@@ -59,11 +59,14 @@ class HourlySource implements BarSource {
   }
 }
 
-class NoSignals implements SignalSource {
-  async points(): Promise<SignalHit[]> {
-    return []
+class FixedSignals implements SignalSource {
+  constructor(private readonly hits: SignalHit[] = []) {}
+  async points(_ref: string, _symbol: string, _resolution: string, from: number, to: number): Promise<SignalHit[]> {
+    return this.hits.filter((hit) => hit.date >= from && hit.date < to)
   }
 }
+
+const SIGNAL = 'arev:arev21:long'
 
 interface Harness {
   session: InstanceType<typeof ReplayTradingSession>
@@ -75,7 +78,7 @@ interface Harness {
 /** The cursor starts one bar in, so a crossing armed before the first step has a bar behind
  * it to be seeded from -- which is the ordinary case (a replay starts inside stored history).
  */
-async function make(cursor = START + H): Promise<Harness> {
+async function make(cursor = START + H, hits: SignalHit[] = []): Promise<Harness> {
   const raised: NotificationSpec[] = []
   const saved: Array<{ watches: unknown[] }> = []
   const watches = new ReplayWatches({
@@ -100,7 +103,7 @@ async function make(cursor = START + H): Promise<Harness> {
     pauseOnFill: false,
     storedIntervals: ['1h'],
     engine: new Engine(10_000),
-    signals: new SignalBook([], new NoSignals()),
+    signals: new SignalBook([], new FixedSignals(hits)),
     barSource: new HourlySource(),
     dataEnd: () => START + 12 * H,
     save: async (state) => {
@@ -241,6 +244,64 @@ describe('ReplayWatches', () => {
     ])
   })
 
+  test('"next signal" stops on the base bar a watch fires on, with no signal armed', async () => {
+    const h = await make()
+    expect(h.session.armedStops).toBe(0)
+    // Mid highs rise 1.10165, 1.10265, 1.10365...: the third bar from the cursor is the first
+    // whose band reaches 1.1035.
+    await create(h, 1.1035)
+    expect(h.session.armedStops).toBe(1)
+
+    const result = await h.session.nextSignal()
+    expect(result?.reason).toBe('watch')
+    expect(result?.to).toBe(START + 4 * H)
+    expect(result?.bars.length).toBe(3)
+    expect(result?.observed).toEqual([{ label: 'EURUSD 1.10350' }])
+    expect(h.session.cursor).toBe(START + 4 * H)
+    expect(h.raised.length).toBe(1)
+
+    // The watch was a one-shot and is spent: the next run has nothing to stop at and runs to
+    // the end of the data, by seeking.
+    expect(h.session.armedStops).toBe(0)
+    const rest = await h.session.nextSignal()
+    expect(rest?.reason).toBe('end')
+    expect(rest?.to).toBe(START + 12 * H)
+    expect(rest?.observed).toEqual([])
+  })
+
+  test('a Step is not cut short by a watch: it asked for N candles', async () => {
+    const h = await make()
+    await create(h, 1.1025)
+    const result = await h.session.advanceBy({ interval: '1h', multiple: 4 })
+    expect(h.raised.length).toBe(1)
+    expect(result?.reason).toBe('target')
+    expect(result?.bars.length).toBe(4)
+    expect(result?.observed).toEqual([])
+  })
+
+  test('an armed signal ahead of the watch still wins, and one on the same bar stays a signal stop', async () => {
+    // The signal is effective at the close of the first bar from the cursor; the watch level
+    // is only reached two bars later.
+    const early = await make(START + H, [{ date: START + H, effective: START + 2 * H }])
+    early.session.signals.arm(SIGNAL, '1h')
+    await create(early, 1.1035)
+    const first = await early.session.nextSignal()
+    expect(first?.reason).toBe('signal')
+    expect(first?.to).toBe(START + 2 * H)
+    expect(early.raised).toEqual([])
+
+    // Same bar: the watch fires (its row is raised) but the stop is reported as the signal the
+    // run was armed for.
+    const same = await make(START + H, [{ date: START + 3 * H, effective: START + 4 * H }])
+    same.session.signals.arm(SIGNAL, '1h')
+    await create(same, 1.1035)
+    const stop = await same.session.nextSignal()
+    expect(stop?.reason).toBe('signal')
+    expect(stop?.to).toBe(START + 4 * H)
+    expect(stop?.observed).toEqual([])
+    expect(same.raised.length).toBe(1)
+  })
+
   test('watches ride in the replay’s state blob, baseline and all', async () => {
     const h = await make()
     await create(h, 1.1015)
@@ -256,6 +317,40 @@ describe('ReplayWatches', () => {
     expect(restored.status).toBe('fired')
     expect(restored.fireCount).toBe(1)
     expect(restored.name).toBe('EURUSD 1.10150')
+  })
+
+  test('placing, editing and deleting a watch saves the blob at once, with no step', async () => {
+    const h = await make()
+    let changes = 0
+    h.session.onControlChange(() => changes++)
+
+    const watch = await create(h, 1.5)
+    await h.session.flushSaves()
+    // Saved before any advance: a reload now finds the watch.
+    expect(h.saved.length).toBe(1)
+    expect(h.saved[0].watches.length).toBe(1)
+    // ...and the controls heard it, which is what re-enables "Next signal".
+    expect(changes).toBeGreaterThan(0)
+
+    await h.watches.store.update(watch?.id ?? '', { note: 'edited' })
+    await h.watches.store.arm(watch?.id ?? '')
+    await h.session.flushSaves()
+    expect(h.saved.length).toBe(3)
+
+    // A re-read is not a change and must not cost a write.
+    await h.watches.store.refresh()
+    await h.session.flushSaves()
+    expect(h.saved.length).toBe(3)
+
+    await h.watches.store.remove(watch?.id ?? '')
+    await h.session.flushSaves()
+    expect(h.saved.length).toBe(4)
+    expect(h.saved[3].watches).toEqual([])
+
+    // A refused watch changed nothing, so nothing is written.
+    await h.watches.store.create({ source: PRICE_SOURCE, target: 'oanda:GBPUSD', condition: priceCondition(1.3), name: 'GBPUSD' })
+    await h.session.flushSaves()
+    expect(h.saved.length).toBe(4)
   })
 
   test('another instrument is refused rather than stored as a line that can never fire', async () => {

@@ -111,7 +111,8 @@ measured at 5s per 20 market days at a 1m base.) When it is true the advance **w
 bars from the cache, feeding each to the engine — or, when a candle's band intersects a working order or
 an open trade's stop/target, the finer stored bars inside it instead (recursively; a per-span
 refinement that never lowers the base). "Pause on fill" stops at the filling bar. `nextSignal`
-is an advance to the end of the data.
+is an advance to the end of the data that also stops at the first bar a **price watch fires
+on** (stop reason `watch`; see below).
 
 ## Price watches
 
@@ -141,12 +142,21 @@ Three things follow, each of which was a decision:
   crossing without a baseline makes it fire on its first bar. A restored session keeps the
   STORED baseline instead — the reading the watch was armed with — which is the same decision
   the server's `restore()` makes.
+- **A firing watch stops "Next signal", and only that.** `onBar` returns what it raised
+  (`ObserverStop[]`), and a `toEnd` advance breaks on the first bar that raised anything, so
+  the cursor lands on that base bar's close with reason `watch`; `armedStops()` is what enables
+  the button with no signal armed. A Step is not cut short — it asked for N candles. Order when
+  two land on one bar: a fill pause, then the armed signal the run was planned to stop at, then
+  the watch (whose notification is raised either way).
 - **The event clock is the bar's close, never the wall clock.** A session replaying 2024 has
   a 2024 cooldown. The notification itself is still *dated* when it was raised, so it sorts
   with everything else in the centre; the replay instant is in its body and in `data.eventAt`.
 
 Watches ride in the state blob (`persist.ts` `watches`), baseline and all, so a reload finds
-them where they were — status, fire count and all. **Their notifications do not**: those are
+them where they were — status, fire count and all. **The blob is written on every mutation**
+(create, edit, arm, delete — `ReplayWatches` hands the store a `WatchApi` that saves after
+each), not only on the next advance: a watch is placed by a chart gesture, and until that was
+added a reload before stepping lost it. A re-read is not a mutation and writes nothing. **Their notifications do not**: those are
 raised locally and the centre holds no persistence of its own, so the alert rows are gone
 after a reload while the grey line that raised them is still there.
 

@@ -2,11 +2,11 @@ import type { NotificationSink } from '../notifications'
 import { formatInstant } from '../trading/format'
 import { type LocalWatchSource, type LocalWatchState, type WatchFiring, LocalWatchRegistry } from '../watch/local'
 import type { Observation, Sample } from '../watch/evaluate'
-import { WatchStore } from '../watch/store'
+import { type WatchApi, WatchStore } from '../watch/store'
 import { PRICE_SOURCE } from '../watch/types'
 import type { SourceField } from '../watch/types'
 import type { ReplayBar } from './cache'
-import type { ReplayObserver } from './session'
+import type { ObserverStop, ReplayObserver } from './session'
 
 // PRICE WATCHES ON A REPLAY WALL: the same lines, the same right-click, the same dialog and
 // the same Notification Center as a live wall — over the replay's own market instead of the
@@ -171,7 +171,31 @@ export class ReplayWatches implements ReplayObserver {
         this.host?.persist()
       }
     })
-    this.store = new WatchStore(this.registry)
+    this.store = new WatchStore(this.persisting(this.registry))
+  }
+
+  /** The registry as the store's `WatchApi`, writing the state blob after every mutation.
+   *
+   * Placing, editing, re-arming or deleting a watch is a chart gesture, not an advance, so
+   * nothing else saves it: a reload before the next step used to find the watch gone. Reads
+   * (`list`, `sources`) do not save -- the store re-reads after every advance and every
+   * firing, and a save per re-read would double the writes a step makes. The session's
+   * `persist` also re-renders the controls, which is what re-enables "Next signal" when a
+   * watch appears. */
+  private persisting(registry: LocalWatchRegistry): WatchApi {
+    const saved = async <T>(write: Promise<T>): Promise<T> => {
+      const answer = await write
+      this.host?.persist()
+      return answer
+    }
+    return {
+      sources: () => registry.sources(),
+      list: () => registry.list(),
+      create: (draft) => saved(registry.create(draft)),
+      update: (id, patch) => saved(registry.update(id, patch)),
+      arm: (id) => saved(registry.arm(id)),
+      remove: (id) => saved(registry.remove(id))
+    }
   }
 
   /** Bind to the session. Separate from the constructor because the session needs this as
@@ -195,12 +219,18 @@ export class ReplayWatches implements ReplayObserver {
     return this.registry.armedTargets().length > 0
   }
 
-  onBar(bar: ReplayBar): void {
+  /** Every armed watch is a place "next signal" can stop. */
+  armedStops(): number {
+    return this.registry.armedTargets().length
+  }
+
+  onBar(bar: ReplayBar): ObserverStop[] {
     const observation = this.source.observe(bar)
     // The bar's CLOSE is the event instant: a watch answered by a bar is answered when that
     // bar is complete, and it is the clock the cooldown measures on. Never the wall clock —
     // a session replaying 2024 must have a 2024 cooldown.
-    this.registry.onEvent(this.source.id, this.opts.symbol, bar.end, observation)
+    const fired = this.registry.onEvent(this.source.id, this.opts.symbol, bar.end, observation)
+    return fired.map((firing) => ({ label: firing.title }))
   }
 
   toState(): LocalWatchState[] {
