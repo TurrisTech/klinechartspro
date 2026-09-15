@@ -1,15 +1,41 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { LAYOUT_VERSION } from './manifest'
 
 // End-to-end over the real tiles bin/build_chart_tiles.py wrote: manifest -> fetch -> decode
 // -> KLineData, through the same code the browser runs. The positive half of the contract;
 // manifest.test.ts pins where tiles stop and parity.test.ts pins that the join is exact.
 //
-// Skipped when no tile store is present, so a checkout without /mnt/d still runs green.
+// Every test is gated on the series IT reads, not on the store as a whole. A local store is
+// routinely partial -- on 2026-09-15 this workstation's v2 tree held EURUSD and EURTRY and
+// nothing else, the rest of it still v1 -- and a single EURUSD gate let the USDJPY test run
+// against a manifest that did not exist, failing with `expected tiled bars, got null`. A
+// missing series now skips its test by name; the precision rule that test was the only
+// cover for is pinned against a committed fixture in `precision.test.ts`, which needs no
+// store at all.
+//
+// Likewise nothing here keys off the wall clock. A local tree is built by hand and ages; a
+// window measured back from `Date.now()` stopped overlapping it thirty days after the last
+// build. The live-edge tests are measured from the manifest's own `coveredTo`.
 
 const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
-const ready = existsSync(`${ROOT}/${LAYOUT_VERSION}/oanda/EURUSD/1m/manifest.json`)
+
+function manifestPath(vendor: string, symbol: string, interval: string): string {
+  return `${ROOT}/${LAYOUT_VERSION}/${vendor}/${symbol}/${interval}/manifest.json`
+}
+
+/** Whether the local store holds this series under the layout the client reads. */
+function stored(vendor: string, symbol: string, interval: string): boolean {
+  return existsSync(manifestPath(vendor, symbol, interval))
+}
+
+const eurusd = stored('oanda', 'EURUSD', '1m')
+const usdjpy = stored('oanda', 'USDJPY', '1m')
+
+/** Where the stored EURUSD 1m tiles stop, read from the manifest the client will read. */
+function eurusdCoveredTo(): number {
+  return (JSON.parse(readFileSync(manifestPath('oanda', 'EURUSD', '1m'), 'utf8')) as { coveredTo: number }).coveredTo
+}
 
 let barsFromTiles: typeof import('./index').barsFromTiles
 
@@ -40,8 +66,8 @@ afterAll(() => {
   globalThis.fetch = Bun.fetch
 })
 
-describe.skipIf(!ready)('barsFromTiles over the real tile store', () => {
-  test('serves a historical 1m window with correctly unscaled prices', async () => {
+describe('barsFromTiles over the real tile store', () => {
+  test.skipIf(!eurusd)('serves a historical 1m window with correctly unscaled prices', async () => {
     const from = Date.UTC(2024, 2, 4, 0, 0)
     const to = Date.UTC(2024, 2, 4, 8, 0)
     const { bars } = present(await barsFromTiles('oanda:EURUSD', '1m', from, to), 'tiled bars')
@@ -61,7 +87,7 @@ describe.skipIf(!ready)('barsFromTiles over the real tile store', () => {
     }
   })
 
-  test('unscales a 3-decimal instrument by its own precision, not a global one', async () => {
+  test.skipIf(!usdjpy)('unscales a 3-decimal instrument by its own precision, not a global one', async () => {
     const { bars } = present(
       await barsFromTiles('oanda:USDJPY', '1m', Date.UTC(2024, 2, 4, 0), Date.UTC(2024, 2, 4, 4)),
       'tiled bars'
@@ -71,7 +97,7 @@ describe.skipIf(!ready)('barsFromTiles over the real tile store', () => {
     expect(bars[0].open).toBeLessThan(300)
   })
 
-  test('joins consecutive tiles across a month boundary without a gap or duplicate', async () => {
+  test.skipIf(!eurusd)('joins consecutive tiles across a month boundary without a gap or duplicate', async () => {
     const { bars } = present(
       await barsFromTiles('oanda:EURUSD', '1m', Date.UTC(2024, 1, 29, 20), Date.UTC(2024, 2, 1, 4)),
       'tiled bars'
@@ -81,23 +107,25 @@ describe.skipIf(!ready)('barsFromTiles over the real tile store', () => {
     expect(bars.some((b) => b.timestamp >= Date.UTC(2024, 2, 1))).toBe(true)
   })
 
-  test('reports where tiles stop so the caller can fetch the rest', async () => {
-    const now = Date.now()
-    const tiled = await barsFromTiles('oanda:EURUSD', '1m', now - 30 * 86_400_000, now)
-    // A window reaching the live edge is answered in part, not refused: tiles carry the
+  test.skipIf(!eurusd)('reports where tiles stop so the caller can fetch the rest', async () => {
+    const edge = eurusdCoveredTo()
+    const to = edge + 7 * 86_400_000
+    const tiled = await barsFromTiles('oanda:EURUSD', '1m', edge - 30 * 86_400_000, to)
+    // A window reaching past the tiles is answered in part, not refused: tiles carry the
     // closed periods and coveredTo says where /getbars must pick up.
     const { bars, coveredTo } = present(tiled, 'a partial tiled answer')
     expect(bars.length).toBeGreaterThan(0)
-    expect(coveredTo).toBeLessThanOrEqual(now)
+    expect(coveredTo).toBe(edge)
+    expect(coveredTo).toBeLessThan(to)
     expect(Math.max(...bars.map((b) => b.timestamp))).toBeLessThan(coveredTo)
   })
 
-  test('contributes nothing when the window is entirely in the forming period', async () => {
-    const now = Date.now()
-    expect(await barsFromTiles('oanda:EURUSD', '1m', now - 500 * 60_000, now)).toBeNull()
+  test.skipIf(!eurusd)('contributes nothing when the window is entirely in the forming period', async () => {
+    const edge = eurusdCoveredTo()
+    expect(await barsFromTiles('oanda:EURUSD', '1m', edge, edge + 500 * 60_000)).toBeNull()
   })
 
-  test('returns null for an interval that has no tiles', async () => {
+  test.skipIf(!eurusd)('returns null for an interval that has no tiles', async () => {
     expect(await barsFromTiles('oanda:EURUSD', '15', Date.UTC(2024, 2, 4), Date.UTC(2024, 2, 5))).toBeNull()
   })
 })
