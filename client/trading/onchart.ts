@@ -10,6 +10,7 @@ import {
   defaultProtection,
   fillingPrice,
   layoutLabels,
+  levelForBalancePercent,
   orderFigures,
   outcome,
   type PricingContext,
@@ -17,9 +18,11 @@ import {
   protectionValid,
   restingPriceValid,
   roundTo,
+  targetForReward,
   tradeFigures
 } from './metrics'
 import { type CardAction, h, moveText, OrderCard } from './ordercard'
+import { tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 
 // The HTML half of what a trading session puts on one candle pane: a LABEL on every trade line
@@ -279,7 +282,7 @@ export class OnChartLayer {
 
   private pricing(snapshot: SimSnapshot): PricingContext {
     const info = this.host.instrumentFor(this.key)
-    return pricingContext(this.key, info, snapshot.account, snapshot.quotes[this.key])
+    return pricingContext(this.key, info, snapshot.account, snapshot.quotes[this.key], snapshot.quotes)
   }
 
   render(snapshot: SimSnapshot | null): void {
@@ -341,7 +344,9 @@ export class OnChartLayer {
       collapsed: this.host.isCollapsed(this.compact),
       compact: this.compact,
       expanded: selected,
-      armed: this.armed
+      armed: this.armed,
+      riskPercent: tradePrefs().riskPercent,
+      rewardRatio: tradePrefs().rewardRatio
     })
     this.schedule()
   }
@@ -530,6 +535,19 @@ export class OnChartLayer {
         this.run(action.owner === 'trade' ? session.modifyTrade(action.id, field) : session.modifyOrder(action.id, field))
         return
       }
+      case 'riskStop':
+      case 'rewardTarget': {
+        if (!snapshot) return
+        const level = this.presetLevel(snapshot, action)
+        if (typeof level === 'string') {
+          this.showError(level)
+          return
+        }
+        this.host.select(action.id)
+        const field = action.kind === 'riskStop' ? { stopLoss: level } : { takeProfit: level }
+        this.run(action.owner === 'trade' ? session.modifyTrade(action.id, field) : session.modifyOrder(action.id, field))
+        return
+      }
       case 'protect': {
         if (!snapshot) return
         const price = this.startingLevel(snapshot, action.owner, action.id, action.role)
@@ -543,6 +561,43 @@ export class OnChartLayer {
         return
       }
     }
+  }
+
+  /** The card's preset levels, or why there is none: a stop that loses `riskPercent` of the
+   * balance at the position's size, or a target `rewardRatio` times the stop's distance -- each
+   * measured from the entry (a pending order's price), and checked against what the engine accepts
+   * before it is sent. */
+  private presetLevel(
+    snapshot: SimSnapshot,
+    action: Extract<CardAction, { kind: 'riskStop' | 'rewardTarget' }>
+  ): number | string {
+    const ctx = this.pricing(snapshot)
+    const { riskPercent, rewardRatio } = tradePrefs()
+    const trade = action.owner === 'trade' ? snapshot.trades.find((t) => t.id === action.id) : undefined
+    const order = action.owner === 'order' ? snapshot.orders.find((o) => o.id === action.id) : undefined
+    const position = trade ?? order
+    const from = trade ? trade.entryPrice : order?.price
+    if (!position || from === null || from === undefined) return 'This is no longer working'
+    // The engine checks an open trade's levels against its closing side, an order's against its price.
+    const reference = trade ? closingPrice(trade.side, ctx.quote) : from
+    const side = position.side
+    const precision = ctx.info.precision
+    let level: number | null
+    if (action.kind === 'riskStop') {
+      level = levelForBalancePercent(side, 'stop', position.units, from, riskPercent, ctx)
+      if (level === null) return `No ${ctx.account.currency} rate for ${ctx.currencies.quote}, so a stop cannot be priced from the balance`
+      if (reference !== null && !protectionValid(side, 'stop', level, reference)) {
+        return `Already more than ${riskPercent}% down: a stop there (${formatPrice(level, precision)}) is past the market`
+      }
+    } else {
+      if (position.stopLoss === null) return 'Set a stop loss first'
+      level = targetForReward(side, from, position.stopLoss, rewardRatio, precision)
+      if (level === null) return 'The stop is past the entry, so there is no risk to multiply'
+      if (reference !== null && !protectionValid(side, 'target', level, reference)) {
+        return `The market is already past ${rewardRatio}R (${formatPrice(level, precision)})`
+      }
+    }
+    return level
   }
 
   /** Where a new stop or target is put: a slice of the pane's visible price range beyond the

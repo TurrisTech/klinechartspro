@@ -42,7 +42,10 @@ mode only for its title.
   pure "which lines does this snapshot draw" (`linesFor`, `workingFor`).
 - `onchart.ts` — the HTML layer per pane: a label on every line, dragging, and the actions.
 - `ordercard.ts` — the collapsible order card in that layer.
-- `metrics.ts` — PURE forex figures, the engine's refusal rules, and label placement.
+- `ticket.ts` — the order ticket (below), built once and updated in place.
+- `prefs.ts` — the choices kept per browser (ticket size/stop modes, risk %, R, whether the order
+  card is rolled up), and the channel that keeps every pane, the ticket and other tabs in step.
+- `metrics.ts` — PURE forex figures, risk sizing, the engine's refusal rules, label placement.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
 - `format.ts` — pure price / pip / P&L helpers.
@@ -77,8 +80,11 @@ window is open** — an order placed from the ticket appears on the chart at onc
 - **The order card**, lower left: one row per trade and order, the selected (or only) one
   expanded with stop and target (price, pips, amount, % of balance, R:R), size in units and lots,
   pip value, margin and time; actions Breakeven, Close ½, Close, Cancel order, add/remove
-  stop/target, and Flatten for the instrument. Rolled up, the header still shows the counts and
-  the open P&L. Remembered per browser, separately for phone-sized and regular panes.
+  stop/target, and Flatten for the instrument. **Risk N%** puts the stop where it loses that share
+  of the balance at the position's size, and **NR** puts the target at N times the stop's distance
+  -- N being the ticket's risk % and last-used R. Rolled up, the header still shows the counts and
+  the open P&L. **Rolled up on one pane is rolled up on every pane**, and in other tabs (`prefs.ts`,
+  via the `storage` event); until chosen, a phone-sized pane starts rolled up.
 
 **Dragging** a stop, a target or a pending order's price — by the label or by the line — shows
 what that price would realise while it moves, marks a price the engine would refuse (dashed, with
@@ -105,6 +111,26 @@ over the card). And `src/app.css`'s `.klinecharts-pro * { border-color }` loads 
 
 The whole feature is gated on the server's `sim` capability: `mountPaperTrading` returns
 `null` when it is absent, so an older server simply has no Paper button.
+
+## The order ticket
+
+- **Size by** Units, or **Risk %**: the units that lose that share of the balance if the stop is
+  hit (`unitsForRisk`), floored to the instrument's unit precision so the loss never exceeds it.
+- **SL / TP as** Pips, Price, or **% bal** — the balance lost at the stop or made at the target at
+  the planned size (`levelForBalancePercent`, rounded toward the entry). % bal is disabled while
+  sizing by risk, which already fixes the loss. Switching how a level is stated converts what was
+  typed.
+- **Target at 1R / 2R / 3R** once there is a stop.
+- A **summary** of the order as it would be sent: units, lots, margin (flagged when it is more
+  than the equity — the paper engine does not enforce margin, a live account would), risk and
+  reward with their share of the balance, R:R — or the reason it cannot be sent yet.
+
+Everything percent-of-balance needs a conversion to the account currency: 1:1 when the account is
+the quote, the mid when it is the base, or a pair the session holds a quote for (GBPUSD for EURGBP).
+Without one the ticket says so rather than guessing.
+
+The ticket is built once. It used to be rebuilt on every session notification — every two seconds
+while anything is working — which took focus and a half-typed price away from whoever was typing.
 
 ## Pips (OANDA)
 
