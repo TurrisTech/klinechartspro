@@ -1649,6 +1649,24 @@ body.wd-has-dock > #app {
   border-top: 1px solid var(--border);
 }
 
+/* A copy's confirmation (menu.ts `flash`): centred at the foot of the pane it came from,
+   never in the way of the next tap. */
+.wd-watch-flash {
+  position: fixed;
+  z-index: 66;
+  transform: translate(-50%, -100%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--popover);
+  padding: 0.375rem 0.75rem;
+  color: var(--popover-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.24);
+}
+
 /* The set-a-price dialog, shared by "watch this price" and "a line was dropped here".
    Modelled on the replay start dialog; a body-level card, so it carries the theme class
    itself. */

@@ -28,7 +28,9 @@ Nothing else in this directory knows which one it is drawing.
 | `local.ts` | `LocalWatchRegistry implements WatchApi` — the registry's firing policy, ported from `registry.py`. **Only a replay runs it.** |
 | `template.ts` | The registered klinecharts overlay `wdPriceWatch`: a line, and a **persistent** tag on the price axis. |
 | `overlays.ts` | A line per drawable watch per pane, the drag, and the hit test the menu uses. |
-| `menu.ts` | The right-click menu (generic: rows with a label and a detail). |
+| `menu.ts` | The right-click menu (generic: rows with a label and a detail), and `flash`, a copy's one-line confirmation. |
+| `longpress.ts` | The touch-screen hold that opens the same menu — iPhone Safari fires no `contextmenu`. |
+| `clipboard.ts` | The copy rows' writes, in the form Safari accepts for text that is still being fetched. |
 | `dialog.ts` | Set a price and a direction, then apply. Used by BOTH the create and the move flow. |
 | `notifications.ts` | The `NotificationBackend` over `/notifications` + the live `notification` frames. |
 | `index.ts` | `mountPriceWatches(chartPro, { store?, canWatch? })`. The wiring, and nothing else. |
@@ -86,6 +88,9 @@ level is one `PATCH`: a changed condition re-arms server-side, which re-seeds.
 
 ## The gestures
 
+Every "right-click" below is **also a long-press** on a touch screen: one finger held still for
+`LONG_PRESS_MS` (500 ms) on the candle pane opens the same menu at the finger.
+
 - **Right-click empty chart** → six rows, each showing the price it would use: at cursor,
   current price, and the open/high/low/close of the bar under the pointer. Picking one opens
   the dialog, pre-filled and editable.
@@ -99,9 +104,33 @@ level is one `PATCH`: a changed condition re-arms server-side, which re-seeds.
   and ask are not on the chart's bars, so they are read from the session (`quote` option:
   the paper account's `watch`, or a replay's cursor quote) on the click, never when the menu
   opens, and show no price.
+- **Every copy says what happened** — "Copied 1.16194" or "Couldn't copy", briefly, at the foot
+  of the pane. A phone has no console, and a copy that silently did nothing looks exactly like
+  one that worked until the paste.
 - **Drag a line** → the same dialog, pre-filled with where it was dropped. Cancelling is not
   a revert branch: the store re-emits and every pane redraws from it, the same path that
   draws everything else.
+
+## iPhone: three things that do not work the desktop way
+
+- **No `contextmenu` for a long-press, ever.** `longpress.ts` recognises the hold from touch
+  events (a pointer stream the browser decides is a scroll ends in `pointercancel` part-way).
+  Android and Windows fire BOTH for one hold, in either order: a native `contextmenu` cancels a
+  hold in progress, and one arriving within `SAME_GESTURE_MS` of a fired hold opens nothing.
+  The click the lifted finger delivers is swallowed at `window` in the capture phase, or it
+  would seek the wall or pick the row that just appeared under the finger. The menu dismisses
+  on `pointerdown`: a touch screen sends compatibility `mousedown`s only to targets it thinks
+  are clickable, and the bare canvas is not one.
+- **A clipboard write must START inside the tap.** Safari refuses one begun after an `await` —
+  the quote fetch behind *Fetch bid/ask* — silently. `copyPendingText` starts the write in the
+  tap with the text still a promise (`ClipboardItem` with a promised Blob); activation is
+  checked at the call, not at resolution. Where `ClipboardItem` is missing or takes no promise,
+  it writes the text once it arrives, which those browsers allow without a gesture.
+- **The pre-Clipboard-API fallback** (a page over plain http has no `navigator.clipboard`)
+  selects nothing in a read-only textarea on iOS and zooms the page into any field under 16px
+  that takes focus, so it copies from an editable 16px field selected by range.
+
+Tested with synthetic touch events in desktop Chrome against the dev dashboard, not on an iPhone.
 
 ## Two klinecharts traps
 

@@ -2,8 +2,10 @@ import type { Chart, KLineData } from 'klinecharts'
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { hasFeature } from '../capabilities'
 import { symbolVendor } from '../symbols'
+import { copyPendingText, copyText } from './clipboard'
 import { openWatchDialog } from './dialog'
-import { openContextMenu, type ContextMenu, type MenuItem } from './menu'
+import { attachLongPress, type LongPress } from './longpress'
+import { flash, openContextMenu, type ContextMenu, type MenuItem } from './menu'
 import { WatchOverlays } from './overlays'
 import { loadWatches, type WatchStore } from './store'
 import {
@@ -27,7 +29,8 @@ export {
 } from './types'
 export type { Condition, PriceDirection, Watch, WatchDraft, WatchSource } from './types'
 
-// PRICE WATCHES on the chart: a line per level, right-click to place one, drag to move it.
+// PRICE WATCHES on the chart: a line per level, right-click (or, on a touch screen, a
+// long-press) to place one, drag to move it.
 //
 // This module is a VIEW. The watches live on the server (`wdashboard_server/watch`), which is
 // what makes them fire with this tab closed, across a reload and across a rollout -- so
@@ -39,6 +42,8 @@ export type { Condition, PriceDirection, Watch, WatchDraft, WatchSource } from '
 //   template.ts  the registered overlay: a line, and the tag on the price axis
 //   overlays.ts  one line per drawable watch per pane, dragging, and the hit test
 //   menu.ts      the right-click menu (generic)
+//   longpress.ts the touch-screen gesture that opens it -- iPhone Safari fires no contextmenu
+//   clipboard.ts the copy rows' writes, in the form Safari accepts
 //   dialog.ts    set-a-price-then-apply, shared by create and move
 //
 // A price watch is one SHAPE of watch: the `price` source, one leaf, on the `price` field.
@@ -82,30 +87,6 @@ declare global {
   }
 }
 
-/** `navigator.clipboard` exists only in a secure context, so a wall opened over plain http on
- * a LAN address falls back to the deprecated `execCommand`, which still works from the click
- * that selected the row. */
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text)
-    return
-  } catch {
-    // Missing API (insecure context) or a denied permission: try the old path.
-  }
-  const area = document.createElement('textarea')
-  area.value = text
-  area.setAttribute('readonly', '')
-  area.style.position = 'fixed'
-  area.style.opacity = '0'
-  document.body.appendChild(area)
-  area.select()
-  try {
-    document.execCommand('copy')
-  } finally {
-    area.remove()
-  }
-}
-
 /** Null when there is nothing to draw watches from: with no `store` of its own this is a
  * view of the server's, and an older server cannot hold a watch. A browser-side monitor is
  * not a substitute for one on a LIVE wall -- it cannot fire with the tab closed, which is the
@@ -125,7 +106,10 @@ export async function mountPriceWatches(
   // everything else. There is no "revert" branch.
   const unsubscribe = store.subscribe((watches) => overlays.update(watches))
 
-  const bound = new Map<string, { element: HTMLElement; handler: (event: MouseEvent) => void }>()
+  const bound = new Map<
+    string,
+    { element: HTMLElement; handler: (event: MouseEvent) => void; longPress: LongPress }
+  >()
   let menu: ContextMenu | null = null
 
   window.__wdWatches = {
@@ -187,15 +171,15 @@ export async function mountPriceWatches(
     })
   }
 
-  function onContextMenu(pane: ChartProPane, element: HTMLElement, event: MouseEvent): void {
+  /** The menu, at viewport coordinates -- a right-click's, or a long-press's. */
+  function openMenuAt(pane: ChartProPane, element: HTMLElement, clientX: number, clientY: number): void {
     const chart = pane.getChart()
     if (!chart) return
-    event.preventDefault()
     menu?.close()
 
     const rect = element.getBoundingClientRect()
-    const x = event.clientX - rect.left
-    const y = event.clientY - rect.top
+    const x = clientX - rect.left
+    const y = clientY - rect.top
     const symbol = pane.getSymbol()
     const precision = symbol.pricePrecision ?? 5
 
@@ -226,7 +210,7 @@ export async function mountPriceWatches(
       (row): row is { label: string; price: number } => typeof row.price === 'number'
     )
     copyRows.forEach((row, index) => {
-      items.push({ ...copyItem(row.label, row.price, precision), separator: index === 0 })
+      items.push({ ...copyItem(element, row.label, row.price, precision), separator: index === 0 })
     })
     // The bid and ask are not on the chart's bars, so they are fetched on the click and carry
     // no detail: a price shown when the menu opened would already be stale by the pick.
@@ -236,20 +220,21 @@ export async function mountPriceWatches(
         items.push({
           label: `Fetch ${side} price into clipboard`,
           separator: side === 'bid' && copyRows.length === 0,
+          // Started here, inside the tap, with the price still a promise: Safari refuses a
+          // clipboard write begun after the fetch returns (clipboard.ts).
           onSelect: () => {
-            quote(target)
-              .then((q) => {
-                if (q) return copyText(q[side].toFixed(precision))
-                console.warn(`[watch] no ${side} quote for ${target}`)
-              })
-              .catch((err) => console.warn(`[watch] ${side} fetch failed for ${target}`, err))
+            const pending = quote(target).then((q) => {
+              if (!q) throw new Error(`no ${side} quote for ${target}`)
+              return q[side].toFixed(precision)
+            })
+            reportCopy(element, copyPendingText(pending), pending)
           }
         })
       }
     }
     menu = openContextMenu({
-      x: event.clientX,
-      y: event.clientY,
+      x: clientX,
+      y: clientY,
       host: element,
       header:
         hit && level !== null
@@ -315,9 +300,20 @@ export async function mountPriceWatches(
   }
 
   /** The price as the menu shows it — the instrument's precision, not the float's. */
-  function copyItem(label: string, price: number, precision: number): MenuItem {
+  function copyItem(host: HTMLElement, label: string, price: number, precision: number): MenuItem {
     const text = price.toFixed(precision)
-    return { label, detail: text, onSelect: () => void copyText(text) }
+    return { label, detail: text, onSelect: () => reportCopy(host, copyText(text), Promise.resolve(text)) }
+  }
+
+  /** Says what happened. A phone shows no console, and a copy that silently did nothing reads
+   * exactly like one that worked until the paste. */
+  function reportCopy(host: HTMLElement, copied: Promise<boolean>, text: Promise<string>): void {
+    Promise.all([copied, text])
+      .then(([ok, value]) => flash(host, ok ? `Copied ${value}` : "Couldn't copy"))
+      .catch((err) => {
+        console.warn('[watch] copy failed', err)
+        flash(host, "Couldn't copy")
+      })
   }
 
   // -- chart helpers --------------------------------------------------------------------
@@ -372,6 +368,7 @@ export async function mountPriceWatches(
     for (const [id, entry] of bound) {
       if (live.has(id)) continue
       entry.element.removeEventListener('contextmenu', entry.handler)
+      entry.longPress.dispose()
       bound.delete(id)
     }
     for (const pane of panes) {
@@ -381,9 +378,20 @@ export async function mountPriceWatches(
       // needs are this element's own.
       const element = pane.getChart()?.getDom(CANDLE_PANE, 'main') ?? null
       if (!element) continue
-      const handler = (event: MouseEvent): void => onContextMenu(pane, element, event)
+      // iPhone Safari never fires `contextmenu` for a long-press, so the hold is recognised
+      // here as well (longpress.ts). Android and Windows fire both for one hold: whichever
+      // comes second is the same gesture and opens nothing.
+      const longPress = attachLongPress(element, {
+        onLongPress: ({ clientX, clientY }) => openMenuAt(pane, element, clientX, clientY)
+      })
+      const handler = (event: MouseEvent): void => {
+        event.preventDefault()
+        longPress.cancel()
+        if (longPress.firedRecently()) return
+        openMenuAt(pane, element, event.clientX, event.clientY)
+      }
       element.addEventListener('contextmenu', handler)
-      bound.set(pane.id, { element, handler })
+      bound.set(pane.id, { element, handler, longPress })
     }
   }
 
@@ -397,6 +405,7 @@ export async function mountPriceWatches(
       overlays.teardown()
       for (const entry of bound.values()) {
         entry.element.removeEventListener('contextmenu', entry.handler)
+        entry.longPress.dispose()
       }
       bound.clear()
       delete window.__wdWatches
