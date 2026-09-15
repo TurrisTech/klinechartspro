@@ -223,6 +223,7 @@ export class TradingOverlays {
   private selected: string | null = null
   private amendment: Amendment | null = null
   private sending = false
+  private readonly amendmentListeners = new Set<() => void>()
   private colors: OverlayColors
 
   private readonly unsubscribePrefs: () => void
@@ -279,6 +280,7 @@ export class TradingOverlays {
         propose: (amendment) => this.propose(amendment),
         confirmAmendment: () => this.confirmAmendment(),
         cancelAmendment: () => this.cancelAmendment(),
+        realSnapshot: () => this.snapshot,
         draft: this.ctx.draft,
         // One state for every pane (and every tab): rolled up on one, rolled up on all. Until the
         // user chooses, a phone-sized pane starts rolled up and a larger one open.
@@ -300,7 +302,10 @@ export class TradingOverlays {
     // An amendment to something that has since filled, closed or been cancelled has nothing left to
     // amend.
     const a = this.amendment
-    if (a && snapshot && !this.sending && currentLevel(snapshot, a.owner, a.id, a.role) === undefined) this.amendment = null
+    if (a && snapshot && !this.sending && currentLevel(snapshot, a.owner, a.id, a.role) === undefined) {
+      this.amendment = null
+      this.amendmentChanged()
+    }
     this.refreshAll()
   }
 
@@ -330,6 +335,27 @@ export class TradingOverlays {
     }
   }
 
+  /** The waiting change, for the account window's tables, which ask the same question. */
+  currentAmendment(): Amendment | null {
+    return this.amendment
+  }
+
+  isSending(): boolean {
+    return this.sending
+  }
+
+  /** Told whenever a change is proposed, replaced, sent or dropped. */
+  onAmendmentChange(listener: () => void): () => void {
+    this.amendmentListeners.add(listener)
+    return () => {
+      this.amendmentListeners.delete(listener)
+    }
+  }
+
+  private amendmentChanged(): void {
+    for (const listener of [...this.amendmentListeners]) listener()
+  }
+
   /** Put a change up for confirmation, replacing any other still waiting. False when there is
    * nothing to ask about: the position is gone, or the level is already there. */
   propose(change: Omit<Amendment, 'from'>): boolean {
@@ -339,6 +365,7 @@ export class TradingOverlays {
     this.amendment = { ...change, from }
     this.selected = change.id
     this.refreshAll(true)
+    this.amendmentChanged()
     return true
   }
 
@@ -346,6 +373,7 @@ export class TradingOverlays {
     if (!this.amendment || this.sending) return
     this.amendment = null
     this.refreshAll(true)
+    this.amendmentChanged()
   }
 
   /** Send the waiting change. Throws what the server said, after putting the chart back. */
@@ -354,6 +382,7 @@ export class TradingOverlays {
     if (!a || this.sending) return
     this.sending = true
     this.refreshAll()
+    this.amendmentChanged()
     try {
       const session = this.ctx.session
       if (a.owner === 'trade') {
@@ -367,6 +396,7 @@ export class TradingOverlays {
       this.sending = false
       if (this.amendment === a) this.amendment = null
       this.refreshAll(true)
+      this.amendmentChanged()
     }
   }
 

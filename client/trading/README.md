@@ -46,6 +46,8 @@ mode only for its title.
 - `prefs.ts` — the choices kept per browser (ticket size/stop modes, risk %, R, whether the order
   card is rolled up), and the channel that keeps every pane, the ticket and other tabs in step.
 - `metrics.ts` — PURE forex figures, risk sizing, the engine's refusal rules, label placement.
+- `amend.ts` — PURE: a waiting stop/target/price change in words, and why the engine would refuse
+  it; shared by the chart and the tables.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
 - `format.ts` — pure price / pip / P&L helpers.
@@ -125,6 +127,17 @@ question in words — "Move the long 10K's stop loss 1.15228 → 1.15300? If hit
 Confirm sends it; × or Escape puts it back. A new proposal replaces the old one; one whose position
 has since closed is dropped; a button that would change nothing says so. Drafts are exempt — a
 draft only edits the ticket, and placing it already takes two presses.
+
+**The account window's tables ask too.** Leaving an edited stop, target or pending-price cell
+proposes the same kind of change through the same waiting state (`TradingOverlays`), so the chart
+label and card show it when the instrument is on a pane, and a bar above the table asks it in any
+case — a table row's instrument need not be on screen. The cell is marked (a cleared cell reads
+"remove?"), a value that is not a price is refused with a note, and Confirm/Cancel answer it. The
+wording and the refusal rules are one pure module (`amend.ts`) for the chart and the tables alike.
+
+**A table is never rebuilt under the cursor.** The panel re-renders on every session notification;
+while a table cell has focus the table waits (the confirm bar still updates), and it catches up
+when the focus leaves — so a two-second poll no longer takes an edit away mid-typing.
 
 **Currencies.** P&L is the engine's: in the instrument's quote currency. The card labels it so,
 and adds the account-currency figure only where one exact conversion exists (the account is the

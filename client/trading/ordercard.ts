@@ -4,10 +4,10 @@ import {
   formatLots,
   formatMoney,
   formatPercent,
-  formatPips,
   formatPrice,
   formatUnits,
-  formatUnitsShort
+  formatUnitsShort,
+  moveText
 } from './format'
 import type { DraftOrder } from './lines'
 import {
@@ -113,14 +113,7 @@ function setTone(node: HTMLElement, value: number | null | undefined): void {
   node.classList.toggle('is-down', tone(value) === 'is-down')
 }
 
-/** A move in pips, or in percent for an instrument not priced in pips. */
-export function moveText(outcome: Pick<Outcome, 'pips' | 'percent'> | null, signed = true): string {
-  if (!outcome) return '—'
-  if (outcome.pips !== null) {
-    return signed ? `${formatPips(outcome.pips)}p` : `${Math.abs(outcome.pips).toFixed(1)}p`
-  }
-  return signed ? formatPercent(outcome.percent) : `${Math.abs(outcome.percent).toFixed(2)}%`
-}
+export { moveText } from './format'
 
 /** An amount in the quote currency, then -- only where it differs and converts exactly -- the
  * account-currency figure. */

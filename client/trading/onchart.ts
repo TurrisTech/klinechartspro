@@ -2,7 +2,7 @@ import type { Chart, Coordinate, Crosshair, Point } from 'klinecharts'
 import type { ChartProPane } from '../../src'
 import { OhlcvApiError } from '../config'
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
-import { formatMoney, formatPercent, formatPrice, formatUnitsShort, symbolKey } from './format'
+import { formatMoney, formatPrice, formatUnitsShort, symbolKey } from './format'
 import { type InstrumentInfo, seedInstrument } from './instrument'
 import {
   type Amendment,
@@ -28,11 +28,11 @@ import {
   type PricingContext,
   pricingContext,
   protectionValid,
-  restingPriceValid,
   roundTo,
   targetForReward,
   tradeFigures
 } from './metrics'
+import { amendmentRefusal, describeAmendment } from './amend'
 import { type CardAction, h, moveText, OrderCard } from './ordercard'
 import { tradePrefs } from './prefs'
 import type { TradingSession } from './session'
@@ -104,6 +104,8 @@ export interface LayerHost {
   propose(change: Omit<Amendment, 'from'>): boolean
   confirmAmendment(): Promise<void>
   cancelAmendment(): void
+  /** The session's snapshot without the waiting change applied -- what is working now. */
+  realSnapshot(): SimSnapshot | null
   /** The ticket's order, while the account window is open. */
   readonly draft?: DraftController
   isCollapsed(compact: boolean): boolean
@@ -575,39 +577,18 @@ export class OnChartLayer {
   /** The waiting change in words, for the card, when it belongs to this pane's instrument. */
   private describeAmendment(
     snapshot: SimSnapshot,
-    ctx: PricingContext,
+    _ctx: PricingContext,
     key: string
   ): { title: string; detail: string; refusal: string | null; sending: boolean } | null {
     const a = this.host.amendment()
-    if (!a) return null
-    const trade = a.owner === 'trade' ? snapshot.trades.find((t) => t.id === a.id) : undefined
-    const order = a.owner === 'order' ? snapshot.orders.find((o) => o.id === a.id) : undefined
-    const position = trade ?? order
+    const real = this.host.realSnapshot()
+    if (!a || !real) return null
+    const position = a.owner === 'trade' ? real.trades.find((t) => t.id === a.id) : real.orders.find((o) => o.id === a.id)
     if (!position || position.symbol !== key) return null
-    const precision = ctx.info.precision
-    const what = a.role === 'stop' ? 'stop loss' : a.role === 'target' ? 'take profit' : `${order?.type ?? 'order'} price`
-    const whose = trade ? `${trade.side === 'buy' ? 'long' : 'short'} ${formatUnitsShort(trade.units)}` : `${position.side} ${order?.type ?? ''} ${formatUnitsShort(position.units)}`
-    let title: string
-    if (a.price === null) title = `Remove the ${what} (${formatPrice(a.from, precision)}) from the ${whose}?`
-    else if (a.from === null) title = `Add a ${what} at ${formatPrice(a.price, precision)} to the ${whose}?`
-    else title = `Move the ${whose}'s ${what} ${formatPrice(a.from, precision)} → ${formatPrice(a.price, precision)}?`
-
-    let detail = ''
-    if (a.price !== null && a.role !== 'order') {
-      const from = trade ? trade.entryPrice : (order?.price ?? null)
-      if (from !== null) {
-        const o = outcome(position.side, position.units, from, a.price, ctx)
-        detail = `If hit: ${moveText(o)} · ${formatMoney(o.amount, ctx.currencies.quote)}${o.ofBalance !== null ? ` (${formatPercent(o.ofBalance)} of balance)` : ''}`
-      }
-    } else if (a.price === null) {
-      detail = a.role === 'stop' ? 'The position will have no stop loss.' : 'The position will have no take profit.'
-    } else if (order) {
-      const fill = fillingPrice(order.side, ctx.quote)
-      if (fill !== null) detail = `${moveText({ pips: ctx.info.pipSize ? Math.abs(a.price - fill) / ctx.info.pipSize : null, percent: (Math.abs(a.price - fill) / fill) * 100 }, false)} from the market`
-    }
-    const line = linesFor(snapshot, key).find((l) => l.owner === a.owner && l.id === a.id && l.role === a.role)
-    const refusal = a.price !== null && line ? this.refusal(line, a.price) : null
-    return { title, detail, refusal, sending: this.host.sending() }
+    const info = this.host.instrumentFor(key)
+    const words = describeAmendment(a, real, info)
+    if (!words) return null
+    return { ...words, refusal: amendmentRefusal(a, snapshot, info), sending: this.host.sending() }
   }
 
   flash(text: string, tone: 'up' | 'down' | 'info'): void {
@@ -885,9 +866,6 @@ export class OnChartLayer {
   private refusal(line: LineSpec, price: number): string | null {
     const snapshot = this.snapshot
     if (!snapshot) return null
-    const quote = snapshot.quotes[this.key]
-    const precision = this.host.instrumentFor(this.key).precision
-    const sideName = line.side === 'buy' ? 'long' : 'short'
     if (line.owner === 'draft') {
       // Nothing is sent from a drag, so nothing is refused; a level on the wrong side is flagged,
       // and the ticket says the same thing where Place would be.
@@ -897,39 +875,13 @@ export class OnChartLayer {
       const below = line.role === 'stop' ? draft.side === 'buy' : draft.side === 'sell'
       return `The draft's ${line.role === 'stop' ? 'stop' : 'target'} must be ${below ? 'below' : 'above'} its entry`
     }
-    if (line.owner === 'trade') {
-      const trade = snapshot.trades.find((t) => t.id === line.id)
-      if (!trade || trade.closedAt !== null) return 'This trade has closed'
-      if (line.role !== 'stop' && line.role !== 'target') return null
-      const mark = closingPrice(trade.side, quote)
-      if (mark === null || protectionValid(trade.side, line.role, price, mark)) return null
-      const below = line.role === 'stop' ? trade.side === 'buy' : trade.side === 'sell'
-      return `A ${sideName}'s ${line.role === 'stop' ? 'stop' : 'target'} must be ${below ? 'below' : 'above'} the ${
-        trade.side === 'buy' ? 'bid' : 'ask'
-      } (${formatPrice(mark, precision)})`
-    }
-    const order = snapshot.orders.find((o) => o.id === line.id)
-    if (!order || order.status !== 'pending' || order.price === null) return 'This order is no longer working'
-    if (line.role === 'order') {
-      if (!restingPriceValid(order.side, order.type, price, quote)) {
-        const fill = fillingPrice(order.side, quote)
-        if (fill === null) return null
-        const below = (order.type === 'limit') === (order.side === 'buy')
-        return `A ${order.side} ${order.type} must be ${below ? 'below' : 'above'} the ${order.side === 'buy' ? 'ask' : 'bid'} (${formatPrice(fill, precision)})`
-      }
-      if (order.stopLoss !== null && !protectionValid(order.side, 'stop', order.stopLoss, price)) {
-        return 'The order would pass its own stop loss'
-      }
-      if (order.takeProfit !== null && !protectionValid(order.side, 'target', order.takeProfit, price)) {
-        return 'The order would pass its own take profit'
-      }
-      return null
-    }
-    if ((line.role === 'stop' || line.role === 'target') && !protectionValid(order.side, line.role, price, order.price)) {
-      const below = line.role === 'stop' ? order.side === 'buy' : order.side === 'sell'
-      return `A ${order.side} order's ${line.role} must be ${below ? 'below' : 'above'} its price (${formatPrice(order.price, precision)})`
-    }
-    return null
+    if (line.role === 'entry') return null
+    // Checked against the real snapshot: the change is judged against what is working now.
+    return amendmentRefusal(
+      { owner: line.owner, id: line.id, role: line.role, price },
+      this.host.realSnapshot() ?? snapshot,
+      this.host.instrumentFor(this.key)
+    )
   }
 
   // -- dragging -----------------------------------------------------------------------------------
