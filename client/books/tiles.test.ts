@@ -7,9 +7,12 @@ import { LAYOUT_VERSION, type BookTileManifest, tilesUpTo } from './tiles'
 // Two halves. The coverage arithmetic is pure and always runs -- it is where both of the
 // bar tiles' off-by-ones lived (chart-tiles.md, trap 2) and neither is visible to a check
 // that only asks whether the API's points appear in the tiles. The decode half needs a
-// built store and is skipped without one, the same way client/tiles/parity.test.ts is.
+// built store named by TILES_ROOT (a local tree laid out like the bucket,
+// `<root>/books/v1/...`) and is skipped without one, the same way client/tiles/parity.test.ts
+// is. There is no default directory -- the one there used to be,
+// /mnt/d/marketdata/dev/tiles, is a damaged, ephemeral volume being retired.
 
-const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
+const ROOT = process.env.TILES_ROOT?.trim().replace(/\/+$/, '') || undefined
 const SERIES = `${ROOT}/books/${LAYOUT_VERSION}/position/oanda/EURUSD/1h`
 
 function manifest(over: Partial<BookTileManifest> = {}): BookTileManifest {
@@ -76,8 +79,14 @@ describe('coverage', () => {
   })
 })
 
-const built = existsSync(`${SERIES}/manifest.json`)
-if (!built) console.warn(`tiles.test: no book tiles at ${SERIES}; skipping the decode cases`)
+const built = ROOT !== undefined && existsSync(`${SERIES}/manifest.json`)
+if (!built) {
+  console.warn(
+    ROOT === undefined
+      ? 'tiles.test: TILES_ROOT unset; skipping the decode cases'
+      : `tiles.test: no book tiles at ${SERIES}; skipping the decode cases`
+  )
+}
 
 describe.skipIf(!built)('decode', () => {
   test('a built tile decodes to points whose buckets sit on the vendor grid', async () => {

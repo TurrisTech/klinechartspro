@@ -6,6 +6,11 @@ import { LAYOUT_VERSION } from './manifest'
 // -> KLineData, through the same code the browser runs. The positive half of the contract;
 // manifest.test.ts pins where tiles stop and parity.test.ts pins that the join is exact.
 //
+// Opt-in: it reads a local tile tree only when TILES_ROOT names one (laid out like the bucket,
+// `<root>/v2/<vendor>/<symbol>/<interval>/...`), and skips every case otherwise. There is no
+// default directory -- the one there used to be, /mnt/d/marketdata/dev/tiles, is a damaged,
+// ephemeral volume being retired.
+//
 // Every test is gated on the series IT reads, not on the store as a whole. A local store is
 // routinely partial -- on 2026-09-15 this workstation's v2 tree held EURUSD and EURTRY and
 // nothing else, the rest of it still v1 -- and a single EURUSD gate let the USDJPY test run
@@ -18,7 +23,7 @@ import { LAYOUT_VERSION } from './manifest'
 // window measured back from `Date.now()` stopped overlapping it thirty days after the last
 // build. The live-edge tests are measured from the manifest's own `coveredTo`.
 
-const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
+const ROOT = process.env.TILES_ROOT?.trim().replace(/\/+$/, '') || undefined
 
 function manifestPath(vendor: string, symbol: string, interval: string): string {
   return `${ROOT}/${LAYOUT_VERSION}/${vendor}/${symbol}/${interval}/manifest.json`
@@ -26,7 +31,7 @@ function manifestPath(vendor: string, symbol: string, interval: string): string 
 
 /** Whether the local store holds this series under the layout the client reads. */
 function stored(vendor: string, symbol: string, interval: string): boolean {
-  return existsSync(manifestPath(vendor, symbol, interval))
+  return ROOT !== undefined && existsSync(manifestPath(vendor, symbol, interval))
 }
 
 const eurusd = stored('oanda', 'EURUSD', '1m')

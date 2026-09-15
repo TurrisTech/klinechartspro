@@ -11,9 +11,12 @@ import { LAYOUT_VERSION } from './manifest'
 // the tiles passes happily while the tiles carry an extra bar at the window edge, which is
 // precisely the bug that /getbars' exclusive `to` bound produced here.
 //
-// Needs the dev stack (bin/dev-stack.sh) and a built tile store; skipped without either.
+// Needs the dev stack (bin/dev-stack.sh) and a built tile store named by TILES_ROOT (a local
+// tree laid out like the bucket, `<root>/v2/...`); skipped without either. There is no default
+// directory -- the one there used to be, /mnt/d/marketdata/dev/tiles, is a damaged, ephemeral
+// volume being retired.
 
-const ROOT = process.env.TILES_ROOT ?? '/mnt/d/marketdata/dev/tiles'
+const ROOT = process.env.TILES_ROOT?.trim().replace(/\/+$/, '') || undefined
 const API = `http://localhost:${process.env.PORT0 ?? 25998}/ohlcv`
 const FIELDS = ['timestamp', 'open', 'high', 'low', 'close', 'volume'] as const
 
@@ -27,8 +30,11 @@ const realFetch = Bun.fetch
 
 // Probed at module load, not in beforeAll: `test.skipIf` is evaluated while the file is
 // being collected, so a flag set later is always still false and every case silently skips.
-const ready = existsSync(`${ROOT}/${LAYOUT_VERSION}/oanda/EURUSD/1m/manifest.json`)
-const serverUp = await realFetch(`${API}/capabilities`).then((r) => r.ok).catch(() => false)
+const ready =
+  ROOT !== undefined && existsSync(`${ROOT}/${LAYOUT_VERSION}/oanda/EURUSD/1m/manifest.json`)
+// Only probed when there is a tree to compare against, so a run without one makes no request.
+const serverUp =
+  ready && (await realFetch(`${API}/capabilities`).then((r) => r.ok).catch(() => false))
 if (ready && !serverUp) console.warn(`parity.test: no server at ${API}; skipping`)
 
 async function getbars(symbol: string, resolution: string, from: number, to: number) {
