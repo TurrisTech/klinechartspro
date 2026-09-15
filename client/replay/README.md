@@ -114,6 +114,24 @@ refinement that never lowers the base). "Pause on fill" stops at the filling bar
 advance — Step or Next signal — stops at the first bar a price watch fires on** (stop reason
 `watch`; see below). `nextSignal` is an advance to the end of the data.
 
+**Stopping a long advance.** While an advance runs, the title bar's Step button reads **Stop**
+and calls `cancel()`; the advance stops at its next natural place — **between two whole base
+bars**, or before moving at all if it is still looking up signals — with reason `cancel` and
+the cursor on the last bar walked, exactly where a fill pause would leave it. A seek (nothing
+could fill, nothing watched) is one read and is not interrupted. Two things had to change for a
+Stop to be hearable at all, and each was a bug before it was a feature:
+
+- **The walk fetches a page at a time** (`WALK_CHUNK_BARS`, about one server page). It used to
+  `ensure` the whole span before reading its first bar, so a year at a 1m base was a minute of
+  download with nothing checking in between.
+- **The walk hands the event loop back every `WALK_YIELD_MS` (50 ms).** Once its bars are cached
+  a walk is synchronous end to end — every `await` in it resolves as a microtask — so a click
+  could not even be delivered until it finished. `session.test.ts` pins this with a timer that
+  can only fire mid-walk if the walk yields (it fails with the yield disabled).
+
+A cancel that lands before anything moved does not call `onAdvanced`: nothing the chart shows
+changed, and telling it the clock moved would make every plugin forget and refetch.
+
 ## Price watches
 
 The same lines, the same right-click, the same dialog and the same Notification Center as a
@@ -200,5 +218,10 @@ the intersection rule descending / not descending, cache walk-vs-seek, the sessi
 (fake source, fake signals), persist round trip, and `watches.test.ts` — a real session over a
 synthetic path: an armed watch forcing the walk, firing on the base bar that reaches the
 level, the band (a level between two closes), the blob round trip and the one-instrument
-refusal. The firing RULE is tested against the server's own fixtures in `client/watch`. `scripts/sync-engine-fixtures.sh` vendors the
+refusal. The firing RULE is tested against the server's own fixtures in `client/watch`.
+`controls.test.ts` renders the controls and the start dialog into a real DOM (happy-dom,
+registered for that file only and removed after it) over a fake `ReplayController`: which
+controller call every gesture makes, when each button is usable, Step becoming Stop, every stop
+reason's wording, the one-panel rule, the signal list's star/arm, the base refusal, and the
+dialog's New York clock on both sides of DST, its refusals and Random's range. `scripts/sync-engine-fixtures.sh` vendors the
 fixtures from wdashboard-server; `--check` (run by `fixtures.test.ts`) fails if they differ.

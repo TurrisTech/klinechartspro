@@ -7,8 +7,8 @@ import { advanceTarget } from './timeframes'
 // chart, no DOM -- the session (session.ts) does the walking.
 
 /** `watch`: an observer (a price watch) fired during the advance -- discovered while walking,
- * like `fill`; see `session.ts`. */
-export type StopReason = 'target' | 'signal' | 'fill' | 'watch' | 'end'
+ * like `fill`. `cancel`: the user stopped it, between two base bars. See `session.ts`. */
+export type StopReason = 'target' | 'signal' | 'fill' | 'watch' | 'cancel' | 'end'
 
 /** What the user asked for: N whole candles of an interval, or "to the end of the data". */
 export type AdvanceRequest = { interval: string; multiple: number } | { toEnd: true; end: number }
