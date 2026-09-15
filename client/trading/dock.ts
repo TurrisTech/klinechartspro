@@ -59,11 +59,10 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
   }
   const activeSymbol = (): SymbolInfo => activePane()?.getSymbol() ?? chartPro.getSymbol()
 
-  const overlays = new TradingOverlays((kind, trade, price) => {
-    void session
-      .modifyTrade(trade.id, kind === 'stop' ? { stopLoss: price } : { takeProfit: price })
-      .catch((err) => console.warn(`[${tag}] trade amend failed`, err))
-  }, tag)
+  // The lines, brackets, labels and order card on every candle pane. They show whether or not
+  // this window is open: an order placed from the ticket appears on the chart at once, and the
+  // window stays the place for the ticket and the history.
+  const overlays = new TradingOverlays({ session, tag, instrumentFor: (key) => instrumentFor(key) })
 
   const instrumentFor = (key: string): InstrumentInfo =>
     instrumentInfo(key, () => {

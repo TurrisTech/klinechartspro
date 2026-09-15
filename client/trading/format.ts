@@ -83,3 +83,51 @@ export function tradePips(
 export function sideLabel(side: SimSide): string {
   return side === 'buy' ? 'Buy' : 'Sell'
 }
+
+//: Currencies conventionally quoted without minor units, so an amount in them reads as a whole
+//: number rather than as `1,250.00`.
+const WHOLE_CURRENCIES = new Set(['JPY', 'HUF', 'KRW', 'CLP', 'ISK'])
+
+const moneyFormats = new Map<number, Intl.NumberFormat>()
+function moneyFormat(digits: number): Intl.NumberFormat {
+  let format = moneyFormats.get(digits)
+  if (!format) {
+    format = new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+    moneyFormats.set(digits, format)
+  }
+  return format
+}
+
+/** A signed amount with thousands separators and, when given, its currency:
+ * '+1,234.56 USD' / '−1,250 JPY'. */
+export function formatMoney(value: number | null | undefined, currency = '', signed = true): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const digits = WHOLE_CURRENCIES.has(currency) ? 0 : 2
+  const text = moneyFormat(digits).format(Math.abs(value))
+  const zero = Number(text.replace(/,/g, '')) === 0
+  const sign = !signed || zero ? '' : value > 0 ? '+' : '−'
+  return `${sign}${text}${currency ? ` ${currency}` : ''}`
+}
+
+/** Units in the short form a chart label has room for: 250, 10K, 1.5M. */
+export function formatUnitsShort(units: number): string {
+  const abs = Math.abs(units)
+  const trim = (n: number): string => (Number.isInteger(n) ? String(n) : n.toFixed(n < 10 ? 2 : 1).replace(/\.?0+$/, ''))
+  if (abs >= 1_000_000) return `${trim(abs / 1_000_000)}M`
+  if (abs >= 1_000) return `${trim(abs / 1_000)}K`
+  return trim(abs)
+}
+
+/** Standard lots, two decimals: '0.10 lot' / '1.50 lots'. */
+export function formatLots(lots: number | null): string {
+  if (lots === null || !Number.isFinite(lots)) return '—'
+  return `${lots.toFixed(2)} ${lots === 1 ? 'lot' : 'lots'}`
+}
+
+/** A signed percentage: '+0.42%' / '−1.10%'. */
+export function formatPercent(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const text = Math.abs(value).toFixed(digits)
+  const sign = Number(text) === 0 ? '' : value > 0 ? '+' : '−'
+  return `${sign}${text}%`
+}
