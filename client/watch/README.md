@@ -91,9 +91,14 @@ level is one `PATCH`: a changed condition re-arms server-side, which re-seeds.
   the dialog, pre-filled and editable.
 - **Right-click a line** (within `HIT_TOLERANCE_PX`) → Edit price…, Re-arm here (once it has
   fired), Delete.
-- **Copy price**, below a rule at the foot of both menus, puts the price on the clipboard at
-  the instrument's precision: the line's level on a line, the price under the pointer
-  anywhere else. It is offered even where `canWatch` refuses a watch.
+- **Copy rows**, below a rule at the foot of both menus, put a price on the clipboard at the
+  instrument's precision: the cursor price (or the line's level on a line), the current
+  price, and the open/high/low/close of the bar under the pointer. Offered even where
+  `canWatch` refuses a watch.
+- **Fetch bid/ask price into clipboard** follow them when a trading session exists. The bid
+  and ask are not on the chart's bars, so they are read from the session (`quote` option:
+  the paper account's `watch`, or a replay's cursor quote) on the click, never when the menu
+  opens, and show no price.
 - **Drag a line** → the same dialog, pre-filled with where it was dropped. Cancelling is not
   a revert branch: the store re-emits and every pane redraws from it, the same path that
   draws everything else.

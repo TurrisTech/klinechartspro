@@ -417,7 +417,13 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // the same either way.
   watches = await mountPriceWatches(
     chartPro,
-    replay ? { store: replay.watches.store, canWatch: (target) => replay?.watches.canWatch(target) ?? null } : {}
+    replay
+      ? {
+          store: replay.watches.store,
+          canWatch: (target) => replay?.watches.canWatch(target) ?? null,
+          quote: replay.quote
+        }
+      : { quote: paper?.quote }
   )
   // The panes mounted before `watches` resolved, so the first sync is made here rather than
   // waited for from onPanesChange -- which does not fire again until the layout changes.
