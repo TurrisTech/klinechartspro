@@ -12,6 +12,8 @@ export interface MenuItem {
   detail?: string
   danger?: boolean
   disabled?: boolean
+  /** Draw a rule above this row — a row that is not part of the list above it. */
+  separator?: boolean
   onSelect(): void
 }
 
@@ -46,6 +48,12 @@ export function openContextMenu(options: ContextMenuOptions): ContextMenu {
   }
 
   for (const item of options.items) {
+    if (item.separator && menu.childElementCount > 0) {
+      const rule = document.createElement('div')
+      rule.className = 'wd-watch-menu-separator'
+      rule.setAttribute('role', 'separator')
+      menu.appendChild(rule)
+    }
     const row = document.createElement('button')
     row.type = 'button'
     row.className = `wd-watch-menu-item${item.danger ? ' is-danger' : ''}`

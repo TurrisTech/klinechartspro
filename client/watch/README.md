@@ -91,6 +91,9 @@ level is one `PATCH`: a changed condition re-arms server-side, which re-seeds.
   the dialog, pre-filled and editable.
 - **Right-click a line** (within `HIT_TOLERANCE_PX`) → Edit price…, Re-arm here (once it has
   fired), Delete.
+- **Copy price**, below a rule at the foot of both menus, puts the price on the clipboard at
+  the instrument's precision: the line's level on a line, the price under the pointer
+  anywhere else. It is offered even where `canWatch` refuses a watch.
 - **Drag a line** → the same dialog, pre-filled with where it was dropped. Cancelling is not
   a revert branch: the store re-emits and every pane redraws from it, the same path that
   draws everything else.

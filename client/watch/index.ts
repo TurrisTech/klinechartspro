@@ -78,6 +78,30 @@ declare global {
   }
 }
 
+/** `navigator.clipboard` exists only in a secure context, so a wall opened over plain http on
+ * a LAN address falls back to the deprecated `execCommand`, which still works from the click
+ * that selected the row. */
+async function copyText(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return
+  } catch {
+    // Missing API (insecure context) or a denied permission: try the old path.
+  }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.setAttribute('readonly', '')
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.appendChild(area)
+  area.select()
+  try {
+    document.execCommand('copy')
+  } finally {
+    area.remove()
+  }
+}
+
 /** Null when there is nothing to draw watches from: with no `store` of its own this is a
  * view of the server's, and an older server cannot hold a watch. A browser-side monitor is
  * not a substitute for one on a LIVE wall -- it cannot fire with the tab closed, which is the
@@ -176,6 +200,15 @@ export async function mountPriceWatches(
     // place and a fired line behaves like a live one.
     const hit = overlays.watchAt(pane.id, y)
     const level = hit === null ? null : priceLevel(hit)
+    const cursor = priceAt(chart, y)
+    const items =
+      hit && level !== null
+        ? watchItems(hit, level, precision)
+        : createItems(pane, chart, x, cursor, precision)
+    // Copying is not a watch gesture, so it is offered even where `canWatch` refuses one: on
+    // a line it copies that line's level, anywhere else the price under the pointer.
+    const copyable = hit && level !== null ? level : cursor
+    if (copyable !== null) items.push(copyItem(copyable, precision))
     menu = openContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -184,10 +217,7 @@ export async function mountPriceWatches(
         hit && level !== null
           ? `Watch · ${level.toFixed(precision)}`
           : `Price watch · ${symbol.ticker}`,
-      items:
-        hit && level !== null
-          ? watchItems(hit, level, precision)
-          : createItems(pane, chart, x, y, precision),
+      items,
       onClose: () => {
         menu = null
       }
@@ -217,7 +247,7 @@ export async function mountPriceWatches(
     pane: ChartProPane,
     chart: Chart,
     x: number,
-    y: number,
+    cursor: number | null,
     precision: number
   ): MenuItem[] {
     const symbol = pane.getSymbol()
@@ -227,7 +257,6 @@ export async function mountPriceWatches(
     // backend does not watch, and silently accepting a watch on one is the failure this
     // avoids.
     if (refusal !== null) return [{ label: refusal, disabled: true, onSelect: () => {} }]
-    const cursor = priceAt(chart, y)
     const bar = barAt(chart, x)
     const market = marketPrice(target)
     const rows: Array<{ label: string; price: number | null }> = [
@@ -245,6 +274,17 @@ export async function mountPriceWatches(
         detail: row.price.toFixed(precision),
         onSelect: () => openCreateDialog(pane, row.price)
       }))
+  }
+
+  /** The price as the menu shows it — the instrument's precision, not the float's. */
+  function copyItem(price: number, precision: number): MenuItem {
+    const text = price.toFixed(precision)
+    return {
+      label: 'Copy price',
+      detail: text,
+      separator: true,
+      onSelect: () => void copyText(text)
+    }
   }
 
   // -- chart helpers --------------------------------------------------------------------
