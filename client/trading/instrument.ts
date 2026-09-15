@@ -14,6 +14,9 @@ export interface InstrumentInfo {
    * in pips (assetClass other than forex/metal, or no config). */
   pipSize: number | null
   assetClass: string
+  /** OANDA's margin requirement as a fraction of notional (0.0333 = 30:1); null when the
+   * vendor states none. */
+  marginRate: number | null
 }
 
 const cache = new Map<string, InstrumentInfo>()
@@ -23,7 +26,7 @@ const seeds = new Map<string, number>()
 const inflight = new Set<string>()
 
 function placeholder(vendorSymbol: string): InstrumentInfo {
-  return { precision: seeds.get(vendorSymbol) ?? 5, pipSize: null, assetClass: 'forex' }
+  return { precision: seeds.get(vendorSymbol) ?? 5, pipSize: null, assetClass: 'forex', marginRate: null }
 }
 
 /** The cached info for `vendor:TICKER`, or a sane placeholder while it loads; `onLoad` fires
@@ -55,7 +58,8 @@ function fromConfig(config: InstrumentConfig): InstrumentInfo {
       isForex && typeof config.forexPipLocation === 'number'
         ? 10 ** config.forexPipLocation
         : null,
-    assetClass: config.assetClass ?? 'forex'
+    assetClass: config.assetClass ?? 'forex',
+    marginRate: typeof config.marginRate === 'number' && config.marginRate > 0 ? config.marginRate : null
   }
 }
 

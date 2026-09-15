@@ -37,9 +37,12 @@ mode only for its title.
   `kc-*`/`wd-trade-*`. It owns no chrome — the title bar, close and drag are the window's —
   but it does own its shape: below 620px (a window floated small) the three grid areas stop
   sharing rows and stack into one column (`is-narrow`, from its OWN width, not the page's).
-- `overlays.ts` — a line per pending order and per open trade (entry) on each pane, plus
-  draggable stop/target lines that report an amendment back through the session. Per pane, that
-  pane's instrument only, clamped to a draw window.
+- `overlays.ts` — `TradingOverlays`, everything the session puts on the candle panes (below).
+- `lines.ts` — the two registered klinecharts templates (`wdTradeLine`, `wdTradeBracket`) and the
+  pure "which lines does this snapshot draw" (`linesFor`, `workingFor`).
+- `onchart.ts` — the HTML layer per pane: a label on every line, dragging, and the actions.
+- `ordercard.ts` — the collapsible order card in that layer.
+- `metrics.ts` — PURE forex figures, the engine's refusal rules, and label placement.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
 - `format.ts` — pure price / pip / P&L helpers.
@@ -55,6 +58,48 @@ mode only for its title.
   returns `{ toggle, isOpen, sync, teardown }`. The "Paper" button in the drawing rail's
   footer (`client/index.ts` `mountChartExtras`) calls `toggle`; "Replay" beside it is
   `client/replay`.
+
+## On the price pane
+
+Whatever is working on a pane's instrument is drawn on that pane, **whether or not the account
+window is open** — an order placed from the ticket appears on the chart at once.
+
+- **Lines** (`wdTradeLine`): a pending order's price, an open trade's entry, every stop and
+  target, each with its price on the axis. The entry is locked; the rest are draggable.
+- **Bracket** (`wdTradeBracket`): what connects an entry to its stop and target — a loss band
+  and a profit band from the bar the position opened on to the right edge, a dashed connector,
+  and a dot at the fill. Strong for the selected entry, faint for the rest. No figure takes
+  events, so it never steals a pan.
+- **Labels**, against the right edge beside each line's axis tag: `Long 10K −1.8p −1.80 ×`,
+  `SL −20.0p −20.00 ×`, `Buy limit 10K 14.5p away ×`. Close lines are placed by `layoutLabels`
+  so none overlap, with a leader back to the line; a line off the pane pins its label to that
+  edge (▲/▼). Hover or selection shows `SL`/`TP` buttons where one is missing.
+- **The order card**, lower left: one row per trade and order, the selected (or only) one
+  expanded with stop and target (price, pips, amount, % of balance, R:R), size in units and lots,
+  pip value, margin and time; actions Breakeven, Close ½, Close, Cancel order, add/remove
+  stop/target, and Flatten for the instrument. Rolled up, the header still shows the counts and
+  the open P&L. Remembered per browser, separately for phone-sized and regular panes.
+
+**Dragging** a stop, a target or a pending order's price — by the label or by the line — shows
+what that price would realise while it moves, marks a price the engine would refuse (dashed, with
+the reason as its title), and commits one amendment on release. A refused drop, Escape or a
+cancelled pointer puts the line back. Canvas rebuilds are held for the gesture and until the
+amendment answers, so a poll landing mid-drag cannot pull the line out from under the pointer.
+
+**Currencies.** P&L is the engine's: in the instrument's quote currency. The card labels it so,
+and adds the account-currency figure only where one exact conversion exists (the account is the
+quote, or the base at the mid) — a cross gets none rather than an invented rate.
+
+**Close and flatten take two presses** (the button relabels for three seconds, and stays where the
+first press found it). Selecting is a click on a row, a label or a line; a newly placed order or a
+fresh fill is selected automatically, and a fill, a stop or target hit and a close are announced
+in the card's header for a few seconds.
+
+**Traps.** The layer lives inside klinecharts' price-area container, so it stops `mousedown`,
+`touchstart`, `pointerdown`, `click`, `wheel` and `contextmenu` from reaching the chart (a pan, a
+wall seek, the watch menu) but lets `mouseup` and a button-down `mousemove` through (a pan ending
+over the card). And `src/app.css`'s `.klinecharts-pro * { border-color }` loads after
+`client/style.css` at equal specificity: a rule here that colours a border is scoped `.wd-oc …`.
 
 ## Gating
 
