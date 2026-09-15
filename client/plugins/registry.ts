@@ -1,3 +1,4 @@
+import { createArevLabPlugin } from '../arevlab/plugin'
 import { createBooksPlugin } from '../books/plugin'
 import { createMtf01Plugin } from '../mtf01/plugin'
 import { createMtfPlugin } from '../mtf/plugin'
@@ -12,9 +13,10 @@ import type { IndicatorPlugin } from './types'
 // mounted by the single `registry` plugin, which reads `GET /indicators/registry` and builds
 // a template per row: adding an indicator is a row, not a module. What is left beside it is
 // what the registry deliberately does not cover: the multi-timeframe overlays, whose sources
-// read timeframes that are not the chart's, and the book profiles, which are not a
-// scalar-per-bar series at all.
+// read timeframes that are not the chart's; the book profiles, which are not a
+// scalar-per-bar series at all; and the AREV lab, which reads several registry rows into one
+// pane and computes its own signal rules over them.
 
 export function builtinPlugins(): IndicatorPlugin[] {
-  return [createRegistryPlugin(), createMtfPlugin(), createMtf01Plugin(), createBooksPlugin()]
+  return [createRegistryPlugin(), createArevLabPlugin(), createMtfPlugin(), createMtf01Plugin(), createBooksPlugin()]
 }

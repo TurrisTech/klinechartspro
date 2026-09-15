@@ -6,12 +6,36 @@
 // went dark under the dev server in d382ce5 — pulling that chain into client/ would risk
 // the same failure mode for a feature with no test coverage to catch it.
 
+/** Show a field only while another field's value is one of `is` -- the levers of the one rule
+ * a select has chosen, say. Evaluated against the live config: a `switch` or `select` change
+ * re-renders the panel, so a dependent field appears or disappears as its condition flips. A
+ * `number` edit does not re-render (it would steal the input's focus mid-keystroke), which is
+ * why a condition should name a switch or a select. */
+export interface SettingsFieldCondition {
+  key: string
+  is: unknown[]
+}
+
 export type SettingsField =
-  | { kind: 'group'; label: string; fields: SettingsField[] }
-  | { kind: 'select'; key: string; label: string; options: { value: string; label: string }[] }
-  | { kind: 'number'; key: string; label: string; min: number; max: number; step: number }
-  | { kind: 'switch'; key: string; label: string }
-  | { kind: 'color'; key: string; label: string }
+  | { kind: 'group'; label: string; fields: SettingsField[]; when?: SettingsFieldCondition }
+  | {
+      kind: 'select'
+      key: string
+      label: string
+      options: { value: string; label: string }[]
+      when?: SettingsFieldCondition
+    }
+  | {
+      kind: 'number'
+      key: string
+      label: string
+      min: number
+      max: number
+      step: number
+      when?: SettingsFieldCondition
+    }
+  | { kind: 'switch'; key: string; label: string; when?: SettingsFieldCondition }
+  | { kind: 'color'; key: string; label: string; when?: SettingsFieldCondition }
 
 // Both assume `source`/`target` are a complete, already-valid config (every intermediate
 // container the path walks through already exists) — every caller here builds a field's
@@ -80,6 +104,10 @@ export function openSettingsPanel<T extends object>(
   const { anchor, title, fields, defaults, onChange, onClose, onToggleEnabled } = options
   let config = structuredClone(options.config)
   let enabled = options.enabled ?? true
+  // Whether any field depends on another: only then does a switch or select edit re-render.
+  const conditional = (function hasCondition(list: SettingsField[]): boolean {
+    return list.some((f) => Boolean(f.when) || (f.kind === 'group' && hasCondition(f.fields)))
+  })(fields)
 
   const panel = document.createElement('div')
   panel.className = 'kc-popover wd-layer-panel'
@@ -123,7 +151,12 @@ export function openSettingsPanel<T extends object>(
     return button
   }
 
-  function renderField(field: SettingsField): HTMLElement {
+  function shown(field: SettingsField): boolean {
+    return !field.when || field.when.is.includes(getByPath(config, field.when.key))
+  }
+
+  function renderField(field: SettingsField): HTMLElement | null {
+    if (!shown(field)) return null
     if (field.kind === 'group') {
       const fieldset = document.createElement('fieldset')
       fieldset.className = 'kc-fieldset'
@@ -132,7 +165,10 @@ export function openSettingsPanel<T extends object>(
       fieldset.appendChild(legend)
       const groupBody = document.createElement('div')
       groupBody.className = 'kc-field-group'
-      for (const child of field.fields) groupBody.appendChild(renderField(child))
+      for (const child of field.fields) {
+        const rendered = renderField(child)
+        if (rendered) groupBody.appendChild(rendered)
+      }
       fieldset.appendChild(groupBody)
       return fieldset
     }
@@ -160,6 +196,7 @@ export function openSettingsPanel<T extends object>(
           const nextConfig = structuredClone(config)
           setByPath(nextConfig, field.key, next)
           commit(nextConfig)
+          if (conditional) refresh()
         }
       )
     }
@@ -179,6 +216,7 @@ export function openSettingsPanel<T extends object>(
         const next = structuredClone(config)
         setByPath(next, field.key, select.value)
         commit(next)
+        if (conditional) refresh()
       })
       return select
     }
@@ -245,7 +283,10 @@ export function openSettingsPanel<T extends object>(
 
   function refresh(): void {
     fieldsBody.innerHTML = ''
-    for (const field of fields) fieldsBody.appendChild(renderField(field))
+    for (const field of fields) {
+      const rendered = renderField(field)
+      if (rendered) fieldsBody.appendChild(rendered)
+    }
   }
   refresh()
 
