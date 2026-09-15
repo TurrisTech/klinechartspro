@@ -189,6 +189,29 @@ describe('createPluginHost', () => {
     expect([...keys].every((k) => peekStore(k) === undefined)).toBe(true)
   })
 
+  test('a signature rebind that keeps a source keeps its store reachable by key', async () => {
+    // A settings edit (mtf, the AREV lab) bumps the plugin signature and rebinds onto the
+    // same keys. The store must survive the hand-over under its key, or the template's
+    // peekStore finds nothing and the pane goes blank.
+    let rev = 0
+    const { plugin: base, fetches } = pointsPlugin([{ date: 1, v: 1 }])
+    const plugin: IndicatorPlugin = { ...base, signature: () => rev }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [{ timestamp: 1 }]
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5])]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    const key = (fc.overrides[0] as { extendData: { seriesKey: string } }).extendData.seriesKey
+    const store = peekStore(key)
+    expect(store?.size).toBe(1)
+    rev = 1
+    await new Promise((r) => setTimeout(r, 600)) // the reconcile poll
+    expect(peekStore(key)).toBe(store)
+    expect(fetches.length).toBe(1)
+  })
+
   test('subscribe runs at bind and its disposer at release; notify.changed re-applies', async () => {
     let disposed = 0
     let notifyChanged: (() => void) | null = null

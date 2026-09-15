@@ -9,11 +9,11 @@ import {
   hydrateLayout,
   toPaneOptions,
   toPersistedLayout,
+  type PanePluginState,
   type PersistedLayout
 } from './layout'
 import { levelsLayer } from './levels/layer'
 import { levels2Layer } from './levels2/layer'
-import type { MtfConfig } from './mtf/config'
 import { mountNotificationCenter, notifications } from './notifications'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
@@ -278,6 +278,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // never heard of, carried in the pane's own document entry (layout.ts).
       mtf: Object.fromEntries(
         hydrated.panes.flatMap((pane, index) => (pane.mtfConfig ? [[index, pane.mtfConfig]] : []))
+      ),
+      // The AREV lab's, carried the same way.
+      arevlab: Object.fromEntries(
+        hydrated.panes.flatMap((pane, index) => (pane.labConfig ? [[index, pane.labConfig]] : []))
       )
     }
   })
@@ -312,9 +316,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
         panes,
         activeIndex,
         latestSync,
-        // The plugins' per-pane document state (today: the AREV21 overlay's settings),
-        // supplied here rather than read off the snapshots.
-        (pluginHost.paneState().mtf ?? {}) as Record<number, MtfConfig>
+        // The plugins' per-pane document state (the AREV21 overlay's and the AREV lab's
+        // settings), supplied here rather than read off the snapshots.
+        pluginHost.paneState() as PanePluginState
       )
     )
     // The switcher's row for the active workspace shows its pane count and instrument, so it

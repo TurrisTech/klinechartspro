@@ -130,6 +130,7 @@ normalise it with the server's own rule). Tests: `signals.test.ts`.
 | `arev/plugin.ts` | `AREV:<generation>` | one per template | no live stream |
 | `krev/plugin.ts` | `KREV:krev01:p` | one, folded by side | |
 | `mtf/plugin.ts` | `MTF:arev21` | one per enabled source timeframe (`MtfStore`: votes + bar grid) | per-pane settings, own panel; shares arev21 stores with the AREV plugin |
+| `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, widened backwards by the rule's lead-in), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed rule or a client-side rank/median/prior; per-pane settings, own panel; rules are a port of the server's `arev21outlier.py`, locked by `arevlab/fixtures/rules_parity.json` |
 | `books/plugin.ts` | `BOOK:depth:*`, `BOOK:view:*`, `BOOK:sentiment:*`, `BOOK:flow` | one per binding; depth + view share one profile store per kind | the OANDA 20-minute books: depth draws every snapshot on the price pane at its own instant, view follows the crosshair, sentiment/flow are sub-pane series |
 
 Tests: `bun test client` (`*.test.ts` here, with `testing.ts`'s fake chart).
@@ -144,8 +145,9 @@ server indicator by name.
 It replaced three plugins and their template modules: `arev/`, `krev/` and `indicators/`,
 which were structural copies differing mostly in their colours and in constants the server
 also held. What is left beside it is what the registry deliberately does not cover: `mtf/`
-and `mtf01/`, whose sources read timeframes that are not the chart's, and `books/`, which is
-not a scalar-per-bar series at all.
+and `mtf01/`, whose sources read timeframes that are not the chart's; `books/`, which is
+not a scalar-per-bar series at all; and `arevlab/`, which reads several registry rows into one
+pane and computes its own signal rules over them.
 
 **Template names come from the row.** A saved wall document names its indicators by template,
 so `S:rsi@v0.0.2`, `AREV:arev21` and `KREV:krev01:p` are unchanged and every stored layout

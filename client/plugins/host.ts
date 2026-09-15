@@ -337,16 +337,17 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const siblings = [...entry.bindings.values()]
         .filter((o) => o.plugin === plugin && o.indicatorId !== ind.id && !o.disposed)
         .map((o) => ({ indicatorId: o.indicatorId, name: o.name }))
-      // The new binding is made BEFORE the old one is disposed, so a store both read
-      // (a rebind that keeps a source) survives the hand-over instead of being dropped
-      // and refetched.
+      // The new binding is made AND filed before the old one is disposed, so a store both
+      // read (a rebind that keeps a source) survives the hand-over instead of being dropped
+      // and refetched. Filing it first is the half that matters: `dispose` asks
+      // `storeInUse`, which only sees filed bindings, and a store dropped while the new
+      // binding still holds it is unreachable by key -- the template's `peekStore` finds
+      // nothing and the pane stays blank however much the orphan is filled.
       const b = bind(entry, plugin, ind, { ...base, indicator: ind, siblings }, sig)
-      if (existing) {
-        dispose(existing)
-        entry.bindings.delete(ind.id)
-      }
+      if (b) entry.bindings.set(ind.id, b)
+      else entry.bindings.delete(ind.id)
+      if (existing) dispose(existing)
       if (!b) continue
-      entry.bindings.set(ind.id, b)
       fresh.push(b)
     }
     for (const [id, b] of entry.bindings) {

@@ -8,6 +8,7 @@ import type {
   SyncOptions
 } from '../src'
 import { availablePeriods, defaultPeriod } from './periods'
+import { fromStoredLabConfig, toStoredLabConfig, type LabConfig, type StoredLabConfig } from './arevlab/config'
 import { fromStoredMtfConfig, toStoredMtfConfig, type MtfConfig, type StoredMtfConfig } from './mtf/config'
 import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 
@@ -42,6 +43,10 @@ interface PersistedPane {
   // timeframe, which is the whole reason that overlay owns a settings panel of its own.
   // Omitted for a pane that has never been configured, which reads as the defaults.
   mtf?: StoredMtfConfig
+  // The AREV lab's settings for THIS pane -- which generations it draws, each one's colour and
+  // signal rule and that rule's levers -- for the same reason as `mtf`, and stored the same
+  // way: only what differs from the defaults, omitted for a pane never configured.
+  al?: StoredLabConfig
 }
 
 // One pane's view -- the library's PaneViewState, minus what is not worth storing. Kept
@@ -82,6 +87,8 @@ export interface HydratedPane {
   indicatorParams: Record<string, number[]>
   /** Undefined for a pane never configured; the overlay seeds those itself. */
   mtfConfig?: MtfConfig
+  /** Undefined for a pane never configured; the AREV lab seeds those itself. */
+  labConfig?: LabConfig
   view: PaneViewState | null
 }
 
@@ -270,6 +277,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
   const symbols = await Promise.all(layout.panes.map(symbolFor))
   const panes: HydratedPane[] = layout.panes.map((pane, index) => {
     const mtfConfig = fromStoredMtfConfig(pane.mtf)
+    const labConfig = fromStoredLabConfig(pane.al)
     return {
       symbol: symbols[index],
       period: periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
@@ -280,6 +288,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
       // a malformed one must read as "never configured" rather than reach the drawing code
       // as a half-object.
       ...(mtfConfig ? { mtfConfig } : {}),
+      ...(labConfig ? { labConfig } : {}),
       view: hydrateView(pane)
     }
   })
@@ -357,24 +366,31 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
 }
 
 /** The live wall, as a document. */
-/** `mtfByPane` is keyed by pane index and comes from the overlay's controller: the AREV21
- * settings are app state the library has never heard of, so unlike everything else here they
- * cannot be read off a PaneSnapshot. A pane absent from the map keeps whatever it had. */
+/** Per-pane plugin settings, keyed by pane index -- app state the library has never heard of,
+ * so unlike everything else here it cannot be read off a PaneSnapshot. */
+export interface PanePluginState {
+  /** The AREV21 multi-timeframe overlay's. */
+  mtf?: Record<number, MtfConfig>
+  /** The AREV lab's. */
+  arevlab?: Record<number, LabConfig>
+}
+
 export function toPersistedLayout(
   preset: string,
   panes: PaneSnapshot[],
   active: number,
   sync: SyncOptions,
-  mtfByPane: Record<number, MtfConfig> = {}
+  pluginState: PanePluginState = {}
 ): PersistedLayout {
   return {
     version: LAYOUT_VERSION,
     preset,
     active,
     panes: panes.map((pane, index) => {
-      const persisted = toPersistedPane(pane)
-      const mtf = mtfByPane[index] ? toStoredMtfConfig(mtfByPane[index]) : undefined
-      return mtf ? { ...persisted, mtf } : persisted
+      const persisted: PersistedPane = toPersistedPane(pane)
+      const mtf = pluginState.mtf?.[index] ? toStoredMtfConfig(pluginState.mtf[index]) : undefined
+      const al = pluginState.arevlab?.[index] ? toStoredLabConfig(pluginState.arevlab[index]) : undefined
+      return { ...persisted, ...(mtf ? { mtf } : {}), ...(al ? { al } : {}) }
     }),
     sync
   }

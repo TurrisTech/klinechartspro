@@ -12,6 +12,8 @@ const hadWindow = 'window' in globalThis
 }
 
 const { defaultLayout, isPersistedLayout, toPersistedLayout } = await import('./layout')
+const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
+const { MTF_DEFAULTS } = await import('./mtf/config')
 
 afterAll(() => {
   if (!hadWindow) delete (globalThis as Record<string, unknown>).window
@@ -72,5 +74,25 @@ describe('a round trip through the document', () => {
     const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 1, sync)
     expect(written.sync).toEqual(sync)
     expect(isPersistedLayout(written)).toBe(true)
+  })
+
+  test("each pane carries its own plugins' settings, and a pane on the defaults carries none", () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const lab = structuredClone(LAB_DEFAULTS)
+    lab.generations.arev19.enabled = true
+    lab.generations.arev19.signals = 'rank'
+    const mtf = structuredClone(MTF_DEFAULTS)
+    mtf.timeframes['4h'].enabled = !mtf.timeframes['4h'].enabled
+    const written = toPersistedLayout('3h', [PANE, { ...PANE, id: 'p2' }, { ...PANE, id: 'p3' }], 0, sync, {
+      mtf: { 0: mtf },
+      arevlab: { 0: lab, 1: structuredClone(LAB_DEFAULTS) }
+    })
+    expect(written.panes[0].al).toEqual({ arev19: { enabled: true, signals: 'rank' } })
+    expect(written.panes[0].mtf).toBeDefined()
+    expect('al' in written.panes[1]).toBe(false)
+    expect('al' in written.panes[2]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+    // What hydrateLayout does with the field, minus the symbol lookup it needs a server for.
+    expect(fromStoredLabConfig(JSON.parse(JSON.stringify(written.panes[0].al)))).toEqual(lab)
   })
 })
