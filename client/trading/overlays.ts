@@ -18,6 +18,7 @@ import {
   workingFor
 } from './lines'
 import { OnChartLayer } from './onchart'
+import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 
 // Everything a trading session puts on the candle panes, one instance per mounted wall:
@@ -177,8 +178,6 @@ interface PaneEntry {
   onRange: () => void
 }
 
-const COLLAPSE_KEY = 'wd-onchart-orders:collapsed:'
-
 /** Manages the trading overlays and on-chart widgets across a wall's panes. */
 export class TradingOverlays {
   private panes = new Map<string, PaneEntry>()
@@ -186,9 +185,16 @@ export class TradingOverlays {
   private selected: string | null = null
   private colors: OverlayColors
 
+  private readonly unsubscribePrefs: () => void
+
   constructor(private ctx: TradingOverlayContext) {
     this.colors = ctx.colors ?? DEFAULT_COLORS
     registerTradeOverlays()
+    // The card's rolled-up state and its preset numbers are shared: a change from any pane, the
+    // ticket or another tab redraws every card.
+    this.unsubscribePrefs = subscribeTradePrefs(() => {
+      for (const entry of this.panes.values()) entry.layer.render(this.snapshot)
+    })
   }
 
   /** Called from the wall's onPanesChange, exactly like a ChartLayer's sync. */
@@ -229,8 +235,10 @@ export class TradingOverlays {
         hold: () => this.hold(entry),
         release: (restore) => this.release(entry, restore),
         commit: (line, price) => this.commit(line, price),
-        isCollapsed: (compact) => readCollapsed(compact),
-        setCollapsed: (compact, collapsed) => writeCollapsed(compact, collapsed)
+        // One state for every pane (and every tab): rolled up on one, rolled up on all. Until the
+        // user chooses, a phone-sized pane starts rolled up and a larger one open.
+        isCollapsed: (compact) => tradePrefs().cardCollapsed ?? compact,
+        setCollapsed: (_compact, collapsed) => setTradePrefs({ cardCollapsed: collapsed })
       })
       this.panes.set(pane.id, entry)
       chart.subscribeAction('onVisibleRangeChange', entry.onRange)
@@ -260,6 +268,7 @@ export class TradingOverlays {
   }
 
   teardown(): void {
+    this.unsubscribePrefs()
     for (const entry of this.panes.values()) this.detach(entry)
     this.panes.clear()
   }
@@ -467,24 +476,4 @@ function isWorking(snapshot: SimSnapshot, id: string): boolean {
     snapshot.trades.some((t) => t.id === id && t.closedAt === null) ||
     snapshot.orders.some((o) => o.id === id && o.status === 'pending')
   )
-}
-
-function readCollapsed(compact: boolean): boolean {
-  try {
-    const raw = window.localStorage.getItem(COLLAPSE_KEY + (compact ? 'compact' : 'regular'))
-    if (raw === '1') return true
-    if (raw === '0') return false
-  } catch {
-    // storage blocked: fall through to the default
-  }
-  // A phone-sized pane starts rolled up: the card would otherwise cover most of the candles.
-  return compact
-}
-
-function writeCollapsed(compact: boolean, collapsed: boolean): void {
-  try {
-    window.localStorage.setItem(COLLAPSE_KEY + (compact ? 'compact' : 'regular'), collapsed ? '1' : '0')
-  } catch {
-    // the card still toggles; it just will not remember
-  }
 }

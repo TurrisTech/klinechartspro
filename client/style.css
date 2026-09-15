@@ -950,6 +950,56 @@ body.wd-has-dock > #app {
   margin: 0;
 }
 
+.wd-trade-ticket [hidden] {
+  display: none;
+}
+
+.wd-trade-seg:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 1R / 2R / 3R: separate chips rather than one segmented control -- each sets the target once,
+   none of them is a mode that stays selected (the lit one is only the last used). */
+.wd-trade-ratios {
+  flex-wrap: wrap;
+  gap: 0.25rem 0.375rem;
+}
+
+.wd-trade-ratio {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+/* The order as it would be sent. */
+.wd-trade-ticket-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-ticket-summary:empty {
+  display: none;
+}
+
+.wd-trade-summary-line.is-muted {
+  color: var(--muted-foreground);
+}
+
+.wd-trade-ticket-summary .is-up {
+  color: #26a69a;
+}
+
+.wd-trade-ticket-summary .is-down {
+  color: #ef5350;
+}
+
+.wd-trade-ticket-summary .is-warning {
+  color: #f59e0b;
+}
+
 /* Tabs + tables. */
 .wd-trade-tables {
   grid-area: tables;
@@ -1471,7 +1521,7 @@ body.wd-has-dock > #app {
 
 .wd-oc-level {
   display: grid;
-  grid-template-columns: 3.25rem minmax(0, 1fr) auto auto;
+  grid-template-columns: 3.25rem minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 0.375rem;
   min-height: 1.5rem;

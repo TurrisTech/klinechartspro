@@ -4,6 +4,7 @@ import type { InstrumentInfo } from './instrument'
 import {
   defaultProtection,
   layoutLabels,
+  levelForBalancePercent,
   orderFigures,
   orderPriceValid,
   pairCurrencies,
@@ -12,12 +13,14 @@ import {
   protectionValid,
   quoteToAccountRate,
   restingPriceValid,
-  tradeFigures
+  targetForReward,
+  tradeFigures,
+  unitsForRisk
 } from './metrics'
 
 const ACCOUNT: SimAccount = { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 }
-const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333 }
-const USDJPY: InstrumentInfo = { precision: 3, pipSize: 0.01, assetClass: 'forex', marginRate: 0.04 }
+const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
+const USDJPY: InstrumentInfo = { precision: 3, pipSize: 0.01, assetClass: 'forex', marginRate: 0.04, unitsPrecision: 0 }
 
 function trade(over: Partial<SimTrade> = {}): SimTrade {
   return {
@@ -130,6 +133,16 @@ describe('tradeFigures', () => {
     expect(f.margin).toBeCloseTo(400, 9)
   })
 
+  test('a cross converts through a pair the account holds a quote for, and only then', () => {
+    const quotes = { 'oanda:GBPUSD': { time: 0, bid: 1.2999, ask: 1.3001 } }
+    const cross = pricingContext('oanda:EURGBP', EURUSD, ACCOUNT, { time: 0, bid: 0.86, ask: 0.8602 }, quotes)
+    const f = tradeFigures(trade({ symbol: 'oanda:EURGBP', entryPrice: 0.85 }), cross)
+    expect(f.pnl?.amount).toBeCloseTo(100, 6) // GBP
+    expect(f.pnl?.amountAccount).toBeCloseTo(130, 6) // at GBPUSD 1.3000
+    const yen = pricingContext('oanda:EURJPY', USDJPY, ACCOUNT, undefined, { 'oanda:USDJPY': { time: 0, bid: 150, ask: 150 } })
+    expect(quoteToAccountRate(yen)).toBeCloseTo(1 / 150, 12)
+  })
+
   test('a cross has no account figure rather than an invented one', () => {
     const cross = pricingContext('oanda:EURGBP', EURUSD, ACCOUNT, { time: 0, bid: 0.86, ask: 0.8602 })
     const f = tradeFigures(trade({ symbol: 'oanda:EURGBP', entryPrice: 0.85 }), cross)
@@ -232,5 +245,40 @@ describe('layoutLabels', () => {
 
   test('lines off the pane pin their labels to the edge they left by', () => {
     expect(layoutLabels([-40, 400], 300, 20)).toEqual([10, 290])
+  })
+})
+
+describe('sizing by risk', () => {
+  const quote = { time: 0, bid: 1.1, ask: 1.1002 }
+  const ctx = pricingContext('oanda:EURUSD', EURUSD, ACCOUNT, quote)
+
+  test('units for a 1% risk over a 20-pip stop: 100 USD / 0.0020 = 50,000, floored', () => {
+    expect(unitsForRisk(1, 1.1, 1.098, ctx)).toBe(50_000)
+    // 0.37% over 23 pips = 37 / 0.0023 = 16,086.9 -> never rounds up past the budget.
+    expect(unitsForRisk(0.37, 1.1, 1.0977, ctx)).toBe(16_086)
+    expect(unitsForRisk(1, 1.1, 1.1, ctx)).toBeNull()
+  })
+
+  test('a yen pair sizes through the mid; a cross with no conversion cannot be sized', () => {
+    const jpy = pricingContext('oanda:USDJPY', USDJPY, ACCOUNT, { time: 0, bid: 150, ask: 150 })
+    // 100 USD over 0.50 yen per unit at 150 yen per dollar: 100 / (0.5 / 150) = 30,000.
+    expect(unitsForRisk(1, 150, 149.5, jpy)).toBe(30_000)
+    expect(unitsForRisk(1, 0.85, 0.848, pricingContext('oanda:EURGBP', EURUSD, ACCOUNT, quote))).toBeNull()
+  })
+
+  test('the stop that loses a share of the balance, rounded toward the entry', () => {
+    // 10,000 units losing 1% (100 USD) moves 0.0100 from the entry.
+    expect(levelForBalancePercent('buy', 'stop', 10_000, 1.1, 1, ctx)).toBeCloseTo(1.09, 12)
+    expect(levelForBalancePercent('sell', 'stop', 10_000, 1.1, 1, ctx)).toBeCloseTo(1.11, 12)
+    expect(levelForBalancePercent('buy', 'target', 10_000, 1.1, 2, ctx)).toBeCloseTo(1.12, 12)
+    // 30,000 units losing 1%: 0.003333... -> 1.096667 rounds UP (toward the entry) to 1.09667.
+    expect(levelForBalancePercent('buy', 'stop', 30_000, 1.1, 1, ctx)).toBeCloseTo(1.09667, 12)
+    expect(levelForBalancePercent('buy', 'stop', 10, 1.1, 1, ctx)).toBeNull() // would pass zero
+  })
+
+  test('targets as a multiple of the risk', () => {
+    expect(targetForReward('buy', 1.1, 1.098, 2, 5)).toBeCloseTo(1.104, 12)
+    expect(targetForReward('sell', 1.1, 1.103, 1.5, 5)).toBeCloseTo(1.0955, 12)
+    expect(targetForReward('buy', 1.1, 1.101, 2, 5)).toBeNull() // stop past entry: no risk
   })
 })

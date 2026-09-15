@@ -16,6 +16,7 @@ import {
   type PricingContext,
   positionSummary,
   protectionValid,
+  quoteToAccountRate,
   tradeFigures
 } from './metrics'
 
@@ -39,6 +40,9 @@ export type CardAction =
   | { kind: 'cancel'; order: SimOrder }
   | { kind: 'protect'; owner: 'trade' | 'order'; id: string; role: 'stop' | 'target' }
   | { kind: 'unprotect'; owner: 'trade' | 'order'; id: string; role: 'stop' | 'target' }
+  /** The stop at `riskPercent` of the balance; the target at `rewardRatio` times the stop. */
+  | { kind: 'riskStop'; owner: 'trade' | 'order'; id: string }
+  | { kind: 'rewardTarget'; owner: 'trade' | 'order'; id: string }
   | { kind: 'flatten' }
 
 export interface CardModel {
@@ -52,6 +56,9 @@ export interface CardModel {
   expanded: string | null
   /** The action key waiting for its confirming second press ('close:t1', 'flatten'). */
   armed: string | null
+  /** The shared presets behind the "Risk N%" and "NR" buttons (prefs.ts). */
+  riskPercent: number
+  rewardRatio: number
 }
 
 export function h<K extends keyof HTMLElementTagNameMap>(
@@ -293,10 +300,11 @@ class LevelLine {
   private readonly move: HTMLElement
   private readonly amount: HTMLElement
   private readonly extra: HTMLElement
+  readonly preset: HTMLButtonElement
   readonly add: HTMLButtonElement
   readonly remove: HTMLButtonElement
 
-  constructor(role: 'stop' | 'target', onAdd: () => void, onRemove: () => void) {
+  constructor(role: 'stop' | 'target', onAdd: () => void, onRemove: () => void, onPreset: () => void) {
     this.element = h('div', `wd-oc-level is-${role}`)
     const label = h('span', 'wd-oc-level-label', role === 'stop' ? 'Stop' : 'Target')
     const figures = h('span', 'wd-oc-level-figures')
@@ -306,9 +314,18 @@ class LevelLine {
     this.extra = h('span', 'wd-oc-level-extra')
     figures.append(this.price, this.move, this.amount, this.extra)
     const name = role === 'stop' ? 'stop loss' : 'take profit'
+    this.preset = btn('wd-oc-btn wd-oc-preset', '', onPreset)
     this.add = btn('wd-oc-btn', '+ Add', onAdd, `Add a ${name}`)
     this.remove = btn('wd-oc-btn wd-oc-icon', '×', onRemove, `Remove the ${name}`)
-    this.element.append(label, figures, this.add, this.remove)
+    this.element.append(label, figures, this.preset, this.add, this.remove)
+  }
+
+  /** The preset button: its label, and the reason it cannot be used (null when it can). */
+  setPreset(text: string, title: string, refusal: string | null): void {
+    this.preset.textContent = text
+    this.preset.disabled = refusal !== null
+    this.preset.title = refusal ?? title
+    this.preset.setAttribute('aria-label', refusal ? `${title} (${refusal})` : title)
   }
 
   update(outcome: Outcome | null, ctx: PricingContext, extra: string): void {
@@ -324,6 +341,25 @@ class LevelLine {
     this.extra.textContent = extra
     this.extra.hidden = extra === ''
   }
+}
+
+/** The "Risk N%" and "NR" buttons. What they would do is priced by the layer when pressed;
+ * here only whether they can: a stop from a share of the balance needs a conversion to the account
+ * currency, and a target as a multiple of the risk needs a stop that is a loss. */
+function presets(stop: LevelLine, target: LevelLine, stopOutcome: Outcome | null, model: CardModel): void {
+  const { riskPercent, rewardRatio, ctx } = model
+  const risk = `${Number(riskPercent.toFixed(2))}%`
+  stop.setPreset(
+    `Risk ${risk}`,
+    `Put the stop where it loses ${risk} of the balance`,
+    quoteToAccountRate(ctx) === null ? `no ${ctx.account.currency} rate for ${ctx.currencies.quote}` : null
+  )
+  const ratio = `${Number(rewardRatio.toFixed(2))}R`
+  target.setPreset(
+    ratio,
+    `Put the target at ${ratio}: ${Number(rewardRatio.toFixed(2))}× the stop's distance`,
+    !stopOutcome ? 'set a stop loss first' : stopOutcome.amount >= 0 ? 'the stop is past the entry and risks nothing' : null
+  )
 }
 
 function keyValue(label: string): { element: HTMLElement; value: HTMLElement } {
@@ -374,12 +410,14 @@ class TradeRow {
     this.stop = new LevelLine(
       'stop',
       () => dispatch({ kind: 'protect', owner: 'trade', id, role: 'stop' }),
-      () => dispatch({ kind: 'unprotect', owner: 'trade', id, role: 'stop' })
+      () => dispatch({ kind: 'unprotect', owner: 'trade', id, role: 'stop' }),
+      () => dispatch({ kind: 'riskStop', owner: 'trade', id })
     )
     this.target = new LevelLine(
       'target',
       () => dispatch({ kind: 'protect', owner: 'trade', id, role: 'target' }),
-      () => dispatch({ kind: 'unprotect', owner: 'trade', id, role: 'target' })
+      () => dispatch({ kind: 'unprotect', owner: 'trade', id, role: 'target' }),
+      () => dispatch({ kind: 'rewardTarget', owner: 'trade', id })
     )
     const grid = h('div', 'wd-oc-kvs')
     this.units = keyValue('Size')
@@ -424,6 +462,7 @@ class TradeRow {
     const targetExtra = f.rewardToRisk !== null ? `R:R ${f.rewardToRisk.toFixed(2)}` : ''
     this.stop.update(f.stop, ctx, stopExtra)
     this.target.update(f.target, ctx, targetExtra)
+    presets(this.stop, this.target, f.stop, model)
     this.units.value.textContent = f.lots !== null ? `${formatUnits(trade.units)} · ${formatLots(f.lots)}` : formatUnits(trade.units)
     this.pipValue.element.hidden = f.pipValue === null
     this.pipValue.value.textContent = amountText(f.pipValue, f.pipValueAccount, ctx, false)
@@ -483,12 +522,14 @@ class OrderRow {
     this.stop = new LevelLine(
       'stop',
       () => dispatch({ kind: 'protect', owner: 'order', id, role: 'stop' }),
-      () => dispatch({ kind: 'unprotect', owner: 'order', id, role: 'stop' })
+      () => dispatch({ kind: 'unprotect', owner: 'order', id, role: 'stop' }),
+      () => dispatch({ kind: 'riskStop', owner: 'order', id })
     )
     this.target = new LevelLine(
       'target',
       () => dispatch({ kind: 'protect', owner: 'order', id, role: 'target' }),
-      () => dispatch({ kind: 'unprotect', owner: 'order', id, role: 'target' })
+      () => dispatch({ kind: 'unprotect', owner: 'order', id, role: 'target' }),
+      () => dispatch({ kind: 'rewardTarget', owner: 'order', id })
     )
     const grid = h('div', 'wd-oc-kvs')
     this.units = keyValue('Size')
@@ -529,6 +570,7 @@ class OrderRow {
     const targetExtra = f.rewardToRisk !== null ? `R:R ${f.rewardToRisk.toFixed(2)}` : ''
     this.stop.update(f.stop, ctx, stopExtra)
     this.target.update(f.target, ctx, targetExtra)
+    presets(this.stop, this.target, f.stop, model)
     this.units.value.textContent = f.lots !== null ? `${formatUnits(order.units)} · ${formatLots(f.lots)}` : formatUnits(order.units)
     this.pipValue.element.hidden = f.pipValue === null
     this.pipValue.value.textContent = amountText(f.pipValue, f.pipValueAccount, ctx, false)

@@ -12,9 +12,10 @@ import type { InstrumentInfo } from './instrument'
 //   into the balance without conversion, which the server documents as an approximation for
 //   anything not quoted in the account currency. The widget does not paper over that: it
 //   labels an amount with the quote currency, and adds the account-currency figure only where
-//   one exact conversion exists -- the account IS the quote currency (1:1) or IS the base
-//   (divide by the mid). A cross (EURGBP on a USD account) has no such rate here, and gets no
-//   invented one.
+//   a rate comes from a real quote -- the account IS the quote currency (1:1), IS the base
+//   (divide by the mid), or a pair the account holds a quote for joins the two (GBPUSD for a
+//   EURGBP trade on a USD account). With none of those there is no account figure, and no
+//   invented one; and risk sizing, which needs it, says so.
 // - Validity mirrors the engine's refusals, so a drag that would be rejected can say so before
 //   it is sent: `_check_protection` for stops/targets and `_check_resting_price` for orders.
 
@@ -39,6 +40,8 @@ export interface PricingContext {
   account: SimAccount
   quote: SimQuote | undefined
   currencies: Currencies
+  /** Every quote the session holds, for a cross's conversion to the account currency. */
+  quotes?: Record<string, SimQuote>
 }
 
 /** A ticker that names no currency (an equity) is booked by the engine in the account's
@@ -47,13 +50,15 @@ export function pricingContext(
   key: string,
   info: InstrumentInfo,
   account: SimAccount,
-  quote: SimQuote | undefined
+  quote: SimQuote | undefined,
+  quotes?: Record<string, SimQuote>
 ): PricingContext {
   return {
     info,
     account,
     quote,
-    currencies: pairCurrencies(key) ?? { base: '', quote: account.currency }
+    currencies: pairCurrencies(key) ?? { base: '', quote: account.currency },
+    quotes
   }
 }
 
@@ -73,8 +78,8 @@ export function fillingPrice(side: SimSide, quote: SimQuote | undefined): number
   return side === 'buy' ? quote.ask : quote.bid
 }
 
-/** The factor taking a quote-currency amount to the account currency, or null where no exact
- * one exists (see the header). */
+/** The factor taking a quote-currency amount to the account currency, or null where no quote
+ * supplies one (see the header). */
 export function quoteToAccountRate(ctx: PricingContext): number | null {
   const { base, quote } = ctx.currencies
   const account = ctx.account.currency
@@ -82,6 +87,13 @@ export function quoteToAccountRate(ctx: PricingContext): number | null {
   if (base === account) {
     const mid = midPrice(ctx.quote)
     return mid && mid > 0 ? 1 / mid : null
+  }
+  for (const [key, other] of Object.entries(ctx.quotes ?? {})) {
+    const pair = pairCurrencies(key)
+    const mid = midPrice(other)
+    if (!pair || !mid || mid <= 0) continue
+    if (pair.base === quote && pair.quote === account) return mid // GBPUSD for GBP -> USD
+    if (pair.base === account && pair.quote === quote) return 1 / mid // USDJPY for JPY -> USD
   }
   return null
 }
@@ -355,6 +367,57 @@ export function defaultProtection(
 
 export function roundTo(value: number, precision: number): number {
   return Number(value.toFixed(Math.max(0, Math.min(precision, 12))))
+}
+
+/** Rounded to `precision` in the direction of `anchor`: a level computed from a budget never
+ * lands a pip beyond it. The epsilon keeps an exact grid value where it is. */
+export function roundToward(value: number, anchor: number, precision: number): number {
+  const factor = 10 ** Math.max(0, Math.min(precision, 12))
+  const scaled = value * factor
+  const snapped = value < anchor ? Math.ceil(scaled - 1e-6) : Math.floor(scaled + 1e-6)
+  return roundTo(snapped / factor, precision)
+}
+
+// -- sizing by risk ---------------------------------------------------------------------------
+
+/** The units that lose `riskPercent` of the balance if a stop at `stop` is hit after entering at
+ * `entry` -- floored to the instrument's unit precision, so the loss never exceeds the budget.
+ * Null with no conversion to the account currency, no distance, or no budget. */
+export function unitsForRisk(riskPercent: number, entry: number, stop: number, ctx: PricingContext): number | null {
+  const rate = quoteToAccountRate(ctx)
+  const budget = (ctx.account.balance * riskPercent) / 100
+  if (rate === null || !(budget > 0)) return null
+  const lossPerUnit = Math.abs(entry - stop) * rate
+  if (!(lossPerUnit > 0)) return null
+  const factor = 10 ** ctx.info.unitsPrecision
+  return Math.floor((budget / lossPerUnit) * factor + 1e-9) / factor
+}
+
+/** The stop (or target) at which `units` entered at `from` lose (or make) `percent` of the
+ * balance, rounded toward `from` so a stop never costs more than asked. Null with no conversion
+ * to the account currency, or when the distance would take the price to zero. */
+export function levelForBalancePercent(
+  side: SimSide,
+  role: 'stop' | 'target',
+  units: number,
+  from: number,
+  percent: number,
+  ctx: PricingContext
+): number | null {
+  const rate = quoteToAccountRate(ctx)
+  if (rate === null || !(units > 0) || !(percent > 0) || !(ctx.account.balance > 0)) return null
+  const move = (ctx.account.balance * percent) / 100 / (units * rate)
+  const below = role === 'stop' ? side === 'buy' : side === 'sell'
+  const price = below ? from - move : from + move
+  return price > 0 ? roundToward(price, from, ctx.info.precision) : null
+}
+
+/** A target `ratio` times the stop's distance beyond the entry (2 -> "2R"). Null unless the stop
+ * is a loss: a stop already past the entry risks nothing to multiply. */
+export function targetForReward(side: SimSide, entry: number, stop: number, ratio: number, precision: number): number | null {
+  const risk = side === 'buy' ? entry - stop : stop - entry
+  if (!(risk > 0) || !(ratio > 0)) return null
+  return roundTo(side === 'buy' ? entry + ratio * risk : entry - ratio * risk, precision)
 }
 
 // -- label placement ----------------------------------------------------------------------------
