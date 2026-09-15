@@ -12,7 +12,7 @@
  * limitations under the License.
  */
 
-import type { Chart, Coordinate, Crosshair, Point } from 'klinecharts'
+import type { Chart, Coordinate, Crosshair, PaneOptions, Point } from 'klinecharts'
 
 // A synthetic paneId that names no real klinecharts sub-pane. Dispatched for a time-only sync
 // (the source hover was over an indicator sub-pane, whose value has no meaning on another
@@ -52,6 +52,25 @@ export function crosshairPoint(
   return onCandlePane && typeof point.value === 'number'
     ? { timestamp: point.timestamp, value: point.value }
     : { timestamp: point.timestamp }
+}
+
+// The chart pane whose main (plotting) area contains `target` -- candle_pane or an indicator
+// sub-pane -- or undefined for anything else: an axis, a separator, or a node no longer in the
+// chart at all (a sub-pane removed by its own tooltip's close icon on the same gesture). Every
+// content pane's main area shares one left edge and one width, so an x measured against the
+// returned element is an x on candle_pane's time axis too. Enumerated from the chart on each
+// call rather than tracked, because sub-panes come and go with the indicators on them.
+export function paneMainAt(
+  chart: Chart,
+  target: Node | null
+): { paneId: string; main: HTMLElement } | undefined {
+  if (!target) return undefined
+  for (const { id } of chart.getPaneOptions() as PaneOptions[]) {
+    if (id === 'x_axis_pane') continue
+    const main = chart.getDom(id, 'main')
+    if (main?.contains(target)) return { paneId: id, main }
+  }
+  return undefined
 }
 
 // Moves a TARGET pane's crosshair to `point`. `setCrosshair` derives its position from pixel
