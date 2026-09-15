@@ -54,6 +54,9 @@ export type CardAction =
   | { kind: 'draftPreset'; role: 'stop' | 'target' }
   | { kind: 'draftPlace' }
   | { kind: 'draftDiscard' }
+  /** The on-chart change waiting for confirmation. */
+  | { kind: 'amendConfirm' }
+  | { kind: 'amendCancel' }
 
 export interface CardModel {
   symbol: string
@@ -71,6 +74,8 @@ export interface CardModel {
   rewardRatio: number
   /** The order being written in the ticket, when it is for this instrument. */
   draft: DraftOrder | null
+  /** A change to a stop, target or pending price waiting to be confirmed, in words. */
+  confirm: { title: string; detail: string; refusal: string | null; sending: boolean } | null
 }
 
 export function h<K extends keyof HTMLElementTagNameMap>(
@@ -147,6 +152,10 @@ export class OrderCard {
   private readonly errorNode: HTMLElement
   private readonly rows = new Map<string, TradeRow | OrderRow>()
   private readonly draftRow: DraftRow
+  private readonly confirmBar: HTMLElement
+  private readonly confirmTitle: HTMLElement
+  private readonly confirmDetail: HTMLElement
+  private readonly confirmButton: HTMLButtonElement
   private flashTimer: ReturnType<typeof setTimeout> | null = null
   private errorTimer: ReturnType<typeof setTimeout> | null = null
   private flashing = false
@@ -180,7 +189,19 @@ export class OrderCard {
     this.errorNode.setAttribute('role', 'alert')
     this.errorNode.hidden = true
     this.draftRow = new DraftRow(dispatch)
-    this.body.append(this.draftRow.element, this.list, this.foot, this.errorNode)
+    // The confirmation for an on-chart change: first in the card, so it is where the eye goes.
+    this.confirmBar = h('div', 'wd-oc-confirm')
+    this.confirmBar.setAttribute('role', 'alertdialog')
+    const words = h('div', 'wd-oc-confirm-text')
+    this.confirmTitle = h('div', 'wd-oc-confirm-title')
+    this.confirmDetail = h('div', 'wd-oc-confirm-detail')
+    words.append(this.confirmTitle, this.confirmDetail)
+    const answers = h('div', 'wd-oc-actions')
+    this.confirmButton = btn('wd-oc-btn is-primary', 'Confirm', () => dispatch({ kind: 'amendConfirm' }))
+    answers.append(btn('wd-oc-btn', 'Cancel', () => dispatch({ kind: 'amendCancel' })), this.confirmButton)
+    this.confirmBar.append(words, answers)
+    this.confirmBar.hidden = true
+    this.body.append(this.confirmBar, this.draftRow.element, this.list, this.foot, this.errorNode)
 
     this.element.append(head, this.body)
     this.element.hidden = true
@@ -190,10 +211,22 @@ export class OrderCard {
     const { trades, orders, ctx } = model
     this.empty = trades.length === 0 && orders.length === 0 && model.draft === null
     this.element.hidden = this.empty && !this.flashing
-    this.element.classList.toggle('is-collapsed', model.collapsed)
+    // A question waiting for an answer opens the card, whatever its rolled-up preference.
+    const collapsed = model.collapsed && model.confirm === null
+    this.element.classList.toggle('is-collapsed', collapsed)
     this.element.classList.toggle('is-empty', this.empty)
-    this.toggle.setAttribute('aria-expanded', String(!model.collapsed))
-    this.toggle.title = model.collapsed ? 'Show working orders' : 'Hide working orders'
+    this.element.classList.toggle('is-confirming', model.confirm !== null)
+    this.toggle.setAttribute('aria-expanded', String(!collapsed))
+    this.toggle.title = collapsed ? 'Show working orders' : 'Hide working orders'
+
+    this.confirmBar.hidden = model.confirm === null
+    if (model.confirm) {
+      this.confirmTitle.textContent = model.confirm.title
+      this.confirmDetail.textContent = model.confirm.refusal ?? model.confirm.detail
+      this.confirmDetail.classList.toggle('is-warning', model.confirm.refusal !== null)
+      this.confirmButton.disabled = model.confirm.sending || model.confirm.refusal !== null
+      this.confirmButton.textContent = model.confirm.sending ? 'Sending…' : 'Confirm'
+    }
 
     // Header: instrument, what is working, and the open P&L -- in the quote currency, which is
     // uniform across one instrument, so the sum is exact.

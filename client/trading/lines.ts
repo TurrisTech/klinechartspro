@@ -13,7 +13,7 @@ import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './a
 //
 // `wdTradeBracket` -- what connects a position's entry to its stop and target: a translucent
 // loss band from the entry to the stop, a profit band from the entry to the target, both from
-// the bar the position opened on to the right edge, a dashed connector down that bar, and a dot
+// the bar the position opened on to the right edge, a connector down that bar, and a dot
 // where the entry filled. Every figure ignores events, so the bracket never steals a pan or a
 // click from the chart underneath it.
 
@@ -150,7 +150,7 @@ const bracketTemplate: OverlayTemplate<TradeBracketData> = {
       figures.push({
         type: 'line',
         attrs: { coordinates: [{ x, y: yStop ?? yEntry }, { x, y: yTarget ?? yEntry }] },
-        styles: { style: 'dashed', dashedValue: [3, 3], color: withAlpha(datum.entryColor, 0.7), size: 1 },
+        styles: { style: 'solid', color: withAlpha(datum.entryColor, 0.7), size: 1 },
         ignoreEvent: true
       })
     }
@@ -206,6 +206,51 @@ export function workingFor(snapshot: SimSnapshot, key: string): { trades: SimTra
       .filter((o) => o.symbol === key && o.status === 'pending' && o.price !== null)
       .sort((a, b) => a.createdAt - b.createdAt)
   }
+}
+
+/** A change to a working trade's or order's stop, target or price made on the chart -- a drag, or
+ * one of the add/remove/preset buttons -- waiting for the user to confirm it. Nothing is sent
+ * until they do (user, 2026-09-15). `price` null removes a stop or target; `from` is the level it
+ * had, for the confirmation's wording. */
+export interface Amendment {
+  owner: 'trade' | 'order'
+  id: string
+  role: 'stop' | 'target' | 'order'
+  price: number | null
+  from: number | null
+}
+
+/** The level a working trade or order has now, null when it has none, or undefined when it is not
+ * working any more. */
+export function currentLevel(
+  snapshot: SimSnapshot,
+  owner: 'trade' | 'order',
+  id: string,
+  role: 'stop' | 'target' | 'order'
+): number | null | undefined {
+  if (owner === 'trade') {
+    const trade = snapshot.trades.find((t) => t.id === id && t.closedAt === null)
+    if (!trade || role === 'order') return undefined
+    return role === 'stop' ? trade.stopLoss : trade.takeProfit
+  }
+  const order = snapshot.orders.find((o) => o.id === id && o.status === 'pending')
+  if (!order) return undefined
+  return role === 'stop' ? order.stopLoss : role === 'target' ? order.takeProfit : order.price
+}
+
+/** The snapshot as it would be if the amendment were confirmed -- what the chart draws while it
+ * waits, so the line, its bands, its label and the card all show the proposed level. A removal
+ * is not applied: the line stays, marked, until it is confirmed. Pure. */
+export function applyAmendment(snapshot: SimSnapshot, amendment: Amendment | null): SimSnapshot {
+  if (!amendment || amendment.price === null) return snapshot
+  const { owner, id, role, price } = amendment
+  if (owner === 'trade') {
+    if (role === 'order') return snapshot
+    const field = role === 'stop' ? 'stopLoss' : 'takeProfit'
+    return { ...snapshot, trades: snapshot.trades.map((t) => (t.id === id ? { ...t, [field]: price } : t)) }
+  }
+  const field = role === 'stop' ? 'stopLoss' : role === 'target' ? 'takeProfit' : 'price'
+  return { ...snapshot, orders: snapshot.orders.map((o) => (o.id === id ? { ...o, [field]: price } : o)) }
 }
 
 /** A draft worth drawing: one with a level of its own. A market order with no stop and no target
