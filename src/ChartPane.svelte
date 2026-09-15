@@ -30,7 +30,7 @@
   import { clone, setByPath } from './utils/object'
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
-  import { applyCrosshairAt, crosshairPoint, type CrosshairPoint } from './sync/crosshair'
+  import { applyCrosshairAt, crosshairPoint, paneMainAt, type CrosshairPoint } from './sync/crosshair'
   import {
     isTimestampVisible,
     LIVE_EDGE_FRACTION,
@@ -101,6 +101,14 @@
   // below fires. So by the time our click handler runs, this flag already reflects whether
   // the same click also hit a drawing; read-and-clear there.
   let overlayInteracted = false
+
+  // Set by onIndicatorFeatureClick when a gesture hits an indicator tooltip's eye / settings /
+  // close icon, which must not also seek. klinecharts fires that action on MOUSEDOWN, not in its
+  // click handling, and the close icon removes a sub-pane on the spot -- so the click that
+  // follows may never be delivered at all, and a read-and-clear would carry the flag into the
+  // next one. It is cleared instead by the pane's pointerdown capture handler, which runs before
+  // the mousedown every pointer gesture produces, so it always describes the gesture in flight.
+  let tooltipFeatureInteracted = false
 
   // True while the pointer gesture in flight is the one that SELECTED this pane -- set in the
   // root's pointerdown capture handler (below), which runs before any listener on the chart's
@@ -936,6 +944,7 @@
     widget.setDataLoader(chartDataLoader)
     const onIndicatorFeatureClick = (value?: unknown) => {
       const data = value as IndicatorFeatureClick
+      tooltipFeatureInteracted = true
       const featureId = data.feature.id
       const indicator = data.indicator
       if (featureId === 'visible' || featureId === 'invisible') {
@@ -974,12 +983,15 @@
     }
     widget.subscribeAction('onCrosshairChange', onCrosshairChange)
 
-    // Click-to-scroll source: a native DOM click on candle_pane's own main widget. Any
-    // position in the pane -- not just a candle figure -- resolves to a date via
-    // `convertFromPixel`, which extrapolates linearly outside the loaded range using this
-    // chart's own period.
+    // Click-to-scroll source: a native DOM click on the main area of ANY of this chart's panes --
+    // candle_pane or an indicator sub-pane beneath it (`paneMainAt`). Listened for on the
+    // chart's root rather than on each pane's element, because sub-panes are created and
+    // destroyed with their indicators long after this runs. Any position in a pane -- not just
+    // a candle figure -- resolves to a date via `convertFromPixel`, which extrapolates linearly
+    // outside the loaded range using this chart's own period. A click on a sub-pane carries no
+    // price: its y is that indicator's own value, which `crosshairPoint` drops.
     //
-    // Four guards:
+    // Five guards:
     // - `selectingPointerDown` rules out the click that moved the wall's selection to this
     //   pane. Selecting a pane and pointing at an instant in it are two different intentions,
     //   and a click on an unselected pane is unambiguously the first: the user is reaching for
@@ -998,16 +1010,20 @@
     //   guard returning with it still set would carry it into the next click and swallow that
     //   seek instead.
     // - `currentStep !== -1` rules out a click that is placing a new drawing's point.
-    const candleMain = widget.getDom('candle_pane', 'main')
+    // - `tooltipFeatureInteracted` rules out a click on an indicator tooltip's eye / settings /
+    //   close icon -- see its own comment for why it is not read-and-cleared like the overlay flag.
+    const chartDom = widget.getDom() ?? widgetElement
     let clickDownX = 0
     let clickDownY = 0
-    const onCandleMainPointerDown = (event: PointerEvent) => {
+    const onClickPointerDown = (event: PointerEvent) => {
       clickDownX = event.clientX
       clickDownY = event.clientY
     }
-    const onCandleMainClick = (event: MouseEvent) => {
+    const onChartClick = (event: MouseEvent) => {
       const hitOverlay = overlayInteracted
       overlayInteracted = false
+      const target = paneMainAt(chart, event.target as Node | null)
+      if (!target) return
       if (selectingPointerDown) {
         console.debug('[sync] click ignored: selected this pane', { pane: pane.id })
         return
@@ -1020,31 +1036,36 @@
         console.debug('[sync] click ignored: hit an existing drawing', { pane: pane.id })
         return
       }
+      if (tooltipFeatureInteracted) {
+        console.debug('[sync] click ignored: hit an indicator tooltip icon', { pane: pane.id })
+        return
+      }
       if (chart.getOverlays().some((overlay) => overlay.currentStep !== -1)) {
         console.debug('[sync] click ignored: a drawing is in progress', { pane: pane.id })
         return
       }
-      const main = chart.getSize('candle_pane', 'main')
-      if (!main || main.width === 0 || !candleMain) {
-        console.debug('[sync] click ignored: candle_pane has no measured width yet', { pane: pane.id })
+      const main = chart.getSize(target.paneId, 'main')
+      if (!main || main.width === 0) {
+        console.debug('[sync] click ignored: pane has no measured width yet', { pane: pane.id, chartPane: target.paneId })
         return
       }
-      const rect = candleMain.getBoundingClientRect()
+      const rect = target.main.getBoundingClientRect()
       const x = event.clientX - rect.left
       const y = event.clientY - rect.top
       // Same resolver the hover-driven crosshair sync uses (onCrosshairChange above), so a
-      // click carries a price too -- reused to re-show a crosshair on any pane this seek
-      // reloads, since reloading wipes klinecharts' own crosshair state (see bus.seekPane).
-      const point = crosshairPoint(chart, { x, y, paneId: 'candle_pane' })
+      // click on candle_pane carries a price too -- reused to re-show a crosshair on any pane
+      // this seek reloads, since reloading wipes klinecharts' own crosshair state (see
+      // bus.seekPane). A sub-pane click re-shows the time line alone, as its hover does.
+      const point = crosshairPoint(chart, { x, y, paneId: target.paneId })
       if (!point) {
         console.debug('[sync] click ignored: could not resolve a date for this position', { pane: pane.id, x })
         return
       }
-      console.debug('[sync] broadcasting seek', { pane: pane.id, point, fraction: x / main.width })
+      console.debug('[sync] broadcasting seek', { pane: pane.id, chartPane: target.paneId, point, fraction: x / main.width })
       bus.broadcastSeek(pane.id, point, x / main.width)
     }
-    candleMain?.addEventListener('pointerdown', onCandleMainPointerDown)
-    candleMain?.addEventListener('click', onCandleMainClick)
+    chartDom.addEventListener('pointerdown', onClickPointerDown)
+    chartDom.addEventListener('click', onChartClick)
 
     // Auto time sync source, and the jump-to-live control's own trigger. Both consume the same
     // dispatch: klinecharts fires this whenever the visible range moves, whether from a drag,
@@ -1084,7 +1105,6 @@
     // args returns the chart's own root container, which is what actually receives pointer
     // events.
     const onPointerLeave = () => { bus.clearCrosshair(pane.id) }
-    const chartDom = widget.getDom() ?? widgetElement
     chartDom.addEventListener('pointerleave', onPointerLeave)
     chartDom.addEventListener('pointerdown', onPanPointerDown)
     chartDom.addEventListener('wheel', onPanWheel, { passive: true })
@@ -1140,8 +1160,8 @@
       chartDom.removeEventListener('wheel', onPanWheel)
       window.removeEventListener('pointerup', onPanPointerUp)
       window.removeEventListener('pointercancel', onPanPointerUp)
-      candleMain?.removeEventListener('pointerdown', onCandleMainPointerDown)
-      candleMain?.removeEventListener('click', onCandleMainClick)
+      chartDom.removeEventListener('pointerdown', onClickPointerDown)
+      chartDom.removeEventListener('click', onChartClick)
       widget?.unsubscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
       widget?.unsubscribeAction('onCrosshairChange', onCrosshairChange)
       widget?.unsubscribeAction('onVisibleRangeChange', onVisibleRangeChange)
@@ -1173,6 +1193,7 @@
     // selectingPointerDown. Any pointerdown anywhere in the pane refreshes it, so the flag
     // always describes the gesture actually in flight.
     selectingPointerDown = !active
+    tooltipFeatureInteracted = false
     onActivate(pane.id)
   }}
   onfocusin={() => onActivate(pane.id)}
