@@ -1864,6 +1864,13 @@ body.wd-has-dock > #app {
   color: var(--foreground);
 }
 
+/* Step while an advance runs: the button stops it, so it should not read as "go". */
+.wd-replay-step.is-stop {
+  background: color-mix(in oklab, #ef5350 80%, var(--background));
+  border-color: transparent;
+  color: #ffffff;
+}
+
 /* The armed watch line's orange (client/watch/overlays.ts). */
 .wd-replay-stop-reason.is-watch {
   background: color-mix(in oklab, #ff9800 18%, transparent);

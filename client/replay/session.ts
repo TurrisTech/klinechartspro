@@ -12,6 +12,17 @@ import { type BaseCheck, finerStored, nominalMs, validateBase } from './timefram
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50
 
+/** How much of the span a walk fetches at once, in base bars: about one server page
+ * (`HttpBarSource` pages at 80% of the 5,000-bar cap). A walk used to fetch the whole span
+ * before reading its first bar, so a year at a 1m base was a minute of download nothing could
+ * interrupt; fetched a page at a time, a cancel is heard between pages. */
+export const WALK_CHUNK_BARS = 4000
+
+/** Longest a walk runs without handing the event loop back, in ms. Once its bars are cached a
+ * walk is synchronous work end to end, so without this a Stop click could not even be
+ * DELIVERED until the walk had finished. */
+export const WALK_YIELD_MS = 50
+
 // GLUE. `ReplayTradingSession` implements `TradingSession` (the seam the whole trading UI
 // acts through) over the client-side engine and the bar caches, and is the
 // `ReplayController` the control strip drives. It owns the clock: nothing else moves the
@@ -87,6 +98,10 @@ export interface ReplayController {
   /** Advance to the next armed signal or firing price watch (to the end of the data if
    * neither). */
   nextSignal(): Promise<AdvanceResult | null>
+  /** Ask the running advance to stop at its next natural place. No-op when idle. */
+  cancel(): void
+  /** A cancel has been asked for and the advance has not stopped yet. */
+  readonly cancelling: boolean
   onControlChange(listener: () => void): () => void
   /** Persist now (a star/arm change). */
   persist(): void
@@ -138,6 +153,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   private rev = 0
   private saveChain: Promise<void> = Promise.resolve()
   private disposed = false
+  private cancelRequested = false
 
   constructor(private readonly opts: ReplaySessionOptions) {
     this.symbol = opts.symbol
@@ -397,9 +413,25 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     return this.advanceBy({ toEnd: true, end: this.opts.dataEnd() })
   }
 
+  /** Ask the running advance to stop at its next natural place: before the next base bar it
+   * would consume, or -- asked while the advance is still planning -- before it moves at all.
+   * Whole base bars only, so the engine and the watches never see a bar half-walked, and the
+   * cursor lands on a bar's close exactly as a fill pause leaves it. A seek (nothing could
+   * fill, nothing watched) is one read and is not interrupted. */
+  cancel(): void {
+    if (!this.busy || this.cancelRequested) return
+    this.cancelRequested = true
+    this.controlsChanged()
+  }
+
+  get cancelling(): boolean {
+    return this.cancelRequested
+  }
+
   async advanceBy(request: AdvanceRequest): Promise<AdvanceResult | null> {
     if (this.busy || this.disposed) return null
     this.busy = true
+    this.cancelRequested = false
     this.controlsChanged()
     const from = this.cursor
     try {
@@ -413,6 +445,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const consumed: ReplayBar[] = []
       let observed: ObserverStop[] = []
       let paused = false
+      // Asked while the signals were being looked up: stop before moving at all.
+      let cancelled = this.cancelRequested
       // Walk the base bars only when one of them could actually do something. With nothing
       // resting and nothing protected the account cannot change however the price moves, so
       // the advance SEEKS: the cursor lands on the same instant, the engine takes the closing
@@ -423,28 +457,53 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const walked =
         canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol) ||
         (this.opts.observer?.needsBars() ?? false)
-      if (walked) {
-        for (;;) {
-          await this.baseCache.ensure(stopAt, this.cursor)
-          const bar = this.baseCache.peek()
-          if (!bar || bar.end > stopAt) break
-          this.baseCache.take(bar.end)
-          consumed.push(bar)
-          const produced = await this.consume(bar, this.base)
-          events.push(...produced)
-          // After the engine, so anything an observer raises sees the account as this bar
-          // left it -- and the BASE bar, not the refinement's parts.
-          const raised = this.opts.observer?.onBar(bar) ?? []
-          this.cursor = bar.end
-          if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
-            paused = true
-            break
+      if (cancelled) {
+        // Neither walk nor seek: the cursor stays where it was.
+      } else if (walked) {
+        const chunk = WALK_CHUNK_BARS * nominalMs(this.base)
+        let reach = this.cursor
+        let sliceStart = performance.now()
+        walk: for (;;) {
+          // One page of the span at a time (WALK_CHUNK_BARS). `reach` moves on by a whole
+          // chunk even when the chunk held no bar -- a weekend, a gap in the store -- so the
+          // walk always ends, at `stopAt`.
+          reach = Math.min(stopAt, Math.max(reach, this.cursor) + chunk)
+          await this.baseCache.ensure(reach, this.cursor)
+          for (;;) {
+            const bar = this.baseCache.peek()
+            if (!bar || bar.end > reach) break
+            // The natural place to stop: between two whole base bars.
+            if (this.cancelRequested) {
+              cancelled = true
+              break walk
+            }
+            this.baseCache.take(bar.end)
+            consumed.push(bar)
+            const produced = await this.consume(bar, this.base)
+            events.push(...produced)
+            // After the engine, so anything an observer raises sees the account as this bar
+            // left it -- and the BASE bar, not the refinement's parts.
+            const raised = this.opts.observer?.onBar(bar) ?? []
+            this.cursor = bar.end
+            if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+              paused = true
+              break walk
+            }
+            // A firing watch ends ANY advance, a Step as much as "next signal": it is the move
+            // the watch was placed to catch, and walking on past it would put the cursor, and
+            // every pane, somewhere other than where it happened.
+            if (raised.length > 0) {
+              observed = raised
+              break walk
+            }
+            if (performance.now() - sliceStart > WALK_YIELD_MS) {
+              await nextTask()
+              sliceStart = performance.now()
+            }
           }
-          // A firing watch ends ANY advance, a Step as much as "next signal": it is the move the
-          // watch was placed to catch, and walking on past it would put the cursor, and every
-          // pane, somewhere other than where it happened.
-          if (raised.length > 0) {
-            observed = raised
+          if (reach >= stopAt) break
+          if (this.cancelRequested) {
+            cancelled = true
             break
           }
         }
@@ -454,6 +513,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         this.opts.observer?.seeked()
       }
       if (paused) reason = 'fill'
+      else if (cancelled) reason = 'cancel'
       else if (observed.length === 0) this.cursor = stopAt
       // A watch firing on the very bar the advance was going to stop at anyway leaves a signal
       // stop a signal stop: that is the one the user armed the run for, and the watch has its
@@ -472,11 +532,14 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
           console.error('[replay] session listener failed', err)
         }
       }
-      await this.opts.onAdvanced(result)
+      // A cancel that landed before anything moved changed nothing the chart shows; telling it
+      // the clock moved would only make every plugin forget and refetch its forming bar.
+      if (!(cancelled && this.cursor === from)) await this.opts.onAdvanced(result)
       this.persist()
       return result
     } finally {
       this.busy = false
+      this.cancelRequested = false
       this.controlsChanged()
     }
   }
@@ -519,6 +582,26 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     this.baseCache.dump()
     for (const c of this.refinements.values()) c.dump()
   }
+}
+
+/** Hand the event loop back for one turn, so a click, a paint or a due timer can run.
+ *
+ * NOT `setTimeout(0)`: a hidden tab clamps chained timers to about a second each (measured in
+ * this project's Chrome: ten chained zero-delay timers took 3.1 s, while ten MessageChannel
+ * turns took 2 ms), so a walk left running behind another tab would yield once a second and
+ * crawl. `scheduler.yield()` is built for exactly this and lets input through; a MessageChannel
+ * turn is the fallback where it does not exist -- neither is throttled in a hidden tab. */
+function nextTask(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
+  if (typeof scheduler?.yield === 'function') return scheduler.yield()
+  return new Promise((resolve) => {
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => {
+      channel.port1.close()
+      resolve()
+    }
+    channel.port2.postMessage(null)
+  })
 }
 
 /** An engine refusal, as the server's `invalid_request` would arrive (the panel shows an

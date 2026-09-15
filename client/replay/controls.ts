@@ -90,11 +90,18 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     // Step lives in the title bar, not the body: it is the one control used on every single
     // interaction, so it stays reachable with the window rolled up to that bar.
     win.actions.innerHTML = ''
-    const step = button('kc-button kc-button-primary wd-replay-step', busy ? '…' : 'Step', () => {
-      void controller.step().then((r) => r && options.onStop?.(r))
+    // While an advance runs -- a Step or Next signal -- the same button stops it, at the next
+    // base bar. It is the one control reachable with the window rolled up, which is exactly
+    // when a long run is most likely to need stopping.
+    const cancelling = busy && controller.cancelling
+    const label = !busy ? 'Step' : cancelling ? 'Stopping…' : 'Stop'
+    const step = button('kc-button kc-button-primary wd-replay-step', label, () => {
+      if (controller.busy) controller.cancel()
+      else void controller.step().then((r) => r && options.onStop?.(r))
     })
-    step.disabled = busy
-    step.title = `Advance ${controller.advance.multiple} × ${controller.advance.interval}`
+    step.classList.toggle('is-stop', busy)
+    step.disabled = cancelling
+    step.title = busy ? 'Stop at the next bar' : `Advance ${controller.advance.multiple} × ${controller.advance.interval}`
 
     const exit = button('kc-button wd-replay-exit', 'Exit', () => options.onExit())
     exit.disabled = busy
@@ -304,6 +311,10 @@ function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogue
       const [first, ...rest] = result.observed
       return `Stopped at watch ${first?.label ?? ''}${rest.length > 0 ? ` +${rest.length}` : ''}`
     }
+    case 'cancel':
+      return result.bars.length > 0
+        ? `Stopped by you after ${result.bars.length} bar${result.bars.length === 1 ? '' : 's'}`
+        : 'Stopped by you before the first bar'
     case 'end':
       return 'End of data'
     default:
