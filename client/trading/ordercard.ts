@@ -9,14 +9,18 @@ import {
   formatUnits,
   formatUnitsShort
 } from './format'
+import type { DraftOrder } from './lines'
 import {
   closingPrice,
   type Outcome,
   orderFigures,
   type PricingContext,
   positionSummary,
+  outcome,
   protectionValid,
   quoteToAccountRate,
+  rewardToRisk,
+  sizeFigures,
   tradeFigures
 } from './metrics'
 
@@ -44,6 +48,12 @@ export type CardAction =
   | { kind: 'riskStop'; owner: 'trade' | 'order'; id: string }
   | { kind: 'rewardTarget'; owner: 'trade' | 'order'; id: string }
   | { kind: 'flatten' }
+  /** The ticket's draft: add a level, clear one, apply a preset, or place it. */
+  | { kind: 'draftProtect'; role: 'stop' | 'target' }
+  | { kind: 'draftClear'; role: 'entry' | 'stop' | 'target' }
+  | { kind: 'draftPreset'; role: 'stop' | 'target' }
+  | { kind: 'draftPlace' }
+  | { kind: 'draftDiscard' }
 
 export interface CardModel {
   symbol: string
@@ -59,6 +69,8 @@ export interface CardModel {
   /** The shared presets behind the "Risk N%" and "NR" buttons (prefs.ts). */
   riskPercent: number
   rewardRatio: number
+  /** The order being written in the ticket, when it is for this instrument. */
+  draft: DraftOrder | null
 }
 
 export function h<K extends keyof HTMLElementTagNameMap>(
@@ -134,6 +146,7 @@ export class OrderCard {
   private readonly flattenButton: HTMLButtonElement
   private readonly errorNode: HTMLElement
   private readonly rows = new Map<string, TradeRow | OrderRow>()
+  private readonly draftRow: DraftRow
   private flashTimer: ReturnType<typeof setTimeout> | null = null
   private errorTimer: ReturnType<typeof setTimeout> | null = null
   private flashing = false
@@ -166,7 +179,8 @@ export class OrderCard {
     this.errorNode = h('div', 'wd-oc-card-error')
     this.errorNode.setAttribute('role', 'alert')
     this.errorNode.hidden = true
-    this.body.append(this.list, this.foot, this.errorNode)
+    this.draftRow = new DraftRow(dispatch)
+    this.body.append(this.draftRow.element, this.list, this.foot, this.errorNode)
 
     this.element.append(head, this.body)
     this.element.hidden = true
@@ -174,7 +188,7 @@ export class OrderCard {
 
   render(model: CardModel): void {
     const { trades, orders, ctx } = model
-    this.empty = trades.length === 0 && orders.length === 0
+    this.empty = trades.length === 0 && orders.length === 0 && model.draft === null
     this.element.hidden = this.empty && !this.flashing
     this.element.classList.toggle('is-collapsed', model.collapsed)
     this.element.classList.toggle('is-empty', this.empty)
@@ -190,6 +204,7 @@ export class OrderCard {
     if (orders.length > 0) {
       parts.push(model.compact ? `${orders.length} ord` : `${orders.length} order${orders.length === 1 ? '' : 's'}`)
     }
+    if (model.draft) parts.push('draft')
     this.count.textContent = parts.join(' · ')
     this.count.hidden = parts.length === 0
     if (summary.pnlAccount !== null || trades.length > 0) {
@@ -199,6 +214,9 @@ export class OrderCard {
     } else {
       this.pnl.hidden = true
     }
+
+    this.draftRow.element.hidden = model.draft === null
+    if (model.draft) this.draftRow.update(model.draft, model)
 
     // Rows, keyed by id and kept in the order they opened.
     const wanted = new Set<string>()
@@ -340,6 +358,115 @@ class LevelLine {
     setTone(this.amount, outcome?.amount)
     this.extra.textContent = extra
     this.extra.hidden = extra === ''
+  }
+}
+
+/** The order still being written in the ticket: always open, since it is what is being worked
+ * on, with what it would risk and make, and Place. Nothing here is sent until Place is pressed
+ * twice -- a second press, as for close and flatten, because the chart is an easy place to press
+ * by accident. */
+class DraftRow {
+  readonly element: HTMLElement
+  private readonly badge: HTMLElement
+  private readonly size: HTMLElement
+  private readonly prices: HTMLElement
+  private readonly ratio: HTMLElement
+  private readonly stop: LevelLine
+  private readonly target: LevelLine
+  private readonly units: { element: HTMLElement; value: HTMLElement }
+  private readonly margin: { element: HTMLElement; value: HTMLElement }
+  private readonly problem: HTMLElement
+  private readonly discard: HTMLButtonElement
+  private readonly placeButton: HTMLButtonElement
+
+  constructor(dispatch: (action: CardAction) => void) {
+    this.element = h('div', 'wd-oc-row is-draft is-expanded')
+    const main = h('div', 'wd-oc-row-main')
+    this.badge = h('span', 'wd-oc-badge is-pending', 'Draft')
+    this.size = h('span', 'wd-oc-row-size')
+    this.prices = h('span', 'wd-oc-row-prices')
+    this.ratio = h('span', 'wd-oc-row-pips')
+    main.append(this.badge, this.size, this.prices, this.ratio)
+    const detail = h('div', 'wd-oc-row-detail')
+    this.stop = new LevelLine(
+      'stop',
+      () => dispatch({ kind: 'draftProtect', role: 'stop' }),
+      () => dispatch({ kind: 'draftClear', role: 'stop' }),
+      () => dispatch({ kind: 'draftPreset', role: 'stop' })
+    )
+    this.target = new LevelLine(
+      'target',
+      () => dispatch({ kind: 'draftProtect', role: 'target' }),
+      () => dispatch({ kind: 'draftClear', role: 'target' }),
+      () => dispatch({ kind: 'draftPreset', role: 'target' })
+    )
+    const grid = h('div', 'wd-oc-kvs')
+    this.units = keyValue('Size')
+    this.margin = keyValue('Margin')
+    grid.append(this.units.element, this.margin.element)
+    this.problem = h('div', 'wd-oc-draft-problem')
+    const actions = h('div', 'wd-oc-actions')
+    this.discard = btn('wd-oc-btn', 'Discard', () => dispatch({ kind: 'draftDiscard' }))
+    this.discard.title = 'Clear the draft: back to a market order with no stop or target'
+    this.placeButton = btn('wd-oc-btn is-primary', 'Place', () => dispatch({ kind: 'draftPlace' }))
+    actions.append(this.discard, this.placeButton)
+    detail.append(this.stop.element, this.target.element, grid, this.problem, actions)
+    this.element.append(main, detail)
+  }
+
+  update(draft: DraftOrder, model: CardModel): void {
+    const { ctx } = model
+    const buy = draft.side === 'buy'
+    const precision = ctx.info.precision
+    this.element.dataset.side = draft.side
+    this.badge.className = `wd-oc-badge is-pending ${buy ? 'is-buy' : 'is-sell'}`
+    this.size.textContent = `${buy ? 'Buy' : 'Sell'} ${draft.type} ${draft.units !== null ? formatUnitsShort(draft.units) : '—'}`
+    this.prices.textContent = `@ ${formatPrice(draft.entry, precision)}`
+    const at = (price: number | null): Outcome | null =>
+      price === null || draft.units === null ? null : outcome(draft.side, draft.units, draft.entry, price, ctx)
+    const stop = at(draft.stop)
+    const target = at(draft.target)
+    const rr = rewardToRisk(stop, target)
+    this.ratio.textContent = rr !== null ? `R:R ${rr.toFixed(2)}` : ''
+
+    const ofBalance = stop?.ofBalance ?? null
+    this.stop.update(stop, ctx, ofBalance !== null ? `${formatPercent(ofBalance)} of balance` : '')
+    this.target.update(target, ctx, rr !== null ? `R:R ${rr.toFixed(2)}` : '')
+    // A level with no size (the size comes from a stop that is not set yet) still shows its price.
+    if (draft.stop !== null && !stop) this.stop.update(null, ctx, formatPrice(draft.stop, precision))
+    if (draft.target !== null && !target) this.target.update(null, ctx, formatPrice(draft.target, precision))
+    const risk = `${Number(model.riskPercent.toFixed(2))}%`
+    this.stop.setPreset(
+      `Risk ${risk}`,
+      `Put the stop where it loses ${risk} of the balance`,
+      draft.riskPercent !== null
+        ? 'the size already comes from the risk'
+        : quoteToAccountRate(ctx) === null
+          ? `no ${ctx.account.currency} rate for ${ctx.currencies.quote}`
+          : null
+    )
+    const ratio = `${Number(model.rewardRatio.toFixed(2))}R`
+    this.target.setPreset(
+      ratio,
+      `Put the target at ${ratio}: ${Number(model.rewardRatio.toFixed(2))}× the stop's distance`,
+      draft.stop === null ? 'set a stop loss first' : !protectionValid(draft.side, 'stop', draft.stop, draft.entry) ? 'the stop is past the entry' : null
+    )
+
+    const size = draft.units !== null ? sizeFigures(draft.units, ctx) : null
+    this.units.value.textContent =
+      draft.units === null
+        ? '—'
+        : `${formatUnits(draft.units)}${size?.lots != null ? ` · ${formatLots(size.lots)}` : ''}${draft.riskPercent !== null ? ` · ${Number(draft.riskPercent.toFixed(2))}% risk` : ''}`
+    this.margin.element.hidden = size?.margin == null
+    this.margin.value.textContent = formatMoney(size?.margin ?? null, ctx.account.currency, false)
+    this.problem.textContent = draft.problem ?? ''
+    this.problem.hidden = draft.problem === null
+    this.discard.hidden = draft.type === 'market' && draft.stop === null && draft.target === null
+    const armed = model.armed === 'place'
+    this.placeButton.disabled = draft.problem !== null
+    this.placeButton.title = draft.problem ?? ''
+    this.placeButton.textContent = armed ? 'Confirm' : `Place ${buy ? 'buy' : 'sell'} ${draft.type}`
+    this.placeButton.classList.toggle('is-armed', armed)
   }
 }
 

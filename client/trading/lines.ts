@@ -1,6 +1,6 @@
 import { registerOverlay, utils } from 'klinecharts'
 import type { OverlayFigure, OverlayTemplate } from 'klinecharts'
-import type { SimOrder, SimSide, SimSnapshot, SimTrade } from './api'
+import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './api'
 
 // The two chart figures a trade is drawn with, registered once per page.
 //
@@ -22,18 +22,51 @@ export const TRADE_BRACKET = 'wdTradeBracket'
 
 export type LineRole = 'entry' | 'order' | 'stop' | 'target'
 
+/** Who a line belongs to: an open trade, a pending order, or the order still being written in the
+ * ticket -- the DRAFT, which is drawn and dragged like the rest but only ever edits the ticket. */
+export type LineOwner = 'trade' | 'order' | 'draft'
+
+export const DRAFT_ID = 'draft'
+
+/** The ticket's order as it would be sent now. `entry` is the order's price, or for a market order
+ * the price it would fill at. */
+export interface DraftOrder {
+  symbol: string
+  side: SimSide
+  type: SimOrderType
+  units: number | null
+  entry: number
+  stop: number | null
+  target: number | null
+  /** Why the ticket cannot send it as it stands; null when it can. */
+  problem: string | null
+  /** Set when the size comes from a risk %, so a moved stop changes the units, not the loss. */
+  riskPercent: number | null
+}
+
+/** What the chart may do to the draft. Every change lands in the ticket's own fields, stated the
+ * way the ticket states them, so the ticket stays the one place the order is written. */
+export interface DraftController {
+  draft(): DraftOrder | null
+  /** Move a level. Moving the entry of a market order makes it a limit or a stop, whichever side
+   * of the market it is dropped on. */
+  setLevel(role: 'entry' | 'stop' | 'target', price: number): void
+  clearLevel(role: 'entry' | 'stop' | 'target'): void
+  place(): Promise<void>
+}
+
 /** What a trade line carries; the manager reads it back on every drag event. */
 export interface TradeLineData {
   wd: {
     role: LineRole
-    owner: 'trade' | 'order'
+    owner: LineOwner
     id: string
   }
 }
 
 export interface TradeBracketData {
   wd: {
-    owner: 'trade' | 'order'
+    owner: LineOwner
     id: string
     entry: number
     stop: number | null
@@ -43,7 +76,7 @@ export interface TradeBracketData {
     lossColor: string
     profitColor: string
     entryColor: string
-    /** A pending order has not filled: no fill dot, and a fainter band. */
+    /** A pending order or a draft has not filled: no fill dot, and a fainter band. */
     pending: boolean
   }
 }
@@ -152,7 +185,7 @@ export const DEFAULT_COLORS: OverlayColors = {
 /** One line on the pane, as both the canvas and the HTML layer see it. */
 export interface LineSpec {
   role: LineRole
-  owner: 'trade' | 'order'
+  owner: LineOwner
   id: string
   side: SimSide
   price: number
@@ -175,10 +208,29 @@ export function workingFor(snapshot: SimSnapshot, key: string): { trades: SimTra
   }
 }
 
-/** Every line for one snapshot on one instrument. Pure. */
-export function linesFor(snapshot: SimSnapshot, key: string): LineSpec[] {
+/** A draft worth drawing: one with a level of its own. A market order with no stop and no target
+ * is only the current price -- a line on top of the price line, beside the entries of whatever is
+ * already open -- so until it has a level it lives on the card alone. */
+export function isComposing(draft: DraftOrder | null): draft is DraftOrder {
+  return draft !== null && (draft.type !== 'market' || draft.stop !== null || draft.target !== null)
+}
+
+/** The draft when it is for this instrument, else null. */
+export function draftFor(draft: DraftOrder | null | undefined, key: string): DraftOrder | null {
+  return draft && draft.symbol === key ? draft : null
+}
+
+/** Every line for one snapshot on one instrument -- the draft's first, all draggable. Pure. */
+export function linesFor(snapshot: SimSnapshot, key: string, draft: DraftOrder | null = null): LineSpec[] {
   const { trades, orders } = workingFor(snapshot, key)
   const out: LineSpec[] = []
+  const d = draftFor(draft, key)
+  if (isComposing(d)) {
+    const base = { owner: 'draft' as const, id: DRAFT_ID, side: d.side, draggable: true }
+    out.push({ ...base, role: 'entry', price: d.entry })
+    if (d.stop !== null) out.push({ ...base, role: 'stop', price: d.stop })
+    if (d.target !== null) out.push({ ...base, role: 'target', price: d.target })
+  }
   for (const order of orders) {
     const base = { owner: 'order' as const, id: order.id, side: order.side, draggable: true }
     out.push({ ...base, role: 'order', price: order.price as number })

@@ -86,6 +86,29 @@ window is open** — an order placed from the ticket appears on the chart at onc
   the open P&L. **Rolled up on one pane is rolled up on every pane**, and in other tabs (`prefs.ts`,
   via the `storage` event); until chosen, a phone-sized pane starts rolled up.
 
+**The draft — the order being written, on the chart.** While the account window is open, the
+ticket's order is drawn on its instrument's panes and listed first on the card, and it is edited
+from either place: dragging its entry, stop or target writes the new price into the ticket's
+fields as it moves (stated however the ticket states them — pips follow their entry, a risk-sized
+order re-sizes), dragging a market draft's entry makes it a limit or a stop by which side of the
+market it is dropped on, the card's `+ Add` / `Risk N%` / `NR` apply to it, and **Place** (two
+presses) sends it. The ticket stays the one place the order lives (`OrderTicket implements
+DraftController`, `lines.ts`), so the chart and the fields cannot disagree.
+
+Because it sits among orders that are real, it is kept unmistakably apart:
+
+- it is drawn only **once it has a level of its own** (a limit/stop price, a stop or a target) —
+  a bare market draft would be a line on top of the price, beside every open entry, so until
+  then it is a row on the card and nothing on the chart;
+- finely **dotted** lines, **outlined** labels that say "Draft", in **their own column** left of
+  the working orders' labels (a draft stop next to a real stop reads side by side, never
+  interleaved);
+- while it is being composed, **what is already working recedes**: dimmed lines, labels dimmed
+  until hovered, no selected band, card rows faded and shut;
+- **×** on its entry label (or Discard on the card) clears it, and the pane is as it was; closing
+  the account window hides it; a placed order returns the ticket to a clean market order;
+- Escape mid-drag puts the level back where the drag began.
+
 **Dragging** a stop, a target or a pending order's price — by the label or by the line — shows
 what that price would realise while it moves, marks a price the engine would refuse (dashed, with
 the reason as its title), and commits one amendment on release. A refused drop, Escape or a

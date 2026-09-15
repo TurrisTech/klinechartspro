@@ -3,6 +3,7 @@ import { OhlcvApiError } from '../config'
 import type { SimOrderType, SimSide } from './api'
 import { formatLots, formatMoney, formatPercent, formatPrice, formatUnits, sideLabel, symbolKey, toPips } from './format'
 import type { InstrumentInfo } from './instrument'
+import type { DraftController, DraftOrder } from './lines'
 import {
   fillingPrice,
   levelForBalancePercent,
@@ -32,6 +33,11 @@ import type { TradingSession } from './session'
 // The summary line under the fields is the order as it would be sent: units and lots, margin,
 // the loss at the stop and the gain at the target (with their share of the balance), and R:R --
 // or the reason it cannot be sent yet.
+//
+// ON THE CHART the order being written is a DRAFT (`draft()`), which the trading layer draws on
+// the instrument's panes while the account window is open. Dragging its lines calls `setLevel`,
+// which writes the new price back into these fields in whatever way they are stated -- so the
+// ticket stays the one place the order lives, and the chart and the fields cannot disagree.
 //
 // BUILT ONCE and updated in place. The panel re-renders on every session notification, which is
 // every two seconds while anything is working; a ticket rebuilt each time took the focus (and a
@@ -111,7 +117,7 @@ class Segmented<T extends string> {
   }
 }
 
-export class OrderTicket {
+export class OrderTicket implements DraftController {
   readonly element: HTMLElement
   private type: SimOrderType = 'market'
   private side: SimSide = 'buy'
@@ -140,6 +146,7 @@ export class OrderTicket {
   private readonly errorNode: HTMLElement
   private readonly submitButton: HTMLButtonElement
   private readonly unsubscribe: () => void
+  private draftListener: (() => void) | null = null
 
   constructor(
     private readonly session: TradingSession,
@@ -219,7 +226,7 @@ export class OrderTicket {
     this.summary = el('div', 'wd-trade-ticket-summary')
     this.summary.setAttribute('aria-live', 'polite')
     this.errorNode = el('div', 'kc-field-error wd-trade-ticket-error')
-    this.submitButton = button('kc-button kc-button-primary wd-trade-submit', '', () => void this.submit())
+    this.submitButton = button('kc-button kc-button-primary wd-trade-submit', '', () => void this.submit().catch(() => {}))
 
     this.element.append(head, controls, sizeRow, fields, this.ratioRow, this.modeRow, this.summary, this.errorNode, this.submitButton)
     this.unitsField.input.value = String(tradePrefs().units)
@@ -231,6 +238,76 @@ export class OrderTicket {
       this.refresh()
     })
     this.refresh()
+  }
+
+  // -- the draft ------------------------------------------------------------------------------------
+
+  /** Told after every change that can move the draft: a keystroke, a mode, a quote, a drag. */
+  onDraftChange(listener: () => void): void {
+    this.draftListener = listener
+  }
+
+  draft(): DraftOrder | null {
+    const plan = this.plan()
+    if (plan.entry === null || !this.session.ready) return null
+    const prefs = tradePrefs()
+    return {
+      symbol: this.key,
+      side: this.side,
+      type: this.type,
+      units: plan.units,
+      entry: plan.entry,
+      stop: plan.stop ?? null,
+      target: plan.target ?? null,
+      problem: plan.problem,
+      riskPercent: prefs.sizeMode === 'risk' ? prefs.riskPercent : null
+    }
+  }
+
+  setLevel(role: 'entry' | 'stop' | 'target', price: number): void {
+    const info = this.info()
+    if (role === 'entry') {
+      const fill = fillingPrice(this.side, this.session.snapshot.quotes[this.key])
+      if (fill === null) return
+      const rounded = roundTo(price, info.precision)
+      // A buy below the ask waits for the price to come down (limit); above it, for the price to
+      // break up (stop). A sell the mirror. At the market it is a market order again.
+      const below = rounded < fill
+      this.type = rounded === fill ? 'market' : this.side === 'buy' ? (below ? 'limit' : 'stop') : below ? 'stop' : 'limit'
+      this.price = this.type === 'market' ? '' : formatPrice(rounded, info.precision)
+      this.priceField.input.value = this.price
+    } else {
+      const text = this.express(price, this.protectMode(), this.plan())
+      if (role === 'stop') {
+        this.stopLoss = text
+        this.stopField.input.value = text
+      } else {
+        this.takeProfit = text
+        this.targetField.input.value = text
+      }
+    }
+    this.error = ''
+    this.refresh()
+  }
+
+  clearLevel(role: 'entry' | 'stop' | 'target'): void {
+    if (role === 'entry') {
+      this.type = 'market'
+      this.price = ''
+      this.priceField.input.value = ''
+    } else if (role === 'stop') {
+      this.stopLoss = ''
+      this.stopField.input.value = ''
+    } else {
+      this.takeProfit = ''
+      this.targetField.input.value = ''
+    }
+    this.error = ''
+    this.refresh()
+  }
+
+  place(): Promise<void> {
+    return this.submit()
   }
 
   syncInstrument(): void {
@@ -453,6 +530,7 @@ export class OrderTicket {
       plan.units !== null && plan.units > 0 && !plan.problem ? `${label} · ${formatUnits(plan.units)}` : label
     this.submitButton.className = `kc-button kc-button-primary wd-trade-submit ${this.side === 'buy' ? 'is-buy' : 'is-sell'}`
     this.submitButton.disabled = !quote
+    this.draftListener?.()
   }
 
   private renderSummary(plan: Plan): void {
@@ -497,8 +575,9 @@ export class OrderTicket {
   private async submit(): Promise<void> {
     const plan = this.plan()
     if (plan.problem || plan.units === null || plan.units <= 0) {
-      this.showError(plan.problem ?? 'Nothing to send')
-      return
+      const problem = plan.problem ?? 'Nothing to send'
+      this.showError(problem)
+      throw new Error(problem)
     }
     this.error = ''
     try {
@@ -512,6 +591,9 @@ export class OrderTicket {
         stopLoss: plan.stop,
         takeProfit: plan.target
       })
+      // Back to a clean market order: a type kept without its price is a draft with nothing to
+      // show, which would sit on the chart and keep the order just placed dimmed behind it.
+      this.type = 'market'
       this.price = ''
       this.stopLoss = ''
       this.takeProfit = ''
@@ -521,6 +603,7 @@ export class OrderTicket {
       this.refresh()
     } catch (err) {
       this.showError(err instanceof OhlcvApiError ? err.message : 'Order rejected')
+      throw err
     }
   }
 

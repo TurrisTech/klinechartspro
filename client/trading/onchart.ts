@@ -4,7 +4,18 @@ import { OhlcvApiError } from '../config'
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
 import { formatMoney, formatPrice, formatUnitsShort, symbolKey } from './format'
 import { type InstrumentInfo, seedInstrument } from './instrument'
-import { type LineSpec, lineColor, lineKey, linesFor, type OverlayColors, workingFor } from './lines'
+import {
+  type DraftController,
+  type DraftOrder,
+  draftFor,
+  isComposing,
+  type LineSpec,
+  lineColor,
+  lineKey,
+  linesFor,
+  type OverlayColors,
+  workingFor
+} from './lines'
 import {
   closingPrice,
   defaultProtection,
@@ -44,6 +55,14 @@ import type { TradingSession } from './session'
 // the line back. Dragging the line itself goes through `beginCanvasDrag`/`canvasDragTo`/
 // `endCanvasDrag` to the same readout and the same commit.
 //
+// A DRAFT -- the order being written in the ticket -- is drawn once it has a level of its own, and
+// kept apart from what is already working so the two cannot be mistaken for each other: its lines
+// are finely dotted, its labels are outlined and say "Draft", they hang in their OWN column to the
+// left of the working orders' labels (a draft stop beside a real stop reads side by side on one
+// line, never interleaved), and while it is being composed everything else on the pane recedes --
+// dimmed lines, dimmed labels that come back on hover, faint bands, collapsed card rows. Dragging a
+// draft line writes straight into the ticket; × discards the draft and the pane is as it was.
+//
 // EVENTS never reach the chart. klinecharts listens on its root for mouse and touch input, the
 // wall pane for pointerdown (pan tracking, click-to-scroll) and the price watches for
 // contextmenu and a long-press, so a press on a label or the card would otherwise also start a
@@ -75,6 +94,8 @@ export interface LayerHost {
   hold(): void
   release(restore: boolean): void
   commit(line: LineSpec, price: number): Promise<void>
+  /** The ticket's order, while the account window is open. */
+  readonly draft?: DraftController
   isCollapsed(compact: boolean): boolean
   setCollapsed(compact: boolean, collapsed: boolean): void
 }
@@ -99,9 +120,10 @@ class LineLabel {
   readonly addStop: HTMLButtonElement
   readonly addTarget: HTMLButtonElement
   readonly remove: HTMLButtonElement
+  readonly place: HTMLButtonElement
   line: LineSpec
 
-  constructor(line: LineSpec, onAction: (label: LineLabel, action: 'stop' | 'target' | 'remove') => void) {
+  constructor(line: LineSpec, onAction: (label: LineLabel, action: 'stop' | 'target' | 'remove' | 'place') => void) {
     this.line = line
     this.element = h('div', 'wd-oc-tag')
     this.leader = h('span', 'wd-oc-tag-leader')
@@ -109,7 +131,7 @@ class LineLabel {
     this.name = h('span', 'wd-oc-tag-name')
     this.move = h('span', 'wd-oc-tag-move')
     this.amount = h('span', 'wd-oc-tag-amount')
-    const make = (className: string, text: string, action: 'stop' | 'target' | 'remove'): HTMLButtonElement => {
+    const make = (className: string, text: string, action: 'stop' | 'target' | 'remove' | 'place'): HTMLButtonElement => {
       const b = h('button', `wd-oc-tag-btn ${className}`, text)
       b.type = 'button'
       b.addEventListener('click', () => onAction(this, action))
@@ -118,19 +140,24 @@ class LineLabel {
     this.addStop = make('is-add', 'SL', 'stop')
     this.addTarget = make('is-add', 'TP', 'target')
     this.remove = make('is-remove', '×', 'remove')
-    this.element.append(this.leader, this.name, this.move, this.amount, this.addStop, this.addTarget, this.remove)
+    this.place = make('is-place', 'Place', 'place')
+    this.place.hidden = true
+    this.element.append(this.leader, this.name, this.move, this.amount, this.addStop, this.addTarget, this.place, this.remove)
   }
 }
 
 export class OnChartLayer {
   private readonly root: HTMLElement
   private readonly labelsHost: HTMLElement
+  /** The draft's labels: a column of their own, left of the working orders'. */
+  private readonly draftLabelsHost: HTMLElement
   private readonly card: OrderCard
   private readonly labels = new Map<string, LineLabel>()
   private main: HTMLElement | null = null
   private key = ''
   private snapshot: SimSnapshot | null = null
   private lines: LineSpec[] = []
+  private draft: DraftOrder | null = null
   private drag: DragState | null = null
   private armed: string | null = null
   private armTimer: ReturnType<typeof setTimeout> | null = null
@@ -176,8 +203,9 @@ export class OnChartLayer {
   ) {
     this.root = h('div', 'wd-oc')
     this.labelsHost = h('div', 'wd-oc-tags')
+    this.draftLabelsHost = h('div', 'wd-oc-tags is-draft-column')
     this.card = new OrderCard((action) => this.perform(action))
-    this.root.append(this.labelsHost, this.card.element)
+    this.root.append(this.labelsHost, this.draftLabelsHost, this.card.element)
     for (const type of STOPPED_EVENTS) this.root.addEventListener(type, this.stop, { passive: type !== 'contextmenu' })
     this.root.addEventListener('mousemove', this.onHover, { passive: true })
     this.root.addEventListener('mouseout', this.onHoverEnd, { passive: true })
@@ -236,10 +264,20 @@ export class OnChartLayer {
     }
     this.root.style.setProperty('--wd-oc-pane-height', `${height}px`)
 
+    // Two columns laid out independently: the working orders' labels against the axis, the draft's
+    // to their left, clear of the widest of them.
+    const working = this.layoutColumn(this.lines.filter((l) => l.owner !== 'draft'), height)
+    this.draftLabelsHost.style.right = `${6 + (working > 0 ? working + 8 : 0)}px`
+    this.layoutColumn(this.lines.filter((l) => l.owner === 'draft'), height)
+  }
+
+  /** Places one column's labels; returns the column's width. */
+  private layoutColumn(lines: LineSpec[], height: number): number {
     const placed: Array<{ label: LineLabel; y: number }> = []
     const desired: number[] = []
     let labelHeight = 0
-    for (const line of this.lines) {
+    let width = 0
+    for (const line of lines) {
       const label = this.labels.get(lineKey(line))
       if (!label) continue
       const price = this.drag && lineKey(this.drag.line) === lineKey(line) ? this.drag.price : line.price
@@ -250,6 +288,7 @@ export class OnChartLayer {
       }
       label.element.hidden = false
       labelHeight = Math.max(labelHeight, label.element.offsetHeight)
+      width = Math.max(width, label.element.offsetWidth)
       label.element.dataset.edge = y < 0 ? 'above' : y > height ? 'below' : ''
       if (this.drag && lineKey(this.drag.line) === lineKey(line)) {
         // The dragged label follows the pointer exactly; the rest make room around where it was.
@@ -262,6 +301,7 @@ export class OnChartLayer {
     const size = (labelHeight || 20) + 2
     const ys = layoutLabels(desired, height, size)
     for (const [i, { label, y }] of placed.entries()) this.place(label, y, ys[i], height, labelHeight || 20)
+    return width
   }
 
   private place(label: LineLabel, lineY: number, at: number, height: number, labelHeight: number): void {
@@ -310,8 +350,12 @@ export class OnChartLayer {
 
     const ctx = this.pricing(snapshot)
     const { trades, orders } = workingFor(snapshot, key)
-    const selected = this.effectiveSelection(trades, orders)
-    this.lines = linesFor(snapshot, key)
+    this.draft = draftFor(this.host.draft?.draft() ?? null, key)
+    const composing = isComposing(this.draft)
+    this.root.classList.toggle('is-drafting', composing)
+    // Composing a draft, nothing else is selected: its card row stays shut and its band faint.
+    const selected = composing ? null : this.effectiveSelection(trades, orders)
+    this.lines = linesFor(snapshot, key, this.draft)
 
     const wanted = new Set<string>()
     for (const line of this.lines) {
@@ -322,7 +366,7 @@ export class OnChartLayer {
         label = new LineLabel(line, (l, action) => this.labelAction(l, action))
         this.bindDrag(label)
         this.labels.set(k, label)
-        this.labelsHost.appendChild(label.element)
+        ;(line.owner === 'draft' ? this.draftLabelsHost : this.labelsHost).appendChild(label.element)
       }
       label.line = line
       const price = this.drag && lineKey(this.drag.line) === k ? this.drag.price : line.price
@@ -346,7 +390,8 @@ export class OnChartLayer {
       expanded: selected,
       armed: this.armed,
       riskPercent: tradePrefs().riskPercent,
-      rewardRatio: tradePrefs().rewardRatio
+      rewardRatio: tradePrefs().rewardRatio,
+      draft: this.draft
     })
     this.schedule()
   }
@@ -388,9 +433,41 @@ export class OnChartLayer {
     let title = ''
     label.addStop.hidden = true
     label.addTarget.hidden = true
+    label.place.hidden = true
     label.remove.classList.remove('is-armed')
+    el.classList.toggle('is-draft', line.owner === 'draft')
+    const draft = line.owner === 'draft' ? this.draft : null
 
-    if (line.role === 'entry' && trade) {
+    if (draft && line.role === 'entry') {
+      const buy = draft.side === 'buy'
+      const side = this.compact ? (buy ? 'B' : 'S') : buy ? 'buy' : 'sell'
+      name = `Draft ${side} ${draft.type === 'market' ? 'mkt' : draft.type === 'limit' ? (this.compact ? 'LMT' : 'limit') : this.compact ? 'STP' : 'stop'}`
+      if (draft.units !== null) name += ` ${formatUnitsShort(draft.units)}`
+      const fill = fillingPrice(draft.side, ctx.quote)
+      if (draft.type !== 'market' && fill !== null) {
+        const off = Math.abs(price - fill)
+        move = `${ctx.info.pipSize ? `${(off / ctx.info.pipSize).toFixed(1)}p` : `${((off / fill) * 100).toFixed(2)}%`} away`
+      }
+      label.addStop.hidden = draft.stop !== null
+      label.addTarget.hidden = draft.target !== null
+      const armed = this.armed === 'place'
+      label.place.hidden = false
+      label.place.disabled = draft.problem !== null
+      label.place.textContent = armed ? 'Confirm' : 'Place'
+      label.place.classList.toggle('is-armed', armed)
+      label.place.setAttribute('aria-label', armed ? 'Confirm placing this order' : 'Place this order')
+      label.remove.textContent = '×'
+      label.remove.setAttribute('aria-label', 'Discard the draft')
+      title = draft.problem ?? `Draft at ${formatPrice(price, precision)} — drag to set a limit or stop price`
+    } else if (draft && (line.role === 'stop' || line.role === 'target')) {
+      const o = draft.units !== null ? outcome(draft.side, draft.units, draft.entry, price, ctx) : null
+      name = line.role === 'stop' ? 'SL' : 'TP'
+      move = o ? moveText(o) : ''
+      amount = o?.amount ?? null
+      label.remove.textContent = '×'
+      label.remove.setAttribute('aria-label', line.role === 'stop' ? 'Remove the draft stop loss' : 'Remove the draft take profit')
+      title = `Draft ${line.role === 'stop' ? 'stop loss' : 'take profit'} ${formatPrice(price, precision)} — drag to move`
+    } else if (line.role === 'entry' && trade) {
       const f = tradeFigures(trade, ctx)
       name = `${trade.side === 'buy' ? (this.compact ? 'L' : 'Long') : this.compact ? 'S' : 'Short'} ${formatUnitsShort(units)}`
       move = moveText(f.pnl)
@@ -484,8 +561,16 @@ export class OnChartLayer {
     })
   }
 
-  private labelAction(label: LineLabel, action: 'stop' | 'target' | 'remove'): void {
+  private labelAction(label: LineLabel, action: 'stop' | 'target' | 'remove' | 'place'): void {
     const { line } = label
+    if (line.owner === 'draft') {
+      if (action === 'place') this.perform({ kind: 'draftPlace' })
+      else if (action === 'stop' || action === 'target') this.perform({ kind: 'draftProtect', role: action })
+      else if (line.role === 'entry') this.perform({ kind: 'draftDiscard' })
+      else if (line.role === 'stop' || line.role === 'target') this.perform({ kind: 'draftClear', role: line.role })
+      return
+    }
+    if (action === 'place') return
     if (action === 'stop' || action === 'target') {
       this.perform({ kind: 'protect', owner: line.owner, id: line.id, role: action })
       return
@@ -548,6 +633,37 @@ export class OnChartLayer {
         this.run(action.owner === 'trade' ? session.modifyTrade(action.id, field) : session.modifyOrder(action.id, field))
         return
       }
+      case 'draftProtect': {
+        const draft = this.draft
+        if (!snapshot || !draft || !this.host.draft) return
+        const price = this.startingLevel(snapshot, 'draft', 'draft', action.role)
+        if (price !== null) this.host.draft.setLevel(action.role, price)
+        return
+      }
+      case 'draftClear':
+        this.host.draft?.clearLevel(action.role)
+        return
+      case 'draftDiscard':
+        this.disarm()
+        this.host.draft?.clearLevel('stop')
+        this.host.draft?.clearLevel('target')
+        this.host.draft?.clearLevel('entry')
+        return
+      case 'draftPreset': {
+        const draft = this.draft
+        if (!snapshot || !draft || !this.host.draft) return
+        const level = this.draftPreset(snapshot, draft, action.role)
+        if (typeof level === 'string') this.showError(level)
+        else this.host.draft.setLevel(action.role, level)
+        return
+      }
+      case 'draftPlace': {
+        const controller = this.host.draft
+        if (!controller || !this.draft) return
+        if (!this.confirmed('place')) return
+        controller.place().catch((err) => this.showError(err))
+        return
+      }
       case 'protect': {
         if (!snapshot) return
         const price = this.startingLevel(snapshot, action.owner, action.id, action.role)
@@ -600,9 +716,34 @@ export class OnChartLayer {
     return level
   }
 
+  /** The card's presets applied to the draft: the stop at `riskPercent` of the balance for its
+   * size, or the target at `rewardRatio` times its stop. */
+  private draftPreset(snapshot: SimSnapshot, draft: DraftOrder, role: 'stop' | 'target'): number | string {
+    const ctx = this.pricing(snapshot)
+    const { riskPercent, rewardRatio } = tradePrefs()
+    if (role === 'stop') {
+      if (draft.riskPercent !== null) return 'The size already comes from the risk: move the stop instead'
+      if (draft.units === null) return 'The draft has no size yet'
+      return (
+        levelForBalancePercent(draft.side, 'stop', draft.units, draft.entry, riskPercent, ctx) ??
+        `No ${ctx.account.currency} rate for ${ctx.currencies.quote}, so a stop cannot be priced from the balance`
+      )
+    }
+    if (draft.stop === null) return 'Set a stop loss first'
+    return (
+      targetForReward(draft.side, draft.entry, draft.stop, rewardRatio, ctx.info.precision) ??
+      'The stop is past the entry, so there is no risk to multiply'
+    )
+  }
+
   /** Where a new stop or target is put: a slice of the pane's visible price range beyond the
    * entry and the market, so it lands on screen, valid, and ready to be dragged into place. */
-  private startingLevel(snapshot: SimSnapshot, owner: 'trade' | 'order', id: string, role: 'stop' | 'target'): number | null {
+  private startingLevel(
+    snapshot: SimSnapshot,
+    owner: 'trade' | 'order' | 'draft',
+    id: string,
+    role: 'stop' | 'target'
+  ): number | null {
     const ctx = this.pricing(snapshot)
     const height = this.main?.clientHeight ?? 0
     const top = this.yToPrice(0)
@@ -612,6 +753,11 @@ export class OnChartLayer {
     const visible = top !== null && bottom !== null ? Math.abs(top - bottom) : 0
     const distance = Math.max(visible * DEFAULT_DISTANCE_FRACTION, spread * 3, 10 ** -ctx.info.precision)
     const range = top !== null && bottom !== null ? { low: Math.min(top, bottom), high: Math.max(top, bottom) } : undefined
+    if (owner === 'draft') {
+      const draft = this.draft
+      if (!draft) return null
+      return defaultProtection(draft.side, role, draft.entry, draft.entry, distance, ctx.info.precision, range)
+    }
     if (owner === 'trade') {
       const trade = snapshot.trades.find((t) => t.id === id)
       const mark = trade ? closingPrice(trade.side, quote) : null
@@ -630,6 +776,15 @@ export class OnChartLayer {
     const quote = snapshot.quotes[this.key]
     const precision = this.host.instrumentFor(this.key).precision
     const sideName = line.side === 'buy' ? 'long' : 'short'
+    if (line.owner === 'draft') {
+      // Nothing is sent from a drag, so nothing is refused; a level on the wrong side is flagged,
+      // and the ticket says the same thing where Place would be.
+      const draft = this.draft
+      if (!draft || (line.role !== 'stop' && line.role !== 'target')) return null
+      if (protectionValid(draft.side, line.role, price, draft.entry)) return null
+      const below = line.role === 'stop' ? draft.side === 'buy' : draft.side === 'sell'
+      return `The draft's ${line.role === 'stop' ? 'stop' : 'target'} must be ${below ? 'below' : 'above'} its entry`
+    }
     if (line.owner === 'trade') {
       const trade = snapshot.trades.find((t) => t.id === line.id)
       if (!trade || trade.closedAt !== null) return 'This trade has closed'
@@ -677,7 +832,7 @@ export class OnChartLayer {
       event.preventDefault()
       const line = label.line
       if (!line.draggable) {
-        this.perform({ kind: 'select', id: line.id })
+        if (line.owner !== 'draft') this.perform({ kind: 'select', id: line.id })
         return
       }
       el.setPointerCapture(event.pointerId)
@@ -699,7 +854,7 @@ export class OnChartLayer {
         drag.moved = true
         this.host.hold()
         this.root.classList.add('is-dragging')
-        this.host.select(drag.line.id)
+        if (drag.line.owner !== 'draft') this.host.select(drag.line.id)
       }
       const rect = this.main?.getBoundingClientRect()
       if (!rect) return
@@ -718,7 +873,7 @@ export class OnChartLayer {
       }
       if (!drag.moved) {
         this.drag = null
-        this.perform({ kind: 'select', id: drag.line.id })
+        if (drag.line.owner !== 'draft') this.perform({ kind: 'select', id: drag.line.id })
         return
       }
       void this.finishDrag()
@@ -734,11 +889,28 @@ export class OnChartLayer {
     const price = roundTo(raw, precision)
     drag.price = price
     if (moveCanvas) this.host.previewLine(drag.line, price)
+    if (drag.line.owner === 'draft') this.dragDraft(drag.line, price)
     const label = this.labels.get(lineKey(drag.line))
     if (label && this.snapshot) {
       this.fillLabel(label, this.snapshot, this.pricing(this.snapshot), price, drag.line.id)
     }
     this.schedule()
+  }
+
+  /** A draft line moved: write it into the ticket now, and bring along whatever the ticket moved
+   * with it -- a stop and target stated in pips follow their entry. The canvas is held for the
+   * gesture, so those sibling lines are moved by preview. */
+  private dragDraft(line: LineSpec, price: number): void {
+    const controller = this.host.draft
+    if (!controller || (line.role !== 'entry' && line.role !== 'stop' && line.role !== 'target')) return
+    controller.setLevel(line.role, price)
+    const next = controller.draft()
+    if (!next) return
+    for (const sibling of this.lines) {
+      if (sibling.owner !== 'draft' || sibling.role === line.role) continue
+      const moved = sibling.role === 'entry' ? next.entry : sibling.role === 'stop' ? next.stop : next.target
+      if (moved !== null && moved !== sibling.price) this.host.previewLine(sibling, moved)
+    }
   }
 
   /** klinecharts started dragging an unlocked trade line. */
@@ -747,7 +919,7 @@ export class OnChartLayer {
     this.drag = { line, price: line.price, source: 'canvas', pointerId: null, startY: 0, moved: true, settling: false }
     this.host.hold()
     this.root.classList.add('is-dragging')
-    this.host.select(line.id)
+    if (line.owner !== 'draft') this.host.select(line.id)
   }
 
   canvasDragTo(price: number): void {
@@ -766,6 +938,11 @@ export class OnChartLayer {
     const drag = this.drag
     if (!drag) return
     this.drag = null
+    // A draft drag has been writing into the ticket as it went: put the level back where it began.
+    const { line } = drag
+    if (line.owner === 'draft' && drag.moved && (line.role === 'entry' || line.role === 'stop' || line.role === 'target')) {
+      this.host.draft?.setLevel(line.role, line.price)
+    }
     this.root.classList.remove('is-dragging')
     if (drag.moved) this.host.release(true)
     this.render(this.snapshot)
@@ -774,6 +951,14 @@ export class OnChartLayer {
   private async finishDrag(): Promise<void> {
     const drag = this.drag
     if (!drag) return
+    if (drag.line.owner === 'draft') {
+      // Already in the ticket, move by move; there is nothing to send and nothing to refuse.
+      this.drag = null
+      this.root.classList.remove('is-dragging')
+      this.host.release(false)
+      this.render(this.snapshot)
+      return
+    }
     const refusal = this.refusal(drag.line, drag.price)
     if (refusal !== null || drag.price === drag.line.price) {
       this.cancelDrag()
