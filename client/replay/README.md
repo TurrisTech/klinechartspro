@@ -110,9 +110,9 @@ false. (A months-long "next signal" jump used to feed ~10⁵ bars to the engine 
 measured at 5s per 20 market days at a 1m base.) When it is true the advance **walks** base
 bars from the cache, feeding each to the engine — or, when a candle's band intersects a working order or
 an open trade's stop/target, the finer stored bars inside it instead (recursively; a per-span
-refinement that never lowers the base). "Pause on fill" stops at the filling bar. `nextSignal`
-is an advance to the end of the data that also stops at the first bar a **price watch fires
-on** (stop reason `watch`; see below).
+refinement that never lowers the base). "Pause on fill" stops at the filling bar, and **any
+advance — Step or Next signal — stops at the first bar a price watch fires on** (stop reason
+`watch`; see below). `nextSignal` is an advance to the end of the data.
 
 ## Price watches
 
@@ -142,12 +142,14 @@ Three things follow, each of which was a decision:
   crossing without a baseline makes it fire on its first bar. A restored session keeps the
   STORED baseline instead — the reading the watch was armed with — which is the same decision
   the server's `restore()` makes.
-- **A firing watch stops "Next signal", and only that.** `onBar` returns what it raised
-  (`ObserverStop[]`), and a `toEnd` advance breaks on the first bar that raised anything, so
-  the cursor lands on that base bar's close with reason `watch`; `armedStops()` is what enables
-  the button with no signal armed. A Step is not cut short — it asked for N candles. Order when
-  two land on one bar: a fill pause, then the armed signal the run was planned to stop at, then
-  the watch (whose notification is raised either way).
+- **A firing watch stops the advance, Step and Next signal alike.** `onBar` returns what it
+  raised (`ObserverStop[]`), and the walk breaks on the first bar that raised anything, so the
+  cursor lands on that base bar's close with reason `watch` — a Step short of its target, or
+  on its last bar (still reported as `watch`, not `target`). `armedStops()` is what enables Next
+  signal with no signal armed. Order when two land on one bar: a fill pause, then the armed
+  signal the advance was planned to stop at, then the watch (whose notification is raised
+  either way). Stopping a Step too was the user's call (2026-09-15): walking on past a firing
+  puts the cursor, and every pane, somewhere other than where it happened.
 - **The event clock is the bar's close, never the wall clock.** A session replaying 2024 has
   a 2024 cooldown. The notification itself is still *dated* when it was raised, so it sorts
   with everything else in the centre; the replay instant is in its body and in `data.eventAt`.

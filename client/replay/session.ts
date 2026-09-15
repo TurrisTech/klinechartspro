@@ -34,8 +34,8 @@ export interface AdvanceResult {
   observed: ObserverStop[]
 }
 
-/** Something an observer raised on a bar that is worth stopping a "next signal" run for --
- * a price watch firing. Only what the controls need to say why the run stopped. */
+/** Something an observer raised on a bar that is worth stopping an advance for -- a price
+ * watch firing. Only what the controls need to say why the advance stopped. */
 export interface ObserverStop {
   label: string
 }
@@ -56,7 +56,8 @@ export interface ReplayObserver {
   armedStops(): number
   /** One base bar the engine has just consumed, in walk order. Always the BASE bar, never a
    * refinement's finer parts: whether an order happens to be resting must not change what an
-   * observer sees. Returns what it raised on this bar; a "next signal" run stops on any. */
+   * observer sees. Returns what it raised on this bar; the advance (Step or "next signal")
+   * stops on any. */
   onBar(bar: ReplayBar): ObserverStop[]
   /** The cursor moved without a walk — nothing between was examined. */
   seeked(): void
@@ -390,8 +391,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     return this.advanceBy({ interval: this.advance.interval, multiple: this.advance.multiple })
   }
 
-  /** An advance to the end of the data that stops at the first armed signal, or at the first
-   * bar an observer raises something on (a price watch firing). */
+  /** An advance to the end of the data that stops at the first armed signal -- or, like any
+   * advance, at the first bar an observer raises something on (a price watch firing). */
   nextSignal(): Promise<AdvanceResult | null> {
     return this.advanceBy({ toEnd: true, end: this.opts.dataEnd() })
   }
@@ -408,9 +409,6 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const plan = planAdvance(from, { toEnd: true, end }, occurrences)
       let reason: StopReason = plan.reason === 'signal' ? 'signal' : 'toEnd' in request || end < provisional.target ? 'end' : 'target'
       const stopAt = plan.stopAt
-      // A "next signal" run is a run to the next thing worth looking at, and a price watch
-      // firing is one. A Step is not: it asked for N candles and gets them.
-      const stopOnObserver = 'toEnd' in request
       const events: SimEvent[] = []
       const consumed: ReplayBar[] = []
       let observed: ObserverStop[] = []
@@ -442,7 +440,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
             paused = true
             break
           }
-          if (stopOnObserver && raised.length > 0) {
+          // A firing watch ends ANY advance, a Step as much as "next signal": it is the move the
+          // watch was placed to catch, and walking on past it would put the cursor, and every
+          // pane, somewhere other than where it happened.
+          if (raised.length > 0) {
             observed = raised
             break
           }
@@ -454,9 +455,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       }
       if (paused) reason = 'fill'
       else if (observed.length === 0) this.cursor = stopAt
-      // A watch firing on the very bar the run was going to stop at anyway leaves a signal
-      // stop a signal stop: that is the one the user armed the run for, and the watch has
-      // its own row in the Notification Center. Against `end` it is the more useful answer.
+      // A watch firing on the very bar the advance was going to stop at anyway leaves a signal
+      // stop a signal stop: that is the one the user armed the run for, and the watch has its
+      // own row in the Notification Center. Against `target` or `end` it is the more useful
+      // answer.
       else if (!(this.cursor === stopAt && reason === 'signal')) reason = 'watch'
       if (reason !== 'watch') observed = []
       const result: AdvanceResult = { from, to: this.cursor, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed, walked, observed }

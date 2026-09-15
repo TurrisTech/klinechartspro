@@ -6,8 +6,8 @@ import { advanceTarget } from './timeframes'
 // why, and whether a candle may be consumed whole or must be refined. No fetching, no
 // chart, no DOM -- the session (session.ts) does the walking.
 
-/** `watch`: an observer (a price watch) fired during a "next signal" run -- discovered while
- * walking, like `fill`; see `session.ts`. */
+/** `watch`: an observer (a price watch) fired during the advance -- discovered while walking,
+ * like `fill`; see `session.ts`. */
 export type StopReason = 'target' | 'signal' | 'fill' | 'watch' | 'end'
 
 /** What the user asked for: N whole candles of an interval, or "to the end of the data". */
