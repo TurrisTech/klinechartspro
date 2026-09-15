@@ -8,7 +8,7 @@ import { loadSignalCatalogue } from '../plugins/api'
 import type { PluginHost } from '../plugins/host'
 import { periodToResolution } from '../periods'
 import { symbolVendor } from '../symbols'
-import { simApi } from '../trading/api'
+import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { symbolKey } from '../trading/format'
 import { createReplayControls, openStartDialog } from './controls'
@@ -39,6 +39,8 @@ export interface BarReplayController {
    * exists only in this tab, so its watches are evaluated here, against the base bars the
    * walk consumes. */
   watches: ReplayWatches
+  /** The instrument's bid/ask at the cursor -- the replay's own market, so no fetch. */
+  quote(key: string): Promise<SimQuote | undefined>
   teardown(): void
 }
 
@@ -326,6 +328,7 @@ export async function mountBarReplay(
       if (!check.ok) console.warn(`${REPLAY_LOG} base ${session.base} no longer fits the wall: ${check.reason}`)
       controls.refresh()
     },
+    quote: async (key: string) => session.snapshot.quotes[key],
     teardown(): void {
       controls.dispose()
       dock.teardown()

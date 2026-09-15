@@ -1,5 +1,6 @@
 import type { ChartProPane, KLineChartPro } from '../../src'
 import { hasFeature } from '../capabilities'
+import type { SimQuote } from './api'
 import { mountTradingDock } from './dock'
 import { PaperTradingSession } from './session'
 
@@ -23,6 +24,9 @@ export interface PaperTradingController {
   onOpenChange(listener: (open: boolean) => void): void
   /** Resync overlays and the ticket to the current wall panes (the wall's onPanesChange). */
   sync(panes: ChartProPane[]): void
+  /** The instrument's bid/ask as the account holds it now. Watches the instrument first --
+   * idempotent, and the server never lets a stored seed overwrite a live tick. */
+  quote(key: string): Promise<SimQuote | undefined>
   teardown(): void
 }
 
@@ -56,6 +60,10 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
     sync(panes: ChartProPane[]): void {
       dock.sync(panes)
       void session.watch(dock.activeKey()).catch(() => {})
+    },
+    async quote(key: string): Promise<SimQuote | undefined> {
+      await session.watch(key)
+      return session.snapshot.quotes[key]
     },
     teardown(): void {
       dock.teardown()

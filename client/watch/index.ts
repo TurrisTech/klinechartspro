@@ -62,6 +62,10 @@ export interface PriceWatchesOptions {
    * one instrument, so its other panes get a reason instead of rows that would create a watch
    * nothing will ever evaluate. */
   canWatch?: (target: string) => string | null
+  /** Fetch an instrument's bid/ask from the trading session, for the menu's "fetch into
+   * clipboard" rows -- read when the row is picked, never when the menu opens. Absent: no
+   * such rows. */
+  quote?: (target: string) => Promise<{ bid: number; ask: number } | undefined>
 }
 
 export interface PriceWatchesController {
@@ -205,10 +209,44 @@ export async function mountPriceWatches(
       hit && level !== null
         ? watchItems(hit, level, precision)
         : createItems(pane, chart, x, cursor, precision)
-    // Copying is not a watch gesture, so it is offered even where `canWatch` refuses one: on
-    // a line it copies that line's level, anywhere else the price under the pointer.
-    const copyable = hit && level !== null ? level : cursor
-    if (copyable !== null) items.push(copyItem(copyable, precision))
+    // Copying is not a watch gesture, so it is offered even where `canWatch` refuses one.
+    const target = instrumentTarget(symbolVendor(symbol), symbol.ticker)
+    const bar = barAt(chart, x)
+    const copies: Array<{ label: string; price: number | null | undefined }> = [
+      hit && level !== null
+        ? { label: 'Copy watch price', price: level }
+        : { label: 'Copy cursor price', price: cursor },
+      { label: 'Copy current price', price: marketPrice(target) },
+      { label: 'Copy open', price: bar?.open },
+      { label: 'Copy high', price: bar?.high },
+      { label: 'Copy low', price: bar?.low },
+      { label: 'Copy close', price: bar?.close }
+    ]
+    const copyRows = copies.filter(
+      (row): row is { label: string; price: number } => typeof row.price === 'number'
+    )
+    copyRows.forEach((row, index) => {
+      items.push({ ...copyItem(row.label, row.price, precision), separator: index === 0 })
+    })
+    // The bid and ask are not on the chart's bars, so they are fetched on the click and carry
+    // no detail: a price shown when the menu opened would already be stale by the pick.
+    const quote = options.quote
+    if (quote) {
+      for (const side of ['bid', 'ask'] as const) {
+        items.push({
+          label: `Fetch ${side} price into clipboard`,
+          separator: side === 'bid' && copyRows.length === 0,
+          onSelect: () => {
+            quote(target)
+              .then((q) => {
+                if (q) return copyText(q[side].toFixed(precision))
+                console.warn(`[watch] no ${side} quote for ${target}`)
+              })
+              .catch((err) => console.warn(`[watch] ${side} fetch failed for ${target}`, err))
+          }
+        })
+      }
+    }
     menu = openContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -277,14 +315,9 @@ export async function mountPriceWatches(
   }
 
   /** The price as the menu shows it — the instrument's precision, not the float's. */
-  function copyItem(price: number, precision: number): MenuItem {
+  function copyItem(label: string, price: number, precision: number): MenuItem {
     const text = price.toFixed(precision)
-    return {
-      label: 'Copy price',
-      detail: text,
-      separator: true,
-      onSelect: () => void copyText(text)
-    }
+    return { label, detail: text, onSelect: () => void copyText(text) }
   }
 
   // -- chart helpers --------------------------------------------------------------------
