@@ -90,7 +90,7 @@ export function openContextMenu(options: ContextMenuOptions): ContextMenu {
 
   let closed = false
 
-  function onOutside(event: MouseEvent): void {
+  function onOutside(event: Event): void {
     if (menu.contains(event.target as Node | null)) return
     close()
   }
@@ -100,10 +100,12 @@ export function openContextMenu(options: ContextMenuOptions): ContextMenu {
   }
 
   // Deferred by a frame: the `contextmenu` event that opened this is still propagating, and
-  // on some platforms a `mousedown` follows it immediately.
+  // on some platforms a `mousedown` follows it immediately. `pointerdown`, not `mousedown`: a
+  // touch screen delivers compatibility mouse events only to targets it thinks are clickable,
+  // so a tap on the bare chart would never dismiss a menu a long-press opened.
   requestAnimationFrame(() => {
     if (closed) return
-    document.addEventListener('mousedown', onOutside, true)
+    document.addEventListener('pointerdown', onOutside, true)
     document.addEventListener('contextmenu', onOutside, true)
   })
   document.addEventListener('keydown', onKey)
@@ -111,7 +113,7 @@ export function openContextMenu(options: ContextMenuOptions): ContextMenu {
   function close(): void {
     if (closed) return
     closed = true
-    document.removeEventListener('mousedown', onOutside, true)
+    document.removeEventListener('pointerdown', onOutside, true)
     document.removeEventListener('contextmenu', onOutside, true)
     document.removeEventListener('keydown', onKey)
     menu.remove()
@@ -119,4 +121,23 @@ export function openContextMenu(options: ContextMenuOptions): ContextMenu {
   }
 
   return { close }
+}
+
+const FLASH_MS = 1600
+
+/** A one-line confirmation near the bottom of `host` (a copy landed, or did not), gone after
+ * FLASH_MS. Appended into the themed chart root like the menu. One at a time: a second
+ * replaces the first rather than stacking over it. */
+export function flash(host: HTMLElement, text: string): void {
+  const root = host.closest('.klinecharts-pro') ?? document.body
+  root.querySelector('.wd-watch-flash')?.remove()
+  const note = document.createElement('div')
+  note.className = 'wd-watch-flash'
+  note.setAttribute('role', 'status')
+  note.textContent = text
+  const rect = host.getBoundingClientRect()
+  note.style.left = `${Math.round(rect.left + rect.width / 2)}px`
+  note.style.top = `${Math.round(rect.bottom - 16)}px`
+  root.appendChild(note)
+  setTimeout(() => note.remove(), FLASH_MS)
 }
