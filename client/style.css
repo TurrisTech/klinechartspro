@@ -1642,6 +1642,11 @@ body.wd-has-dock > #app {
   font-variant-numeric: tabular-nums;
 }
 
+.wd-watch-menu-separator {
+  margin: 0.25rem 0;
+  border-top: 1px solid var(--border);
+}
+
 /* The set-a-price dialog, shared by "watch this price" and "a line was dropped here".
    Modelled on the replay start dialog; a body-level card, so it carries the theme class
    itself. */
