@@ -67,10 +67,12 @@ mode only for its title.
 Whatever is working on a pane's instrument is drawn on that pane, **whether or not the account
 window is open** — an order placed from the ticket appears on the chart at once.
 
-- **Lines** (`wdTradeLine`): a pending order's price, an open trade's entry, every stop and
+- **Lines** (`wdTradeLine`): entries and pending prices **solid**, stops and targets **long dashes**
+  (10 on, 6 off; user, 2026-09-15). Colour does the rest — red stop, green target, the side's colour
+  for an entry; a pending order is heavier — with the label: a pending order's price, an open trade's entry, every stop and
   target, each with its price on the axis. The entry is locked; the rest are draggable.
 - **Bracket** (`wdTradeBracket`): what connects an entry to its stop and target — a loss band
-  and a profit band from the bar the position opened on to the right edge, a dashed connector,
+  and a profit band from the bar the position opened on to the right edge, a connector,
   and a dot at the fill. Strong for the selected entry, faint for the rest. No figure takes
   events, so it never steals a pan.
 - **Labels**, against the right edge beside each line's axis tag: `Long 10K −1.8p −1.80 ×`,
@@ -100,7 +102,7 @@ Because it sits among orders that are real, it is kept unmistakably apart:
 - it is drawn only **once it has a level of its own** (a limit/stop price, a stop or a target) —
   a bare market draft would be a line on top of the price, beside every open entry, so until
   then it is a row on the card and nothing on the chart;
-- finely **dotted** lines, **outlined** labels that say "Draft", in **their own column** left of
+- **outlined** labels that say "Draft", in **their own column** left of
   the working orders' labels (a draft stop next to a real stop reads side by side, never
   interleaved);
 - while it is being composed, **what is already working recedes**: dimmed lines, labels dimmed
@@ -110,10 +112,19 @@ Because it sits among orders that are real, it is kept unmistakably apart:
 - Escape mid-drag puts the level back where the drag began.
 
 **Dragging** a stop, a target or a pending order's price — by the label or by the line — shows
-what that price would realise while it moves, marks a price the engine would refuse (dashed, with
-the reason as its title), and commits one amendment on release. A refused drop, Escape or a
-cancelled pointer puts the line back. Canvas rebuilds are held for the gesture and until the
-amendment answers, so a poll landing mid-drag cannot pull the line out from under the pointer.
+what that price would realise while it moves and marks a price the engine would refuse (dashed
+label border, the reason as its title). Canvas rebuilds are held for the gesture, so a poll
+landing mid-drag cannot pull the line out from under the pointer.
+
+**Every interactive change to a working stop, target or pending price is confirmed before it is
+sent** (user, 2026-09-15). Dropping a drag, or pressing `+ Add`, `Risk N%`, `NR`, Breakeven or ×
+on a stop/target, only PROPOSES the change (`Amendment`, held by `TradingOverlays` so every pane
+shows the same one): the chart draws it as if confirmed (`applyAmendment`), that line's label pulses
+and turns into **Confirm / ×** (a removal reads "remove?"), and the card opens with the same
+question in words — "Move the long 10K's stop loss 1.15228 → 1.15300? If hit: −7.8p · −7.80 USD".
+Confirm sends it; × or Escape puts it back. A new proposal replaces the old one; one whose position
+has since closed is dropped; a button that would change nothing says so. Drafts are exempt — a
+draft only edits the ticket, and placing it already takes two presses.
 
 **Currencies.** P&L is the engine's: in the instrument's quote currency. The card labels it so,
 and adds the account-currency figure only where one exact conversion exists (the account is the

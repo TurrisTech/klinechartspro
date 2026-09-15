@@ -8,7 +8,7 @@ import type { DraftOrder } from './lines'
 installWindow()
 const { pipsToPrice, toPips, tradePips, tradePnl } = await import('./format')
 const { DEFAULT_COLORS, linesFor, overlaysFor } = await import('./overlays')
-const { isComposing } = await import('./lines')
+const { applyAmendment, currentLevel, isComposing } = await import('./lines')
 
 const KEY = 'oanda:EUR_USD'
 const SPAN = { first: 1_000, last: 2_000 }
@@ -173,6 +173,24 @@ describe('the draft', () => {
     expect(lineColors.filter(([owner]) => owner === 'draft').every(([, c]) => c.startsWith('#'))).toBe(true)
     const brackets = overlays.filter((o) => o.name === 'wdTradeBracket').map((o) => (o.extendData as { wd: { owner: string; selected: boolean } }).wd)
     expect(brackets).toEqual([expect.objectContaining({ owner: 'draft', selected: true }), expect.objectContaining({ owner: 'trade', selected: false })])
+  })
+})
+
+describe('amendments waiting for confirmation', () => {
+  test('the chart draws the snapshot as if confirmed; a removal waits, marked, on its line', () => {
+    const s = snapshot({ trades: [trade({ stopLoss: 1.09 })], orders: [order()] })
+    const moved = applyAmendment(s, { owner: 'trade', id: 't1', role: 'stop', price: 1.095, from: 1.09 })
+    expect(moved.trades[0].stopLoss).toBe(1.095)
+    expect(s.trades[0].stopLoss).toBe(1.09) // the real snapshot is untouched
+    expect(applyAmendment(s, { owner: 'order', id: 'o1', role: 'order', price: 1.085, from: 1.09 }).orders[0].price).toBe(1.085)
+    expect(applyAmendment(s, { owner: 'trade', id: 't1', role: 'stop', price: null, from: 1.09 })).toBe(s)
+  })
+
+  test('currentLevel: the level now, null for none, undefined once the position is gone', () => {
+    const s = snapshot({ trades: [trade({ takeProfit: null }), trade({ id: 't2', closedAt: 5, stopLoss: 1.08 })], orders: [order()] })
+    expect(currentLevel(s, 'trade', 't1', 'target')).toBeNull()
+    expect(currentLevel(s, 'trade', 't2', 'stop')).toBeUndefined()
+    expect(currentLevel(s, 'order', 'o1', 'order')).toBe(1.09)
   })
 })
 

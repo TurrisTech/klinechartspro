@@ -1307,6 +1307,39 @@ body.wd-has-dock > #app {
   background: var(--kc-danger);
 }
 
+/* A change waiting for confirmation: the label is the question -- a pulsing outline, and Confirm. */
+.wd-oc .wd-oc-tag.is-proposed {
+  z-index: 2;
+  opacity: 1;
+  animation: wd-oc-propose 1.4s ease-in-out infinite;
+}
+
+@keyframes wd-oc-propose {
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--wd-oc-color) 45%, transparent),
+      0 2px 8px rgb(0 0 0 / 0.22);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wd-oc .wd-oc-tag.is-proposed {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--wd-oc-color);
+  }
+}
+
+.wd-oc .wd-oc-tag-btn.is-confirm {
+  padding: 0 6px;
+  background: var(--wd-oc-color);
+  color: #ffffff;
+}
+
+.wd-oc .wd-oc-tag-btn.is-confirm:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 /* Composing a draft, what is already working recedes -- and comes back under the pointer, so it
    can still be managed. */
 .wd-oc.is-drafting .wd-oc-tag:not(.is-draft):not(:hover) {
@@ -1574,16 +1607,19 @@ body.wd-has-dock > #app {
 
 .wd-oc-level.is-stop .wd-oc-level-label::before,
 .wd-oc-level.is-target .wd-oc-level-label::before {
+  --wd-oc-level-color: #ef5350;
   content: '';
   display: inline-block;
-  width: 0.5rem;
-  height: 0;
+  width: 1rem;
+  height: 1.5px;
   margin: 0 0.3rem 0.2rem 0;
-  border-top: 1.5px dashed #ef5350;
+  vertical-align: middle;
+  /* The chart's long dash in miniature: a CSS dashed border's dash length cannot be set. */
+  background: repeating-linear-gradient(90deg, var(--wd-oc-level-color) 0 6px, transparent 6px 9px);
 }
 
 .wd-oc-level.is-target .wd-oc-level-label::before {
-  border-top-color: #26a69a;
+  --wd-oc-level-color: #26a69a;
 }
 
 .wd-oc-level-figures {
@@ -1677,6 +1713,29 @@ body.wd-has-dock > #app {
 
 .wd-oc-btn.is-danger {
   color: var(--kc-danger);
+}
+
+/* The card's confirmation bar, first in the card while a change waits. */
+.wd-oc-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, #f59e0b 12%, transparent);
+}
+
+.wd-oc-confirm-title {
+  font-weight: 600;
+}
+
+.wd-oc-confirm-detail {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-oc-confirm-detail.is-warning {
+  color: #f59e0b;
 }
 
 /* The card's draft row: the thing being worked on, set apart from what is working. */

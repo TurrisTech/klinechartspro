@@ -2,9 +2,10 @@ import type { Chart, Coordinate, Crosshair, Point } from 'klinecharts'
 import type { ChartProPane } from '../../src'
 import { OhlcvApiError } from '../config'
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
-import { formatMoney, formatPrice, formatUnitsShort, symbolKey } from './format'
+import { formatMoney, formatPercent, formatPrice, formatUnitsShort, symbolKey } from './format'
 import { type InstrumentInfo, seedInstrument } from './instrument'
 import {
+  type Amendment,
   type DraftController,
   type DraftOrder,
   draftFor,
@@ -51,13 +52,16 @@ import type { TradingSession } from './session'
 // DRAGGING, from the label. A stop, a target or a pending order's price follows the pointer, the
 // canvas line with it (`previewLine`), and the label shows what that price would realise while
 // it moves -- pips, amount -- and whether the engine would refuse it (a long's stop above the
-// bid). Release commits one amendment; a refused or cancelled drag (Escape, pointercancel) puts
-// the line back. Dragging the line itself goes through `beginCanvasDrag`/`canvasDragTo`/
+// bid). Release PROPOSES the change: the line stays where it was dropped, its label turns into
+// Confirm / x, the card asks the same question, and nothing is sent until Confirm (user,
+// 2026-09-15: always confirm an interactive stop or target change). The add, remove, preset and
+// breakeven buttons propose the same way. A refused or cancelled drag (Escape, pointercancel)
+// puts the line back. Dragging the line itself goes through `beginCanvasDrag`/`canvasDragTo`/
 // `endCanvasDrag` to the same readout and the same commit.
 //
 // A DRAFT -- the order being written in the ticket -- is drawn once it has a level of its own, and
-// kept apart from what is already working so the two cannot be mistaken for each other: its lines
-// are finely dotted, its labels are outlined and say "Draft", they hang in their OWN column to the
+// kept apart from what is already working so the two cannot be mistaken for each other: its labels
+// are outlined and say "Draft", they hang in their OWN column to the
 // left of the working orders' labels (a draft stop beside a real stop reads side by side on one
 // line, never interleaved), and while it is being composed everything else on the pane recedes --
 // dimmed lines, dimmed labels that come back on hover, faint bands, collapsed card rows. Dragging a
@@ -93,7 +97,13 @@ export interface LayerHost {
   /** Hold canvas rebuilds for a drag and its amendment; `release(true)` redraws from the snapshot. */
   hold(): void
   release(restore: boolean): void
-  commit(line: LineSpec, price: number): Promise<void>
+  /** The on-chart change waiting for confirmation, and whether it is being sent. */
+  amendment(): Amendment | null
+  sending(): boolean
+  /** Put a change to a working stop, target or pending price up for confirmation. */
+  propose(change: Omit<Amendment, 'from'>): boolean
+  confirmAmendment(): Promise<void>
+  cancelAmendment(): void
   /** The ticket's order, while the account window is open. */
   readonly draft?: DraftController
   isCollapsed(compact: boolean): boolean
@@ -107,9 +117,9 @@ interface DragState {
   pointerId: number | null
   startY: number
   moved: boolean
-  /** Released and waiting for the amendment's answer: the preview stays where it was dropped. */
-  settling: boolean
 }
+
+type LabelAction = 'stop' | 'target' | 'remove' | 'place' | 'confirm' | 'cancel'
 
 class LineLabel {
   readonly element: HTMLElement
@@ -121,9 +131,11 @@ class LineLabel {
   readonly addTarget: HTMLButtonElement
   readonly remove: HTMLButtonElement
   readonly place: HTMLButtonElement
+  readonly confirm: HTMLButtonElement
+  readonly cancel: HTMLButtonElement
   line: LineSpec
 
-  constructor(line: LineSpec, onAction: (label: LineLabel, action: 'stop' | 'target' | 'remove' | 'place') => void) {
+  constructor(line: LineSpec, onAction: (label: LineLabel, action: LabelAction) => void) {
     this.line = line
     this.element = h('div', 'wd-oc-tag')
     this.leader = h('span', 'wd-oc-tag-leader')
@@ -131,7 +143,7 @@ class LineLabel {
     this.name = h('span', 'wd-oc-tag-name')
     this.move = h('span', 'wd-oc-tag-move')
     this.amount = h('span', 'wd-oc-tag-amount')
-    const make = (className: string, text: string, action: 'stop' | 'target' | 'remove' | 'place'): HTMLButtonElement => {
+    const make = (className: string, text: string, action: LabelAction): HTMLButtonElement => {
       const b = h('button', `wd-oc-tag-btn ${className}`, text)
       b.type = 'button'
       b.addEventListener('click', () => onAction(this, action))
@@ -142,7 +154,23 @@ class LineLabel {
     this.remove = make('is-remove', '×', 'remove')
     this.place = make('is-place', 'Place', 'place')
     this.place.hidden = true
-    this.element.append(this.leader, this.name, this.move, this.amount, this.addStop, this.addTarget, this.place, this.remove)
+    this.confirm = make('is-confirm', 'Confirm', 'confirm')
+    this.cancel = make('is-remove', '×', 'cancel')
+    this.confirm.hidden = true
+    this.cancel.hidden = true
+    this.cancel.setAttribute('aria-label', 'Cancel this change')
+    this.element.append(
+      this.leader,
+      this.name,
+      this.move,
+      this.amount,
+      this.addStop,
+      this.addTarget,
+      this.place,
+      this.confirm,
+      this.cancel,
+      this.remove
+    )
   }
 }
 
@@ -193,7 +221,9 @@ export class OnChartLayer {
     if (!(event.relatedTarget instanceof Node) || !this.root.contains(event.relatedTarget)) this.hovering = false
   }
   private readonly onKey = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape' && this.drag && !this.drag.settling) this.cancelDrag()
+    if (event.key !== 'Escape') return
+    if (this.drag) this.cancelDrag()
+    else if (this.host.amendment()) this.host.cancelAmendment()
   }
 
   constructor(
@@ -391,7 +421,8 @@ export class OnChartLayer {
       armed: this.armed,
       riskPercent: tradePrefs().riskPercent,
       rewardRatio: tradePrefs().rewardRatio,
-      draft: this.draft
+      draft: this.draft,
+      confirm: this.describeAmendment(snapshot, ctx, key)
     })
     this.schedule()
   }
@@ -511,7 +542,72 @@ export class OnChartLayer {
     }
     label.addStop.setAttribute('aria-label', 'Add a stop loss')
     label.addTarget.setAttribute('aria-label', 'Add a take profit')
+
+    // Waiting for confirmation: this label is the question, and answers it.
+    const amendment = this.host.amendment()
+    const proposed =
+      amendment !== null &&
+      line.owner === amendment.owner &&
+      line.id === amendment.id &&
+      line.role === (amendment.role === 'order' ? 'order' : amendment.role)
+    el.classList.toggle('is-proposed', proposed)
+    label.confirm.hidden = !proposed
+    label.cancel.hidden = !proposed
+    if (proposed) {
+      label.addStop.hidden = true
+      label.addTarget.hidden = true
+      label.place.hidden = true
+      label.remove.hidden = true
+      const sending = this.host.sending()
+      label.confirm.disabled = sending
+      label.confirm.textContent = sending ? '…' : 'Confirm'
+      if (amendment.price === null) {
+        label.move.textContent = 'remove?'
+        label.amount.hidden = true
+      }
+      title = 'Confirm to send this change, or × (Escape) to put it back'
+    } else {
+      label.remove.hidden = false
+    }
     el.title = refusal ?? title
+  }
+
+  /** The waiting change in words, for the card, when it belongs to this pane's instrument. */
+  private describeAmendment(
+    snapshot: SimSnapshot,
+    ctx: PricingContext,
+    key: string
+  ): { title: string; detail: string; refusal: string | null; sending: boolean } | null {
+    const a = this.host.amendment()
+    if (!a) return null
+    const trade = a.owner === 'trade' ? snapshot.trades.find((t) => t.id === a.id) : undefined
+    const order = a.owner === 'order' ? snapshot.orders.find((o) => o.id === a.id) : undefined
+    const position = trade ?? order
+    if (!position || position.symbol !== key) return null
+    const precision = ctx.info.precision
+    const what = a.role === 'stop' ? 'stop loss' : a.role === 'target' ? 'take profit' : `${order?.type ?? 'order'} price`
+    const whose = trade ? `${trade.side === 'buy' ? 'long' : 'short'} ${formatUnitsShort(trade.units)}` : `${position.side} ${order?.type ?? ''} ${formatUnitsShort(position.units)}`
+    let title: string
+    if (a.price === null) title = `Remove the ${what} (${formatPrice(a.from, precision)}) from the ${whose}?`
+    else if (a.from === null) title = `Add a ${what} at ${formatPrice(a.price, precision)} to the ${whose}?`
+    else title = `Move the ${whose}'s ${what} ${formatPrice(a.from, precision)} → ${formatPrice(a.price, precision)}?`
+
+    let detail = ''
+    if (a.price !== null && a.role !== 'order') {
+      const from = trade ? trade.entryPrice : (order?.price ?? null)
+      if (from !== null) {
+        const o = outcome(position.side, position.units, from, a.price, ctx)
+        detail = `If hit: ${moveText(o)} · ${formatMoney(o.amount, ctx.currencies.quote)}${o.ofBalance !== null ? ` (${formatPercent(o.ofBalance)} of balance)` : ''}`
+      }
+    } else if (a.price === null) {
+      detail = a.role === 'stop' ? 'The position will have no stop loss.' : 'The position will have no take profit.'
+    } else if (order) {
+      const fill = fillingPrice(order.side, ctx.quote)
+      if (fill !== null) detail = `${moveText({ pips: ctx.info.pipSize ? Math.abs(a.price - fill) / ctx.info.pipSize : null, percent: (Math.abs(a.price - fill) / fill) * 100 }, false)} from the market`
+    }
+    const line = linesFor(snapshot, key).find((l) => l.owner === a.owner && l.id === a.id && l.role === a.role)
+    const refusal = a.price !== null && line ? this.refusal(line, a.price) : null
+    return { title, detail, refusal, sending: this.host.sending() }
   }
 
   flash(text: string, tone: 'up' | 'down' | 'info'): void {
@@ -561,13 +657,21 @@ export class OnChartLayer {
     })
   }
 
-  private labelAction(label: LineLabel, action: 'stop' | 'target' | 'remove' | 'place'): void {
+  private labelAction(label: LineLabel, action: LabelAction): void {
     const { line } = label
     if (line.owner === 'draft') {
       if (action === 'place') this.perform({ kind: 'draftPlace' })
       else if (action === 'stop' || action === 'target') this.perform({ kind: 'draftProtect', role: action })
       else if (line.role === 'entry') this.perform({ kind: 'draftDiscard' })
       else if (line.role === 'stop' || line.role === 'target') this.perform({ kind: 'draftClear', role: line.role })
+      return
+    }
+    if (action === 'confirm') {
+      this.perform({ kind: 'amendConfirm' })
+      return
+    }
+    if (action === 'cancel') {
+      this.perform({ kind: 'amendCancel' })
       return
     }
     if (action === 'place') return
@@ -606,7 +710,13 @@ export class OnChartLayer {
         return
       }
       case 'breakeven':
-        this.run(session.modifyTrade(action.trade.id, { stopLoss: action.trade.entryPrice }))
+        this.proposeOrSay({ owner: 'trade', id: action.trade.id, role: 'stop', price: action.trade.entryPrice })
+        return
+      case 'amendConfirm':
+        this.host.confirmAmendment().catch((err) => this.showError(err))
+        return
+      case 'amendCancel':
+        this.host.cancelAmendment()
         return
       case 'cancel':
         this.run(session.cancelOrder(action.order.id))
@@ -615,11 +725,9 @@ export class OnChartLayer {
         if (!this.confirmed('flatten')) return
         this.run(session.flatten(this.key))
         return
-      case 'unprotect': {
-        const field = action.role === 'stop' ? { stopLoss: null } : { takeProfit: null }
-        this.run(action.owner === 'trade' ? session.modifyTrade(action.id, field) : session.modifyOrder(action.id, field))
+      case 'unprotect':
+        this.proposeOrSay({ owner: action.owner, id: action.id, role: action.role, price: null })
         return
-      }
       case 'riskStop':
       case 'rewardTarget': {
         if (!snapshot) return
@@ -628,9 +736,7 @@ export class OnChartLayer {
           this.showError(level)
           return
         }
-        this.host.select(action.id)
-        const field = action.kind === 'riskStop' ? { stopLoss: level } : { takeProfit: level }
-        this.run(action.owner === 'trade' ? session.modifyTrade(action.id, field) : session.modifyOrder(action.id, field))
+        this.proposeOrSay({ owner: action.owner, id: action.id, role: action.kind === 'riskStop' ? 'stop' : 'target', price: level })
         return
       }
       case 'draftProtect': {
@@ -671,12 +777,18 @@ export class OnChartLayer {
           this.showError('No price yet to place it from')
           return
         }
-        this.host.select(action.id)
-        const field = action.role === 'stop' ? { stopLoss: price } : { takeProfit: price }
-        this.run(action.owner === 'trade' ? session.modifyTrade(action.id, field) : session.modifyOrder(action.id, field))
+        this.proposeOrSay({ owner: action.owner, id: action.id, role: action.role, price })
         return
       }
     }
+  }
+
+  /** A button's change goes up for confirmation -- or, when it would change nothing, says so rather
+   * than doing nothing visibly. */
+  private proposeOrSay(change: Omit<Amendment, 'from'>): void {
+    if (this.host.propose(change)) return
+    const what = change.role === 'stop' ? 'stop loss' : change.role === 'target' ? 'take profit' : 'price'
+    this.card.flash(change.price === null ? `No ${what} to remove` : `The ${what} is already there`, 'info', FLASH_MS / 2)
   }
 
   /** The card's preset levels, or why there is none: a stop that loses `riskPercent` of the
@@ -827,7 +939,7 @@ export class OnChartLayer {
     el.addEventListener('pointerdown', (event) => {
       if (event.pointerType === 'mouse' && event.button !== 0) return
       if ((event.target as Element).closest('button')) return
-      if (this.drag) return
+      if (this.drag || this.host.sending()) return
       // Suppresses the compatibility mousedown klinecharts would otherwise start a pan from.
       event.preventDefault()
       const line = label.line
@@ -842,13 +954,12 @@ export class OnChartLayer {
         source: 'label',
         pointerId: event.pointerId,
         startY: event.clientY,
-        moved: false,
-        settling: false
+        moved: false
       }
     })
     el.addEventListener('pointermove', (event) => {
       const drag = this.drag
-      if (!drag || drag.source !== 'label' || drag.pointerId !== event.pointerId || drag.settling) return
+      if (!drag || drag.source !== 'label' || drag.pointerId !== event.pointerId) return
       if (!drag.moved) {
         if (Math.abs(event.clientY - drag.startY) < DRAG_THRESHOLD_PX) return
         drag.moved = true
@@ -864,7 +975,7 @@ export class OnChartLayer {
     })
     const end = (event: PointerEvent): void => {
       const drag = this.drag
-      if (!drag || drag.source !== 'label' || drag.pointerId !== event.pointerId || drag.settling) return
+      if (!drag || drag.source !== 'label' || drag.pointerId !== event.pointerId) return
       if (el.hasPointerCapture(event.pointerId)) el.releasePointerCapture(event.pointerId)
       if (event.type === 'pointercancel') {
         if (drag.moved) this.cancelDrag()
@@ -876,7 +987,7 @@ export class OnChartLayer {
         if (drag.line.owner !== 'draft') this.perform({ kind: 'select', id: drag.line.id })
         return
       }
-      void this.finishDrag()
+      this.finishDrag()
     }
     el.addEventListener('pointerup', end)
     el.addEventListener('pointercancel', end)
@@ -916,22 +1027,22 @@ export class OnChartLayer {
   /** klinecharts started dragging an unlocked trade line. */
   beginCanvasDrag(line: LineSpec): void {
     if (this.drag) return
-    this.drag = { line, price: line.price, source: 'canvas', pointerId: null, startY: 0, moved: true, settling: false }
+    this.drag = { line, price: line.price, source: 'canvas', pointerId: null, startY: 0, moved: true }
     this.host.hold()
     this.root.classList.add('is-dragging')
     if (line.owner !== 'draft') this.host.select(line.id)
   }
 
   canvasDragTo(price: number): void {
-    if (this.drag?.source !== 'canvas' || this.drag.settling) return
+    if (this.drag?.source !== 'canvas') return
     this.dragTo(price, false)
   }
 
   endCanvasDrag(price: number | null): void {
     const drag = this.drag
-    if (drag?.source !== 'canvas' || drag.settling) return
+    if (drag?.source !== 'canvas') return
     if (price !== null) drag.price = roundTo(price, this.host.instrumentFor(this.key).precision)
-    void this.finishDrag()
+    this.finishDrag()
   }
 
   private cancelDrag(): void {
@@ -948,7 +1059,7 @@ export class OnChartLayer {
     this.render(this.snapshot)
   }
 
-  private async finishDrag(): Promise<void> {
+  private finishDrag(): void {
     const drag = this.drag
     if (!drag) return
     if (drag.line.owner === 'draft') {
@@ -965,19 +1076,15 @@ export class OnChartLayer {
       if (refusal !== null) this.showError(refusal)
       return
     }
-    drag.settling = true
-    let restore = false
-    try {
-      await this.host.commit(drag.line, drag.price)
-    } catch (err) {
-      restore = true
-      this.showError(err)
-    } finally {
-      if (this.drag === drag) this.drag = null
-      this.root.classList.remove('is-dragging')
-      this.host.release(restore)
-      this.render(this.snapshot)
+    // Proposed, not sent: the line stays where it was dropped until the change is confirmed.
+    const { line, price } = drag
+    this.drag = null
+    this.root.classList.remove('is-dragging')
+    this.host.release(false)
+    if (line.owner !== 'draft' && (line.role === 'stop' || line.role === 'target' || line.role === 'order')) {
+      this.host.propose({ owner: line.owner, id: line.id, role: line.role, price })
     }
+    this.render(this.snapshot)
   }
 
   dispose(): void {

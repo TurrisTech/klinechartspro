@@ -4,6 +4,9 @@ import type { SimSide, SimSnapshot } from './api'
 import { formatPips, formatPrice, formatUnitsShort, symbolKey } from './format'
 import type { InstrumentInfo } from './instrument'
 import {
+  type Amendment,
+  applyAmendment,
+  currentLevel,
   DEFAULT_COLORS,
   DRAFT_ID,
   type DraftController,
@@ -43,15 +46,20 @@ import type { TradingSession } from './session'
 //
 // DRAGGING. A stop, a target and a pending order's price move up and down on the pane, either by
 // the line itself (klinecharts' own drag of an unlocked overlay) or by its label (the layer's
-// pointer drag, which moves the line through `overrideOverlay`). Both routes end in `commit`,
-// which sends one amendment. For the whole gesture -- and until that amendment has settled --
-// the pane's canvas is not rebuilt: a 2-second poll landing mid-drag would otherwise remove the
-// overlay under the pointer, and one landing before the answer would snap the line back to the
-// old price for a frame. A refused amendment restores the canvas from the snapshot. Entry lines
-// stay locked: dragging one would imply the fill can move.
+// pointer drag, which moves the line through `overrideOverlay`). For the gesture the pane's canvas
+// is not rebuilt: a 2-second poll landing mid-drag would otherwise remove the overlay under the
+// pointer. Entry lines stay locked: dragging one would imply the fill can move.
+//
+// CONFIRMATION. Nothing a drag or an on-chart button does to a working stop, target or pending
+// price is sent until the user confirms it (user, 2026-09-15). The drop -- or the button -- makes
+// an `Amendment`, held HERE so every pane shows the same one; every pane draws the snapshot as if
+// it were confirmed (`applyAmendment`), and the layer turns that line's label into Confirm / x
+// and puts the same question at the top of the card. Confirm sends it; x or Escape drops it and
+// the pane redraws from the snapshot. The amendment is kept until the answer arrives, so a
+// confirmed line does not flick back to its old price in between.
 //
 // THE DRAFT. While the account window is open, the order being written in the ticket is drawn
-// too (`ctx.draft`), finely dotted: its entry, stop and target, a bracket, labels and a row on
+// too (`ctx.draft`): its entry, stop and target, a bracket, outlined labels and a row on
 // the card. Its lines drag like the rest, but a drag lands in the ticket's fields as it moves --
 // nothing is sent until it is placed, from the ticket or from the chart.
 
@@ -70,7 +78,6 @@ function lineOverlay(line: LineSpec, span: DataSpan, colors: OverlayColors, dim 
   // While a draft is being composed, what is already working recedes, so the draft's lines are the
   // ones that read -- still there, still draggable, just quieter.
   const color = dim ? withAlpha(lineColor(line, colors), 0.4) : lineColor(line, colors)
-  const solid = line.role === 'entry' && line.owner !== 'draft'
   return {
     name: TRADE_LINE,
     paneId: CANDLE_PANE,
@@ -81,10 +88,14 @@ function lineOverlay(line: LineSpec, span: DataSpan, colors: OverlayColors, dim 
     styles: {
       line: {
         color,
+        // Entries and a pending order's price are solid; a stop and a target are LONG dashes, so
+        // the levels a position exits at read apart from where it entered (user, 2026-09-15: solid
+        // lines, then wider dashes for SL/TP -- the short dashes they replaced read as dotted).
+        // Colour does the rest: red stop, green target, the side's colour for an entry; a pending
+        // order is the heavier line, and a draft is told apart by its outlined "Draft" label.
         size: line.role === 'order' ? 1.5 : 1,
-        style: solid ? 'solid' : 'dashed',
-        // A draft is finely dotted: it is on the chart, but nothing has been sent.
-        dashedValue: line.owner === 'draft' ? [2, 3] : line.role === 'order' ? [6, 3] : [4, 3]
+        style: line.role === 'stop' || line.role === 'target' ? 'dashed' : 'solid',
+        dashedValue: [10, 6]
       },
       text: {
         color: '#ffffff',
@@ -210,6 +221,8 @@ export class TradingOverlays {
   private panes = new Map<string, PaneEntry>()
   private snapshot: SimSnapshot | null = null
   private selected: string | null = null
+  private amendment: Amendment | null = null
+  private sending = false
   private colors: OverlayColors
 
   private readonly unsubscribePrefs: () => void
@@ -220,7 +233,7 @@ export class TradingOverlays {
     // The card's rolled-up state and its preset numbers are shared: a change from any pane, the
     // ticket or another tab redraws every card.
     this.unsubscribePrefs = subscribeTradePrefs(() => {
-      for (const entry of this.panes.values()) entry.layer.render(this.snapshot)
+      for (const entry of this.panes.values()) entry.layer.render(this.view())
     })
   }
 
@@ -261,7 +274,11 @@ export class TradingOverlays {
         previewLine: (line, price) => this.preview(entry, line, price),
         hold: () => this.hold(entry),
         release: (restore) => this.release(entry, restore),
-        commit: (line, price) => this.commit(line, price),
+        amendment: () => this.amendment,
+        sending: () => this.sending,
+        propose: (amendment) => this.propose(amendment),
+        confirmAmendment: () => this.confirmAmendment(),
+        cancelAmendment: () => this.cancelAmendment(),
         draft: this.ctx.draft,
         // One state for every pane (and every tab): rolled up on one, rolled up on all. Until the
         // user chooses, a phone-sized pane starts rolled up and a larger one open.
@@ -271,7 +288,7 @@ export class TradingOverlays {
       this.panes.set(pane.id, entry)
       chart.subscribeAction('onVisibleRangeChange', entry.onRange)
       this.redraw(entry)
-      entry.layer.render(this.snapshot)
+      entry.layer.render(this.view())
     }
   }
 
@@ -280,26 +297,76 @@ export class TradingOverlays {
     this.snapshot = snapshot
     if (snapshot && previous && previous.id === snapshot.id) this.announce(previous, snapshot)
     if (this.selected && snapshot && !isWorking(snapshot, this.selected)) this.selected = null
-    for (const entry of this.panes.values()) {
-      this.redraw(entry)
-      entry.layer.render(snapshot)
-    }
+    // An amendment to something that has since filled, closed or been cancelled has nothing left to
+    // amend.
+    const a = this.amendment
+    if (a && snapshot && !this.sending && currentLevel(snapshot, a.owner, a.id, a.role) === undefined) this.amendment = null
+    this.refreshAll()
   }
 
   /** The draft changed, appeared or went: redraw every pane. */
   draftChanged(): void {
-    for (const entry of this.panes.values()) {
-      this.redraw(entry)
-      entry.layer.render(this.snapshot)
-    }
+    this.refreshAll()
   }
 
   select(id: string | null): void {
     if (this.selected === id) return
     this.selected = id
+    this.refreshAll()
+  }
+
+  // -- confirmation -------------------------------------------------------------------------
+
+  /** The snapshot as every pane draws it: with the amendment waiting for confirmation applied. */
+  private view(): SimSnapshot | null {
+    return this.snapshot ? applyAmendment(this.snapshot, this.amendment) : null
+  }
+
+  private refreshAll(force = false): void {
+    const view = this.view()
     for (const entry of this.panes.values()) {
-      this.redraw(entry)
-      entry.layer.render(this.snapshot)
+      this.redraw(entry, force)
+      entry.layer.render(view)
+    }
+  }
+
+  /** Put a change up for confirmation, replacing any other still waiting. False when there is
+   * nothing to ask about: the position is gone, or the level is already there. */
+  propose(change: Omit<Amendment, 'from'>): boolean {
+    if (!this.snapshot || this.sending) return false
+    const from = currentLevel(this.snapshot, change.owner, change.id, change.role)
+    if (from === undefined || from === change.price) return false
+    this.amendment = { ...change, from }
+    this.selected = change.id
+    this.refreshAll(true)
+    return true
+  }
+
+  cancelAmendment(): void {
+    if (!this.amendment || this.sending) return
+    this.amendment = null
+    this.refreshAll(true)
+  }
+
+  /** Send the waiting change. Throws what the server said, after putting the chart back. */
+  async confirmAmendment(): Promise<void> {
+    const a = this.amendment
+    if (!a || this.sending) return
+    this.sending = true
+    this.refreshAll()
+    try {
+      const session = this.ctx.session
+      if (a.owner === 'trade') {
+        await session.modifyTrade(a.id, a.role === 'stop' ? { stopLoss: a.price } : { takeProfit: a.price })
+      } else if (a.role === 'order') {
+        if (a.price !== null) await session.modifyOrder(a.id, { price: a.price })
+      } else {
+        await session.modifyOrder(a.id, a.role === 'stop' ? { stopLoss: a.price } : { takeProfit: a.price })
+      }
+    } finally {
+      this.sending = false
+      if (this.amendment === a) this.amendment = null
+      this.refreshAll(true)
     }
   }
 
@@ -399,8 +466,9 @@ export class TradingOverlays {
     const data = chart.getDataList()
     const span = data.length === 0 ? null : { first: data[0].timestamp, last: data[data.length - 1].timestamp }
     entry.span = span
-    const specs = this.snapshot && span && this.ctx.session.ready
-      ? overlaysFor(this.snapshot, symbolKey(pane.getSymbol()), span, this.colors, this.selected, this.ctx.draft?.draft() ?? null)
+    const view = this.view()
+    const specs = view && span && this.ctx.session.ready
+      ? overlaysFor(view, symbolKey(pane.getSymbol()), span, this.colors, this.selected, this.ctx.draft?.draft() ?? null)
       : []
     const signature = JSON.stringify(specs)
     if (!force && signature === entry.signature) return
@@ -413,12 +481,14 @@ export class TradingOverlays {
     const created: OverlayCreate = { ...spec, groupId: GROUP }
     const line = (spec.extendData as TradeLineData | undefined)?.wd
     if (spec.name === TRADE_LINE && line) {
-      const find = (): LineSpec | null =>
-        this.snapshot
-          ? (linesFor(this.snapshot, symbolKey(entry.pane.getSymbol()), this.ctx.draft?.draft() ?? null).find(
+      const find = (): LineSpec | null => {
+        const view = this.view()
+        return view
+          ? (linesFor(view, symbolKey(entry.pane.getSymbol()), this.ctx.draft?.draft() ?? null).find(
               (l) => l.role === line.role && l.id === line.id
             ) ?? null)
           : null
+      }
       const priceOf = (event: OverlayEvent<unknown>): number | null => {
         const value = event.overlay.points?.[0]?.value
         return typeof value === 'number' ? value : null
@@ -497,18 +567,6 @@ export class TradingOverlays {
       entry.stale = false
       this.redraw(entry, restore)
     }
-  }
-
-  private async commit(line: LineSpec, price: number): Promise<void> {
-    const session = this.ctx.session
-    if (line.owner === 'trade') {
-      if (line.role === 'stop') await session.modifyTrade(line.id, { stopLoss: price })
-      else if (line.role === 'target') await session.modifyTrade(line.id, { takeProfit: price })
-      return
-    }
-    if (line.role === 'order') await session.modifyOrder(line.id, { price })
-    else if (line.role === 'stop') await session.modifyOrder(line.id, { stopLoss: price })
-    else if (line.role === 'target') await session.modifyOrder(line.id, { takeProfit: price })
   }
 }
 
