@@ -149,8 +149,11 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const next = button('kc-button kc-button-outline wd-replay-next', 'Next signal', () => {
       void controller.nextSignal().then((r) => r && options.onStop?.(r))
     })
-    next.disabled = busy || controller.signals.armed.length === 0
-    next.title = controller.signals.armed.length === 0 ? 'Arm a signal first' : 'Advance to the next armed signal'
+    // An armed price watch is a stop too, so a wall with watches and no signals can still run
+    // to the next one.
+    const stops = controller.signals.armed.length + controller.armedStops
+    next.disabled = busy || stops === 0
+    next.title = stops === 0 ? 'Arm a signal or place a price watch first' : 'Advance to the next armed signal or price watch'
     row.append(label, picker, times, multiple, next)
     return row
   }
@@ -297,6 +300,10 @@ function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogue
     }
     case 'fill':
       return `Paused on ${result.events.some((e) => e.kind === 'fill') ? 'a fill' : 'a close'}`
+    case 'watch': {
+      const [first, ...rest] = result.observed
+      return `Stopped at watch ${first?.label ?? ''}${rest.length > 0 ? ` +${rest.length}` : ''}`
+    }
     case 'end':
       return 'End of data'
     default:
