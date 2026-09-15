@@ -232,10 +232,14 @@ describe('ReplayWatches', () => {
       repeat: 'always',
       cooldownMs: 0
     })
-    const result = await h.session.advanceBy({ interval: '1h', multiple: 4 })
-    expect(result?.bars.length).toBe(4)
-    // Four bars walked, four events, and the condition holds for every one of them.
-    expect(h.raised.length).toBe(4)
+    // The watch holds for every bar, so each firing ends its advance after one bar -- and the
+    // next advance starts from the bar after it: four advances see four consecutive bars, none
+    // skipped and none seen twice.
+    for (let i = 0; i < 4; i++) {
+      const result = await h.session.advanceBy({ interval: '1h', multiple: 4 })
+      expect(result?.reason).toBe('watch')
+      expect(result?.bars.length).toBe(1)
+    }
     expect(h.raised.map((row) => (row.data as { eventAt: number }).eventAt)).toEqual([
       START + 2 * H,
       START + 3 * H,
@@ -269,14 +273,31 @@ describe('ReplayWatches', () => {
     expect(rest?.observed).toEqual([])
   })
 
-  test('a Step is not cut short by a watch: it asked for N candles', async () => {
+  test('a Step stops on the base bar a watch fires on, short of its target', async () => {
+    const h = await make()
+    h.session.setAdvance({ interval: '1h', multiple: 6 })
+    // Reached on the second bar from the cursor (mid high 1.10265), four short of the target.
+    await create(h, 1.1025)
+    const result = await h.session.step()
+    expect(result?.reason).toBe('watch')
+    expect(result?.to).toBe(START + 3 * H)
+    expect(result?.bars.length).toBe(2)
+    expect(result?.observed).toEqual([{ label: 'EURUSD 1.10250' }])
+    expect(h.raised.length).toBe(1)
+
+    // Spent: the next Step goes its whole distance again.
+    const next = await h.session.step()
+    expect(next?.reason).toBe('target')
+    expect(next?.to).toBe(START + 9 * H)
+  })
+
+  test('a watch firing on a Step’s last bar is still reported as the reason it stopped', async () => {
     const h = await make()
     await create(h, 1.1025)
-    const result = await h.session.advanceBy({ interval: '1h', multiple: 4 })
-    expect(h.raised.length).toBe(1)
-    expect(result?.reason).toBe('target')
-    expect(result?.bars.length).toBe(4)
-    expect(result?.observed).toEqual([])
+    const result = await h.session.advanceBy({ interval: '1h', multiple: 2 })
+    expect(result?.to).toBe(START + 3 * H)
+    expect(result?.reason).toBe('watch')
+    expect(result?.observed).toEqual([{ label: 'EURUSD 1.10250' }])
   })
 
   test('an armed signal ahead of the watch still wins, and one on the same bar stays a signal stop', async () => {
