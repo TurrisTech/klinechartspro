@@ -75,6 +75,28 @@
 	color: inherit;
 }
 
+/*
+  Native <select> popups are drawn by the browser, not by these rules, and take their colours
+  from the element's `color-scheme`. index.html declares `light dark`, so without this the
+  popup follows the OS -- while the select's text follows the chart theme through
+  `color: inherit`. A dark chart on a light OS got white option text on a white popup.
+  Pin the scheme to the chart's own theme. `:where()` keeps the light default at zero weight
+  so `.dark` wins on the same element, and body-level chrome that carries the theme class
+  (windows, dialogs, the dock) gets the same answer.
+*/
+:where(.klinecharts-pro, .wd-window, .wd-replay-dialog, .wd-watch-dialog, .wd-dockhost) {
+	color-scheme: light;
+}
+
+.dark {
+	color-scheme: dark;
+}
+
+:where(.klinecharts-pro, .dark) option {
+	background-color: var(--popover);
+	color: var(--popover-foreground);
+}
+
 :where(.klinecharts-pro) button {
 	appearance: none;
 	border: 0;
