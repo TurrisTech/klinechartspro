@@ -1,134 +1,169 @@
 import { describe, expect, test } from 'bun:test'
 import fixture from './fixtures/rules_parity.json'
 import {
+  MIN_WINDOW_VALUES,
   bandLines,
+  countingBars,
   entrySides,
   fixedSides,
   medianLines,
   quantileSorted,
   rankLines,
-  validSamples,
-  type LabPoint,
-  type RuleLines
+  type LabPoint
 } from './rules'
 
-// The lab's rules are a port of wdashboard-server services/arev21outlier.py. The parity cases
-// are that module's own output on seeded data (fixtures/generate.py); the rest pins the
-// semantics a reader of the chart relies on, in cases small enough to check by eye.
+// Two halves. The parity cases are wdashboard-server's own output (fixtures/generate.py) for the
+// pieces the lab still shares with services/arev21outlier.py -- the quantile, the band and the
+// entry rule -- since the lab's windows are spans of days, which that module has no form of. The
+// rest pins the day window itself, in cases small enough to check by eye.
 
-interface Case {
-  kind: 'rank' | 'median' | 'prior'
-  window?: number
-  q?: number
-  width: number
-  centreIn?: (number | null)[]
-  centre: (number | null)[]
-  hi: (number | null)[]
-  lo: (number | null)[]
-  side: number[]
-}
+const HOUR = 3_600_000
+const DAY = 86_400_000
 
 const points: LabPoint[] = fixture.rows.map((r) => ({ date: r.date, p: r.p ?? Number.NaN, n: r.n, atCross: r.atCross }))
 
-function expectLines(actual: RuleLines, expected: Case, label: string): void {
-  for (const name of ['centre', 'hi', 'lo'] as const) {
-    expected[name].forEach((want, i) => {
-      const got = actual[name][i]
-      if (want === null) expect(Number.isNaN(got), `${label} ${name}[${i}]`).toBe(true)
-      else expect(Math.abs(got - want), `${label} ${name}[${i}] ${got} vs ${want}`).toBeLessThan(1e-12)
-    })
-  }
-}
+describe('parity with the server', () => {
+  test('the quantile is numpy linear, on every shape the fixture holds', () => {
+    for (const c of fixture.quantiles) {
+      expect(Math.abs(quantileSorted(c.sorted, c.q) - c.value), `q=${c.q} n=${c.sorted.length}`).toBeLessThan(1e-12)
+    }
+  })
 
-describe('parity with the server rules', () => {
-  const valid = validSamples(points, fixture.minNeighbours)
+  test('the band and the entry rule match `derive` + `sides`', () => {
+    // `sides()` counts a bar only at a sample, which is `samplesOnly`.
+    const counts = countingBars(points, fixture.minNeighbours, true)
+    for (const c of fixture.entryCases) {
+      const centre = Float64Array.from(c.centreIn.map((v) => v ?? Number.NaN))
+      const lines = bandLines(centre, c.width)
+      c.hi.forEach((want, i) => {
+        if (want === null) expect(Number.isNaN(lines.hi[i])).toBe(true)
+        else expect(Math.abs(lines.hi[i] - want)).toBeLessThan(1e-12)
+      })
+      c.lo.forEach((want, i) => {
+        if (want === null) expect(Number.isNaN(lines.lo[i])).toBe(true)
+        else expect(Math.abs(lines.lo[i] - want)).toBeLessThan(1e-12)
+      })
+      expect(Array.from(entrySides(points, counts, lines))).toEqual(c.side)
+    }
+  })
 
-  for (const c of fixture.cases as Case[]) {
-    const label = `${c.kind} window=${c.window} q=${c.q} width=${c.width}`
-    test(label, () => {
-      let lines: RuleLines
-      if (c.kind === 'rank') lines = rankLines(points, valid, c.window as number, c.q as number)
-      else if (c.kind === 'median') lines = medianLines(points, valid, c.window as number, c.width)
-      else lines = bandLines(Float64Array.from((c.centreIn ?? []).map((v) => v ?? Number.NaN)), c.width)
-      expectLines(lines, c, label)
-      expect(Array.from(entrySides(points, valid, lines))).toEqual(c.side)
-    })
-  }
-
-  test('the fixture exercises both sides of every rule', () => {
-    for (const c of fixture.cases as Case[]) {
+  test('the fixture exercises both sides', () => {
+    for (const c of fixture.entryCases) {
       expect(c.side.filter((s) => s === 1).length).toBeGreaterThan(0)
       expect(c.side.filter((s) => s === -1).length).toBeGreaterThan(0)
     }
   })
 })
 
-const pt = (p: number, atCross = true, n = 100): LabPoint => ({ date: 0, p, n, atCross })
-const series = (ps: number[]): LabPoint[] => ps.map((p, i) => ({ ...pt(p), date: i }))
+/** `count` hourly bars of p, ascending from date 0. */
+const hourly = (ps: number[], atCross = true): LabPoint[] => ps.map((p, i) => ({ date: i * HOUR, p, n: 100, atCross }))
+const flat = (count: number, p = 0.5): number[] => Array.from({ length: count }, () => p)
 
-describe('quantileSorted', () => {
-  test('is numpy linear interpolation', () => {
-    expect(quantileSorted([1, 2, 3, 4], 0.25)).toBeCloseTo(1.75, 12)
-    expect(quantileSorted([1, 2, 3, 4], 0.5)).toBeCloseTo(2.5, 12)
-    expect(quantileSorted([1, 2, 3, 4], 0.85)).toBeCloseTo(3.55, 12)
-    expect(quantileSorted([7], 0.9)).toBe(7)
+describe('countingBars', () => {
+  const pts: LabPoint[] = [
+    { date: 0, p: 0.6, n: 100, atCross: true },
+    { date: 1, p: 0.6, n: 100, atCross: false },
+    { date: 2, p: 0.6, n: 49, atCross: true },
+    { date: 3, p: Number.NaN, n: 100, atCross: true }
+  ]
+
+  test('by default every bar with a usable p counts, sample or not', () => {
+    expect(countingBars(pts, 50, false)).toEqual([true, true, false, false])
+  })
+
+  test('samplesOnly narrows it to the bars the model predicts on', () => {
+    expect(countingBars(pts, 50, true)).toEqual([true, false, false, false])
   })
 })
 
-describe('validSamples', () => {
-  test('a sample bar with enough neighbours and a finite p', () => {
-    expect(validSamples([pt(0.6), pt(0.6, false), pt(0.6, true, 49), pt(Number.NaN)], 50)).toEqual([true, false, false, false])
-  })
-})
-
-describe('the rolling rules', () => {
-  test('a bar is judged against the samples BEFORE it, and is blank until a full window', () => {
-    const pts = series([0.5, 0.52, 0.48, 0.9])
-    const lines = medianLines(pts, validSamples(pts, 0), 3, 0.01)
-    expect(Number.isNaN(lines.centre[2])).toBe(true)
-    // bar 3's window is bars 0..2 -- its own 0.9 is not in it, or no outlier could ever be.
-    expect(lines.centre[3]).toBeCloseTo(0.5, 12)
-    expect(entrySides(pts, validSamples(pts, 0), lines)[3]).toBe(1)
+describe('the day window', () => {
+  test('a bar is judged against the window BEFORE it, never against itself', () => {
+    const pts = hourly([...flat(30, 0.5), 0.9])
+    const lines = medianLines(pts, countingBars(pts, 0, false), 2 * DAY, 0.01)
+    expect(lines.centre[30]).toBeCloseTo(0.5, 12)
+    expect(entrySides(pts, countingBars(pts, 0, false), lines)[30]).toBe(1)
   })
 
-  test('non-samples neither enter the window nor move it', () => {
-    const pts = series([0.4, 0.5, 0.6, 0.99, 0.55])
-    pts[3].atCross = false
-    const lines = rankLines(pts, validSamples(pts, 0), 3, 0.5)
-    expect(lines.centre[4]).toBeCloseTo(0.5, 12)
-    expect(lines.centre[3]).toBeCloseTo(0.5, 12)
+  test('nothing is drawn until the window holds enough values', () => {
+    const pts = hourly(flat(MIN_WINDOW_VALUES + 1, 0.5))
+    const lines = medianLines(pts, countingBars(pts, 0, false), 2 * DAY, 0.01)
+    expect(Number.isNaN(lines.centre[MIN_WINDOW_VALUES - 1])).toBe(true)
+    expect(lines.centre[MIN_WINDOW_VALUES]).toBeCloseTo(0.5, 12)
+  })
+
+  test('values older than the span roll off', () => {
+    // 30 bars at 0.30, then 30 at 0.70, one an hour. At bar 60 a 24h window holds only the
+    // second block (bars 36..59), so its median is 0.70 and not the 0.50 of both blocks.
+    const pts = hourly([...flat(30, 0.3), ...flat(31, 0.7)])
+    const counts = countingBars(pts, 0, false)
+    expect(medianLines(pts, counts, DAY, 0).centre[60]).toBeCloseTo(0.7, 12)
+    expect(medianLines(pts, counts, 30 * DAY, 0).centre[60]).toBeCloseTo(0.5, 12)
+  })
+
+  test('the window is a span, not a count: a gap empties it', () => {
+    const pts = hourly(flat(40, 0.5))
+    pts[39].date = 40 * DAY // a market gap far longer than the window
+    const lines = medianLines(pts, countingBars(pts, 0, false), DAY, 0.01)
+    expect(Number.isNaN(lines.centre[39])).toBe(true)
+  })
+
+  test('q = 1 is the window high and q = 0 its low -- the rolling extreme', () => {
+    // A quiet base cycling 0.48..0.51, one old spike of 0.70, and then 0.60.
+    const base = Array.from({ length: 30 }, (_, i) => [0.48, 0.49, 0.5, 0.51][i % 4])
+    base[10] = 0.7
+    const pts = hourly([...base, 0.6])
+    const counts = countingBars(pts, 0, false)
+    const extreme = rankLines(pts, counts, 30 * DAY, 1)
+    expect(extreme.hi[30]).toBeCloseTo(0.7, 12)
+    expect(extreme.lo[30]).toBeCloseTo(0.48, 12)
+    // At the extreme, 0.60 is short of the window's own high and prints nothing; a shade below
+    // the extreme, the same bar is past the line and prints an arrow. That is the whole
+    // difference between a high and a quantile, in one bar.
+    expect(entrySides(pts, counts, extreme)[30]).toBe(0)
+    expect(entrySides(pts, counts, rankLines(pts, counts, 30 * DAY, 0.98))[30]).toBe(1)
+  })
+
+  test('non-counting bars are neither compared nor part of the window', () => {
+    const pts = hourly([...flat(25, 0.5), 0.99, 0.5])
+    pts[25].atCross = false
+    const counts = countingBars(pts, 0, true)
+    const lines = medianLines(pts, counts, 30 * DAY, 0.01)
+    expect(entrySides(pts, counts, lines)[25]).toBe(0)
+    expect(lines.centre[26]).toBeCloseTo(0.5, 12)
   })
 })
 
 describe('entrySides', () => {
-  test('an arrow on entering a zone, not on every sample inside it', () => {
-    const pts = series([0.6, 0.61, 0.62, 0.5, 0.63, 0.3, 0.31])
+  test('an arrow on entering a zone, not on every bar inside it', () => {
+    const pts = hourly([0.6, 0.61, 0.62, 0.5, 0.63, 0.3, 0.31])
     const size = pts.length
     const lines = { centre: new Float64Array(size).fill(0.5), hi: new Float64Array(size).fill(0.55), lo: new Float64Array(size).fill(0.45) }
-    expect(Array.from(entrySides(pts, validSamples(pts, 0), lines))).toEqual([1, 0, 0, 0, 1, -1, 0])
+    expect(Array.from(entrySides(pts, countingBars(pts, 0, false), lines))).toEqual([1, 0, 0, 0, 1, -1, 0])
   })
 
-  test('an invalid sample in between does not end the run', () => {
-    const pts = series([0.6, 0.5, 0.61])
+  test('a bar that does not count does not end the run', () => {
+    const pts = hourly([0.6, 0.5, 0.61])
     pts[1].atCross = false
+    const counts = countingBars(pts, 0, true)
     const lines = { centre: new Float64Array(3).fill(0.5), hi: new Float64Array(3).fill(0.55), lo: new Float64Array(3).fill(0.45) }
-    expect(Array.from(entrySides(pts, validSamples(pts, 0), lines))).toEqual([1, 0, 0])
+    expect(Array.from(entrySides(pts, counts, lines))).toEqual([1, 0, 0])
   })
 })
 
 describe('fixedSides', () => {
-  test('is a level: every confident valid sample, not only the first', () => {
-    const pts = series([0.576, 0.58, 0.5, 0.424, 0.43])
-    expect(Array.from(fixedSides(pts, validSamples(pts, 0), 0.075))).toEqual([1, 1, 0, -1, 0])
+  test('is a level: every confident counting bar, not only the first', () => {
+    const pts = hourly([0.576, 0.58, 0.5, 0.424, 0.43])
+    expect(Array.from(fixedSides(pts, countingBars(pts, 0, false), 0.075))).toEqual([1, 1, 0, -1, 0])
   })
 
-  test("compares in floating point exactly as the server's published `signal` does", () => {
-    // services/arev.py: `abs(p - 0.5) >= SIGNAL_CONFIDENCE`, and 0.575 - 0.5 is a hair under
-    // 0.075 in binary -- so neither side draws an arrow there, and the lab at its defaults
-    // draws the AREV pane's arrows rather than one more.
-    const pts = series([0.575, 0.425])
-    expect(Array.from(fixedSides(pts, validSamples(pts, 0), 0.075))).toEqual(
-      pts.map((x) => (Math.abs(x.p - 0.5) >= 0.075 ? (x.p > 0.5 ? 1 : -1) : 0))
+  test("with samplesOnly on it is the server's published `signal`, float comparison included", () => {
+    // services/arev.py: `abs(p - 0.5) >= SIGNAL_CONFIDENCE` on a sample bar with a full
+    // neighbourhood. 0.575 - 0.5 is a hair under 0.075 in binary, so neither side fires there.
+    const counts = countingBars(points, fixture.minNeighbours, true)
+    const expected = points.map((pt, i) =>
+      counts[i] && Math.abs(pt.p - 0.5) >= 0.075 ? (pt.p > 0.5 ? 1 : -1) : 0
     )
+    expect(Array.from(fixedSides(points, counts, 0.075))).toEqual(expected)
+    expect(expected.filter((s) => s !== 0).length).toBeGreaterThan(0)
   })
 })

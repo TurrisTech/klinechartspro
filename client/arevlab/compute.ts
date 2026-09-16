@@ -3,12 +3,12 @@ import { enabledGenerations, type LabConfig, type LabGeneration } from './config
 import { buildLabels, priorCentre, type LabBar } from './labels'
 import {
   bandLines,
+  countingBars,
   entrySides,
   fixedLines,
   fixedSides,
   medianLines,
   rankLines,
-  validSamples,
   type LabPoint,
   type RuleLines
 } from './rules'
@@ -16,6 +16,19 @@ import {
 // Everything the AREV lab draws, as one pure pass from its inputs -- the generations' points
 // and, for the prior, the bars -- to a value per chart bar. Kept out of templates.ts so the
 // tests exercise exactly what the pane draws without a chart.
+
+/** A rule's window in milliseconds, or 0 for a rule that has none. */
+export function spanMs(settings: LabGeneration): number {
+  const days =
+    settings.signals === 'rank'
+      ? settings.rank.days
+      : settings.signals === 'median'
+        ? settings.median.days
+        : settings.signals === 'prior'
+          ? settings.prior.days
+          : 0
+  return days * 86_400_000
+}
 
 /** One arrow: which generation placed it and which way it points. */
 export interface LabMark {
@@ -53,7 +66,8 @@ export function computeGeneration(
   points: readonly LabPoint[],
   bars: readonly LabBar[]
 ): GenerationResult {
-  const valid = validSamples(points, settings.minNeighbours)
+  const counts = countingBars(points, settings.minNeighbours, settings.samplesOnly)
+  const span = spanMs(settings)
   switch (settings.signals) {
     case 'none':
       return { points: [...points], lines: null, sides: new Int8Array(points.length) }
@@ -61,25 +75,27 @@ export function computeGeneration(
       return {
         points: [...points],
         lines: fixedLines(points.length, settings.fixed.confidence),
-        sides: fixedSides(points, valid, settings.fixed.confidence)
+        sides: fixedSides(points, counts, settings.fixed.confidence)
       }
     case 'rank': {
-      const lines = rankLines(points, valid, settings.rank.window, settings.rank.q)
-      return { points: [...points], lines, sides: entrySides(points, valid, lines) }
+      const lines = rankLines(points, counts, span, settings.rank.q)
+      return { points: [...points], lines, sides: entrySides(points, counts, lines) }
     }
     case 'median': {
-      const lines = medianLines(points, valid, settings.median.window, settings.median.width)
-      return { points: [...points], lines, sides: entrySides(points, valid, lines) }
+      const lines = medianLines(points, counts, span, settings.median.width)
+      return { points: [...points], lines, sides: entrySides(points, counts, lines) }
     }
     case 'prior': {
+      // Labels are the TRAINING side and always come from sample bars, whatever is being
+      // compared: a label is what the model was asked to predict at a sample.
       const labels = buildLabels(generation, points, bars)
       const centre = priorCentre(
         points.map((pt) => pt.date),
         labels,
-        settings.prior.labels
+        span
       )
       const lines = bandLines(centre, settings.prior.width)
-      return { points: [...points], lines, sides: entrySides(points, valid, lines) }
+      return { points: [...points], lines, sides: entrySides(points, counts, lines) }
     }
   }
 }

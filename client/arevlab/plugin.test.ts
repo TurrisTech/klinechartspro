@@ -35,12 +35,13 @@ afterAll(() => {
 
 const { LAB_DEFAULTS, normaliseLabConfig } = await import('./config')
 const { figureKeys, labValues } = await import('./compute')
-const { barsSourceKey, createArevLabPlugin, leadInBars, widen } = await import('./plugin')
+const { barsSourceKey, createArevLabPlugin, leadInMs, widen, windowTruncatedDays } = await import('./plugin')
 const { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, labFigures } = await import('./templates')
 const { storedSource } = await import('../tsregistry/plugin')
 const { loadRegistry } = await import('../tsregistry/api')
 
 const HOUR = 3_600_000
+const DAY = 86_400_000
 
 function facilities(): PluginFacilities {
   return {
@@ -119,18 +120,19 @@ describe('bind', () => {
     expect(plugin.bind(ctx())?.sources.map((s) => s.id)).toEqual(['arev21'])
   })
 
-  test('the fixed rule reads the chart range; an adaptive one widens it by its lead-in', async () => {
-    const range = { from: 1_000 * HOUR, to: 2_000 * HOUR }
+  test('the fixed rule reads the chart range; an adaptive one reaches back exactly its window', async () => {
+    const range = { from: 10_000 * HOUR, to: 20_000 * HOUR }
     const fixed = (await mounted()).plugin.bind(ctx())?.sources[0] as SourceSpec
     expect(fixed.window).toBeUndefined()
     const rank = configWith((c) => {
       c.generations.arev21.signals = 'rank'
-      c.generations.arev21.rank.window = 50
+      c.generations.arev21.rank.days = 90
     })
     const widened = (await mounted({ 0: rank })).plugin.bind(ctx())?.sources[0] as SourceSpec
-    const bars = leadInBars('arev21', rank.generations.arev21)
-    expect(bars).toBe((50 + 2) * 4 * 2)
-    expect(widened.window?.(range)).toEqual({ from: range.from - bars * HOUR, to: range.to })
+    const lead = leadInMs('arev21', rank.generations.arev21, HOUR)
+    // The window, and one bar so the first drawn bar has a predecessor. No estimate anywhere.
+    expect(lead).toBe(90 * DAY + HOUR)
+    expect(widened.window?.(range)).toEqual({ from: range.from - lead, to: range.to })
   })
 
   test('a bar source exists only while some generation uses the prior', async () => {
@@ -171,28 +173,40 @@ describe('bind', () => {
 
   test('a hydrated config is normalised before any binding reads it', async () => {
     const bad = configWith((c) => {
-      c.generations.arev21.rank.window = -3
+      c.generations.arev21.rank.days = -3
     })
     const { plugin } = await mounted({ 0: bad })
     const snapshot = plugin.paneState?.snapshot() as Record<number, LabConfig>
-    expect(snapshot[0].generations.arev21.rank.window).toBe(5)
+    expect(snapshot[0].generations.arev21.rank.days).toBe(1)
     expect(snapshot[0]).toEqual(normaliseLabConfig(bad))
   })
 })
 
-describe('leadInBars and widen', () => {
-  test('no lead-in for rules that look back at nothing', () => {
-    expect(leadInBars('arev19', { ...LAB_DEFAULTS.generations.arev19, signals: 'fixed' })).toBe(0)
-    expect(leadInBars('arev19', { ...LAB_DEFAULTS.generations.arev19, signals: 'none' })).toBe(0)
+describe('leadInMs, the cap and widen', () => {
+  test('no history for rules that look back at nothing', () => {
+    expect(leadInMs('arev19', { ...LAB_DEFAULTS.generations.arev19, signals: 'fixed' }, HOUR)).toBe(0)
+    expect(leadInMs('arev19', { ...LAB_DEFAULTS.generations.arev19, signals: 'none' }, HOUR)).toBe(0)
   })
 
-  test('capped, so a huge window cannot ask for a year of minute bars', () => {
-    const g = { ...LAB_DEFAULTS.generations.arev19, signals: 'rank' as const, rank: { window: 5000, q: 0.9 } }
-    expect(leadInBars('arev19', g)).toBe(40_000)
+  test("arev22's prior also waits for the bar its label is stamped at", () => {
+    const g = { ...LAB_DEFAULTS.generations.arev22, signals: 'prior' as const, prior: { days: 30, width: 0.02 } }
+    expect(leadInMs('arev22', g, HOUR)).toBe(30 * DAY + 10 * HOUR + HOUR)
+    expect(leadInMs('arev21', g, HOUR)).toBe(30 * DAY + HOUR)
+  })
+
+  test('a window longer than a pane can hold is capped, and says so', () => {
+    const g = { ...LAB_DEFAULTS.generations.arev19, signals: 'rank' as const, rank: { days: 3650, q: 0.9 } }
+    const minute = 60_000
+    expect(leadInMs('arev19', g, minute)).toBe(40_000 * minute)
+    // 40,000 minutes is ~27 days of the 3,650 asked for, and the legend carries that number.
+    expect(windowTruncatedDays(g, minute)).toBe(27)
+    // On a daily chart the same window fits, so nothing is said.
+    expect(windowTruncatedDays(g, DAY)).toBeNull()
+    expect(windowTruncatedDays({ ...LAB_DEFAULTS.generations.arev19, signals: 'none' }, minute)).toBeNull()
   })
 
   test('never below zero', () => {
-    expect(widen({ from: 10, to: 20 }, 100, HOUR)).toEqual({ from: 0, to: 20 })
+    expect(widen({ from: 10, to: 20 }, 100 * DAY)).toEqual({ from: 0, to: 20 })
   })
 })
 

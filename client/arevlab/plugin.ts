@@ -5,6 +5,7 @@ import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFac
 import { loadRegistry, type RegistryIndicator } from '../tsregistry/api'
 import { storedSource } from '../tsregistry/plugin'
 import { LAB_DEFAULTS, LAB_FIELDS, enabledGenerations, normaliseLabConfig, type LabConfig, type LabGeneration } from './config'
+import { spanMs } from './compute'
 import { AREV22_HORIZON, type LabBar } from './labels'
 import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, registerLabIndicator } from './templates'
 
@@ -27,15 +28,10 @@ import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, register
 // plugin is their only writer, an edit bumps the pane's revision, the revision is part of the
 // binding signature, and the rebind sets the figures the new config draws.
 
-/** Roughly how many bars separate two samples, per generation -- to turn "the previous N
- * samples" into a time span. Measured on EURUSD: arev21's fresh extremes and arev22's stride
- * land about every 4 bars, the WMA crosses of arev19/20/23 about every 12. */
-const BARS_PER_SAMPLE: Record<ArevGeneration, number> = { arev19: 12, arev20: 12, arev21: 4, arev22: 4, arev23: 12 }
-/** Headroom on that span: a nominal bar duration overcounts trading time (the FX weekend is a
- * third of the week), and the spacing is an average. */
-const LEAD_SLACK = 2
-/** The widest lead-in fetched, in bars. A 5000-sample window on arev19 would otherwise ask for
- * 120,000 minute bars; past this the rule simply starts later on the chart. */
+/** The most history a lab pane loads per generation, in bars -- 8 pages at the server's cap, and
+ * what a browser can hold per pane. A window longer than this in wall-clock terms is honoured as
+ * far as the cap and the legend says what span was actually used, rather than being silently
+ * computed over less. Ten years of daily bars fit; ten years of 1m does not. */
 const LEAD_MAX_BARS = 40_000
 
 /** `/getbars` is bounded by range and 413s past the server's cap; fetch in nominal chunks
@@ -44,32 +40,35 @@ const BAR_CHUNK = 4000
 
 const LEGEND_ROW_HEIGHT = 24
 
-/** Bars of history a generation's rule needs before the first bar it is drawn on. */
-export function leadInBars(generation: ArevGeneration, settings: LabGeneration): number {
-  const samples =
-    settings.signals === 'rank'
-      ? settings.rank.window
-      : settings.signals === 'median'
-        ? settings.median.window
-        : settings.signals === 'prior'
-          ? settings.prior.labels
-          : 0
-  if (samples === 0) return 0
-  const horizon = settings.signals === 'prior' && generation === 'arev22' ? AREV22_HORIZON : 0
-  return Math.min(LEAD_MAX_BARS, Math.ceil((samples + 2) * BARS_PER_SAMPLE[generation] * LEAD_SLACK) + horizon)
+/** The history one generation's rule needs before the first bar it is drawn on: its window,
+ * exactly -- plus, for arev22's prior, the ten bars its label waits for. Capped at what a pane
+ * may hold, so the answer is in milliseconds and the caller can see it was shortened. */
+export function leadInMs(generation: ArevGeneration, settings: LabGeneration, barMs: number): number {
+  const span = spanMs(settings)
+  if (span === 0) return 0
+  const horizon = settings.signals === 'prior' && generation === 'arev22' ? AREV22_HORIZON * barMs : 0
+  return Math.min(LEAD_MAX_BARS * barMs, span + horizon + barMs)
 }
 
-/** A chart range widened backwards by `bars` bars of `durationMs`. Wire dates do not go below
- * zero on any series here, and a negative `from` is a request the server refuses. */
-export function widen(range: Range, bars: number, durationMs: number): Range {
-  return { from: Math.max(0, range.from - bars * durationMs), to: range.to }
+/** A chart range widened backwards by `leadMs`. Wire dates do not go below zero on any series
+ * here, and a negative `from` is a request the server refuses. */
+export function widen(range: Range, leadMs: number): Range {
+  return { from: Math.max(0, range.from - leadMs), to: range.to }
+}
+
+/** Whether the cap shortened a generation's window, for the legend. */
+export function windowTruncatedDays(settings: LabGeneration, barMs: number): number | null {
+  const span = spanMs(settings)
+  if (span === 0) return null
+  const capped = LEAD_MAX_BARS * barMs
+  return span > capped ? Math.floor(capped / 86_400_000) : null
 }
 
 export function barsSourceKey(vendor: string, ticker: string, interval: string): string {
   return `arevlab-bars|${vendor}:${ticker}|${interval}`
 }
 
-function barsSource(f: PluginFacilities, ctx: BindContext, leadBars: number): SourceSpec<LabBar> {
+function barsSource(f: PluginFacilities, ctx: BindContext, leadMs: number): SourceSpec<LabBar> {
   const duration = f.resolutionDurationMs(ctx.interval)
   const chunk = BAR_CHUNK * duration
   const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
@@ -77,7 +76,7 @@ function barsSource(f: PluginFacilities, ctx: BindContext, leadBars: number): So
     id: BARS_SOURCE_ID,
     key: barsSourceKey(ctx.vendor, ctx.ticker, ctx.interval),
     resolution: ctx.interval,
-    window: (range) => widen(range, leadBars, duration),
+    window: (range) => widen(range, leadMs),
     fetch: async (range) => {
       const to = Math.min(range.to, range.from + chunk)
       const bars = await fetchBars(vendorSymbol, ctx.interval, range.from, to, null)
@@ -101,13 +100,19 @@ export function createArevLabPlugin(): IndicatorPlugin {
   /** The generations switched on that this server actually serves. */
   const readable = (config: LabConfig): ArevGeneration[] => enabledGenerations(config).filter((g) => entries.has(g))
 
-  const label = (config: LabConfig, state: BindingState): string => {
+  const label = (config: LabConfig, state: BindingState, barMs: number): string => {
     const shown = readable(config)
     if (shown.length === 0) return 'AREV lab · none on'
     const names = shown.join(' ')
     const stores = shown.map((g) => state.sources.find((s) => s.id === g)?.store)
     if (stores.some((s) => s?.phase === 'error')) return `AREV lab ${names} · error`
     if (stores.some((s) => !s || s.phase === 'idle' || s.phase === 'loading')) return `AREV lab ${names} · loading`
+    // A window this timeframe cannot hold is drawn over what it can, and says so -- a shortened
+    // window is a different statistic, and silently computing one is how a reader is misled.
+    const cut = shown
+      .map((g) => [g, windowTruncatedDays(config.generations[g], barMs)] as const)
+      .filter(([, days]) => days !== null)
+    if (cut.length > 0) return `AREV lab ${names} · window ${cut.map(([g, d]) => `${g} ${d}d`).join(' ')}`
     return `AREV lab ${names}`
   }
 
@@ -175,20 +180,18 @@ export function createArevLabPlugin(): IndicatorPlugin {
       const shown = readable(config)
       const sources: SourceSpec[] = shown.map((generation) => {
         const entry = entries.get(generation) as RegistryIndicator
-        const lead = leadInBars(generation, config.generations[generation])
+        const lead = leadInMs(generation, config.generations[generation], duration)
         const base = storedSource(f, entry, ctx)
-        return lead > 0 ? { ...base, window: (range: Range) => widen(range, lead, duration) } : base
+        return lead > 0 ? { ...base, window: (range: Range) => widen(range, lead) } : base
       }) as SourceSpec[]
-      const priorLead = Math.max(
-        0,
-        ...shown.filter((g) => config.generations[g].signals === 'prior').map((g) => leadInBars(g, config.generations[g]))
-      )
-      if (shown.some((g) => config.generations[g].signals === 'prior')) {
-        sources.push(barsSource(f, ctx, priorLead) as unknown as SourceSpec)
+      const priors = shown.filter((g) => config.generations[g].signals === 'prior')
+      if (priors.length > 0) {
+        const lead = Math.max(...priors.map((g) => leadInMs(g, config.generations[g], duration)))
+        sources.push(barsSource(f, ctx, lead) as unknown as SourceSpec)
       }
       return {
         sources,
-        label: (state) => label(config, state),
+        label: (state) => label(config, state, duration),
         extendData: () => ({ config }),
         overrides: { figures: labFigures(config) }
       }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { AREV22_HORIZON, buildLabels, priorCentre, type LabBar } from './labels'
+import { AREV22_HORIZON, MIN_PRIOR_LABELS, buildLabels, priorCentre, type LabBar } from './labels'
 import type { LabPoint } from './rules'
 
 const bar = (date: number, close: number, open = close): LabBar => ({ date, open, close })
@@ -39,26 +39,34 @@ describe('buildLabels, arev22', () => {
 })
 
 describe('priorCentre', () => {
-  const labels = { stamps: [10, 20, 30, 40], ups: Uint8Array.from([1, 1, 0, 0]) }
-
-  test('counts only labels stamped strictly before the bar', () => {
-    const centre = priorCentre([10, 11, 30, 41], labels, 2)
-    expect(Number.isNaN(centre[0])).toBe(true) // none before 10
-    expect(Number.isNaN(centre[1])).toBe(true) // one label, fewer than a window of 2
-    expect(centre[2]).toBe(1) // labels at 10, 20
-    expect(centre[3]).toBe(0) // the last two: 30, 40
+  const DAY = 86_400_000
+  /** `count` labels a day apart from day 1, the first `ups` of them up. */
+  const daily = (count: number, ups: number) => ({
+    stamps: Array.from({ length: count }, (_, i) => (i + 1) * DAY),
+    ups: Uint8Array.from(Array.from({ length: count }, (_, i) => (i < ups ? 1 : 0)))
   })
 
-  test('the window is the last `count` labels', () => {
-    expect(priorCentre([41], labels, 4)[0]).toBe(0.5)
-    expect(priorCentre([41], labels, 3)[0]).toBeCloseTo(1 / 3, 12)
+  test('counts the labels stamped in [date - span, date)', () => {
+    const labels = daily(40, 20) // days 1..20 up, 21..40 down
+    const centre = priorCentre([21 * DAY, 41 * DAY], labels, 20 * DAY)
+    // At day 21 the window holds days 1..20, every one of them up.
+    expect(centre[0]).toBe(1)
+    // At day 41 it holds days 21..40, none of them up.
+    expect(centre[1]).toBe(0)
   })
 
-  test('a large count draws from MIN_PRIOR_LABELS on rather than waiting for the whole window', () => {
-    const many = { stamps: Array.from({ length: 60 }, (_, i) => i), ups: new Uint8Array(60).fill(1) }
-    const centre = priorCentre([49, 50, 1000], many, 1000)
-    expect(Number.isNaN(centre[0])).toBe(true)
-    expect(centre[1]).toBe(1)
-    expect(centre[2]).toBe(1)
+  test('a label on the window edge is in, and its own bar is out', () => {
+    const labels = daily(30, 30)
+    // The label stamped exactly at date - span counts; one stamped at the date itself does not.
+    expect(priorCentre([31 * DAY], { stamps: labels.stamps, ups: labels.ups }, 30 * DAY)[0]).toBe(1)
+    expect(Number.isNaN(priorCentre([1 * DAY], labels, 30 * DAY)[0])).toBe(true)
+  })
+
+  test('too few labels in the window draws nothing', () => {
+    const labels = daily(MIN_PRIOR_LABELS + 5, MIN_PRIOR_LABELS + 5)
+    const short = priorCentre([(MIN_PRIOR_LABELS + 6) * DAY], labels, 3 * DAY)
+    expect(Number.isNaN(short[0])).toBe(true)
+    const long = priorCentre([(MIN_PRIOR_LABELS + 6) * DAY], labels, 365 * DAY)
+    expect(long[0]).toBe(1)
   })
 })

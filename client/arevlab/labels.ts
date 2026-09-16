@@ -66,22 +66,29 @@ export function buildLabels(generation: ArevGeneration, points: readonly LabPoin
   return { stamps: pairs.map((p) => p[0]), ups: Uint8Array.from(pairs.map((p) => p[1])) }
 }
 
-/** Fewer labels than this before a bar and its prior is not a rate worth drawing. */
-export const MIN_PRIOR_LABELS = 50
+/** A prior drawn from fewer labels than this is not a rate worth drawing. */
+export const MIN_PRIOR_LABELS = 20
 
-/** Per point, the up-rate of the last `count` labels stamped strictly before its date; NaN
- * where fewer than min(count, MIN_PRIOR_LABELS) exist. `dates` ascending. */
-export function priorCentre(dates: readonly number[], labels: Labels, count: number): Float64Array {
+/** Per point, the up-rate of the labels stamped in `[date - spanMs, date)`; NaN where that
+ * window holds fewer than MIN_PRIOR_LABELS. `dates` ascending.
+ *
+ * The same window the server's `prior_centre` uses (services/arev21outlier.py), and for the same
+ * reason: the prior is what the model's own training window says the base rate is, which is a
+ * span of time, not a count of rows. The span is shorter here -- a browser cannot read the
+ * model's five years of minute labels -- and that is the only difference. */
+export function priorCentre(dates: readonly number[], labels: Labels, spanMs: number): Float64Array {
   const cum = new Float64Array(labels.ups.length + 1)
   for (let i = 0; i < labels.ups.length; i++) cum[i + 1] = cum[i] + labels.ups[i]
   const out = new Float64Array(dates.length).fill(Number.NaN)
-  const floor = Math.min(count, MIN_PRIOR_LABELS)
-  let k = 0 // labels stamped strictly before dates[i]; dates ascend, so it only moves forward
+  // Both bounds only move forward, because the dates ascend.
+  let head = 0 // labels stamped strictly before dates[i]
+  let tail = 0 // labels stamped before dates[i] - spanMs
   dates.forEach((date, i) => {
-    while (k < labels.stamps.length && labels.stamps[k] < date) k++
-    const taken = Math.min(count, k)
-    if (taken < floor || taken === 0) return
-    out[i] = (cum[k] - cum[k - taken]) / taken
+    while (head < labels.stamps.length && labels.stamps[head] < date) head++
+    while (tail < head && labels.stamps[tail] < date - spanMs) tail++
+    const taken = head - tail
+    if (taken < MIN_PRIOR_LABELS) return
+    out[i] = (cum[head] - cum[tail]) / taken
   })
   return out
 }
