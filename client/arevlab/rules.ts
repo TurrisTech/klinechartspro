@@ -1,19 +1,25 @@
 // The AREV lab's signal rules, as pure functions over one generation's points in date order.
 //
-// Semantics are the server's (wdashboard-server services/arev21outlier.py), ported rather than
-// re-imagined, and `rules.test.ts` holds a fixture generated from that module so the two cannot
-// drift:
+// The adaptive rules answer one question: is `p` unusual COMPARED WITH WHAT IT HAS BEEN LATELY?
+// "Lately" is a span of days -- the last 90 days of p, not the last 50 of anything -- which is
+// the same shape of window the model itself is trained on, and it is what makes the lines
+// computable in a browser: the history to load is the window, exactly, rather than an estimate
+// of how many bars hold N of something.
 //
-//   * A VALID sample is a sample bar (`atCross`) with `n >= minNeighbours` and a finite p.
-//   * A bar's lines come from information strictly BEFORE it -- the previous `window` valid
-//     samples, or the labels stamped before it -- so a line is known at the bar's close.
-//   * An adaptive arrow is an ENTRY: a valid sample in the long zone (`p >= hi`, and not also
-//     `p <= lo`) whose previous valid sample was not; the short side mirrors it. Fresh extremes
-//     come in runs, so a level trigger would print an arrow on every bar of a trend.
-//   * The fixed rule is the published one, a LEVEL: every valid sample with `|p - 0.5| >=
-//     confidence`, long when p > 0.5 and short otherwise (services/arev.py `signal_of`).
+//   * A bar counts when its `p` is finite and at least `minNeighbours` samples stand behind it.
+//     `samplesOnly` narrows that to the bars the model actually predicts on (`atCross`), which is
+//     what the published rule and the server's variants do -- see config.ts.
+//   * A bar's lines come from the counting bars in `[date - span, date)` -- strictly before it --
+//     so a line is known at the bar's close and never moves afterwards.
+//   * An arrow is an ENTRY: a counting bar in the long zone (`p >= hi`, and not also `p <= lo`)
+//     whose predecessor was not; the short side mirrors it. Extremes come in runs, so a level
+//     trigger would print an arrow on every bar of a trend.
+//   * The fixed rule is the published one, a LEVEL: every counting bar with `|p - 0.5| >=
+//     confidence`, long when p > 0.5 (wdashboard-server services/arev.py `signal_of`).
 //
-// Quantiles are numpy's default (linear interpolation), which is what the server uses.
+// Quantiles are numpy's default (linear interpolation), which is what the server uses, and
+// `rules.test.ts` holds a fixture generated from services/arev21outlier.py for the two pieces
+// the lab still shares with it: the quantile and the entry rule.
 
 export interface LabPoint {
   date: number
@@ -28,8 +34,12 @@ export interface RuleLines {
   lo: Float64Array
 }
 
-export function validSamples(points: readonly LabPoint[], minNeighbours: number): boolean[] {
-  return points.map((pt) => pt.atCross && pt.n >= minNeighbours && Number.isFinite(pt.p))
+/** A window holding fewer values than this states nothing about what is usual, so its bars are
+ * left blank rather than given a line drawn from a handful of points. */
+export const MIN_WINDOW_VALUES = 20
+
+export function countingBars(points: readonly LabPoint[], minNeighbours: number, samplesOnly: boolean): boolean[] {
+  return points.map((pt) => Number.isFinite(pt.p) && pt.n >= minNeighbours && (!samplesOnly || pt.atCross))
 }
 
 function nanArray(size: number): Float64Array {
@@ -66,41 +76,52 @@ function removeSorted(sorted: number[], value: number): void {
   sorted.splice(lo, 1)
 }
 
-/** Per point, a statistic of the previous `window` valid samples' p, strictly before it; NaN
- * until that many precede it. */
-function rollingWindow(
+/** Per point, a statistic of the counting bars in `[date - spanMs, date)`; NaN where that window
+ * holds fewer than MIN_WINDOW_VALUES. Points ascending by date. */
+function rollingSpan(
   points: readonly LabPoint[],
-  valid: readonly boolean[],
-  window: number,
+  counts: readonly boolean[],
+  spanMs: number,
   stat: (sorted: readonly number[]) => [number, number, number]
 ): RuleLines {
   const size = points.length
   const lines = { centre: nanArray(size), hi: nanArray(size), lo: nanArray(size) }
   const sorted: number[] = []
-  const arrival: number[] = []
+  // The values in the window, oldest first -- the two pointers are `head` (the next point to
+  // admit) and `tail` (the oldest still inside the span).
+  const held: LabPoint[] = []
+  let head = 0
+  let tail = 0
   for (let i = 0; i < size; i++) {
-    if (sorted.length === window) {
+    const date = points[i].date
+    // Strictly before this bar, so a bar never judges itself.
+    while (head < i) {
+      if (counts[head]) {
+        insertSorted(sorted, points[head].p)
+        held.push(points[head])
+      }
+      head++
+    }
+    while (tail < held.length && held[tail].date < date - spanMs) {
+      removeSorted(sorted, held[tail].p)
+      tail++
+    }
+    if (sorted.length >= MIN_WINDOW_VALUES) {
       const [c, h, l] = stat(sorted)
       lines.centre[i] = c
       lines.hi[i] = h
       lines.lo[i] = l
     }
-    if (valid[i]) {
-      const p = points[i].p
-      insertSorted(sorted, p)
-      arrival.push(p)
-      if (arrival.length > window) removeSorted(sorted, arrival.shift() as number)
-    }
   }
   return lines
 }
 
-export function rankLines(points: readonly LabPoint[], valid: readonly boolean[], window: number, q: number): RuleLines {
-  return rollingWindow(points, valid, window, (s) => [quantileSorted(s, 0.5), quantileSorted(s, q), quantileSorted(s, 1 - q)])
+export function rankLines(points: readonly LabPoint[], counts: readonly boolean[], spanMs: number, q: number): RuleLines {
+  return rollingSpan(points, counts, spanMs, (s) => [quantileSorted(s, 0.5), quantileSorted(s, q), quantileSorted(s, 1 - q)])
 }
 
-export function medianLines(points: readonly LabPoint[], valid: readonly boolean[], window: number, width: number): RuleLines {
-  return rollingWindow(points, valid, window, (s) => {
+export function medianLines(points: readonly LabPoint[], counts: readonly boolean[], spanMs: number, width: number): RuleLines {
+  return rollingSpan(points, counts, spanMs, (s) => {
     const m = quantileSorted(s, 0.5)
     return [m, m + width, m - width]
   })
@@ -124,22 +145,22 @@ export function bandLines(centre: Float64Array, width: number): RuleLines {
 }
 
 /** The published fixed rule: a level, not an entry. */
-export function fixedSides(points: readonly LabPoint[], valid: readonly boolean[], confidence: number): Int8Array {
+export function fixedSides(points: readonly LabPoint[], counts: readonly boolean[], confidence: number): Int8Array {
   const side = new Int8Array(points.length)
   points.forEach((pt, i) => {
-    if (valid[i] && Math.abs(pt.p - 0.5) >= confidence) side[i] = pt.p > 0.5 ? 1 : -1
+    if (counts[i] && Math.abs(pt.p - 0.5) >= confidence) side[i] = pt.p > 0.5 ? 1 : -1
   })
   return side
 }
 
-/** +1 / -1 / 0 per point: a valid sample entering its long or short zone. NaN lines compare
- * false, so no arrow fires before a rule has its window. */
-export function entrySides(points: readonly LabPoint[], valid: readonly boolean[], lines: RuleLines): Int8Array {
+/** +1 / -1 / 0 per point: a counting bar entering its long or short zone. NaN lines compare
+ * false, so no arrow fires before a rule's window has filled. */
+export function entrySides(points: readonly LabPoint[], counts: readonly boolean[], lines: RuleLines): Int8Array {
   const side = new Int8Array(points.length)
   let prevUp = false
   let prevDown = false
   points.forEach((pt, i) => {
-    if (!valid[i]) return
+    if (!counts[i]) return
     const up = pt.p >= lines.hi[i] && !(pt.p <= lines.lo[i])
     const down = pt.p <= lines.lo[i] && !(pt.p >= lines.hi[i])
     if (up && !prevUp) side[i] = 1

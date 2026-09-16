@@ -14,10 +14,16 @@ const edit = (mutate: (c: LabConfig) => void): LabConfig => {
 }
 
 describe('defaults', () => {
-  test('arev21 alone, on the published rule', () => {
+  test('arev21 alone, on the published level, comparing every bar', () => {
     expect(enabledGenerations(LAB_DEFAULTS)).toEqual(['arev21'])
     expect(LAB_DEFAULTS.generations.arev21.signals).toBe('fixed')
     expect(LAB_DEFAULTS.generations.arev21.fixed.confidence).toBe(0.075)
+    expect(LAB_DEFAULTS.generations.arev21.samplesOnly).toBe(false)
+  })
+
+  test('every window is a span of days', () => {
+    const g = LAB_DEFAULTS.generations.arev21
+    expect([g.rank.days, g.median.days, g.prior.days]).toEqual([90, 90, 365])
   })
 
   test('every generation has its own colour', () => {
@@ -30,18 +36,18 @@ describe('normaliseLabConfig', () => {
   test('clamps numbers, rounds integers, and refuses the wrong type', () => {
     const c = normaliseLabConfig(
       edit((c) => {
-        c.generations.arev19.rank.window = 0
+        c.generations.arev19.rank.days = 0
         c.generations.arev19.rank.q = 7
-        c.generations.arev19.median.window = 12.6
+        c.generations.arev19.median.days = 12.6
         c.generations.arev19.color = 'red; drop'
         c.generations.arev19.signals = 'oracle' as never
         c.generations.arev19.lines = 'yes' as never
       })
     )
     const g = c.generations.arev19
-    expect(g.rank.window).toBe(5)
-    expect(g.rank.q).toBe(0.999)
-    expect(g.median.window).toBe(13)
+    expect(g.rank.days).toBe(1)
+    expect(g.rank.q).toBe(1)
+    expect(g.median.days).toBe(13)
     expect(g.color).toBe(LAB_DEFAULTS.generations.arev19.color)
     expect(g.signals).toBe('fixed')
     expect(g.lines).toBe(false)
@@ -61,13 +67,13 @@ describe('the stored diff', () => {
     const c = edit((c) => {
       c.generations.arev19.enabled = true
       c.generations.arev19.signals = 'prior'
-      c.generations.arev19.prior.labels = 2500
+      c.generations.arev19.prior.days = 2500
       c.generations.arev21.enabled = false
       c.generations.arev23.color = '#123456'
     })
     const stored = toStoredLabConfig(c)
     expect(stored).toEqual({
-      arev19: { enabled: true, signals: 'prior', 'prior.labels': 2500 },
+      arev19: { enabled: true, signals: 'prior', 'prior.days': 2500 },
       arev21: { enabled: false },
       arev23: { color: '#123456' }
     })
@@ -78,9 +84,9 @@ describe('the stored diff', () => {
     expect(fromStoredLabConfig(null)).toBeUndefined()
     expect(fromStoredLabConfig([1, 2])).toBeUndefined()
     expect(fromStoredLabConfig({ arev99: { enabled: true } })).toBeUndefined()
-    const c = fromStoredLabConfig({ arev20: { enabled: true, 'rank.window': 'many', lineWidth: 99 } })
+    const c = fromStoredLabConfig({ arev20: { enabled: true, 'rank.days': 'many', lineWidth: 99 } })
     expect(c?.generations.arev20.enabled).toBe(true)
-    expect(c?.generations.arev20.rank.window).toBe(LAB_DEFAULTS.generations.arev20.rank.window)
+    expect(c?.generations.arev20.rank.days).toBe(LAB_DEFAULTS.generations.arev20.rank.days)
     expect(c?.generations.arev20.lineWidth).toBe(4)
   })
 })
@@ -93,7 +99,7 @@ describe('the settings panel', () => {
     const inner = group.fields[1]
     if (inner.kind !== 'group') throw new Error('expected a nested group')
     expect(inner.when).toEqual({ key: 'generations.arev21.enabled', is: [true] })
-    const q = inner.fields.find((f) => f.kind === 'number' && f.key === 'generations.arev21.rank.q')
+    const q = inner.fields.find((f) => f.kind === 'number' && f.key === 'generations.arev21.rank.days')
     expect(q?.when).toEqual({ key: 'generations.arev21.signals', is: ['rank'] })
     expect(inner.fields).toHaveLength(LEVERS.length)
   })

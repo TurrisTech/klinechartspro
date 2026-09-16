@@ -15,15 +15,24 @@ import type { SettingsField } from '../chartlayers/settings'
 //   * `fixed`  -- the published AREV rule, `|p - 0.5| >= confidence` on a sample bar with at
 //     least `minNeighbours` voting. At the defaults it is exactly the arrows the AREV panes
 //     draw.
-//   * `rank`   -- p's `q` and `1 - q` quantiles over the previous `window` valid samples; an
-//     arrow when p ENTERS the zone beyond one (wdashboard-server services/arev21outlier.py).
-//   * `median` -- the median of the previous `window` valid samples, ± `width`; entry.
-//   * `prior`  -- ± `width` around the up-rate of the last `labels` resolved labels, each
+//   * `rank`   -- p's `q` and `1 - q` quantiles over the last `days` of p; an arrow when p
+//     ENTERS the zone beyond one (wdashboard-server services/arev21outlier.py, whose window is
+//     a count of samples rather than a span).
+//   * `median` -- the median of the last `days` of p, ± `width`; entry.
+//   * `prior`  -- ± `width` around the up-rate of the labels resolved in the last `days`, each
 //     rebuilt from the bars exactly as the generation labels a sample; entry. The server's
-//     arev21_outlier_prior uses the model's own training window instead (5 years on minute
-//     timeframes, 20 on hours, all history on 1D+); a window that long is not readable in a
-//     browser below 1D, so here the window is a count, and on 1D a count of a few thousand
-//     is all history.
+//     arev21_outlier_prior uses the same kind of window over the model's own training span (5
+//     years on minute timeframes, 20 on hours, all history on 1D+), which a browser cannot read
+//     below 1D -- so the span is shorter here, and nothing else differs.
+//
+// Every window is a span of DAYS, not a count of bars or samples: that is what the model's own
+// window is, it means the same thing on every timeframe, and it tells the chart exactly how much
+// history to load instead of estimating how many bars hold N of something.
+//
+// By default every bar with a usable p is compared and may print an arrow. `samplesOnly` narrows
+// that to the bars the model actually predicts on -- a moving-average cross, a fresh extreme,
+// the stride -- which is what the published rule and the AREV panes draw; the server notes the
+// vote is right ~60% of the time there and inverted between samples.
 //
 // One table (`LEVERS`) drives the settings panel, the clamping every edit goes through, the
 // stored diff and its validation -- so the panel and the document cannot disagree about a
@@ -43,12 +52,14 @@ export interface LabGeneration {
   lines: boolean
   /** Half-width of an arrow, in pixels. */
   arrowSize: number
-  /** A sample bar counts only with at least this many neighbours voting (every rule). */
+  /** A bar counts only with at least this many samples behind its p (every rule). */
   minNeighbours: number
+  /** Compare, and print arrows on, only the bars the model predicts on (`atCross`). */
+  samplesOnly: boolean
   fixed: { confidence: number }
-  rank: { window: number; q: number }
-  median: { window: number; width: number }
-  prior: { labels: number; width: number }
+  rank: { days: number; q: number }
+  median: { days: number; width: number }
+  prior: { days: number; width: number }
 }
 
 export interface LabConfig {
@@ -76,12 +87,16 @@ function defaultGeneration(generation: ArevGeneration): LabGeneration {
     lines: false,
     arrowSize: 5,
     minNeighbours: 50,
+    // Off: every bar with a usable p is compared and may print an arrow (the user's choice,
+    // 2026-09-16). On, the lab draws the published arrows and nothing else.
+    samplesOnly: false,
     // The research defaults: wdashboard-server services/arev.py SIGNAL_CONFIDENCE and
-    // services/arev21outlier.py VARIANTS.
+    // services/arev21outlier.py VARIANTS. The spans are the lab's own -- 90 days is a quarter of
+    // p's recent history on any timeframe, and a year of labels is a base rate that still moves.
     fixed: { confidence: 0.075 },
-    rank: { window: 50, q: 0.85 },
-    median: { window: 50, width: 0.025 },
-    prior: { labels: 1000, width: 0.025 }
+    rank: { days: 90, q: 0.85 },
+    median: { days: 90, width: 0.025 },
+    prior: { days: 365, width: 0.025 }
   }
 }
 
@@ -116,18 +131,21 @@ export const LEVERS: readonly Lever[] = [
   { path: 'arrowSize', kind: 'number', label: 'Signal size', min: 2, max: 14, step: 0.5, when: ['fixed', 'rank', 'median', 'prior'] },
   { path: 'lines', kind: 'bool', label: 'Rule lines', when: ['fixed', 'rank', 'median', 'prior'] },
   { path: 'minNeighbours', kind: 'number', label: 'Min neighbours', min: 0, max: 1000, step: 10, integer: true, when: ['fixed', 'rank', 'median', 'prior'] },
+  { path: 'samplesOnly', kind: 'bool', label: 'Sample bars only', when: ['fixed', 'rank', 'median', 'prior'] },
   { path: 'fixed.confidence', kind: 'number', label: 'Confidence |p − 0.5|', min: 0, max: 0.5, step: 0.005, when: ['fixed'] },
-  { path: 'rank.window', kind: 'number', label: 'Window (samples)', min: 5, max: 5000, step: 5, integer: true, when: ['rank'] },
-  { path: 'rank.q', kind: 'number', label: 'Upper quantile q', min: 0.5, max: 0.999, step: 0.005, when: ['rank'] },
-  { path: 'median.window', kind: 'number', label: 'Window (samples)', min: 5, max: 5000, step: 5, integer: true, when: ['median'] },
+  { path: 'rank.days', kind: 'number', label: 'Window (days)', min: 1, max: 3650, step: 5, integer: true, when: ['rank'] },
+  // Up to 1.0, which IS the window's high and low -- the rolling form of the running extrema the
+  // AREV wire retired, and the one that cannot freeze as history accumulates.
+  { path: 'rank.q', kind: 'number', label: 'Upper quantile q', min: 0.5, max: 1, step: 0.005, when: ['rank'] },
+  { path: 'median.days', kind: 'number', label: 'Window (days)', min: 1, max: 3650, step: 5, integer: true, when: ['median'] },
   { path: 'median.width', kind: 'number', label: 'Band ± around median', min: 0, max: 0.5, step: 0.005, when: ['median'] },
-  { path: 'prior.labels', kind: 'number', label: 'Labels in window', min: 50, max: 20000, step: 50, integer: true, when: ['prior'] },
+  { path: 'prior.days', kind: 'number', label: 'Window (days)', min: 1, max: 3650, step: 5, integer: true, when: ['prior'] },
   { path: 'prior.width', kind: 'number', label: 'Band ± around prior', min: 0, max: 0.5, step: 0.005, when: ['prior'] }
 ]
 
 const RULE_LABELS: Record<LabRule, string> = {
   none: 'None',
-  fixed: 'Fixed (published)',
+  fixed: 'Fixed level',
   rank: 'Rank (quantiles)',
   median: 'Median band',
   prior: 'Prior band'

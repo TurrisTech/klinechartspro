@@ -130,7 +130,7 @@ normalise it with the server's own rule). Tests: `signals.test.ts`.
 | `arev/plugin.ts` | `AREV:<generation>` | one per template | no live stream |
 | `krev/plugin.ts` | `KREV:krev01:p` | one, folded by side | |
 | `mtf/plugin.ts` | `MTF:arev21` | one per enabled source timeframe (`MtfStore`: votes + bar grid) | per-pane settings, own panel; shares arev21 stores with the AREV plugin |
-| `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, widened backwards by the rule's lead-in), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed rule or a client-side rank/median/prior; per-pane settings, own panel; rules are a port of the server's `arev21outlier.py`, locked by `arevlab/fixtures/rules_parity.json` |
+| `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, reaching back exactly the rule's window), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed level or a client-side rank/median/prior over a window of DAYS; every bar with a usable `p` is compared unless `samplesOnly`; per-pane settings, own panel; the quantile, the band and the entry rule are locked to the server's by `arevlab/fixtures/rules_parity.json` |
 | `books/plugin.ts` | `BOOK:depth:*`, `BOOK:view:*`, `BOOK:sentiment:*`, `BOOK:flow` | one per binding; depth + view share one profile store per kind | the OANDA 20-minute books: depth draws every snapshot on the price pane at its own instant, view follows the crosshair, sentiment/flow are sub-pane series |
 
 Tests: `bun test client` (`*.test.ts` here, with `testing.ts`'s fake chart).
