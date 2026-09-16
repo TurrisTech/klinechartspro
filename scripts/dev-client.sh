@@ -37,7 +37,12 @@ resolve_bun() {
 running_pids() {
   local pid
   for pid in $(pgrep -f 'client/serve\.ts' 2>/dev/null || true); do
-    [[ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" == "$ROOT" ]] && echo "$pid"
+    # `if`, not `[[ ... ]] && echo`: a failed test on the LAST pid becomes the function's exit
+    # status, and `pids=$(running_pids)` under `set -e` then kills the script without a word
+    # whenever another checkout's server happens to be the last one pgrep lists.
+    if [[ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" == "$ROOT" ]]; then
+      echo "$pid"
+    fi
   done
 }
 
