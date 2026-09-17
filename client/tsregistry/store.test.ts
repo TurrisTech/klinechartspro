@@ -3,7 +3,7 @@ import { installWindow } from '../plugins/testing'
 
 installWindow()
 const { RegistryStore, storeFactory, registrySourceKey, GRID_ARRAY } = await import('./store')
-const { storedSource } = await import('./plugin')
+const { storedSource, storedParams } = await import('./plugin')
 import type { PluginFacilities } from '../plugins/types'
 import type { RegistryIndicator } from './api'
 import type { RegistryPoint } from './store'
@@ -216,5 +216,37 @@ describe('the registry pane and the MTF overlay agree on the key they share', ()
     storedSource(facilities, arev21Entry, ctx('1h')).fetch({ from: 1, to: 2 }, 100)
     expect(seen[0].pluginId).toBe('arev')
     expect(seen[0].variant).toBe('arev21')
+  })
+})
+
+describe('a stored row with params', () => {
+  // arev21_outlier's rule is computed per read, so the settings dialog's numbers ride along
+  // with the request -- and become part of the store's identity, or two panes reading the same
+  // series over different windows would share one answer.
+  const outlier = {
+    name: 'arev21_outlier_rank',
+    template: 'TS:arev21_outlier_rank',
+    title: 'AREV21 OUTLIER RANK',
+    source: { kind: 'table', fold_by: null },
+    wire: { plugin: 'arev21_outlier', variant: 'arev21_outlier_rank' },
+    params: [
+      { name: 'bars', type: 'int', default: 200, min: 20, max: 5000 },
+      { name: 'q', type: 'float', default: 0.85, min: 0.5, max: 1 }
+    ]
+  } as unknown as RegistryIndicator
+
+  test('reads the dialog by position, falling back to each default', () => {
+    expect(storedParams(outlier, [50, 0.9])).toEqual({ bars: 50, q: 0.9 })
+    expect(storedParams(outlier, [])).toEqual({ bars: 200, q: 0.85 })
+    expect(storedParams(outlier, [Number.NaN, 'x'])).toEqual({ bars: 200, q: 0.85 })
+    expect(storedParams(outlier, [49.6, 0.9])).toEqual({ bars: 50, q: 0.9 })
+  })
+
+  test('different numbers are different stores; a row without params keeps its key', () => {
+    const f = {} as unknown as PluginFacilities
+    const a = storedSource(f, outlier, ctx('1h'), { bars: 200, q: 0.85 })
+    const b = storedSource(f, outlier, ctx('1h'), { bars: 50, q: 0.85 })
+    expect(a.key).not.toBe(b.key)
+    expect(storedSource(f, arev21Entry, ctx('1h')).key).toBe(registrySourceKey('arev21', 'oanda', 'EURUSD', '1h'))
   })
 })
