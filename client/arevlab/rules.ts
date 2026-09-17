@@ -9,8 +9,9 @@
 //   * A bar counts when its `p` is finite and at least `minNeighbours` samples stand behind it.
 //     `samplesOnly` narrows that to the bars the model actually predicts on (`atCross`), which is
 //     what the published rule and the server's variants do -- see config.ts.
-//   * A bar's lines come from the counting bars in `[date - span, date)` -- strictly before it --
-//     so a line is known at the bar's close and never moves afterwards.
+//   * A bar's lines come from the counting bars strictly before it -- the previous `window` of
+//     them for rank, those within `days` for median, the labels within `days` for prior -- so a
+//     line is known at the bar's close and never moves afterwards.
 //   * An arrow is an ENTRY: a counting bar in the long zone (`p >= hi`, and not also `p <= lo`)
 //     whose predecessor was not; the short side mirrors it. Extremes come in runs, so a level
 //     trigger would print an arrow on every bar of a trend.
@@ -116,8 +117,40 @@ function rollingSpan(
   return lines
 }
 
-export function rankLines(points: readonly LabPoint[], counts: readonly boolean[], spanMs: number, q: number): RuleLines {
-  return rollingSpan(points, counts, spanMs, (s) => [quantileSorted(s, 0.5), quantileSorted(s, q), quantileSorted(s, 1 - q)])
+/** Per point, a statistic of the previous `window` COUNTING BARS -- a count, not a span, which
+ * is what rank asks for: the top and bottom of p's last N readings, however long those took.
+ * NaN until that many precede it. */
+function rollingCount(
+  points: readonly LabPoint[],
+  counts: readonly boolean[],
+  window: number,
+  stat: (sorted: readonly number[]) => [number, number, number]
+): RuleLines {
+  const size = points.length
+  const lines = { centre: nanArray(size), hi: nanArray(size), lo: nanArray(size) }
+  const sorted: number[] = []
+  const arrival: number[] = []
+  for (let i = 0; i < size; i++) {
+    if (sorted.length === window) {
+      const [c, h, l] = stat(sorted)
+      lines.centre[i] = c
+      lines.hi[i] = h
+      lines.lo[i] = l
+    }
+    if (counts[i]) {
+      insertSorted(sorted, points[i].p)
+      arrival.push(points[i].p)
+      if (arrival.length > window) removeSorted(sorted, arrival.shift() as number)
+    }
+  }
+  return lines
+}
+
+/** rank's window is a count of bars (the user, 2026-09-17): the last `window` counting bars,
+ * whatever span they cover. Its lines are percentiles of exactly that many readings, so what
+ * "the top" means does not change with how busy the market has been. */
+export function rankLines(points: readonly LabPoint[], counts: readonly boolean[], window: number, q: number): RuleLines {
+  return rollingCount(points, counts, window, (s) => [quantileSorted(s, 0.5), quantileSorted(s, q), quantileSorted(s, 1 - q)])
 }
 
 export function medianLines(points: readonly LabPoint[], counts: readonly boolean[], spanMs: number, width: number): RuleLines {
