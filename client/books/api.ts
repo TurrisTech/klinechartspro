@@ -12,11 +12,34 @@ import { isTiledMetric, pointsFromTiles } from './tiles'
 
 export const BOOK_KINDS = ['order', 'position'] as const
 
-/** Every book here comes from OANDA's PRACTICE account: the live account is not entitled to
- * /orderBook or /positionBook (401). Prod shows them anyway, by the user's explicit exception
- * (2026-09-17) to the no-demo-data-in-prod rule, on the condition that every book display
- * says so — so this suffix is on every pane label, picker group and drawn title. */
-export const PROVENANCE = 'PRACTICE'
+/** Which book store a template reads. `books` is always this environment's own store;
+ * `books_dev` is the dev (practice-account) store, served by a server that sets
+ * BOOKS_DEV_S3_* — prod, whose own store is empty because OANDA refuses the live account the
+ * book endpoints. The user chose (2026-09-17) a separate, separately named indicator over
+ * filling `books` with dev data, so every dev-fed template, source key, pane label and
+ * drawn title carries the feed, and the two can be on one chart without sharing a store. */
+export interface BookFeed {
+  /** The server plugin id, and the capability feature that gates it. */
+  pluginId: 'books' | 'books_dev'
+  /** Template-name prefix: a saved layout's identity, so never renamed. */
+  prefix: string
+  /** Appended to every label and drawn title. */
+  suffix: string
+  /** The picker group label. */
+  group: string
+  /** Book tiles are this environment's own store; the dev feed reads the API only. */
+  tiles: boolean
+}
+
+export const OWN_BOOKS: BookFeed = { pluginId: 'books', prefix: 'BOOK:', suffix: '', group: 'OANDA books', tiles: true }
+
+export const DEV_BOOKS: BookFeed = {
+  pluginId: 'books_dev',
+  prefix: 'BOOKDEV:',
+  suffix: ' · DEV DATA',
+  group: 'OANDA books · dev data',
+  tiles: false
+}
 export type BookKind = (typeof BOOK_KINDS)[number]
 
 /** OANDA publishes both books every 20 minutes (:00/:20/:40 UTC). */
@@ -63,6 +86,7 @@ export interface BookProfilePoint {
 
 function fetchBooks<P extends { date: number }>(
   facilities: PluginFacilities,
+  feed: BookFeed,
   kind: BookKind,
   vendor: string,
   ticker: string,
@@ -71,7 +95,7 @@ function fetchBooks<P extends { date: number }>(
 ): (range: { from: number; to: number }, limit: number) => Promise<Page<P>> {
   const fromApi = (range: { from: number; to: number }, limit: number) =>
     facilities.points<P>({
-      pluginId: 'books',
+      pluginId: feed.pluginId,
       vendorSymbol: `${vendor}:${ticker}`,
       resolution: interval,
       from: range.from,
@@ -84,7 +108,7 @@ function fetchBooks<P extends { date: number }>(
   const metric = String(params.metric ?? 'totals')
   // `near` is a sum over a radius the tiles do not carry, so it stays on the API outright
   // rather than half-answering from tiles.
-  if (!isTiledMetric(metric)) return fromApi
+  if (!feed.tiles || !isTiledMetric(metric)) return fromApi
 
   // Tiles first, the same join `client/history.ts` makes for bars. Tiles hold every closed
   // period, so they answer the historical part of any window and only the period currently
@@ -125,13 +149,14 @@ export function profileSource(
   kind: BookKind,
   vendor: string,
   ticker: string,
-  interval: string
+  interval: string,
+  feed: BookFeed = OWN_BOOKS
 ): SourceSpec<BookProfilePoint> {
   return {
     id: 'profile',
-    key: `books|profile|${kind}|${vendor}:${ticker}|${interval}|d${PROFILE_DEPTH}`,
+    key: `${feed.pluginId}|profile|${kind}|${vendor}:${ticker}|${interval}|d${PROFILE_DEPTH}`,
     resolution: interval,
-    fetch: fetchBooks<BookProfilePoint>(facilities, kind, vendor, ticker, interval, {
+    fetch: fetchBooks<BookProfilePoint>(facilities, feed, kind, vendor, ticker, interval, {
       metric: 'profile',
       depth: PROFILE_DEPTH
     })
@@ -143,13 +168,14 @@ export function totalsSource(
   kind: BookKind,
   vendor: string,
   ticker: string,
-  interval: string
+  interval: string,
+  feed: BookFeed = OWN_BOOKS
 ): SourceSpec<BookTotalsPoint> {
   return {
     id: 'totals',
-    key: `books|totals|${kind}|${vendor}:${ticker}|${interval}`,
+    key: `${feed.pluginId}|totals|${kind}|${vendor}:${ticker}|${interval}`,
     resolution: interval,
-    fetch: fetchBooks<BookTotalsPoint>(facilities, kind, vendor, ticker, interval, {
+    fetch: fetchBooks<BookTotalsPoint>(facilities, feed, kind, vendor, ticker, interval, {
       metric: 'totals'
     })
   }
@@ -161,13 +187,14 @@ export function nearSource(
   vendor: string,
   ticker: string,
   interval: string,
-  rangePct: number
+  rangePct: number,
+  feed: BookFeed = OWN_BOOKS
 ): SourceSpec<BookNearPoint> {
   return {
     id: 'near',
-    key: `books|near|${kind}|${vendor}:${ticker}|${interval}|r${rangePct}`,
+    key: `${feed.pluginId}|near|${kind}|${vendor}:${ticker}|${interval}|r${rangePct}`,
     resolution: interval,
-    fetch: fetchBooks<BookNearPoint>(facilities, kind, vendor, ticker, interval, {
+    fetch: fetchBooks<BookNearPoint>(facilities, feed, kind, vendor, ticker, interval, {
       metric: 'near',
       range: rangePct
     })

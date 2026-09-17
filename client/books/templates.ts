@@ -3,9 +3,10 @@ import type { IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
 import {
   DEFAULT_FLOW_RANGE_PCT,
-  PROVENANCE,
   GRID_MS,
+  OWN_BOOKS,
   intradayMs,
+  type BookFeed,
   type BookKind,
   type BookNearPoint,
   type BookProfilePoint,
@@ -38,7 +39,6 @@ import {
 // sentiment and flow panes declare lines and return FALSE (klinecharts renders declared
 // figures only `if (!isCover)` — klinechartspro #6).
 
-export const TEMPLATE_PREFIX = 'BOOK:'
 
 export type BookDisplay = 'depth' | 'view' | 'sentiment' | 'flow'
 
@@ -50,13 +50,18 @@ const MUTED = '#787B86'
 const MID_LINE = '#787B86'
 const PCT_LINE = '#426EFF'
 
-export function templateName(display: BookDisplay, kind?: BookKind): string {
-  return display === 'flow' ? `${TEMPLATE_PREFIX}flow` : `${TEMPLATE_PREFIX}${display}:${kind}`
+// `BOOK:` reads this environment's own books; `BOOKDEV:` the same displays over the dev
+// store (api.ts `BookFeed`). Neither prefix is a prefix of the other.
+export function templateName(display: BookDisplay, kind?: BookKind, feed: BookFeed = OWN_BOOKS): string {
+  return display === 'flow' ? `${feed.prefix}flow` : `${feed.prefix}${display}:${kind}`
 }
 
-export function parseTemplateName(name: string): { display: BookDisplay; kind: BookKind } | null {
-  if (!name.startsWith(TEMPLATE_PREFIX)) return null
-  const rest = name.slice(TEMPLATE_PREFIX.length)
+export function parseTemplateName(
+  name: string,
+  feed: BookFeed = OWN_BOOKS
+): { display: BookDisplay; kind: BookKind } | null {
+  if (!name.startsWith(feed.prefix)) return null
+  const rest = name.slice(feed.prefix.length)
   if (rest === 'flow') return { display: 'flow', kind: 'order' }
   const [display, kind] = rest.split(':')
   if ((display === 'depth' || display === 'view' || display === 'sentiment') && (kind === 'order' || kind === 'position')) {
@@ -262,7 +267,7 @@ function drawDepth({ ctx, chart, indicator, xAxis, yAxis }: {
 /** The hover viewer: one book, large — longs up, shorts down, a dashed marker at the
  * snapshot price. Reads the crosshair from `hoverIndex`; without one it shows the newest
  * visible book, so the pane is never idle. */
-function drawView(kind: BookKind) {
+function drawView(kind: BookKind, feed: BookFeed) {
   return ({ ctx, chart, indicator, bounding }: {
     ctx: CanvasRenderingContext2D
     chart: Chart
@@ -273,7 +278,7 @@ function drawView(kind: BookKind) {
     const range = chart.getVisibleRange()
     const W = bounding.width
     const H = bounding.height
-    const title = `${kind.toUpperCase()} BOOK · ${PROVENANCE}`
+    const title = `${kind.toUpperCase()} BOOK${feed.suffix}`
     let idx = hoverIndex.get(chart)
     if (idx == null || idx < 0 || idx >= data.length) idx = Math.min(data.length - 1, range.realTo)
     const snap = idx >= 0 ? indicator.result[idx]?.snap : undefined
@@ -356,16 +361,16 @@ function drawView(kind: BookKind) {
   }
 }
 
-let registered = false
+const registered = new Set<string>()
 
-// Registers every BOOK template once and returns the picker groups. Call only when the
-// server advertises 'books'.
-export function registerBooksIndicators(): IndicatorGroup[] {
-  if (!registered) {
+// Registers every template of one feed once and returns its picker groups. Call only when
+// the server advertises that feed's plugin ('books' / 'books_dev').
+export function registerBooksIndicators(feed: BookFeed = OWN_BOOKS): IndicatorGroup[] {
+  if (!registered.has(feed.pluginId)) {
     for (const kind of ['order', 'position'] as const) {
       const depth: IndicatorTemplate<ProfileValue, number, ExtendData> = {
-        name: templateName('depth', kind),
-        shortName: `${kind.toUpperCase()} BOOK · ${PROVENANCE}`,
+        name: templateName('depth', kind, feed),
+        shortName: `${kind.toUpperCase()} BOOK${feed.suffix}`,
         precision: 2,
         calcParams: [],
         shouldOhlc: false,
@@ -386,8 +391,8 @@ export function registerBooksIndicators(): IndicatorGroup[] {
       }
       registerIndicator(depth)
       const view: IndicatorTemplate<ProfileValue, number, ExtendData> = {
-        name: templateName('view', kind),
-        shortName: `${kind.toUpperCase()} BOOK VIEW · ${PROVENANCE}`,
+        name: templateName('view', kind, feed),
+        shortName: `${kind.toUpperCase()} BOOK VIEW${feed.suffix}`,
         precision: 2,
         calcParams: [],
         shouldOhlc: false,
@@ -406,12 +411,12 @@ export function registerBooksIndicators(): IndicatorGroup[] {
         calc: profileCalc(true),
         regenerateFigures: null,
         createTooltipDataSource: null,
-        draw: drawView(kind)
+        draw: drawView(kind, feed)
       }
       registerIndicator(view)
       const sentiment: IndicatorTemplate<SentimentValue, number, ExtendData> = {
-        name: templateName('sentiment', kind),
-        shortName: `${kind.toUpperCase()} LONG% · ${PROVENANCE}`,
+        name: templateName('sentiment', kind, feed),
+        shortName: `${kind.toUpperCase()} LONG%${feed.suffix}`,
         precision: 1,
         calcParams: [],
         shouldOhlc: false,
@@ -442,8 +447,8 @@ export function registerBooksIndicators(): IndicatorGroup[] {
       registerIndicator(sentiment)
     }
     const flow: IndicatorTemplate<FlowValue, number, ExtendData> = {
-      name: templateName('flow'),
-      shortName: `BOOK FLOW · ${PROVENANCE}`,
+      name: templateName('flow', undefined, feed),
+      shortName: `BOOK FLOW${feed.suffix}`,
       precision: 2,
       // The near-range, percent of the snapshot price either side.
       calcParams: [DEFAULT_FLOW_RANGE_PCT],
@@ -476,51 +481,51 @@ export function registerBooksIndicators(): IndicatorGroup[] {
       draw: null
     }
     registerIndicator(flow)
-    registered = true
+    registered.add(feed.pluginId)
   }
   return [
     {
-      label: 'OANDA books (practice account) · price pane',
+      label: `${feed.group} · price pane`,
       main: true,
       items: [
         {
-          name: templateName('depth', 'order'),
+          name: templateName('depth', 'order', feed),
           label: 'Order book depth',
           description: 'Every 20-minute order book drawn at its own instant: sell orders left, buy orders right, a tick at the snapshot price.'
         },
         {
-          name: templateName('depth', 'position'),
+          name: templateName('depth', 'position', feed),
           label: 'Position book depth',
           description: 'Every 20-minute position book drawn at its own instant: shorts left, longs right.'
         }
       ]
     },
     {
-      label: 'OANDA books (practice account)',
+      label: feed.group,
       main: false,
       items: [
         {
-          name: templateName('view', 'order'),
+          name: templateName('view', 'order', feed),
           label: 'Order book (hover)',
           description: 'The order book active at the hovered candle, drawn large: buys up, sells down, dashed line at the snapshot price.'
         },
         {
-          name: templateName('view', 'position'),
+          name: templateName('view', 'position', feed),
           label: 'Position book (hover)',
           description: 'The position book active at the hovered candle: longs up, shorts down.'
         },
         {
-          name: templateName('sentiment', 'position'),
+          name: templateName('sentiment', 'position', feed),
           label: 'Position sentiment',
           description: 'Percent of open client positions that are long, against the 50% line.'
         },
         {
-          name: templateName('sentiment', 'order'),
+          name: templateName('sentiment', 'order', feed),
           label: 'Order sentiment',
           description: 'Percent of resting client orders that are long, against the 50% line.'
         },
         {
-          name: templateName('flow'),
+          name: templateName('flow', undefined, feed),
           label: 'Order flow near price',
           description: 'Resting orders within ±N% of price (the parameter), split at it: buy/sell limits solid, buy/sell stops dashed.'
         }

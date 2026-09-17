@@ -2,10 +2,11 @@ import type { IndicatorGroup } from '../../src'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import {
   DEFAULT_FLOW_RANGE_PCT,
-  PROVENANCE,
+  OWN_BOOKS,
   nearSource,
   profileSource,
   totalsSource,
+  type BookFeed,
   type BookProfilePoint
 } from './api'
 import { hoverIndex, parseTemplateName, registerBooksIndicators } from './templates'
@@ -22,39 +23,41 @@ const AXIS_GAP = { top: 0.1, bottom: 0.05 }
 function baseLabel(display: string, kind: string): string {
   switch (display) {
     case 'depth':
-      return `${kind.toUpperCase()} BOOK · ${PROVENANCE}`
+      return `${kind.toUpperCase()} BOOK`
     case 'view':
-      return `${kind.toUpperCase()} BOOK VIEW · ${PROVENANCE}`
+      return `${kind.toUpperCase()} BOOK VIEW`
     case 'sentiment':
-      return `${kind.toUpperCase()} LONG% · ${PROVENANCE}`
+      return `${kind.toUpperCase()} LONG%`
     default:
-      return `BOOK FLOW · ${PROVENANCE}`
+      return 'BOOK FLOW'
   }
 }
 
-export function createBooksPlugin(): IndicatorPlugin {
+/** One plugin per book store: `OWN_BOOKS` (this environment's) or `DEV_BOOKS` (the dev
+ * store, where the server advertises it). Same displays; its own templates and source keys. */
+export function createBooksPlugin(feed: BookFeed = OWN_BOOKS): IndicatorPlugin {
   let facilities: PluginFacilities | null = null
   return {
-    id: 'books',
-    feature: 'books',
+    id: feed.pluginId,
+    feature: feed.pluginId,
     register(f: PluginFacilities): IndicatorGroup[] {
       facilities = f
-      return registerBooksIndicators()
+      return registerBooksIndicators(feed)
     },
-    matches: (name) => parseTemplateName(name) !== null,
+    matches: (name) => parseTemplateName(name, feed) !== null,
     bind(ctx: BindContext): BindingSpec | null {
-      const parsed = parseTemplateName(ctx.indicator.name)
+      const parsed = parseTemplateName(ctx.indicator.name, feed)
       if (!parsed || !facilities) return null
       const { display, kind } = parsed
       let source: SourceSpec
       if (display === 'depth' || display === 'view') {
-        source = profileSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval) as SourceSpec
+        source = profileSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval, feed) as SourceSpec
       } else if (display === 'sentiment') {
-        source = totalsSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval) as SourceSpec
+        source = totalsSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval, feed) as SourceSpec
       } else {
         const raw = Number(ctx.indicator.calcParams?.[0])
         const rangePct = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_FLOW_RANGE_PCT
-        source = nearSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval, rangePct) as SourceSpec
+        source = nearSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval, rangePct, feed) as SourceSpec
       }
       if (display === 'view') {
         // The crosshair, as a subscription on the shared profile store: moving the
@@ -94,7 +97,7 @@ export function createBooksPlugin(): IndicatorPlugin {
           }
         } as SourceSpec
       }
-      const base = baseLabel(display, kind)
+      const base = `${baseLabel(display, kind)}${feed.suffix}`
       return {
         sources: [source],
         label: (state: BindingState) => {
