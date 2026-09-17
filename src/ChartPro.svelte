@@ -299,6 +299,14 @@
   let overlaysLocked = $state(false)
   let overlaysVisible = $state(true)
 
+  // The settings dialog's heading: a template's registered name unless the locale gives it a
+  // display label (i18n passes an unknown key through, so the name is the fallback).
+  function indicatorTitle(name: string): string {
+    const key = `indicator_title_${name}`
+    const title = i18n(key, locale)
+    return title === key ? name : title
+  }
+
   const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SWING']
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
@@ -1321,7 +1329,7 @@
         <Dialog.Overlay class="kc-dialog-overlay" />
         <Dialog.Content class="kc-dialog-content kc-dialog-sm">
           <div class="kc-dialog-header">
-          <Dialog.Title>{indicatorSettings.indicatorName}</Dialog.Title>
+          <Dialog.Title>{indicatorTitle(indicatorSettings.indicatorName)}</Dialog.Title>
           <Dialog.Description>{i18n('indicator', locale)}</Dialog.Description>
           </div>
           <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
