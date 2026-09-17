@@ -12,6 +12,7 @@
  * limitations under the License.
  */
 
+import swing from './swing'
 import wma from './wma'
 
 // Indicator templates this library adds to klinecharts' built-ins, computed in the
@@ -19,6 +20,6 @@ import wma from './wma'
 // (client/indicators), whose values come from the server. Registered in src/index.ts;
 // their settings live in src/config/indicators.ts and their picker entries in
 // ChartPro.svelte's `mainIndicatorNames` / `subIndicatorNames`.
-const indicators = [wma]
+const indicators = [wma, swing]
 
 export default indicators

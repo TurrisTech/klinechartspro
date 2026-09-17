@@ -299,7 +299,7 @@
   let overlaysLocked = $state(false)
   let overlaysVisible = $state(true)
 
-  const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI']
+  const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SWING']
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
     'DMI', 'CR', 'PSY', 'DMA', 'TRIX', 'OBV', 'VR', 'WR', 'MTM', 'EMV',
@@ -1329,7 +1329,7 @@
           {#each indicatorSettingsFor(indicatorSettings.indicatorName) as config, index (config.paramNameKey)}
             <div class="kc-field">
               <label for={`indicator-param-${index}`}>{i18n(config.paramNameKey, locale)}</label>
-              <input class="kc-input" id={`indicator-param-${index}`} type="number" min={config.min} step={10 ** -config.precision} value={String(indicatorSettings.calcParams[index] ?? '')} oninput={(event) => {
+              <input class="kc-input" id={`indicator-param-${index}`} type="number" min={config.min} max={config.max} step={10 ** -config.precision} value={String(indicatorSettings.calcParams[index] ?? '')} oninput={(event) => {
                 const next = [...indicatorSettings.calcParams]
                 next[index] = event.currentTarget.value === '' ? '' : Number(event.currentTarget.value)
                 indicatorSettings = { ...indicatorSettings, calcParams: next }
