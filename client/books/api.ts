@@ -29,16 +29,21 @@ export interface BookFeed {
   group: string
   /** Book tiles are this environment's own store; the dev feed reads the API only. */
   tiles: boolean
+  /** The vendors this feed may serve, or null for any. The dev feed is OANDA only: the
+   * practice-data exception on prod covers OANDA and nothing else (user, 2026-09-17), and
+   * the server's books_dev refuses every other vendor too. */
+  vendors: readonly string[] | null
 }
 
-export const OWN_BOOKS: BookFeed = { pluginId: 'books', prefix: 'BOOK:', suffix: '', group: 'OANDA books', tiles: true }
+export const OWN_BOOKS: BookFeed = { pluginId: 'books', prefix: 'BOOK:', suffix: '', group: 'OANDA books', tiles: true, vendors: null }
 
 export const DEV_BOOKS: BookFeed = {
   pluginId: 'books_dev',
   prefix: 'BOOKDEV:',
   suffix: ' · DEV DATA',
   group: 'OANDA books · dev data',
-  tiles: false
+  tiles: false,
+  vendors: ['oanda']
 }
 export type BookKind = (typeof BOOK_KINDS)[number]
 

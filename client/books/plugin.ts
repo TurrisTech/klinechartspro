@@ -48,6 +48,7 @@ export function createBooksPlugin(feed: BookFeed = OWN_BOOKS): IndicatorPlugin {
     bind(ctx: BindContext): BindingSpec | null {
       const parsed = parseTemplateName(ctx.indicator.name, feed)
       if (!parsed || !facilities) return null
+      if (feed.vendors !== null && !feed.vendors.includes(ctx.vendor)) return null
       const { display, kind } = parsed
       let source: SourceSpec
       if (display === 'depth' || display === 'view') {
