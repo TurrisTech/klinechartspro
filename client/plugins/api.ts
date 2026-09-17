@@ -25,6 +25,8 @@ export interface PluginCatalogueEntry {
   available: boolean
   /** The labels this plugin publishes; empty for a continuous series. */
   signals?: SignalSpec[]
+  /** Whether the server pushes this plugin's points over `/stream` (feature `plugins.live`). */
+  live?: boolean
   [extra: string]: unknown
 }
 

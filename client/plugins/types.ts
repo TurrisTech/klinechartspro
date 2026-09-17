@@ -162,7 +162,7 @@ export interface ValidateRequest {
 
 /** The stream surface a plugin may use: the page's live `StreamClient`, or an inert one on
  * a replay wall (nothing live may reach a replay's stores). */
-export type PluginStream = Pick<typeof stream, 'subscribe' | 'unsubscribe' | 'subscribeIndicator' | 'unsubscribeIndicator' | 'onStatus'>
+export type PluginStream = Pick<typeof stream, 'subscribe' | 'unsubscribe' | 'subscribeIndicator' | 'unsubscribeIndicator' | 'subscribePlugin' | 'unsubscribePlugin' | 'onStatus'>
 
 /** What the client gives every plugin: the app's shared services, generalised. */
 export interface PluginFacilities {

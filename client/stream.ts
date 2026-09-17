@@ -52,6 +52,28 @@ export interface IndicatorListener {
   onStatus?(phase: string, error: string | null): void
 }
 
+// A stored plugin's live points (wdashboard-server services/framerelay.py) -- same socket,
+// frames `plugin_subscribed` / `plugin_point`. `onSubscribed` fires on every ack, including
+// the one after a reconnect: a point published while the socket was down is not replayed,
+// so that is the listener's cue to re-read the tail it may have missed.
+export interface PluginPointListener {
+  onPoint(point: { date: number }): void
+  onSubscribed?(): void
+}
+
+/** The server's cap on live plugin subscriptions per connection (framerelay.MAX_LIVE_SUBSCRIPTIONS). */
+const MAX_PLUGIN_SUBSCRIPTIONS = 64
+
+export function pluginSubscriptionKey(
+  plugin: string,
+  variant: string | null,
+  vendor: string,
+  symbol: string,
+  interval: string
+): string {
+  return `${plugin}|${variant ?? ''}|${vendor}|${symbol}|${interval}`
+}
+
 // Values requested on an indicator subscribe to bridge history and live (server default 200).
 const INDICATOR_BACKFILL_COUNT = 200
 
@@ -76,6 +98,15 @@ interface Subscription {
   formingSupported: boolean
 }
 
+interface PluginSubscription {
+  plugin: string
+  variant: string | null
+  vendor: string
+  symbol: string
+  interval: string
+  listeners: Set<PluginPointListener>
+}
+
 interface IndicatorSubscription {
   vendor: string
   symbol: string
@@ -94,6 +125,8 @@ class StreamClient {
   // carries; the controller learns it from its first history read before subscribing.
   private readonly indicatorSubscriptions = new Map<string, IndicatorSubscription>()
   private readonly indicatorLingering = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly pluginSubscriptions = new Map<string, PluginSubscription>()
+  private readonly pluginLingering = new Map<string, ReturnType<typeof setTimeout>>()
   // Keys whose last listener just left: still present in `subscriptions` (so a stray
   // in-flight message for them is a harmless no-op iteration over an empty listener set),
   // but scheduled to actually leave -- and to send the real `unsubscribe` frame -- only if
@@ -254,6 +287,64 @@ class StreamClient {
     this.indicatorLingering.set(seriesKey, timer)
   }
 
+  subscribePlugin(
+    plugin: string,
+    variant: string | null,
+    vendor: string,
+    symbol: string,
+    interval: string,
+    listener: PluginPointListener
+  ): void {
+    const key = pluginSubscriptionKey(plugin, variant, vendor, symbol, interval)
+    const existing = this.pluginSubscriptions.get(key)
+    if (existing) {
+      existing.listeners.add(listener)
+      const timer = this.pluginLingering.get(key)
+      if (timer) {
+        clearTimeout(timer)
+        this.pluginLingering.delete(key)
+      }
+      return
+    }
+    if (this.pluginSubscriptions.size >= MAX_PLUGIN_SUBSCRIPTIONS) {
+      console.error(`[stream] refusing live ${key} — at the server's limit of ${MAX_PLUGIN_SUBSCRIPTIONS} live plugin subscriptions`)
+      return
+    }
+    this.pluginSubscriptions.set(key, { plugin, variant, vendor, symbol, interval, listeners: new Set([listener]) })
+    this.send(this.pluginFrame('subscribe', { plugin, variant, vendor, symbol, interval }))
+    this.connect()
+  }
+
+  unsubscribePlugin(
+    plugin: string,
+    variant: string | null,
+    vendor: string,
+    symbol: string,
+    interval: string,
+    listener: PluginPointListener
+  ): void {
+    const key = pluginSubscriptionKey(plugin, variant, vendor, symbol, interval)
+    const sub = this.pluginSubscriptions.get(key)
+    if (!sub) return
+    sub.listeners.delete(listener)
+    if (sub.listeners.size > 0) return
+    const existing = this.pluginLingering.get(key)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      this.pluginLingering.delete(key)
+      this.pluginSubscriptions.delete(key)
+      this.send(this.pluginFrame('unsubscribe', sub))
+    }, UNSUBSCRIBE_LINGER_MS)
+    this.pluginLingering.set(key, timer)
+  }
+
+  private pluginFrame(
+    action: 'subscribe' | 'unsubscribe',
+    s: { plugin: string; variant: string | null; vendor: string; symbol: string; interval: string }
+  ): StreamClientMessage {
+    return { action, plugin: s.plugin, variant: s.variant, vendor: s.vendor, symbol: s.symbol, interval: s.interval }
+  }
+
   private indicatorSubscribeFrame(vendor: string, symbol: string, interval: string, series: SeriesDoc): StreamClientMessage {
     return {
       action: 'subscribe',
@@ -371,6 +462,10 @@ class StreamClient {
       if (this.indicatorLingering.has(key)) continue
       this.ws?.send(JSON.stringify(this.indicatorSubscribeFrame(sub.vendor, sub.symbol, sub.interval, sub.series)))
     }
+    for (const [key, sub] of this.pluginSubscriptions) {
+      if (this.pluginLingering.has(key)) continue
+      this.ws?.send(JSON.stringify(this.pluginFrame('subscribe', sub)))
+    }
     // A reconnected server remembers no subscription, this one included. Anything raised
     // during the outage is not replayed here and does not need to be -- it is in the store,
     // and the notification centre re-reads that whenever the socket comes back.
@@ -384,6 +479,7 @@ class StreamClient {
       this.reconnectTimer ||
       (this.subscriptions.size === 0 &&
         this.indicatorSubscriptions.size === 0 &&
+        this.pluginSubscriptions.size === 0 &&
         this.notificationsIdentity === null)
     ) {
       return
@@ -477,6 +573,22 @@ class StreamClient {
       }
       case 'indicator': {
         const sub = this.indicatorSubscriptions.get(message.seriesKey)
+        if (!sub) return
+        for (const listener of sub.listeners) listener.onPoint(message.point)
+        return
+      }
+      case 'plugin_subscribed': {
+        const sub = this.pluginSubscriptions.get(
+          pluginSubscriptionKey(message.plugin, message.variant, message.vendor, message.symbol, message.interval)
+        )
+        if (!sub) return
+        for (const listener of sub.listeners) listener.onSubscribed?.()
+        return
+      }
+      case 'plugin_point': {
+        const sub = this.pluginSubscriptions.get(
+          pluginSubscriptionKey(message.plugin, message.variant, message.vendor, message.symbol, message.interval)
+        )
         if (!sub) return
         for (const listener of sub.listeners) listener.onPoint(message.point)
         return

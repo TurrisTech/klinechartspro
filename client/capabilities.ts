@@ -33,6 +33,11 @@ export type Feature =
   // `signal` as the label id (`'long'`, `'top'`) rather than a boolean; without it the
   // client's plugins normalise the old boolean themselves (arev/api.ts `arevSignal`).
   | 'plugins.signals'
+  // WS /stream `subscribe {plugin, variant, vendor, symbol, interval}` -- a plugin's points
+  // pushed as the research feed writes them (wdashboard-server services/framerelay.py). The
+  // `live` flag in GET /plugins says which plugins have such a channel. Absent, a stored
+  // indicator's points change only on a reload or a range change.
+  | 'plugins.live'
   // GET /arev/values — AREV research predictions (wdashboard-server services/arev.py).
   // The client only registers its AREV templates and picker entries when advertised.
   | 'arev'
