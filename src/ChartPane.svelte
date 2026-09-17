@@ -28,6 +28,7 @@
   import { getOptions } from './config/settings'
   import type { PaneApi, PaneState } from './state/wall.svelte'
   import { clone, setByPath } from './utils/object'
+  import { templateTooltipDataSource } from './indicators'
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
   import { applyCrosshairAt, crosshairPoint, paneMainAt, type CrosshairPoint } from './sync/crosshair'
@@ -143,12 +144,16 @@
       name: indicatorName,
       paneId: chartPaneId,
       ...(restoredParams ? { calcParams: [...restoredParams] } : {}),
-      createTooltipDataSource: ({ indicator }) => {
+      // This replaces whatever the template declared, so a template of this library that
+      // builds its own legends (SESSIONS) is asked first and only the icons are imposed.
+      createTooltipDataSource: (params) => {
+        const { indicator } = params
         const defaultFeatures = widget?.getStyles().indicator.tooltip.features ?? []
         const icons = indicator.visible
           ? defaultFeatures.slice(1, 4)
           : [defaultFeatures[0], ...defaultFeatures.slice(2, 4)].filter(Boolean)
-        return { features: icons } as IndicatorTooltipData
+        const own = templateTooltipDataSource(indicator.name)?.(params)
+        return { ...own, features: icons } as IndicatorTooltipData
       }
     }, isStack)
     if (!indicatorId) return null
