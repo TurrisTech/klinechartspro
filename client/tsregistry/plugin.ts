@@ -191,13 +191,40 @@ export function storedSubscribe(
   }
 }
 
+/** A stored row's tunable numbers, as the wire takes them: the row's declared params, read
+ * off the settings dialog's flat `calcParams` array by position, each falling back to its own
+ * default. Empty for a row that declares none, which is every row but the arev21_outlier
+ * ones -- so nothing about the AREV or krev sources changes.
+ *
+ * The rule is served, not stored, so these are a REQUEST parameter rather than a different
+ * series: the same rows, judged by the numbers this pane asked for. */
+export function storedParams(entry: RegistryIndicator, calcParams: readonly unknown[]): Record<string, number> {
+  const out: Record<string, number> = {}
+  entry.params.forEach((param, i) => {
+    const raw = calcParams[i]
+    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : param.default
+    out[param.name] = param.type === 'int' ? Math.round(value) : value
+  })
+  return out
+}
+
 /** The source for one stored indicator on one instrument and interval -- shared with the
  * MTF overlay, which reads arev21 at intervals that are not the chart's. Exported so the
  * test that locks that sharing can name it. */
-export function storedSource(f: PluginFacilities, entry: RegistryIndicator, ctx: BindContext): SourceSpec<RegistryPoint> {
+export function storedSource(
+  f: PluginFacilities,
+  entry: RegistryIndicator,
+  ctx: BindContext,
+  params: Record<string, number> = {}
+): SourceSpec<RegistryPoint> {
+  // Params are part of the store's identity, exactly as they are for a computed series: two
+  // panes reading arev21_outlier over different windows hold different answers. A row with no
+  // params keeps the key it always had, so the AREV sub-pane and the MTF overlay still share
+  // one store (`store.ts`).
+  const tuned = Object.keys(params).length > 0 ? `|${JSON.stringify(params)}` : ''
   return {
     id: entry.name,
-    key: registrySourceKey(entry.name, ctx.vendor, ctx.ticker, ctx.interval),
+    key: `${registrySourceKey(entry.name, ctx.vendor, ctx.ticker, ctx.interval)}${tuned}`,
     resolution: ctx.interval,
     // The one factory for this fold -- the AREV21 MTF overlay names the same one, so
     // whichever binding arrives first the class and the row shape are the same
@@ -206,7 +233,7 @@ export function storedSource(f: PluginFacilities, entry: RegistryIndicator, ctx:
     // Answered from indicator tiles wherever the server has said a series is tiered and the
     // tiles cover the window (`client/indicatortiles/source.ts`); the server otherwise.
     fetch: tieredFetch<RegistryPoint>(
-      `${entry.wire.plugin}|${entry.wire.variant ?? ''}|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,
+      `${entry.wire.plugin}|${entry.wire.variant ?? ''}${tuned}|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,
       (range, limit) =>
         f.points<RegistryPoint>({
           pluginId: entry.wire.plugin,
@@ -215,7 +242,8 @@ export function storedSource(f: PluginFacilities, entry: RegistryIndicator, ctx:
           from: range.from,
           to: range.to,
           limit,
-          variant: entry.wire.variant ?? undefined
+          variant: entry.wire.variant ?? undefined,
+          ...(Object.keys(params).length > 0 ? { params } : {})
         }),
       () => getReadClock() !== null
     ),
@@ -247,12 +275,14 @@ export function createRegistryPlugin(): IndicatorPlugin {
       const entry = byTemplate.get(ctx.indicator.name)
       if (!f || !entry) return null
       const computed = entry.wire.plugin === 'indicators'
-      const calcParams = computed
-        ? ctx.indicator.calcParams.map((v, i) =>
-            typeof v === 'number' && Number.isFinite(v) ? v : defaultCalcParams(entry)[i]
-          )
-        : []
-      const source = computed ? computedSource(f, entry, ctx, calcParams) : storedSource(f, entry, ctx)
+      const calcParams = ctx.indicator.calcParams.map((v, i) =>
+        typeof v === 'number' && Number.isFinite(v) ? v : defaultCalcParams(entry)[i]
+      )
+      // A stored row may declare params too (arev21_outlier's window, band and gate): the rule
+      // is computed per read, so the dialog's numbers ride along with the request.
+      const source = computed
+        ? computedSource(f, entry, ctx, calcParams)
+        : storedSource(f, entry, ctx, storedParams(entry, calcParams))
 
       // Main-pane lines format like price.
       const overrides: Record<string, unknown> = {}
