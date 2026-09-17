@@ -139,6 +139,12 @@ const builtin = {
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 2 },
     { paramNameKey: 'params_3', precision: 0, min: 1, default: 20 }
   ],
+  // SWING is this library's own template (src/indicators/swing.ts).
+  SWING: [
+    { paramNameKey: 'swing_left_bars', precision: 0, min: 1, default: 10 },
+    { paramNameKey: 'swing_right_bars', precision: 0, min: 1, default: 10 },
+    { paramNameKey: 'swing_marker', precision: 0, min: 0, max: 2, default: 0 }
+  ],
   TRIX: [
     { paramNameKey: 'params_1', precision: 0, min: 1, default: 12 },
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 9 }

@@ -48,6 +48,7 @@
   "ma": "MA(Moving Average)",
   "ema": "EMA(Exponential Moving Average)",
   "wma": "WMA(Weighted Moving Average)",
+  "swing": "SWING(Swing Tops And Bottoms)",
   "sma": "SMA",
   "boll": "BOLL(Bolinger Bands)",
   "bbi": "BBI(Bull And Bearlndex)",
@@ -161,5 +162,8 @@
   "log": "Logarithmic",
   "reverse_coordinate": "Reverse axis",
   "grid_show": "Show grid",
-  "restore_default": "Restore defaults"
+  "restore_default": "Restore defaults",
+  "swing_left_bars": "Bars before (history)",
+  "swing_right_bars": "Bars after (future)",
+  "swing_marker": "Marker: 0 circle, 1 signal, 2 both"
 }
