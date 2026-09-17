@@ -100,6 +100,16 @@ describe('the dev book feed', () => {
       profileSource(facilities, 'order', 'oanda', 'EURUSD', '1h').key
     )
   })
+  test('it binds on OANDA instruments only', async () => {
+    const { createBooksPlugin } = await import('./plugin')
+    const plugin = createBooksPlugin(DEV_BOOKS)
+    plugin.register(facilities)
+    const ctx = (vendor: string) =>
+      ({ indicator: { name: 'BOOKDEV:sentiment:order' }, vendor, ticker: 'X', interval: '1h' }) as never
+    expect(plugin.bind(ctx('oanda'))).not.toBeNull()
+    expect(plugin.bind(ctx('coinbase'))).toBeNull()
+    expect(plugin.bind(ctx('schwab'))).toBeNull()
+  })
   test('it reads the books_dev plugin and never this environment\'s tiles', async () => {
     captured.length = 0
     const realFetch = globalThis.fetch
