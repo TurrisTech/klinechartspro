@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 
 installWindow()
-const { FORMING_REFRESH_MS, quoteOf, quoteSource, quoteSourceKey } = await import('./api')
+const { quoteOf, quoteSource, quoteSourceKey } = await import('./api')
 const { bandOpacity, DEFAULT_BAND, quoteValue } = await import('./templates')
 const { OhlcvApiError } = await import('../config')
 const { WindowStore } = await import('../plugins/store')
@@ -171,50 +171,37 @@ describe('quoteSource', () => {
     await expect(quoteSource(f, 'oanda', 'EURUSD', '1h', 5000).fetch({ from: 0, to: HOUR }, 5000)).rejects.toThrow('bad')
   })
 
-  test('a closed bar forgets coverage from itself but keeps the values until the re-read', () => {
+  test('a close re-reads from after the newest quote held, and a forming frame does nothing', () => {
     const { f, listeners } = harness(() => [])
     const spec = quoteSource(f, 'oanda', 'EURUSD', '1h', 5000)
     const store = new WindowStore<QuotePoint>(spec.key)
     const q = quoteOf(OANDA) as QuotePoint
-    store.ingest([{ ...q, date: 0 }, { ...q, date: HOUR }], { from: 0, to: 2 * HOUR })
+    // Quotes through 01:00; the 02:00 bar was covered but came back without one (written late).
+    store.ingest([{ ...q, date: 0 }, { ...q, date: HOUR }], { from: 0, to: 3 * HOUR })
     let refetches = 0
     const dispose = (spec.subscribe as NonNullable<typeof spec.subscribe>)(store as SourceStore<QuotePoint>, {
       changed: () => {},
       refetch: () => refetches++
     })
     expect(listeners.map((l) => l.key)).toEqual(['oanda:EURUSD|1h'])
-    listeners[0].listener.onBar({ ...OANDA, date: HOUR }, true)
+    listeners[0].listener.onBar({ ...OANDA, date: 3 * HOUR }, false)
+    expect(refetches).toBe(0)
+    expect(store.missing({ from: 0, to: 3 * HOUR })).toEqual([])
+    listeners[0].listener.onBar({ ...OANDA, date: 2 * HOUR }, true)
     expect(refetches).toBe(1)
-    expect(store.missing({ from: 0, to: 2 * HOUR })).toEqual([{ from: HOUR, to: 2 * HOUR }])
+    expect(store.missing({ from: 0, to: 3 * HOUR })).toEqual([{ from: HOUR + 1, to: 3 * HOUR }])
     expect([...store.values.keys()]).toEqual([0, HOUR])
     dispose()
     expect(listeners.length).toBe(0)
   })
 
-  test('forming frames re-read at most once per refresh interval', () => {
+  test('with no quote held, a close re-reads only the closed bar', () => {
     const { f, listeners } = harness(() => [])
-    const spec = quoteSource(f, 'oanda', 'EURUSD', '1h', 5000)
+    const spec = quoteSource(f, 'coinbase', 'BTCUSD', '1h', 5000)
     const store = new WindowStore<QuotePoint>(spec.key)
-    let refetches = 0
-    ;(spec.subscribe as NonNullable<typeof spec.subscribe>)(store as SourceStore<QuotePoint>, {
-      changed: () => {},
-      refetch: () => refetches++
-    })
-    const realNow = Date.now
-    let now = 1_000_000
-    Date.now = () => now
-    try {
-      listeners[0].listener.onBar({ ...OANDA, date: HOUR }, false)
-      listeners[0].listener.onBar({ ...OANDA, date: HOUR }, false)
-      expect(refetches).toBe(1)
-      now += FORMING_REFRESH_MS
-      listeners[0].listener.onBar({ ...OANDA, date: HOUR }, false)
-      expect(refetches).toBe(2)
-      // A close always re-reads.
-      listeners[0].listener.onBar({ ...OANDA, date: HOUR }, true)
-      expect(refetches).toBe(3)
-    } finally {
-      Date.now = realNow
-    }
+    store.ingest([], { from: 0, to: 5 * HOUR })
+    ;(spec.subscribe as NonNullable<typeof spec.subscribe>)(store as SourceStore<QuotePoint>, { changed: () => {}, refetch: () => {} })
+    listeners[0].listener.onBar({ ...COINBASE, date: 4 * HOUR }, true)
+    expect(store.missing({ from: 0, to: 5 * HOUR })).toEqual([{ from: 4 * HOUR, to: 5 * HOUR }])
   })
 })

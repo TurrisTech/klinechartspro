@@ -50,10 +50,6 @@ export function quoteSourceKey(vendor: string, ticker: string, interval: string)
   return `bidask|${vendor}:${ticker}|${interval}`
 }
 
-/** How long the forming bar's quote may go unrefreshed while ticks arrive. The stream
- * carries only the mid, so the forming bar's bid/ask is whatever the feed last wrote. */
-export const FORMING_REFRESH_MS = 15_000
-
 /** Bars per page, as a share of the server's cap: a page is sized by nominal duration, and
  * a dense span must not trip the 413. The split below catches the rest. */
 const PAGE_SHARE = 0.8
@@ -101,33 +97,21 @@ export function quoteSource(
       const points = await read(range.from, end)
       return { points, nextFrom: end < range.to ? end : null }
     },
-    // The live half. The stream's bars are mid-only, so a frame is a cue to re-read, not a
-    // value: a closed bar forgets itself and everything after it (what was held for it was a
-    // prefix), and a forming one does the same at most every FORMING_REFRESH_MS. The host
-    // then fetches exactly what was forgotten. A replay wall's stream is inert, so none of
-    // this reaches a replay's store.
+    // The live half. `/getbars` answers closed bars only and the stream's bars are mid-only,
+    // so the forming bar has no quote anywhere until it closes, and a closed frame is a cue
+    // to re-read, not a value. What is re-read is everything after the newest quote held
+    // (never later than the closed bar itself): a bar the feed wrote a moment after its
+    // close frame is then picked up on the next close instead of staying filed as covered
+    // and empty. An instrument with no quotes holds none, so it re-reads only the closed bar.
+    // A replay wall's stream is inert, so none of this reaches a replay's store.
     subscribe: (store: SourceStore<QuotePoint>, notify: SourceNotify) => {
-      let lastForming = 0
-      const forget = (date: number) => {
-        // Coverage is forgotten, the values are kept until the re-read replaces them: dropping
-        // them too would blank the newest bar's quote for the length of a round trip, every
-        // FORMING_REFRESH_MS.
-        const s = store as WindowStore<QuotePoint>
-        const kept = [...s.values].filter(([t]) => t >= date)
-        s.forgetAfter(date)
-        for (const [t, v] of kept) s.values.set(t, v)
-        notify.refetch()
-      }
       const listener: StreamListener = {
         onBar: (bar, closed) => {
-          if (closed) {
-            forget(bar.date)
-            return
-          }
-          const now = Date.now()
-          if (now - lastForming < FORMING_REFRESH_MS) return
-          lastForming = now
-          forget(bar.date)
+          if (!closed) return
+          const s = store as WindowStore<QuotePoint>
+          const latest = s.latest()
+          s.forgetAfter(latest === null ? bar.date : Math.min(bar.date, latest + 1))
+          notify.refetch()
         }
       }
       f.stream.subscribe(vendor, ticker, interval, listener)
