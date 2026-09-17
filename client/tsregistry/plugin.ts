@@ -1,7 +1,7 @@
 import type { IndicatorGroup } from '../../src'
 import { apiUrl, getReadClock } from '../config'
 import { resolveSeries, type IndicatorPoint, type SeriesDoc } from '../indicators/api'
-import { fetchEnvelope, toPage } from '../plugins/api'
+import { fetchEnvelope, loadPluginCatalogue, toPage } from '../plugins/api'
 import type {
   BindContext,
   BindingSpec,
@@ -14,9 +14,9 @@ import type {
   ValidateRequest
 } from '../plugins/types'
 import type { Feature } from '../capabilities'
-import type { IndicatorListener } from '../stream'
+import type { IndicatorListener, PluginPointListener } from '../stream'
 import { tieredFetch } from '../indicatortiles/source'
-import { loadRegistry, type RegistryIndicator } from './api'
+import { loadRegistry, type RegistryIndicator, type RegistryWire } from './api'
 import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore } from './store'
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
 
@@ -36,9 +36,10 @@ import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, se
 //     of whether the server computed it on demand or read it from a store.
 //   * anything else -- the unified `GET /plugins/{id}/values?variant=`. The AREV generations
 //     and krev01 keep being served by the plugins that own their published signal refs and
-//     their legacy alias paths; a new indicator is served by the generic `ts` reader. There
-//     is nothing to subscribe on either: the rows are written by hand-run research scripts,
-//     so new data appears on a reload or a range change.
+//     their legacy alias paths; a new indicator is served by the generic `ts` reader. Where
+//     the server pushes that plugin's points (`plugins.live` -- the research feed's frames,
+//     relayed), the source subscribes and each new bar lands in the store as it is written;
+//     elsewhere new data appears on a reload or a range change. See `liveWire`.
 
 /** Store identity for a `computed` entry. The params are part of it -- a params change is a
  * different series and therefore a different store, not a refetch of the same one. */
@@ -110,6 +111,86 @@ function computedSource(
   }
 }
 
+export interface LiveWire {
+  wire: RegistryWire
+  direct: boolean
+}
+
+/** How a stored entry learns of a new bar, or null when it cannot.
+ *
+ * `direct`: the entry's own wire pushes its points (arev21 through `arev`), and a pushed
+ * point is exactly a fetched one, so it goes straight into the store.
+ *
+ * Otherwise the first dependency whose wire pushes: `arev21_outlier` reads arev21's rows but
+ * computes its lines per read over a trailing window, so an arev21 point is a cue to re-read
+ * this entry's tail, never a value for it. */
+export async function liveWire(
+  f: Pick<PluginFacilities, 'hasFeature'>,
+  entry: RegistryIndicator,
+  load = { catalogue: loadPluginCatalogue, registry: loadRegistry }
+): Promise<LiveWire | null> {
+  if (!f.hasFeature('plugins.live')) return null
+  const catalogue = await load.catalogue()
+  const live = new Set(catalogue.plugins.filter((p) => p.live === true).map((p) => p.id))
+  if (live.has(entry.wire.plugin)) return { wire: entry.wire, direct: true }
+  if (entry.dependsOn.length === 0) return null
+  const byName = new Map((await load.registry()).map((e) => [e.name, e]))
+  for (const name of entry.dependsOn) {
+    const dep = byName.get(name)
+    if (dep && live.has(dep.wire.plugin)) return { wire: dep.wire, direct: false }
+  }
+  return null
+}
+
+/** The live half of a stored source. Resolved asynchronously (the plugin catalogue is a
+ * fetch), so the disposer may run before the subscription exists; it then never does. */
+export function storedSubscribe(
+  f: PluginFacilities,
+  entry: RegistryIndicator,
+  ctx: BindContext,
+  resolve: () => Promise<LiveWire | null> = () => liveWire(f, entry)
+) {
+  return (store: SourceStore<RegistryPoint>, notify: SourceNotify): (() => void) => {
+    const s = store as RegistryStore
+    let disposed = false
+    let unsubscribe: (() => void) | null = null
+    // Re-read everything after the newest point held, never later than `from`. A bar the
+    // host filed as covered before the feed had written it is then fetched again.
+    const rereadFrom = (from: number | null) => {
+      const latest = s.latest()
+      if (latest === null && from === null) return
+      const start = latest === null ? (from as number) : from === null ? latest + 1 : Math.min(from, latest + 1)
+      s.forgetAfter(start)
+      notify.refetch()
+    }
+    resolve()
+      .then((found) => {
+        if (disposed || found === null) return
+        const variant = found.wire.variant ?? null
+        const listener: PluginPointListener = {
+          onPoint: (point) => {
+            if (found.direct) {
+              s.set(point)
+              notify.changed()
+            } else {
+              rereadFrom(point.date)
+            }
+          },
+          // Every ack, the first and each one after a reconnect: a point published while
+          // the socket was down is not replayed, so the tail is re-read instead.
+          onSubscribed: () => rereadFrom(null)
+        }
+        f.stream.subscribePlugin(found.wire.plugin, variant, ctx.vendor, ctx.ticker, ctx.interval, listener)
+        unsubscribe = () => f.stream.unsubscribePlugin(found.wire.plugin, variant, ctx.vendor, ctx.ticker, ctx.interval, listener)
+      })
+      .catch((err) => console.warn(`[registry] no live points for ${entry.name}`, err))
+    return () => {
+      disposed = true
+      unsubscribe?.()
+    }
+  }
+}
+
 /** The source for one stored indicator on one instrument and interval -- shared with the
  * MTF overlay, which reads arev21 at intervals that are not the chart's. Exported so the
  * test that locks that sharing can name it. */
@@ -137,7 +218,8 @@ export function storedSource(f: PluginFacilities, entry: RegistryIndicator, ctx:
           variant: entry.wire.variant ?? undefined
         }),
       () => getReadClock() !== null
-    )
+    ),
+    subscribe: storedSubscribe(f, entry, ctx)
   }
 }
 

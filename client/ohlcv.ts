@@ -175,6 +175,38 @@ export interface StreamIndicatorUnsubscribed {
   seriesKey: string
 }
 
+// Live plugin points (wdashboard-server services/framerelay.py). `point` is exactly what
+// GET /plugins/{id}/values returns for that bar, on the same wire clock. There is no backfill
+// frame: the window store fetches what it lacks, and this carries only what happens next.
+export interface StreamPluginSubscribed {
+  type: 'plugin_subscribed'
+  plugin: string
+  variant: string | null
+  vendor: string
+  symbol: string
+  interval: string
+  serverTime: number
+}
+export interface StreamPluginUnsubscribed {
+  type: 'plugin_unsubscribed'
+  plugin: string
+  variant: string | null
+  vendor: string
+  symbol: string
+  interval: string
+  serverTime: number
+}
+export interface StreamPluginPoint {
+  type: 'plugin_point'
+  plugin: string
+  variant: string | null
+  vendor: string
+  symbol: string
+  interval: string
+  point: { date: number }
+  serverTime: number
+}
+
 export interface StreamNotificationsSubscribed {
   type: 'notifications_subscribed'
   unseen: number
@@ -201,6 +233,9 @@ export type StreamServerMessage =
   | StreamIndicatorPoint
   | StreamIndicatorStatus
   | StreamIndicatorUnsubscribed
+  | StreamPluginSubscribed
+  | StreamPluginUnsubscribed
+  | StreamPluginPoint
 
 export type StreamClientMessage =
   | {
@@ -224,6 +259,7 @@ export type StreamClientMessage =
   // handshake, so `token` (the session bearer, when signed in) is the only way to present
   // it, and `owner` is the anonymous fallback. The server prefers the handshake's
   // Authorization if a non-browser client set one, then `token`, then `owner`.
+  | { action: 'subscribe' | 'unsubscribe'; plugin: string; variant: string | null; vendor: string; symbol: string; interval: string }
   | { action: 'subscribe'; notifications: true; owner: string; token?: string }
   | { action: 'unsubscribe'; notifications: true }
   | { action: 'ping'; id?: string }
