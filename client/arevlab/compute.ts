@@ -17,17 +17,21 @@ import {
 // and, for the prior, the bars -- to a value per chart bar. Kept out of templates.ts so the
 // tests exercise exactly what the pane draws without a chart.
 
-/** A rule's window in milliseconds, or 0 for a rule that has none. */
+/** A rule's window in milliseconds, or 0 for a rule whose window is not a span -- rank counts
+ * bars, and the fixed rule has no window at all. */
 export function spanMs(settings: LabGeneration): number {
   const days =
-    settings.signals === 'rank'
-      ? settings.rank.days
-      : settings.signals === 'median'
-        ? settings.median.days
-        : settings.signals === 'prior'
-          ? settings.prior.days
-          : 0
+    settings.signals === 'median'
+      ? settings.median.days
+      : settings.signals === 'prior'
+        ? settings.prior.days
+        : 0
   return days * 86_400_000
+}
+
+/** A rule's window in bars, or 0 for a rule whose window is not a count. */
+export function windowBars(settings: LabGeneration): number {
+  return settings.signals === 'rank' ? settings.rank.bars : 0
 }
 
 /** One arrow: which generation placed it and which way it points. */
@@ -78,7 +82,7 @@ export function computeGeneration(
         sides: fixedSides(points, counts, settings.fixed.confidence)
       }
     case 'rank': {
-      const lines = rankLines(points, counts, span, settings.rank.q)
+      const lines = rankLines(points, counts, settings.rank.bars, settings.rank.q)
       return { points: [...points], lines, sides: entrySides(points, counts, lines) }
     }
     case 'median': {

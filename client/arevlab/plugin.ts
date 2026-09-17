@@ -5,7 +5,7 @@ import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFac
 import { loadRegistry, type RegistryIndicator } from '../tsregistry/api'
 import { storedSource } from '../tsregistry/plugin'
 import { LAB_DEFAULTS, LAB_FIELDS, enabledGenerations, normaliseLabConfig, type LabConfig, type LabGeneration } from './config'
-import { spanMs } from './compute'
+import { spanMs, windowBars } from './compute'
 import { AREV22_HORIZON, type LabBar } from './labels'
 import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, registerLabIndicator } from './templates'
 
@@ -44,7 +44,8 @@ const LEGEND_ROW_HEIGHT = 24
  * exactly -- plus, for arev22's prior, the ten bars its label waits for. Capped at what a pane
  * may hold, so the answer is in milliseconds and the caller can see it was shortened. */
 export function leadInMs(generation: ArevGeneration, settings: LabGeneration, barMs: number): number {
-  const span = spanMs(settings)
+  // rank counts bars, so its history is bars; median and prior span time.
+  const span = windowBars(settings) > 0 ? windowBars(settings) * barMs : spanMs(settings)
   if (span === 0) return 0
   const horizon = settings.signals === 'prior' && generation === 'arev22' ? AREV22_HORIZON * barMs : 0
   return Math.min(LEAD_MAX_BARS * barMs, span + horizon + barMs)
@@ -56,7 +57,8 @@ export function widen(range: Range, leadMs: number): Range {
   return { from: Math.max(0, range.from - leadMs), to: range.to }
 }
 
-/** Whether the cap shortened a generation's window, for the legend. */
+/** Whether the cap shortened a generation's window, for the legend. Only a SPAN can be cut --
+ * a count of bars is already bounded by the lever's own maximum. */
 export function windowTruncatedDays(settings: LabGeneration, barMs: number): number | null {
   const span = spanMs(settings)
   if (span === 0) return null

@@ -76,7 +76,7 @@ describe('countingBars', () => {
   })
 })
 
-describe('the day window', () => {
+describe('the windows', () => {
   test('a bar is judged against the window BEFORE it, never against itself', () => {
     const pts = hourly([...flat(30, 0.5), 0.9])
     const lines = medianLines(pts, countingBars(pts, 0, false), 2 * DAY, 0.01)
@@ -108,19 +108,29 @@ describe('the day window', () => {
   })
 
   test('q = 1 is the window high and q = 0 its low -- the rolling extreme', () => {
+    // rank counts bars, so its window is the previous 30 counting bars here.
     // A quiet base cycling 0.48..0.51, one old spike of 0.70, and then 0.60.
     const base = Array.from({ length: 30 }, (_, i) => [0.48, 0.49, 0.5, 0.51][i % 4])
     base[10] = 0.7
     const pts = hourly([...base, 0.6])
     const counts = countingBars(pts, 0, false)
-    const extreme = rankLines(pts, counts, 30 * DAY, 1)
+    const extreme = rankLines(pts, counts, 30, 1)
     expect(extreme.hi[30]).toBeCloseTo(0.7, 12)
     expect(extreme.lo[30]).toBeCloseTo(0.48, 12)
     // At the extreme, 0.60 is short of the window's own high and prints nothing; a shade below
     // the extreme, the same bar is past the line and prints an arrow. That is the whole
     // difference between a high and a quantile, in one bar.
     expect(entrySides(pts, counts, extreme)[30]).toBe(0)
-    expect(entrySides(pts, counts, rankLines(pts, counts, 30 * DAY, 0.98))[30]).toBe(1)
+    expect(entrySides(pts, counts, rankLines(pts, counts, 30, 0.98))[30]).toBe(1)
+  })
+
+  test('rank draws nothing until its bar count is complete, then rolls one bar at a time', () => {
+    const pts = hourly([...flat(9, 0.5), 0.9])
+    const counts = countingBars(pts, 0, false)
+    const lines = rankLines(pts, counts, 5, 0.9)
+    expect(Number.isNaN(lines.hi[4])).toBe(true)
+    expect(lines.hi[5]).toBeCloseTo(0.5, 12)
+    expect(entrySides(pts, counts, lines)[9]).toBe(1)
   })
 
   test('non-counting bars are neither compared nor part of the window', () => {

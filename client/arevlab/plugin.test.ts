@@ -126,12 +126,12 @@ describe('bind', () => {
     expect(fixed.window).toBeUndefined()
     const rank = configWith((c) => {
       c.generations.arev21.signals = 'rank'
-      c.generations.arev21.rank.days = 90
+      c.generations.arev21.rank.bars = 200
     })
     const widened = (await mounted({ 0: rank })).plugin.bind(ctx())?.sources[0] as SourceSpec
     const lead = leadInMs('arev21', rank.generations.arev21, HOUR)
-    // The window, and one bar so the first drawn bar has a predecessor. No estimate anywhere.
-    expect(lead).toBe(90 * DAY + HOUR)
+    // rank counts bars: its window, and one bar so the first drawn bar has a predecessor.
+    expect(lead).toBe(201 * HOUR)
     expect(widened.window?.(range)).toEqual({ from: range.from - lead, to: range.to })
   })
 
@@ -173,11 +173,11 @@ describe('bind', () => {
 
   test('a hydrated config is normalised before any binding reads it', async () => {
     const bad = configWith((c) => {
-      c.generations.arev21.rank.days = -3
+      c.generations.arev21.rank.bars = -3
     })
     const { plugin } = await mounted({ 0: bad })
     const snapshot = plugin.paneState?.snapshot() as Record<number, LabConfig>
-    expect(snapshot[0].generations.arev21.rank.days).toBe(1)
+    expect(snapshot[0].generations.arev21.rank.bars).toBe(20)
     expect(snapshot[0]).toEqual(normaliseLabConfig(bad))
   })
 })
@@ -194,14 +194,18 @@ describe('leadInMs, the cap and widen', () => {
     expect(leadInMs('arev21', g, HOUR)).toBe(30 * DAY + HOUR)
   })
 
-  test('a window longer than a pane can hold is capped, and says so', () => {
-    const g = { ...LAB_DEFAULTS.generations.arev19, signals: 'rank' as const, rank: { days: 3650, q: 0.9 } }
+  test('a SPAN longer than a pane can hold is capped, and says so', () => {
+    const g = { ...LAB_DEFAULTS.generations.arev19, signals: 'median' as const, median: { days: 3650, width: 0.075 } }
     const minute = 60_000
     expect(leadInMs('arev19', g, minute)).toBe(40_000 * minute)
     // 40,000 minutes is ~27 days of the 3,650 asked for, and the legend carries that number.
     expect(windowTruncatedDays(g, minute)).toBe(27)
     // On a daily chart the same window fits, so nothing is said.
     expect(windowTruncatedDays(g, DAY)).toBeNull()
+    // A count of bars is bounded by its own lever and is never cut.
+    const counted = { ...LAB_DEFAULTS.generations.arev19, signals: 'rank' as const, rank: { bars: 5000, q: 0.9 } }
+    expect(windowTruncatedDays(counted, minute)).toBeNull()
+    expect(leadInMs('arev19', counted, minute)).toBe(5001 * minute)
     expect(windowTruncatedDays({ ...LAB_DEFAULTS.generations.arev19, signals: 'none' }, minute)).toBeNull()
   })
 

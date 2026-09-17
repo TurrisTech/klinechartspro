@@ -15,9 +15,10 @@ import type { SettingsField } from '../chartlayers/settings'
 //   * `fixed`  -- the published AREV rule, `|p - 0.5| >= confidence` on a sample bar with at
 //     least `minNeighbours` voting. At the defaults it is exactly the arrows the AREV panes
 //     draw.
-//   * `rank`   -- p's `q` and `1 - q` quantiles over the last `days` of p; an arrow when p
-//     ENTERS the zone beyond one (wdashboard-server services/arev21outlier.py, whose window is
-//     a count of samples rather than a span).
+//   * `rank`   -- p's `q` and `1 - q` quantiles over its last `bars` readings; an arrow when p
+//     ENTERS the zone beyond one. A COUNT, not a span (the user, 2026-09-17): the top and
+//     bottom of the last N readings mean the same thing however long those took, and at q = 1
+//     the lines are that window's own high and low.
 //   * `median` -- the median of the last `days` of p, ± `width`; entry.
 //   * `prior`  -- ± `width` around the up-rate of the labels resolved in the last `days`, each
 //     rebuilt from the bars exactly as the generation labels a sample; entry. The server's
@@ -25,9 +26,9 @@ import type { SettingsField } from '../chartlayers/settings'
 //     years on minute timeframes, 20 on hours, all history on 1D+), which a browser cannot read
 //     below 1D -- so the span is shorter here, and nothing else differs.
 //
-// Every window is a span of DAYS, not a count of bars or samples: that is what the model's own
-// window is, it means the same thing on every timeframe, and it tells the chart exactly how much
-// history to load instead of estimating how many bars hold N of something.
+// A window is a span of DAYS for median and prior -- what the model's own window is, and what
+// the prior must be to mean the base rate -- and a count of BARS for rank. Neither is an
+// estimate of how many bars hold N samples, which is what the first build had to guess.
 //
 // By default every bar with a usable p is compared and may print an arrow. `samplesOnly` narrows
 // that to the bars the model actually predicts on -- a moving-average cross, a fresh extreme,
@@ -57,7 +58,7 @@ export interface LabGeneration {
   /** Compare, and print arrows on, only the bars the model predicts on (`atCross`). */
   samplesOnly: boolean
   fixed: { confidence: number }
-  rank: { days: number; q: number }
+  rank: { bars: number; q: number }
   median: { days: number; width: number }
   prior: { days: number; width: number }
 }
@@ -93,10 +94,18 @@ function defaultGeneration(generation: ArevGeneration): LabGeneration {
     // The research defaults: wdashboard-server services/arev.py SIGNAL_CONFIDENCE and
     // services/arev21outlier.py VARIANTS. The spans are the lab's own -- 90 days is a quarter of
     // p's recent history on any timeframe, and a year of labels is a base rate that still moves.
+    //
+    // The band is ±0.075 -- the published rule's own half-width, around a moving centre instead
+    // of 0.5, which is what these variants were always meant to be. It was ±0.025 until
+    // 2026-09-17, and that is a band most of p sits OUTSIDE: measured on prod, only 18-25% of
+    // counting bars fall within 0.025 of their rolling median, so the rule flagged the majority
+    // rather than the tail and fired on ~1 sample bar in 10. At 0.075 it selects like rank's
+    // 85th percentile does and scores +7.4 points over base against +5.9
+    // (notes/research/arev21-outlier/README.md §7).
     fixed: { confidence: 0.075 },
-    rank: { days: 90, q: 0.85 },
-    median: { days: 90, width: 0.025 },
-    prior: { days: 365, width: 0.025 }
+    rank: { bars: 200, q: 0.85 },
+    median: { days: 90, width: 0.075 },
+    prior: { days: 365, width: 0.075 }
   }
 }
 
@@ -133,7 +142,7 @@ export const LEVERS: readonly Lever[] = [
   { path: 'minNeighbours', kind: 'number', label: 'Min neighbours', min: 0, max: 1000, step: 10, integer: true, when: ['fixed', 'rank', 'median', 'prior'] },
   { path: 'samplesOnly', kind: 'bool', label: 'Sample bars only', when: ['fixed', 'rank', 'median', 'prior'] },
   { path: 'fixed.confidence', kind: 'number', label: 'Confidence |p − 0.5|', min: 0, max: 0.5, step: 0.005, when: ['fixed'] },
-  { path: 'rank.days', kind: 'number', label: 'Window (days)', min: 1, max: 3650, step: 5, integer: true, when: ['rank'] },
+  { path: 'rank.bars', kind: 'number', label: 'Window (bars)', min: 20, max: 5000, step: 10, integer: true, when: ['rank'] },
   // Up to 1.0, which IS the window's high and low -- the rolling form of the running extrema the
   // AREV wire retired, and the one that cannot freeze as history accumulates.
   { path: 'rank.q', kind: 'number', label: 'Upper quantile q', min: 0.5, max: 1, step: 0.005, when: ['rank'] },
