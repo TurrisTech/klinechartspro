@@ -1,4 +1,5 @@
 import { createArevLabPlugin } from '../arevlab/plugin'
+import { DEV_BOOKS } from '../books/api'
 import { createBooksPlugin } from '../books/plugin'
 import { createMtf01Plugin } from '../mtf01/plugin'
 import { createMtfPlugin } from '../mtf/plugin'
@@ -18,5 +19,5 @@ import type { IndicatorPlugin } from './types'
 // pane and computes its own signal rules over them.
 
 export function builtinPlugins(): IndicatorPlugin[] {
-  return [createRegistryPlugin(), createArevLabPlugin(), createMtfPlugin(), createMtf01Plugin(), createBooksPlugin()]
+  return [createRegistryPlugin(), createArevLabPlugin(), createMtfPlugin(), createMtf01Plugin(), createBooksPlugin(), createBooksPlugin(DEV_BOOKS)]
 }

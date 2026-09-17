@@ -56,6 +56,10 @@ export type Feature =
   // Parquet book store (wdashboard-server services/books.py). The client registers its
   // BOOK templates and picker entries only when advertised.
   | 'books'
+  // GET /plugins/books_dev/values — the same wire over the DEV (practice-account) book store,
+  // advertised where the server sets BOOKS_DEV_S3_* (prod). Registers the "dev data" BOOKDEV
+  // templates, so they never masquerade as this environment's own books.
+  | 'books_dev'
   // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
   // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
   // ungated experience rather than a login form nothing can ever satisfy.

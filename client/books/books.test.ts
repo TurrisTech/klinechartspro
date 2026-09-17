@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 
 installWindow()
-const { intradayMs, nearSource, profileSource, totalsSource, GRID_MS, PROFILE_DEPTH } = await import('./api')
+const { intradayMs, nearSource, profileSource, totalsSource, DEV_BOOKS, GRID_MS, OWN_BOOKS, PROFILE_DEPTH } = await import('./api')
 const { flowValue, parseTemplateName, sentimentValue, templateName } = await import('./templates')
 import type { PluginFacilities, PointsRequest } from '../plugins/types'
 
@@ -80,6 +80,42 @@ describe('source keys', () => {
       variant: 'position',
       params: { metric: 'profile', depth: PROFILE_DEPTH }
     })
+  })
+})
+
+describe('the dev book feed', () => {
+  test('its templates are its own and never parse as this environment\'s books', () => {
+    const dev = templateName('depth', 'order', DEV_BOOKS)
+    expect(dev).toBe('BOOKDEV:depth:order')
+    expect(parseTemplateName(dev, DEV_BOOKS)).toEqual({ display: 'depth', kind: 'order' })
+    expect(parseTemplateName(dev)).toBeNull()
+    expect(parseTemplateName(templateName('flow'), DEV_BOOKS)).toBeNull()
+    expect(templateName('flow', undefined, DEV_BOOKS)).toBe('BOOKDEV:flow')
+  })
+  test('its sources never share a store with the own feed', () => {
+    expect(totalsSource(facilities, 'order', 'oanda', 'EURUSD', '1h', DEV_BOOKS).key).not.toBe(
+      totalsSource(facilities, 'order', 'oanda', 'EURUSD', '1h', OWN_BOOKS).key
+    )
+    expect(profileSource(facilities, 'order', 'oanda', 'EURUSD', '1h', DEV_BOOKS).key).not.toBe(
+      profileSource(facilities, 'order', 'oanda', 'EURUSD', '1h').key
+    )
+  })
+  test('it reads the books_dev plugin and never this environment\'s tiles', async () => {
+    captured.length = 0
+    const realFetch = globalThis.fetch
+    let tileFetches = 0
+    globalThis.fetch = ((..._args: unknown[]) => {
+      tileFetches++
+      return Promise.reject(new Error('no tiles here'))
+    }) as unknown as typeof fetch
+    try {
+      await profileSource(facilities, 'order', 'oanda', 'EURUSD', '1h', DEV_BOOKS).fetch({ from: 0, to: 1 }, 5000)
+      await totalsSource(facilities, 'position', 'oanda', 'EURUSD', '1h', DEV_BOOKS).fetch({ from: 0, to: 1 }, 5000)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    expect(tileFetches).toBe(0)
+    expect(captured.map((r) => r.pluginId)).toEqual(['books_dev', 'books_dev'])
   })
 })
 
