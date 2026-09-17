@@ -3,6 +3,7 @@ import type { IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
 import {
   DEFAULT_FLOW_RANGE_PCT,
+  PROVENANCE,
   GRID_MS,
   intradayMs,
   type BookKind,
@@ -272,7 +273,7 @@ function drawView(kind: BookKind) {
     const range = chart.getVisibleRange()
     const W = bounding.width
     const H = bounding.height
-    const title = `${kind.toUpperCase()} BOOK`
+    const title = `${kind.toUpperCase()} BOOK · ${PROVENANCE}`
     let idx = hoverIndex.get(chart)
     if (idx == null || idx < 0 || idx >= data.length) idx = Math.min(data.length - 1, range.realTo)
     const snap = idx >= 0 ? indicator.result[idx]?.snap : undefined
@@ -364,7 +365,7 @@ export function registerBooksIndicators(): IndicatorGroup[] {
     for (const kind of ['order', 'position'] as const) {
       const depth: IndicatorTemplate<ProfileValue, number, ExtendData> = {
         name: templateName('depth', kind),
-        shortName: `${kind.toUpperCase()} BOOK`,
+        shortName: `${kind.toUpperCase()} BOOK · ${PROVENANCE}`,
         precision: 2,
         calcParams: [],
         shouldOhlc: false,
@@ -386,7 +387,7 @@ export function registerBooksIndicators(): IndicatorGroup[] {
       registerIndicator(depth)
       const view: IndicatorTemplate<ProfileValue, number, ExtendData> = {
         name: templateName('view', kind),
-        shortName: `${kind.toUpperCase()} BOOK VIEW`,
+        shortName: `${kind.toUpperCase()} BOOK VIEW · ${PROVENANCE}`,
         precision: 2,
         calcParams: [],
         shouldOhlc: false,
@@ -410,7 +411,7 @@ export function registerBooksIndicators(): IndicatorGroup[] {
       registerIndicator(view)
       const sentiment: IndicatorTemplate<SentimentValue, number, ExtendData> = {
         name: templateName('sentiment', kind),
-        shortName: `${kind.toUpperCase()} LONG%`,
+        shortName: `${kind.toUpperCase()} LONG% · ${PROVENANCE}`,
         precision: 1,
         calcParams: [],
         shouldOhlc: false,
@@ -442,7 +443,7 @@ export function registerBooksIndicators(): IndicatorGroup[] {
     }
     const flow: IndicatorTemplate<FlowValue, number, ExtendData> = {
       name: templateName('flow'),
-      shortName: 'BOOK FLOW',
+      shortName: `BOOK FLOW · ${PROVENANCE}`,
       precision: 2,
       // The near-range, percent of the snapshot price either side.
       calcParams: [DEFAULT_FLOW_RANGE_PCT],
@@ -479,7 +480,7 @@ export function registerBooksIndicators(): IndicatorGroup[] {
   }
   return [
     {
-      label: 'OANDA books · price pane',
+      label: 'OANDA books (practice account) · price pane',
       main: true,
       items: [
         {
@@ -495,7 +496,7 @@ export function registerBooksIndicators(): IndicatorGroup[] {
       ]
     },
     {
-      label: 'OANDA books',
+      label: 'OANDA books (practice account)',
       main: false,
       items: [
         {

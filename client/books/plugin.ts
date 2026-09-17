@@ -2,6 +2,7 @@ import type { IndicatorGroup } from '../../src'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import {
   DEFAULT_FLOW_RANGE_PCT,
+  PROVENANCE,
   nearSource,
   profileSource,
   totalsSource,
@@ -21,13 +22,13 @@ const AXIS_GAP = { top: 0.1, bottom: 0.05 }
 function baseLabel(display: string, kind: string): string {
   switch (display) {
     case 'depth':
-      return `${kind.toUpperCase()} BOOK`
+      return `${kind.toUpperCase()} BOOK · ${PROVENANCE}`
     case 'view':
-      return `${kind.toUpperCase()} BOOK VIEW`
+      return `${kind.toUpperCase()} BOOK VIEW · ${PROVENANCE}`
     case 'sentiment':
-      return `${kind.toUpperCase()} LONG%`
+      return `${kind.toUpperCase()} LONG% · ${PROVENANCE}`
     default:
-      return 'BOOK FLOW'
+      return `BOOK FLOW · ${PROVENANCE}`
   }
 }
 

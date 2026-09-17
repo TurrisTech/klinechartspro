@@ -11,6 +11,12 @@ import { isTiledMetric, pointsFromTiles } from './tiles'
 // wants "the book active at this bar" forward-fills in `calc` (templates.ts).
 
 export const BOOK_KINDS = ['order', 'position'] as const
+
+/** Every book here comes from OANDA's PRACTICE account: the live account is not entitled to
+ * /orderBook or /positionBook (401). Prod shows them anyway, by the user's explicit exception
+ * (2026-09-17) to the no-demo-data-in-prod rule, on the condition that every book display
+ * says so — so this suffix is on every pane label, picker group and drawn title. */
+export const PROVENANCE = 'PRACTICE'
 export type BookKind = (typeof BOOK_KINDS)[number]
 
 /** OANDA publishes both books every 20 minutes (:00/:20/:40 UTC). */
