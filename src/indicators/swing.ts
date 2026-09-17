@@ -15,7 +15,7 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
 
 /**
- * SWING -- swing tops and bottoms, computed in the browser and marked on the price pane.
+ * SWING (shown as "Tops and Bottoms") -- swing tops and bottoms, computed in the browser and marked on the price pane.
  *
  * Parameters: [left, right, marker], default [10, 10, 0].
  *
@@ -117,7 +117,8 @@ function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number
 
 const swing: IndicatorTemplate<Swing, number> = {
   name: 'SWING',
-  shortName: 'SWING',
+  // `name` stays SWING: saved layouts record indicators by it. Only the label changed.
+  shortName: 'Tops and Bottoms',
   series: 'price',
   calcParams: [DEFAULT_LEFT, DEFAULT_RIGHT, SWING_MARKER_CIRCLE],
   precision: 2,
