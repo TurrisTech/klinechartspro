@@ -12,6 +12,9 @@
  * limitations under the License.
  */
 
+import type { IndicatorCreateTooltipDataSourceCallback } from 'klinecharts'
+
+import sessions from './sessions'
 import swing from './swing'
 import wma from './wma'
 
@@ -20,6 +23,14 @@ import wma from './wma'
 // (client/indicators), whose values come from the server. Registered in src/index.ts;
 // their settings live in src/config/indicators.ts and their picker entries in
 // ChartPro.svelte's `mainIndicatorNames` / `subIndicatorNames`.
-const indicators = [wma, swing]
+const indicators = [wma, swing, sessions]
+
+// The tooltip data source a template of this library declares, by name -- for ChartPane,
+// which installs its own on every indicator it creates (to pick the legend's icons) and
+// would otherwise discard the template's. Null for a template that has none.
+export function templateTooltipDataSource(name: string): IndicatorCreateTooltipDataSourceCallback<unknown> | null {
+  const template = indicators.find((t) => t.name === name)
+  return (template?.createTooltipDataSource as IndicatorCreateTooltipDataSourceCallback<unknown> | null | undefined) ?? null
+}
 
 export default indicators

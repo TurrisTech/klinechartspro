@@ -1,0 +1,300 @@
+/**
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+
+ * http://www.apache.org/licenses/LICENSE-2.0
+
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import type { Chart, IndicatorTemplate, KLineData, TooltipLegend } from 'klinecharts'
+
+/**
+ * SESSIONS -- the trading sessions of the instrument's asset class, shaded on the price pane.
+ *
+ * Parameters: [fill, ribbon], default [8, 1].
+ *
+ * Which sessions are drawn follows the instrument's asset class (`SymbolInfo.market`, the
+ * normalised class the server stores on the instrument's configuration):
+ *
+ *   forex / metal / cfd / crypto  Tokyo 09:00-18:00 JST, London 08:00-17:00 London time,
+ *                                 New York 08:00-17:00 New York time -- the three centres a
+ *                                 24-hour market is usually described by. Crypto has no
+ *                                 exchange hours at all; these are the desks that move it.
+ *   equity                        pre-market 04:00-09:30, regular 09:30-16:00, after hours
+ *                                 16:00-20:00, all New York time.
+ *
+ * Every session is a wall-clock span in ITS OWN zone, Monday to Friday there, so London
+ * opens at 08:00 whether that is 07:00Z (summer) or 08:00Z (winter) -- the zone rule, not a
+ * UTC offset, is what the chart applies. A session covers a bar when the two half-open spans
+ * intersect, so a 4h bar from 05:00Z to 09:00Z is a London bar in winter and one from 04:00Z
+ * to 08:00Z is not: the session opens exactly as that bar closes. Nothing is drawn on a
+ * daily or coarser chart, where every bar spans every session.
+ *
+ * `fill` is the opacity, in percent, of a band behind the bars of each session (0 turns it
+ * off; overlaps -- London into New York -- stack and read darker). `ribbon` (0 or 1) adds a
+ * labelled strip per session along the bottom of the pane. Colours are fixed per session
+ * rather than themed so a session reads the same on every pane of a wall.
+ *
+ * Everything is computed in `draw` and the tooltip from the bars on screen -- a session is a
+ * fact about the clock, not about the series -- so `calc` produces no values and nothing
+ * here enters the y-axis. The zone offsets that `Intl` resolves are memoised per quarter hour
+ * (bounded), which is what makes a few thousand visible 1m bars cheap.
+ */
+
+export interface TradingSession {
+  id: string
+  label: string
+  /** IANA zone the open/close are read on. */
+  timezone: string
+  /** Minutes after local midnight, half-open [open, close). */
+  open: number
+  close: number
+  color: string
+}
+
+const minutes = (hhmm: string): number => {
+  const [h, m] = hhmm.split(':').map(Number)
+  return h * 60 + m
+}
+
+export const GLOBAL_SESSIONS: readonly TradingSession[] = [
+  { id: 'tokyo', label: 'Tokyo', timezone: 'Asia/Tokyo', open: minutes('09:00'), close: minutes('18:00'), color: '#f06292' },
+  { id: 'london', label: 'London', timezone: 'Europe/London', open: minutes('08:00'), close: minutes('17:00'), color: '#42a5f5' },
+  { id: 'newyork', label: 'New York', timezone: 'America/New_York', open: minutes('08:00'), close: minutes('17:00'), color: '#ffb74d' }
+]
+
+export const US_EQUITY_SESSIONS: readonly TradingSession[] = [
+  { id: 'premarket', label: 'Pre-market', timezone: 'America/New_York', open: minutes('04:00'), close: minutes('09:30'), color: '#ba68c8' },
+  { id: 'regular', label: 'Regular', timezone: 'America/New_York', open: minutes('09:30'), close: minutes('16:00'), color: '#42a5f5' },
+  { id: 'afterhours', label: 'After hours', timezone: 'America/New_York', open: minutes('16:00'), close: minutes('20:00'), color: '#90a4ae' }
+]
+
+/** The session set for an asset class as the server spells it (`AssetClass` in wmarkettypes:
+ * forex, metal, cfd, equity, crypto). Anything unknown reads as the 24-hour set. */
+export function sessionsFor(assetClass: string | undefined): readonly TradingSession[] {
+  return assetClass === 'equity' ? US_EQUITY_SESSIONS : GLOBAL_SESSIONS
+}
+
+const MINUTE_MS = 60_000
+const DAY_MS = 86_400_000
+const OFFSET_BUCKET_MS = 15 * MINUTE_MS
+const OFFSET_CACHE_LIMIT = 50_000
+
+const formatters = new Map<string, Intl.DateTimeFormat>()
+const offsets = new Map<string, number>()
+
+function formatterFor(timezone: string): Intl.DateTimeFormat {
+  let formatter = formatters.get(timezone)
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric'
+    })
+    formatters.set(timezone, formatter)
+  }
+  return formatter
+}
+
+/** The zone's UTC offset in minutes at `ms`, positive east of Greenwich. Resolved through
+ * `Intl` once per quarter hour per zone: a transition lands on a quarter hour in every zone
+ * in use, and the cache is emptied rather than grown past `OFFSET_CACHE_LIMIT`. */
+export function zoneOffsetMinutes(timezone: string, ms: number): number {
+  const bucket = Math.floor(ms / OFFSET_BUCKET_MS)
+  const key = `${timezone}|${bucket}`
+  let offset = offsets.get(key)
+  if (offset === undefined) {
+    const at = bucket * OFFSET_BUCKET_MS
+    const parts = formatterFor(timezone).formatToParts(new Date(at))
+    const part = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value)
+    const asUtc = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour') % 24, part('minute'), part('second'))
+    offset = Math.round((asUtc - at) / MINUTE_MS)
+    if (offsets.size >= OFFSET_CACHE_LIMIT) offsets.clear()
+    offsets.set(key, offset)
+  }
+  return offset
+}
+
+export interface WallClock {
+  /** Days since 1970-01-01 on the zone's calendar. */
+  day: number
+  /** 0 Sunday .. 6 Saturday. */
+  weekday: number
+  minuteOfDay: number
+}
+
+export function wallClock(timezone: string, ms: number): WallClock {
+  const local = ms + zoneOffsetMinutes(timezone, ms) * MINUTE_MS
+  const day = Math.floor(local / DAY_MS)
+  return { day, weekday: weekdayOf(day), minuteOfDay: Math.floor((local - day * DAY_MS) / MINUTE_MS) }
+}
+
+// 1970-01-01 was a Thursday.
+const weekdayOf = (day: number): number => (((day + 4) % 7) + 7) % 7
+const isTradingDay = (day: number): boolean => {
+  const weekday = weekdayOf(day)
+  return weekday >= 1 && weekday <= 5
+}
+
+/** Whether `session` is in progress during any part of the bar [openMs, openMs + spanMs).
+ * Both spans are half-open, so a bar that closes exactly as the session opens is not
+ * covered. A bar may reach the next local day's session; a weekend day's never counts. */
+export function sessionCoversBar(session: TradingSession, openMs: number, spanMs: number): boolean {
+  const localOpen = openMs + zoneOffsetMinutes(session.timezone, openMs) * MINUTE_MS
+  const localClose = localOpen + Math.max(spanMs, 1)
+  const firstDay = Math.floor(localOpen / DAY_MS)
+  const lastDay = Math.floor((localClose - 1) / DAY_MS)
+  for (let day = firstDay; day <= lastDay; day++) {
+    if (!isTradingDay(day)) continue
+    const start = day * DAY_MS + session.open * MINUTE_MS
+    const end = day * DAY_MS + session.close * MINUTE_MS
+    if (localOpen < end && localClose > start) return true
+  }
+  return false
+}
+
+const PERIOD_MS: Partial<Record<string, number>> = { second: 1000, minute: MINUTE_MS, hour: 60 * MINUTE_MS }
+
+interface Plan {
+  sessions: readonly TradingSession[]
+  spanMs: number
+}
+
+/** What to draw on this chart: its asset class's sessions and its bar span, or null on a
+ * daily-or-coarser period, where every bar spans every session and there is nothing to show. */
+function planFor(chart: Chart): Plan | null {
+  const period = chart.getPeriod()
+  const unit = period ? PERIOD_MS[period.type] : undefined
+  if (period === null || unit === undefined) return null
+  const market = chart.getSymbol()?.market
+  return { sessions: sessionsFor(typeof market === 'string' ? market : undefined), spanMs: unit * period.span }
+}
+
+const DEFAULT_FILL = 8
+const DEFAULT_RIBBON = 1
+
+function percentParam(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) / 100 : fallback / 100
+}
+
+const RIBBON_ROW = 12
+const RIBBON_GAP = 1
+const RIBBON_PAD = 4
+
+/** Inclusive index runs of bars the session covers, so a session is one rectangle per
+ * stretch rather than one per bar. */
+export function coveredRuns(session: TradingSession, bars: readonly KLineData[], from: number, to: number, spanMs: number): Array<[number, number]> {
+  const runs: Array<[number, number]> = []
+  let start = -1
+  for (let i = from; i <= to; i++) {
+    if (sessionCoversBar(session, bars[i].timestamp, spanMs)) {
+      if (start < 0) start = i
+    } else if (start >= 0) {
+      runs.push([start, i - 1])
+      start = -1
+    }
+  }
+  if (start >= 0) runs.push([start, to])
+  return runs
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, '0')
+
+export interface SessionsResult {
+  [key: string]: number | undefined
+}
+
+const sessions: IndicatorTemplate<SessionsResult, number> = {
+  name: 'SESSIONS',
+  shortName: 'SESSIONS',
+  series: 'price',
+  calcParams: [DEFAULT_FILL, DEFAULT_RIBBON],
+  precision: 0,
+  shouldOhlc: false,
+  // No figures: nothing enters the y-axis, and the tooltip is built below.
+  figures: [],
+  calc: (dataList: KLineData[]) => dataList.map(() => ({})),
+  createTooltipDataSource: ({ chart, indicator, crosshair }) => {
+    const plan = planFor(chart)
+    const legends: TooltipLegend[] = []
+    const bar = crosshair.dataIndex === undefined ? undefined : chart.getDataList()[crosshair.dataIndex]
+    if (plan === null) {
+      legends.push({ title: 'Sessions: ', value: 'intraday charts only' })
+    } else if (bar) {
+      for (const session of plan.sessions) {
+        const clock = wallClock(session.timezone, bar.timestamp)
+        const open = sessionCoversBar(session, bar.timestamp, plan.spanMs)
+        const time = `${pad2(Math.floor(clock.minuteOfDay / 60))}:${pad2(clock.minuteOfDay % 60)}`
+        legends.push({
+          title: { text: `${session.label}: `, color: session.color },
+          value: { text: `${open ? '●' : '○'} ${time}`, color: session.color }
+        })
+      }
+    }
+    return {
+      name: indicator.shortName,
+      calcParamsText: `(${indicator.calcParams.join(',')})`,
+      legends,
+      features: chart.getStyles().indicator.tooltip.features
+    }
+  },
+  draw: ({ ctx, chart, indicator, bounding, xAxis }) => {
+    const plan = planFor(chart)
+    if (plan === null) return true
+    const fill = percentParam(indicator.calcParams[0], DEFAULT_FILL)
+    const ribbon = indicator.calcParams[1] !== 0
+    if (fill === 0 && !ribbon) return true
+
+    const bars = chart.getDataList()
+    const range = chart.getVisibleRange()
+    const from = Math.max(0, range.realFrom - 1)
+    const to = Math.min(bars.length - 1, range.realTo + 1)
+    if (to < from) return true
+    const pitch = chart.getBarSpace().bar
+    const rows = plan.sessions.length
+
+    ctx.save()
+    ctx.textBaseline = 'middle'
+    ctx.textAlign = 'left'
+    ctx.font = 'bold 10px sans-serif'
+    plan.sessions.forEach((session, row) => {
+      const rowTop = bounding.height - RIBBON_PAD - (rows - row) * (RIBBON_ROW + RIBBON_GAP)
+      for (const [a, b] of coveredRuns(session, bars, from, to, plan.spanMs)) {
+        const x0 = xAxis.convertToPixel(a) - pitch / 2
+        const x1 = xAxis.convertToPixel(b) + pitch / 2
+        ctx.fillStyle = session.color
+        if (fill > 0) {
+          ctx.globalAlpha = fill
+          ctx.fillRect(x0, 0, x1 - x0, bounding.height)
+        }
+        if (ribbon) {
+          ctx.globalAlpha = 0.9
+          ctx.fillRect(x0, rowTop, x1 - x0, RIBBON_ROW)
+          // The label sits at the run's visible start: a run that began off-screen keeps
+          // its name at the left edge rather than losing it with the bars.
+          const labelX = Math.max(x0, 0) + 4
+          if (x1 - labelX > ctx.measureText(session.label).width + 4) {
+            ctx.globalAlpha = 1
+            ctx.fillStyle = '#ffffff'
+            ctx.fillText(session.label, labelX, rowTop + RIBBON_ROW / 2)
+          }
+        }
+      }
+    })
+    ctx.restore()
+    return true
+  }
+}
+
+export default sessions

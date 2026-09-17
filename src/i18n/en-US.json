@@ -49,6 +49,7 @@
   "ema": "EMA(Exponential Moving Average)",
   "wma": "WMA(Weighted Moving Average)",
   "swing": "Tops and Bottoms",
+  "sessions": "Trading Sessions",
   "sma": "SMA",
   "boll": "BOLL(Bolinger Bands)",
   "bbi": "BBI(Bull And Bearlndex)",
@@ -164,7 +165,10 @@
   "grid_show": "Show grid",
   "restore_default": "Restore defaults",
   "indicator_title_SWING": "Tops and Bottoms",
+  "indicator_title_SESSIONS": "Trading Sessions",
   "swing_left_bars": "Bars before (history)",
   "swing_right_bars": "Bars after (future)",
-  "swing_marker": "Marker: 0 circle, 1 signal, 2 both"
+  "swing_marker": "Marker: 0 circle, 1 signal, 2 both",
+  "sessions_fill": "Shading opacity (%)",
+  "sessions_ribbon": "Ribbon: 0 hide, 1 show"
 }

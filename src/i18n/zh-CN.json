@@ -22,6 +22,7 @@
   "ema": "EMA(指数平滑移动平均线)",
   "wma": "WMA(加权移动平均线)",
   "swing": "顶底",
+  "sessions": "交易时段",
   "sma": "SMA",
   "boll": "BOLL(布林线)",
   "bbi": "BBI(多空指数)",
@@ -138,7 +139,10 @@
   "grid_show": "网格线显示",
   "restore_default": "恢复默认",
   "indicator_title_SWING": "顶底",
+  "indicator_title_SESSIONS": "交易时段",
   "swing_left_bars": "左侧K线数",
   "swing_right_bars": "右侧K线数",
-  "swing_marker": "标记: 0 圆圈, 1 信号, 2 两者"
+  "swing_marker": "标记: 0 圆圈, 1 信号, 2 两者",
+  "sessions_fill": "背景透明度 (%)",
+  "sessions_ribbon": "时段条: 0 隐藏, 1 显示"
 }

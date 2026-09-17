@@ -139,6 +139,11 @@ const builtin = {
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 2 },
     { paramNameKey: 'params_3', precision: 0, min: 1, default: 20 }
   ],
+  // SESSIONS is this library's own template (src/indicators/sessions.ts).
+  SESSIONS: [
+    { paramNameKey: 'sessions_fill', precision: 0, min: 0, max: 100, default: 8 },
+    { paramNameKey: 'sessions_ribbon', precision: 0, min: 0, max: 1, default: 1 }
+  ],
   // SWING is this library's own template (src/indicators/swing.ts).
   SWING: [
     { paramNameKey: 'swing_left_bars', precision: 0, min: 1, default: 10 },
