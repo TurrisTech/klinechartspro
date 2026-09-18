@@ -160,8 +160,8 @@ describe('the factory is memoised, which is what makes a shared key safe', () =>
   })
 })
 
-describe('the registry pane and the MTF overlay agree on the key they share', () => {
-  test('same key, same resolution, same factory -- so binding order cannot matter', async () => {
+describe('the registry pane and the MTF overlay read the same series into separate stores', () => {
+  test('the series key plus `|mtf`, the same resolution and the same factory', async () => {
     const { createMtfPlugin } = await import('../mtf/plugin')
     const { fakeChart, fakeIndicator, fakePane } = await import('../plugins/testing')
 
@@ -193,11 +193,10 @@ describe('the registry pane and the MTF overlay agree on the key they share', ()
     const pane = storedSource(facilities, arev21Entry, ctx('4h'))
 
     expect(overlay).toBeDefined()
-    expect(overlay?.key).toBe(pane.key)
+    // Its own store: a sub-pane that loaded a window first must not mark it covered for the
+    // overlay, which needs the grid the sub-pane never fetches (client/mtf/plugin.ts).
+    expect(overlay?.key).toBe(`${pane.key}|mtf`)
     expect(pane.key).toBe(registrySourceKey('arev21', 'oanda', 'EURUSD', '4h'))
-    // Reference equality on the factory is the whole invariant: `storeFor` runs `create`
-    // only for an ABSENT key, so two different factories under one key means the class
-    // depends on which pane mounted first.
     expect(overlay?.createStore).toBe(pane.createStore)
     expect(overlay?.createStore).toBe(storeFactory(null))
     // And on the resolution, or a replay step would forget two different amounts of the
@@ -251,9 +250,9 @@ describe('a stored row with params', () => {
   })
 })
 
-describe('the outlier rank overlays share the sub-pane store at the same numbers', () => {
-  // The overlay sends its params in full, in the row's declared order, so a TS sub-pane
-  // dialled to the same numbers lands on the byte-identical key (mtf/overlays.ts).
+describe('the outlier rank overlays read the sub-pane series at the same numbers', () => {
+  // The overlay sends its params in full, in the row's declared order, so its series key is
+  // the one a TS sub-pane dialled to the same numbers has; its store is that plus `|mtf`.
   const rank = {
     name: 'arev21_outlier_rank',
     template: 'TS:arev21_outlier_rank',
@@ -271,7 +270,7 @@ describe('the outlier rank overlays share the sub-pane store at the same numbers
     [90, 0.9],
     [85, 0.85]
   ] as const) {
-    test(`rank ${percent}: same key and factory as the sub-pane at q=${q}, and asks the wire for q=${q}`, async () => {
+    test(`rank ${percent}: the sub-pane's series at q=${q} in its own store, and asks the wire for q=${q}`, async () => {
       const { createMtfPlugin } = await import('../mtf/plugin')
       const { outlierRankMtf } = await import('../mtf/overlays')
       const { fakeChart, fakeIndicator, fakePane } = await import('../plugins/testing')
@@ -309,7 +308,7 @@ describe('the outlier rank overlays share the sub-pane store at the same numbers
       })
       const source = spec?.sources.find((s) => s.id === '4h')
       const pane = storedSource(facilities, rank, ctx('4h'), storedParams(rank, [200, q, 0]))
-      expect(source?.key).toBe(pane.key)
+      expect(source?.key).toBe(`${pane.key}|mtf`)
       expect(source?.createStore).toBe(pane.createStore)
       expect(source?.resolution).toBe(pane.resolution)
 
@@ -322,6 +321,74 @@ describe('the outlier rank overlays share the sub-pane store at the same numbers
         resolution: '4h',
         params: { bars: 200, q, samples_only: 0 }
       })
+    })
+  }
+})
+
+describe('an overlay never inherits coverage from a sub-pane that fetched no grid', () => {
+  // The bug (2026-09-18): the overlay's source shared the sub-pane's store key, and a store
+  // has ONE record of what has been fetched. A sub-pane that loaded a window first marked it
+  // covered with no bar grid in it, so the overlay never fetched that window's grid, and every
+  // vote in it was dropped as "not closed yet" -- a 1h chart showed only the 8h lane, the one
+  // timeframe no pane on the wall had a sub-pane at.
+  const rank = {
+    name: 'arev21_outlier_rank',
+    template: 'TS:arev21_outlier_rank',
+    title: 'AREV21 OUTLIER RANK',
+    source: { kind: 'table', fold_by: null },
+    wire: { plugin: 'arev21_outlier', variant: 'arev21_outlier_rank' },
+    params: [
+      { name: 'bars', type: 'int', default: 200, min: 20, max: 5000 },
+      { name: 'q', type: 'float', default: 0.85, min: 0.5, max: 1 },
+      { name: 'samples_only', type: 'int', default: 0, min: 0, max: 1 }
+    ]
+  } as unknown as RegistryIndicator
+
+  const cases = [
+    ['MTF:arev21', 'AREV21_MTF', arev21Entry, {}],
+    ['MTF:arev21_outlier_rank_85', 'AREV21_OUTLIER_RANK_85_MTF', rank, { bars: 200, q: 0.85, samples_only: 0 }],
+    ['MTF:arev21_outlier_rank_90', 'AREV21_OUTLIER_RANK_90_MTF', rank, { bars: 200, q: 0.9, samples_only: 0 }]
+  ] as const
+
+  for (const [template, exported, entry, params] of cases) {
+    test(`${template}: a window a sub-pane loaded is still missing for the overlay`, async () => {
+      const { createMtfPlugin } = await import('../mtf/plugin')
+      const overlays = (await import('../mtf/overlays')) as unknown as Record<string, never>
+      const { storeFor } = await import('../plugins/store')
+      const { fakeChart, fakeIndicator, fakePane } = await import('../plugins/testing')
+      const facilities = {
+        points: async () => ({ points: [], nextFrom: null }),
+        resolutionDurationMs: () => 14_400_000,
+        openSettingsPanel: () => ({ close() {} }),
+        requestPersist: () => {},
+        paneInfo: () => null,
+        requestReconcile: () => {}
+      } as unknown as PluginFacilities
+      const plugin = createMtfPlugin(overlays[exported])
+      plugin.register(facilities)
+      const fc = fakeChart()
+      const spec = plugin.bind({
+        chart: fc.chart,
+        pane: fakePane('p1', fc.chart),
+        paneIndex: 0,
+        indicator: fakeIndicator(template, 'i1'),
+        symbol: { ticker: 'EURUSD' } as never,
+        vendor: 'oanda',
+        ticker: 'EURUSD',
+        interval: '1h',
+        siblings: []
+      })
+      const overlay = spec?.sources.find((s) => s.id === '4h')
+      if (!overlay) throw new Error('no 4h source')
+
+      // A 4h pane's sub-pane, at the numbers this overlay reads, loads a window first.
+      const pane = storedSource(facilities, entry, ctx('4h'), params as Record<string, number>)
+      const window = { from: 1_000_000, to: 2_000_000 }
+      if (!pane.createStore || !overlay.createStore) throw new Error('no store factory')
+      storeFor(pane.key, pane.createStore).ingest([row({ date: 1_500_000, p: 0.9, n: 200, signal: 'long' })], window)
+
+      const store = storeFor(overlay.key, overlay.createStore)
+      expect(store.missing(window)).toEqual([window])
     })
   }
 })

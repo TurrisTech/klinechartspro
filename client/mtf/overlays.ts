@@ -27,8 +27,9 @@ export interface MtfOverlay {
   description: string
   /** The server capability this overlay's votes need. */
   feature: Feature
-  /** Store identity for one source timeframe's votes. Chosen to COINCIDE with the key the
-   * registry sub-pane for the same series uses, so the two share one store (tsregistry/store.ts). */
+  /** The series' identity for one source timeframe -- the key the registry sub-pane for the
+   * same series uses. The overlay's store is this plus `|mtf` (plugin.ts says why it must not
+   * be the sub-pane's own). */
   sourceKey(vendor: string, ticker: string, interval: MtfInterval): string
   /** The votes for one source timeframe over `[from, to)`, in that timeframe's wire dates.
    * `nextFrom` is set when the answer was capped short of `to`. */
@@ -72,10 +73,10 @@ const OUTLIER_RANK = 'arev21_outlier_rank'
  *
  * The params are sent in full and in the registry row's declared order (`bars`, `q`,
  * `samples_only` -- wtradingindicators tsregistry `_OUTLIER_PARAMS`), with the row's defaults
- * for the two this overlay does not vary. That is deliberate twice over: the answer does not
- * move if the server's defaults ever do, and the store key is then byte-for-byte the one
- * `storedSource` gives a `TS:arev21_outlier_rank` sub-pane set to the same numbers, so a
- * sub-pane and this overlay on one wall read one store rather than fetching the rows twice.
+ * for the two this overlay does not vary, so the answer does not move if the server's defaults
+ * ever do. `sourceKey` is then the series identity `storedSource` gives a
+ * `TS:arev21_outlier_rank` sub-pane set to the same numbers; the overlay's store is kept apart
+ * from that sub-pane's all the same (plugin.ts).
  */
 export function outlierRankMtf(percent: number): MtfOverlay {
   const params = { bars: 200, q: percent / 100, samples_only: 0 }

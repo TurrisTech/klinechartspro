@@ -4,9 +4,11 @@ import type { Range } from '../plugins/types'
 // THE store class for every registry-driven source, and deliberately the only one.
 //
 // `storeFor(key, create)` calls `create` only when the key is ABSENT, so the binding that
-// arrives first decides the class and every later one silently gets it. Two bindings really
-// do share a key here: the AREV21 sub-pane and the AREV21 multi-timeframe overlay
-// (`client/mtf/`), which reads the same generation at intervals that are not its chart's.
+// arrives first decides the class and every later one silently gets it. The AREV21 sub-pane
+// and the AREV21 multi-timeframe overlay (`client/mtf/`) used to share a key. They no longer
+// do (2026-09-18): the overlay's key carries `|mtf`, because a store has ONE record of what has
+// been fetched and the sub-pane fetches no grid -- see client/mtf/plugin.ts. What follows is
+// why the one class still matters for any two bindings that do share a key.
 // When the two disagreed about what a stored value is, that was a real bug and it went both
 // ways -- the overlay's rows overwrote the pane's votes with rows carrying no `p`, and the
 // overlay then read back a store with no `grid()`: 0 of 266 votes and 0 markers on a 1h

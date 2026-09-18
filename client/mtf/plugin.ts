@@ -65,11 +65,13 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
     const chunk = GRID_CHUNK_BARS * f.resolutionDurationMs(interval)
     return {
       id: interval,
-      // The same key the registry sub-pane for this series would use at this interval
-      // (overlays.ts): a sub-pane and the overlay reading the same votes share one store. Sharing a key means sharing
-      // the row type and the factory as well -- see tsregistry/store.ts for what went wrong when
-      // these two wrote different things under it.
-      key: overlay.sourceKey(ctx.vendor, ctx.ticker, interval),
+      // The series' key plus `|mtf`: the overlay's OWN store, never the registry sub-pane's.
+      // A store keeps one record of which ranges have been fetched, and a sub-pane fetches no
+      // bar grid -- so sharing its store meant a window the sub-pane loaded first counted as
+      // covered, the overlay never fetched that window's grid, and every vote in it was dropped
+      // as not yet closed (a 1h chart drew only the 8h lane: the one timeframe no pane on the
+      // wall had a sub-pane at). The price is fetching the votes twice when both are on a wall.
+      key: `${overlay.sourceKey(ctx.vendor, ctx.ticker, interval)}|mtf`,
       // The SOURCE timeframe, not the chart's: this is what its points are dated on. The
       // AREV sub-pane's spec for this key says the same, so a replay step forgets one
       // amount rather than two (plugins/horizon.ts).
