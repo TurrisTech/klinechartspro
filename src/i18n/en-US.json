@@ -177,5 +177,6 @@
   "indicator_manager_hint": "Every indicator in use, on each pane of the wall",
   "indicator_manager_empty": "No pane carries an indicator yet. Add one from the Indicator picker.",
   "all_panes": "All",
-  "pane": "Pane"
+  "pane": "Pane",
+  "indicator_manager_resize": "Drag to resize; double-click to fit the table"
 }

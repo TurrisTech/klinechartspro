@@ -39,3 +39,33 @@ export function dragOffset(offset: Offset, delta: Offset, start: Box, bounds: Bo
     y: axis(delta.y, bounds.top - start.top, bounds.bottom - start.bottom, offset.y)
   }
 }
+
+export interface Size {
+  width: number
+  height: number
+}
+
+/** The size and offset after the resize grip (bottom-right corner) moved by `delta`, from a
+ * resize that began with the dialog at `start` under `offset`.
+ *
+ * The stylesheet centres the dialog, so growing it by `d` would move each edge by `d/2`; the
+ * offset absorbs half the change, which keeps the top-left corner where it was and puts the
+ * bottom-right corner under the pointer. The size is at least `min` and never carries the
+ * bottom-right corner out of `bounds`. */
+export function resizeBox(
+  offset: Offset,
+  delta: Offset,
+  start: Box,
+  bounds: Box,
+  min: Size
+): { size: Size; offset: Offset } {
+  const width0 = start.right - start.left
+  const height0 = start.bottom - start.top
+  const clamp = (value: number, lo: number, hi: number): number => Math.min(Math.max(value, lo), Math.max(hi, lo))
+  const width = clamp(width0 + delta.x, min.width, bounds.right - start.left)
+  const height = clamp(height0 + delta.y, min.height, bounds.bottom - start.top)
+  return {
+    size: { width, height },
+    offset: { x: offset.x + (width - width0) / 2, y: offset.y + (height - height0) / 2 }
+  }
+}

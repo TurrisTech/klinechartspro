@@ -1337,7 +1337,9 @@
 	/* The drag offset (IndicatorManager.svelte) -- `translate` composes with the centring
 	   transform instead of replacing it. */
 	translate: var(--kc-drag-x, 0) var(--kc-drag-y, 0);
-	width: max-content;
+	/* Unset, the dialog fits its table; the corner grip sets both (IndicatorManager.svelte). */
+	width: var(--kc-size-w, max-content);
+	height: var(--kc-size-h, auto);
 	max-width: calc(100% - 2rem);
 	grid-template-rows: auto minmax(0, 1fr);
 }
@@ -1346,8 +1348,9 @@
 	left: 0;
 	width: 100%;
 	max-width: none;
-	/* A shell that shrank to phone size while the dialog was moved: full screen wins. */
+	/* A shell that shrank to phone size while the dialog was moved or sized: full screen wins. */
 	translate: none;
+	height: 100%;
 }
 
 /* The header moves the dialog (IndicatorManager.svelte). Not on a phone, where the dialog is
@@ -1360,6 +1363,28 @@
 
 .klinecharts-pro-shell[data-size='phone'] .kc-dialog-drag-handle {
 	cursor: auto;
+}
+
+/* The bottom-right corner resizes the dialog; two short diagonal strokes mark it. */
+.kc-dialog-resize-grip {
+	position: absolute;
+	right: 2px;
+	bottom: 2px;
+	width: 14px;
+	height: 14px;
+	cursor: nwse-resize;
+	touch-action: none;
+	background:
+		linear-gradient(135deg, transparent 45%, var(--muted-foreground) 45% 52%, transparent 52% 70%, var(--muted-foreground) 70% 77%, transparent 77%);
+	opacity: 0.6;
+}
+
+.kc-dialog-resize-grip:hover {
+	opacity: 1;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-resize-grip {
+	display: none;
 }
 
 .kc-matrix-scroll {

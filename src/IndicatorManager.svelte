@@ -14,7 +14,7 @@
     rowKey,
     usedIndicators
   } from './state/indicatorMatrix'
-  import { type Box, dragOffset, type Offset } from './utils/drag'
+  import { type Box, dragOffset, type Offset, resizeBox, type Size } from './utils/drag'
 
   // Every indicator in use on the wall against every visible pane: a cell is "this indicator on
   // this pane", and ticking it adds or removes it through the pane's own changeIndicator -- the
@@ -62,6 +62,10 @@
   // shows it full screen, where there is nowhere to move it to.
   let content = $state<HTMLElement | null>(null)
   let offset = $state<Offset>({ x: 0, y: 0 })
+  // Null until the corner grip is dragged: the dialog then fits its table (app.css). Kept across a
+  // close like the offset; a double-click on the grip goes back to fitting.
+  let size = $state<Size | null>(null)
+  const MIN_SIZE: Size = { width: 320, height: 240 }
 
   // The shell less the gutter a dialog keeps from its edges when it is not moved (app.css).
   const GUTTER = 16
@@ -72,20 +76,21 @@
     return { left: r.left + GUTTER, top: r.top + GUTTER, right: r.right - GUTTER, bottom: r.bottom - GUTTER }
   }
 
-  function startDrag(event: PointerEvent): void {
+  // One pointer gesture on a handle: `apply` gets the pointer's travel since pointerdown along
+  // with where the dialog and the shell were when it began.
+  function track(event: PointerEvent, apply: (delta: Offset, start: Box, bounds: Box, from: Offset) => void): void {
     if (event.button !== 0 || !content) return
     const bounds = boundsOf(content)
     if (!bounds) return
     event.preventDefault()
+    event.stopPropagation()
     const handle = event.currentTarget as HTMLElement
     handle.setPointerCapture(event.pointerId)
     const start = content.getBoundingClientRect()
     const from = offset
     const x0 = event.clientX
     const y0 = event.clientY
-    const move = (e: PointerEvent): void => {
-      offset = dragOffset(from, { x: e.clientX - x0, y: e.clientY - y0 }, start, bounds)
-    }
+    const move = (e: PointerEvent): void => apply({ x: e.clientX - x0, y: e.clientY - y0 }, start, bounds, from)
     const end = (): void => {
       handle.removeEventListener('pointermove', move)
       handle.removeEventListener('pointerup', end)
@@ -94,6 +99,42 @@
     handle.addEventListener('pointermove', move)
     handle.addEventListener('pointerup', end)
     handle.addEventListener('pointercancel', end)
+  }
+
+  function startDrag(event: PointerEvent): void {
+    track(event, (delta, start, bounds, from) => {
+      offset = dragOffset(from, delta, start, bounds)
+    })
+  }
+
+  function startResize(event: PointerEvent): void {
+    track(event, (delta, start, bounds, from) => {
+      const next = resizeBox(from, delta, start, bounds, MIN_SIZE)
+      size = next.size
+      offset = next.offset
+    })
+  }
+
+  // Back to fitting the table. The top-left corner stays where it is, as it does during a resize:
+  // measure the fitted box, then move the offset by half of the change in size.
+  function fitToTable(): void {
+    if (!content || !size) return
+    const before = content.getBoundingClientRect()
+    size = null
+    const element = content
+    requestAnimationFrame(() => {
+      const after = element.getBoundingClientRect()
+      const next = {
+        x: offset.x + (after.width - before.width) / 2,
+        y: offset.y + (after.height - before.height) / 2
+      }
+      const bounds = boundsOf(element)
+      offset = bounds ? dragOffset(next, { x: 0, y: 0 }, shifted(after, next.x - offset.x, next.y - offset.y), bounds) : next
+    })
+  }
+
+  function shifted(box: Box, dx: number, dy: number): Box {
+    return { left: box.left + dx, top: box.top + dy, right: box.right + dx, bottom: box.bottom + dy }
   }
 
   // Reopened into a shell that has since shrunk (or gone phone-sized), a remembered offset could
@@ -119,7 +160,7 @@
     <Dialog.Content
       class="kc-dialog-content kc-matrix-dialog"
       bind:ref={content}
-      style={`--kc-drag-x: ${offset.x}px; --kc-drag-y: ${offset.y}px;`}
+      style={`--kc-drag-x: ${offset.x}px; --kc-drag-y: ${offset.y}px;${size ? ` --kc-size-w: ${size.width}px; --kc-size-h: ${size.height}px;` : ''}`}
     >
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="kc-dialog-header kc-dialog-drag-handle" onpointerdown={startDrag}>
@@ -199,6 +240,13 @@
             </table>
         </div>
       {/if}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="kc-dialog-resize-grip"
+        title={i18n('indicator_manager_resize', locale)}
+        onpointerdown={startResize}
+        ondblclick={fitToTable}
+      ></div>
     </Dialog.Content>
   </Dialog.Portal>
 </Dialog.Root>

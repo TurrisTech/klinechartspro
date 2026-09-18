@@ -151,5 +151,6 @@
   "indicator_manager_hint": "所有在用指标，按窗格启用或停用",
   "indicator_manager_empty": "尚无窗格使用指标，请先在指标面板中添加。",
   "all_panes": "全部",
-  "pane": "窗格"
+  "pane": "窗格",
+  "indicator_manager_resize": "拖动调整大小；双击恢复适应表格"
 }
