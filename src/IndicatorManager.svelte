@@ -14,6 +14,7 @@
     rowKey,
     usedIndicators
   } from './state/indicatorMatrix'
+  import { type Box, dragOffset, type Offset } from './utils/drag'
 
   // Every indicator in use on the wall against every visible pane: a cell is "this indicator on
   // this pane", and ticking it adds or removes it through the pane's own changeIndicator -- the
@@ -55,13 +56,73 @@
   function setRow(row: IndicatorRow, on: boolean): void {
     for (const pane of panes) set(pane, row, on)
   }
+
+  // Moved by its header, so the charts behind it can be seen while ticking cells. The offset
+  // outlives a close: reopened, the dialog comes back where it was put. A phone-sized shell
+  // shows it full screen, where there is nowhere to move it to.
+  let content = $state<HTMLElement | null>(null)
+  let offset = $state<Offset>({ x: 0, y: 0 })
+
+  // The shell less the gutter a dialog keeps from its edges when it is not moved (app.css).
+  const GUTTER = 16
+  function boundsOf(element: HTMLElement): Box | null {
+    const shell = element.closest<HTMLElement>('.klinecharts-pro-shell')
+    if (!shell || shell.dataset.size === 'phone') return null
+    const r = shell.getBoundingClientRect()
+    return { left: r.left + GUTTER, top: r.top + GUTTER, right: r.right - GUTTER, bottom: r.bottom - GUTTER }
+  }
+
+  function startDrag(event: PointerEvent): void {
+    if (event.button !== 0 || !content) return
+    const bounds = boundsOf(content)
+    if (!bounds) return
+    event.preventDefault()
+    const handle = event.currentTarget as HTMLElement
+    handle.setPointerCapture(event.pointerId)
+    const start = content.getBoundingClientRect()
+    const from = offset
+    const x0 = event.clientX
+    const y0 = event.clientY
+    const move = (e: PointerEvent): void => {
+      offset = dragOffset(from, { x: e.clientX - x0, y: e.clientY - y0 }, start, bounds)
+    }
+    const end = (): void => {
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', end)
+      handle.removeEventListener('pointercancel', end)
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+  }
+
+  // Reopened into a shell that has since shrunk (or gone phone-sized), a remembered offset could
+  // put the dialog partly outside it: pull it back in, once it is laid out.
+  $effect(() => {
+    if (!open || !content) return
+    const element = content
+    requestAnimationFrame(() => {
+      const bounds = boundsOf(element)
+      if (!bounds) {
+        offset = { x: 0, y: 0 }
+        return
+      }
+      const current = untrack(() => offset)
+      offset = dragOffset(current, { x: 0, y: 0 }, element.getBoundingClientRect(), bounds)
+    })
+  })
 </script>
 
 <Dialog.Root bind:open>
   <Dialog.Portal {...portalProps}>
     <Dialog.Overlay class="kc-dialog-overlay" />
-    <Dialog.Content class="kc-dialog-content kc-matrix-dialog">
-      <div class="kc-dialog-header">
+    <Dialog.Content
+      class="kc-dialog-content kc-matrix-dialog"
+      bind:ref={content}
+      style={`translate: ${offset.x}px ${offset.y}px;`}
+    >
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="kc-dialog-header kc-dialog-drag-handle" onpointerdown={startDrag}>
         <Dialog.Title>{i18n('indicator_manager', locale)}</Dialog.Title>
         <Dialog.Description>{i18n('indicator_manager_hint', locale)}</Dialog.Description>
       </div>
