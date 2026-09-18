@@ -119,7 +119,7 @@
     <Dialog.Content
       class="kc-dialog-content kc-matrix-dialog"
       bind:ref={content}
-      style={`translate: ${offset.x}px ${offset.y}px;`}
+      style={`--kc-drag-x: ${offset.x}px; --kc-drag-y: ${offset.y}px;`}
     >
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div class="kc-dialog-header kc-dialog-drag-handle" onpointerdown={startDrag}>
