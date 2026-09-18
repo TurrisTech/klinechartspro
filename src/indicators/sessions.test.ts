@@ -8,8 +8,12 @@ import sessions, {
   US_EQUITY_SESSIONS,
   coveredRuns,
   sessionCoversBar,
+  sessionWeek,
   sessionsFor,
   wallClock,
+  type WeekClock,
+  weekLabel,
+  weekStarts,
   zoneOffsetMinutes
 } from './sessions'
 
@@ -145,12 +149,67 @@ describe('SESSIONS template', () => {
   test('defaults to an 8% fill with the ribbon shown, on the price pane', () => {
     expect(sessions.name).toBe('SESSIONS')
     expect(sessions.series).toBe('price')
-    expect(sessions.calcParams).toEqual([8, 1])
+    expect(sessions.calcParams).toEqual([8, 1, 1])
   })
 
   test('computes no values: one empty result per bar', () => {
     const bars: KLineData[] = [{ timestamp: 0, open: 1, high: 1, low: 1, close: 1 }, { timestamp: MIN, open: 1, high: 1, low: 1, close: 1 }]
     const indicator = { calcParams: [8, 1] } as unknown as Parameters<NonNullable<typeof sessions.calc>>[1]
     expect(sessions.calc?.(bars, indicator)).toEqual([{}, {}])
+  })
+})
+
+describe('week starts', () => {
+  const NY = 'America/New_York'
+  const fx: WeekClock = { timezone: NY, openOffset: -7, sessionDated: false }
+  const crypto: WeekClock = { timezone: 'UTC', openOffset: 0, sessionDated: false }
+  const equity: WeekClock = { timezone: NY, openOffset: 9, sessionDated: false }
+  const bar = (ms: number): KLineData => ({ timestamp: ms, open: 1, high: 1, low: 1, close: 1 })
+  const hourly = (fromIso: string, count: number): KLineData[] =>
+    Array.from({ length: count }, (_, i) => bar(utc(fromIso) + i * HOUR))
+
+  test('forex: the week opens Sunday 17:00 New York, not at midnight', () => {
+    // 2026-09-13 is a Sunday; 17:00 EDT is 21:00Z. Friday's 16:00 bar is the last of the week.
+    const friLast = sessionWeek(utc('2026-09-11T20:00:00'), fx)
+    const sunOpen = sessionWeek(utc('2026-09-13T21:00:00'), fx)
+    const mon = sessionWeek(utc('2026-09-14T13:00:00'), fx)
+    expect(sunOpen).toBe(friLast + 1)
+    expect(mon).toBe(sunOpen)
+    expect(weekLabel(sunOpen)).toBe('14 Sep')
+    // The weekend is absent from the data: Friday 16:00 EDT is followed by Sunday 17:00.
+    const bars = [bar(utc('2026-09-11T19:00:00')), bar(utc('2026-09-11T20:00:00')), ...hourly('2026-09-13T21:00:00', 3)]
+    expect(weekStarts(bars, 0, bars.length - 1, fx)).toEqual([2])
+  })
+
+  test('forex: the boundary holds on the wall clock across DST', () => {
+    // 2026-11-01 is the US fall-back Sunday; 17:00 EST is 22:00Z.
+    expect(sessionWeek(utc('2026-11-01T21:00:00'), fx)).toBe(sessionWeek(utc('2026-10-30T20:00:00'), fx))
+    expect(sessionWeek(utc('2026-11-01T22:00:00'), fx)).toBe(sessionWeek(utc('2026-10-30T20:00:00'), fx) + 1)
+  })
+
+  test('crypto: Monday 00:00 UTC', () => {
+    const bars = hourly('2026-09-13T22:00:00', 4) // Sun 22:00, 23:00, Mon 00:00, 01:00
+    expect(weekStarts(bars, 0, bars.length - 1, crypto)).toEqual([2])
+  })
+
+  test('equities: the Monday 09:00 anchor, not the 09:30 open or midnight', () => {
+    // Monday 2026-09-14: 04:00 EDT pre-market is 08:00Z, 09:00 EDT is 13:00Z.
+    const bars = [bar(utc('2026-09-11T19:00:00')), bar(utc('2026-09-14T08:00:00')), bar(utc('2026-09-14T13:00:00'))]
+    expect(weekStarts(bars, 0, bars.length - 1, equity)).toEqual([2])
+  })
+
+  test('daily bars are read by their session date', () => {
+    // The wire dates a daily bar at 00:00 New York of its session: Friday then Monday.
+    const daily: WeekClock = { ...fx, sessionDated: true }
+    const bars = [bar(utc('2026-09-11T04:00:00')), bar(utc('2026-09-14T04:00:00')), bar(utc('2026-09-15T04:00:00'))]
+    expect(weekStarts(bars, 0, bars.length - 1, daily)).toEqual([1])
+    // Equity dailies are dated the same way, so the equity offset must not shift them.
+    expect(weekStarts(bars, 0, bars.length - 1, { ...equity, sessionDated: true })).toEqual([1])
+  })
+
+  test('the first visible bar compares against the bar before it', () => {
+    const bars = hourly('2026-09-13T20:00:00', 3) // Sun 16:00 (crypto), 17:00, 18:00 EDT
+    expect(weekStarts(bars, 1, 2, fx)).toEqual([1])
+    expect(weekStarts(bars, 0, 0, fx)).toEqual([])
   })
 })

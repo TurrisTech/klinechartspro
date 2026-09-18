@@ -30,6 +30,18 @@ export interface SymbolInfo {
   // when it is stated -- a crypto instrument reads UTC -- and falls back to the
   // app-level timezone otherwise. Daily-and-coarser session-date labels read on it too.
   timezone?: string
+  // The instrument's day on that clock, derived from its schedule's candle grid (the
+  // client ports wmarkettypes' `day_geometry`). Absent when the instrument has no schedule,
+  // and then nothing that needs the grid -- the SESSIONS week-start line -- is drawn.
+  dayGeometry?: DayGeometry
+}
+
+// wmarkettypes' `DayGeometry`: a session day as two hour offsets from the midnight that
+// dates it. Forex (-7, +17), crypto (0, +24, every day trades), US equities (+9, +16).
+export interface DayGeometry {
+  openOffset: number
+  closeOffset: number
+  everyDayTrades: boolean
 }
 
 export interface Period {
