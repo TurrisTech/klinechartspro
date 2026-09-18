@@ -1334,6 +1334,9 @@
    over the wide anchor at equal specificity; the phone rule below restores full screen. */
 .klinecharts-pro-shell .kc-dialog-content.kc-matrix-dialog {
 	left: 50%;
+	/* The drag offset (IndicatorManager.svelte) -- `translate` composes with the centring
+	   transform instead of replacing it. */
+	translate: var(--kc-drag-x, 0) var(--kc-drag-y, 0);
 	width: max-content;
 	max-width: calc(100% - 2rem);
 	grid-template-rows: auto minmax(0, 1fr);
@@ -1343,12 +1346,12 @@
 	left: 0;
 	width: 100%;
 	max-width: none;
-	/* Beats the inline drag offset: a shell that shrank to phone size while the dialog was open. */
-	translate: none !important;
+	/* A shell that shrank to phone size while the dialog was moved: full screen wins. */
+	translate: none;
 }
 
-/* The header moves the dialog (IndicatorManager.svelte); `translate` composes with the
-   centring transform rather than replacing it. Not on a phone, where the dialog is the screen. */
+/* The header moves the dialog (IndicatorManager.svelte). Not on a phone, where the dialog is
+   the screen. */
 .kc-dialog-drag-handle {
 	cursor: move;
 	touch-action: none;
