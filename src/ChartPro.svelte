@@ -470,7 +470,6 @@
 
   const toolbarActions = $derived([
     { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
-    { label: i18n('indicator_manager', locale), icon: MatrixIcon, action: () => { indicatorManagerOpen = true } },
     { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
     { label: i18n('setting', locale), icon: SettingsIcon, action: openSettings },
     { label: i18n('screenshot', locale), icon: CameraIcon, action: takeScreenshot }
@@ -684,7 +683,8 @@
   })
 
   $effect(() => {
-    const open = symbolDialogOpen || indicatorDialogOpen || indicatorManagerOpen || timezoneDialogOpen ||
+    // Not the indicator manager: it is about the whole wall, and centres on the shell.
+    const open = symbolDialogOpen || indicatorDialogOpen || timezoneDialogOpen ||
       settingsDialogOpen || screenshotDialogOpen || indicatorSettingsOpen
     if (!open || size !== 'wide') {
       dialogAnchorX = null
@@ -896,6 +896,12 @@
           <Popover.Content align="end" sideOffset={4} collisionPadding={8} class="kc-popover kc-more-popover">
             <div class="kc-popover-header">{i18n('layout', locale)}</div>
             <LayoutPicker {wall} {locale} {portalProps} inline />
+            <div class="kc-menu-list">
+              <Popover.Close class="kc-button kc-menu-item" onclick={() => { setTimeout(() => { indicatorManagerOpen = true }, 0) }}>
+                <MatrixIcon />
+                <span>{i18n('indicator_manager', locale)}</span>
+              </Popover.Close>
+            </div>
             <Separator.Root class="kc-separator kc-menu-separator" />
             <div class="kc-popover-header">{i18n('sync', locale)}</div>
             <div class="kc-field-group kc-menu-fields">
@@ -946,6 +952,16 @@
       {#if toolbarTier < 1}
       <div class="kc-toolbar-actions">
         <LayoutPicker {wall} {locale} {portalProps} />
+        <!-- Beside the layout, not among the active-pane actions: the manager acts on every pane
+             of the wall at once, so it belongs with the controls that do. -->
+        <Tooltip.Root>
+          <Tooltip.Trigger class={iconButtonClass()} onclick={() => { indicatorManagerOpen = true }} aria-label={i18n('indicator_manager', locale)}>
+            <MatrixIcon />
+          </Tooltip.Trigger>
+          <Tooltip.Portal {...portalProps}>
+            <Tooltip.Content class="kc-tooltip">{i18n('indicator_manager', locale)}</Tooltip.Content>
+          </Tooltip.Portal>
+        </Tooltip.Root>
         <!-- The three wall-wide switches, in the order they narrow what a pane may differ by:
              the instrument, then the timeframe, then where on the time axis it is looking.
              The two in the popover beside them (crosshair, click to scroll) stay there --

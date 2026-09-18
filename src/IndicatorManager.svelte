@@ -2,7 +2,7 @@
   import CheckIcon from '@lucide/svelte/icons/check'
   import MinusIcon from '@lucide/svelte/icons/minus'
   import XIcon from '@lucide/svelte/icons/x'
-  import { Checkbox, Dialog, ScrollArea } from 'bits-ui'
+  import { Checkbox, Dialog } from 'bits-ui'
   import { untrack } from 'svelte'
 
   import i18n from './i18n'
@@ -60,7 +60,7 @@
 <Dialog.Root bind:open>
   <Dialog.Portal {...portalProps}>
     <Dialog.Overlay class="kc-dialog-overlay" />
-    <Dialog.Content class="kc-dialog-content kc-dialog-2xl">
+    <Dialog.Content class="kc-dialog-content kc-matrix-dialog">
       <div class="kc-dialog-header">
         <Dialog.Title>{i18n('indicator_manager', locale)}</Dialog.Title>
         <Dialog.Description>{i18n('indicator_manager_hint', locale)}</Dialog.Description>
@@ -69,8 +69,9 @@
       {#if rows.length === 0}
         <p class="kc-muted-text">{i18n('indicator_manager_empty', locale)}</p>
       {:else}
-        <ScrollArea.Root class="kc-indicator-scroll-area kc-matrix-scroll-area">
-          <ScrollArea.Viewport class="kc-scroll-viewport">
+        <!-- A plain scroller rather than a ScrollArea: the dialog sizes itself to the table, and
+             only a view too small for it scrolls, in whichever direction it does not fit. -->
+        <div class="kc-matrix-scroll">
             <table class="kc-indicator-matrix">
               <thead>
                 <tr>
@@ -96,13 +97,13 @@
                   <tbody>
                     <tr class="kc-matrix-section">
                       <th scope="colgroup" colspan={panes.length + 2}>
-                        {i18n(main ? 'main_indicator' : 'sub_indicator', locale)}
+                        <span>{i18n(main ? 'main_indicator' : 'sub_indicator', locale)}</span>
                       </th>
                     </tr>
                     {#each section as row (rowKey(row))}
                       {@const state = coverage(panes, row)}
                       <tr>
-                        <th scope="row" class="kc-matrix-name kc-truncate" title={row.name}>{labelFor(row)}</th>
+                        <th scope="row" class="kc-matrix-name" title={row.name}>{labelFor(row)}</th>
                         <td class="kc-matrix-all">
                           <Checkbox.Root
                             class="kc-checkbox"
@@ -135,10 +136,7 @@
                 {/if}
               {/each}
             </table>
-          </ScrollArea.Viewport>
-          <ScrollArea.Scrollbar orientation="vertical" class="kc-scrollbar"><ScrollArea.Thumb class="kc-scroll-thumb" /></ScrollArea.Scrollbar>
-          <ScrollArea.Scrollbar orientation="horizontal" class="kc-scrollbar"><ScrollArea.Thumb class="kc-scroll-thumb" /></ScrollArea.Scrollbar>
-        </ScrollArea.Root>
+        </div>
       {/if}
     </Dialog.Content>
   </Dialog.Portal>
