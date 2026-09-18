@@ -2,7 +2,7 @@
   import CheckIcon from '@lucide/svelte/icons/check'
   import MinusIcon from '@lucide/svelte/icons/minus'
   import XIcon from '@lucide/svelte/icons/x'
-  import { Checkbox, Dialog, ScrollArea } from 'bits-ui'
+  import { Checkbox, Dialog } from 'bits-ui'
   import { untrack } from 'svelte'
 
   import i18n from './i18n'
@@ -14,6 +14,7 @@
     rowKey,
     usedIndicators
   } from './state/indicatorMatrix'
+  import { type Box, dragOffset, type Offset } from './utils/drag'
 
   // Every indicator in use on the wall against every visible pane: a cell is "this indicator on
   // this pane", and ticking it adds or removes it through the pane's own changeIndicator -- the
@@ -55,13 +56,73 @@
   function setRow(row: IndicatorRow, on: boolean): void {
     for (const pane of panes) set(pane, row, on)
   }
+
+  // Moved by its header, so the charts behind it can be seen while ticking cells. The offset
+  // outlives a close: reopened, the dialog comes back where it was put. A phone-sized shell
+  // shows it full screen, where there is nowhere to move it to.
+  let content = $state<HTMLElement | null>(null)
+  let offset = $state<Offset>({ x: 0, y: 0 })
+
+  // The shell less the gutter a dialog keeps from its edges when it is not moved (app.css).
+  const GUTTER = 16
+  function boundsOf(element: HTMLElement): Box | null {
+    const shell = element.closest<HTMLElement>('.klinecharts-pro-shell')
+    if (!shell || shell.dataset.size === 'phone') return null
+    const r = shell.getBoundingClientRect()
+    return { left: r.left + GUTTER, top: r.top + GUTTER, right: r.right - GUTTER, bottom: r.bottom - GUTTER }
+  }
+
+  function startDrag(event: PointerEvent): void {
+    if (event.button !== 0 || !content) return
+    const bounds = boundsOf(content)
+    if (!bounds) return
+    event.preventDefault()
+    const handle = event.currentTarget as HTMLElement
+    handle.setPointerCapture(event.pointerId)
+    const start = content.getBoundingClientRect()
+    const from = offset
+    const x0 = event.clientX
+    const y0 = event.clientY
+    const move = (e: PointerEvent): void => {
+      offset = dragOffset(from, { x: e.clientX - x0, y: e.clientY - y0 }, start, bounds)
+    }
+    const end = (): void => {
+      handle.removeEventListener('pointermove', move)
+      handle.removeEventListener('pointerup', end)
+      handle.removeEventListener('pointercancel', end)
+    }
+    handle.addEventListener('pointermove', move)
+    handle.addEventListener('pointerup', end)
+    handle.addEventListener('pointercancel', end)
+  }
+
+  // Reopened into a shell that has since shrunk (or gone phone-sized), a remembered offset could
+  // put the dialog partly outside it: pull it back in, once it is laid out.
+  $effect(() => {
+    if (!open || !content) return
+    const element = content
+    requestAnimationFrame(() => {
+      const bounds = boundsOf(element)
+      if (!bounds) {
+        offset = { x: 0, y: 0 }
+        return
+      }
+      const current = untrack(() => offset)
+      offset = dragOffset(current, { x: 0, y: 0 }, element.getBoundingClientRect(), bounds)
+    })
+  })
 </script>
 
 <Dialog.Root bind:open>
   <Dialog.Portal {...portalProps}>
     <Dialog.Overlay class="kc-dialog-overlay" />
-    <Dialog.Content class="kc-dialog-content kc-dialog-2xl">
-      <div class="kc-dialog-header">
+    <Dialog.Content
+      class="kc-dialog-content kc-matrix-dialog"
+      bind:ref={content}
+      style={`--kc-drag-x: ${offset.x}px; --kc-drag-y: ${offset.y}px;`}
+    >
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="kc-dialog-header kc-dialog-drag-handle" onpointerdown={startDrag}>
         <Dialog.Title>{i18n('indicator_manager', locale)}</Dialog.Title>
         <Dialog.Description>{i18n('indicator_manager_hint', locale)}</Dialog.Description>
       </div>
@@ -69,8 +130,9 @@
       {#if rows.length === 0}
         <p class="kc-muted-text">{i18n('indicator_manager_empty', locale)}</p>
       {:else}
-        <ScrollArea.Root class="kc-indicator-scroll-area kc-matrix-scroll-area">
-          <ScrollArea.Viewport class="kc-scroll-viewport">
+        <!-- A plain scroller rather than a ScrollArea: the dialog sizes itself to the table, and
+             only a view too small for it scrolls, in whichever direction it does not fit. -->
+        <div class="kc-matrix-scroll">
             <table class="kc-indicator-matrix">
               <thead>
                 <tr>
@@ -96,13 +158,13 @@
                   <tbody>
                     <tr class="kc-matrix-section">
                       <th scope="colgroup" colspan={panes.length + 2}>
-                        {i18n(main ? 'main_indicator' : 'sub_indicator', locale)}
+                        <span>{i18n(main ? 'main_indicator' : 'sub_indicator', locale)}</span>
                       </th>
                     </tr>
                     {#each section as row (rowKey(row))}
                       {@const state = coverage(panes, row)}
                       <tr>
-                        <th scope="row" class="kc-matrix-name kc-truncate" title={row.name}>{labelFor(row)}</th>
+                        <th scope="row" class="kc-matrix-name" title={row.name}>{labelFor(row)}</th>
                         <td class="kc-matrix-all">
                           <Checkbox.Root
                             class="kc-checkbox"
@@ -135,10 +197,7 @@
                 {/if}
               {/each}
             </table>
-          </ScrollArea.Viewport>
-          <ScrollArea.Scrollbar orientation="vertical" class="kc-scrollbar"><ScrollArea.Thumb class="kc-scroll-thumb" /></ScrollArea.Scrollbar>
-          <ScrollArea.Scrollbar orientation="horizontal" class="kc-scrollbar"><ScrollArea.Thumb class="kc-scroll-thumb" /></ScrollArea.Scrollbar>
-        </ScrollArea.Root>
+        </div>
       {/if}
     </Dialog.Content>
   </Dialog.Portal>

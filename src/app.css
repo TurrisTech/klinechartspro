@@ -1327,28 +1327,49 @@
 	}
 }
 
-/* The indicator manager (src/IndicatorManager.svelte): indicators down, wall panes across. */
-.klinecharts-pro-shell .kc-matrix-scroll-area {
-	/* Sized to the table, not the picker's fixed height: a wall with three indicators should not
-	   open a dialog that is mostly empty. The viewport scrolls past the cap. */
-	height: auto;
-	max-height: min(60vh, 30rem);
-	display: flex;
-	flex-direction: column;
+/* The indicator manager (src/IndicatorManager.svelte): indicators down, wall panes across. It is
+   about the whole wall, so it is centred on the shell even when the shell is wide (no
+   `--kc-dialog-anchor-x`), and as wide and tall as its table up to the shell less a gutter --
+   only a view too small for the table scrolls. Placed after the wide/phone rules so it wins
+   over the wide anchor at equal specificity; the phone rule below restores full screen. */
+.klinecharts-pro-shell .kc-dialog-content.kc-matrix-dialog {
+	left: 50%;
+	/* The drag offset (IndicatorManager.svelte) -- `translate` composes with the centring
+	   transform instead of replacing it. */
+	translate: var(--kc-drag-x, 0) var(--kc-drag-y, 0);
+	width: max-content;
+	max-width: calc(100% - 2rem);
+	grid-template-rows: auto minmax(0, 1fr);
 }
 
-.kc-matrix-scroll-area .kc-scroll-viewport {
-	max-height: min(60vh, 30rem);
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-content.kc-matrix-dialog {
+	left: 0;
+	width: 100%;
+	max-width: none;
+	/* A shell that shrank to phone size while the dialog was moved: full screen wins. */
+	translate: none;
 }
 
-.kc-scrollbar[data-orientation='horizontal'] {
-	flex-direction: column;
-	width: auto;
-	height: 0.625rem;
+/* The header moves the dialog (IndicatorManager.svelte). Not on a phone, where the dialog is
+   the screen. */
+.kc-dialog-drag-handle {
+	cursor: move;
+	touch-action: none;
+	user-select: none;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-drag-handle {
+	cursor: auto;
+}
+
+.kc-matrix-scroll {
+	min-height: 0;
+	overflow: auto;
 }
 
 .kc-indicator-matrix {
-	border-collapse: collapse;
+	border-collapse: separate;
+	border-spacing: 0;
 	font-size: 0.875rem;
 }
 
@@ -1356,22 +1377,30 @@
 .kc-indicator-matrix td {
 	padding: 0.375rem 0.5rem;
 	border-bottom: 1px solid var(--border);
+	background: var(--popover);
 	text-align: center;
 	vertical-align: middle;
 }
 
-.kc-indicator-matrix .kc-matrix-name {
-	max-width: 14rem;
-	text-align: left;
-	font-weight: 500;
-}
-
+/* Header row and name column stay put while a view too small for the table scrolls it. */
 .kc-indicator-matrix thead th {
 	position: sticky;
 	top: 0;
-	z-index: 1;
-	background: var(--background);
+	z-index: 2;
 	font-weight: 600;
+}
+
+.kc-indicator-matrix .kc-matrix-name {
+	position: sticky;
+	left: 0;
+	z-index: 1;
+	text-align: left;
+	white-space: nowrap;
+	font-weight: 500;
+}
+
+.kc-indicator-matrix thead .kc-matrix-name {
+	z-index: 3;
 }
 
 .kc-matrix-pane {
@@ -1383,16 +1412,9 @@
 	white-space: nowrap;
 }
 
-.kc-matrix-pane-symbol {
-	max-width: 6rem;
-	margin: 0 auto;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
 .kc-matrix-pane[data-active],
 .kc-matrix-cell[data-active] {
-	background: color-mix(in oklab, var(--primary) 10%, transparent);
+	background: color-mix(in oklab, var(--primary) 10%, var(--popover));
 }
 
 .kc-matrix-all {
@@ -1404,6 +1426,12 @@
 	text-align: left;
 	font-weight: 600;
 	color: var(--muted-foreground);
+}
+
+/* The heading cell spans every column, so pinning the cell would not pin its text; the text is. */
+.kc-matrix-section span {
+	position: sticky;
+	left: 0.5rem;
 }
 
 .kc-indicator-matrix .kc-checkbox {
