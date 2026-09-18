@@ -4,6 +4,7 @@ import { DEV_BOOKS } from '../books/api'
 import { createBooksPlugin } from '../books/plugin'
 import { createMtf01Plugin } from '../mtf01/plugin'
 import { createMtfPlugin } from '../mtf/plugin'
+import { MTF_OVERLAYS } from '../mtf/overlays'
 import { createRegistryPlugin } from '../tsregistry/plugin'
 import type { IndicatorPlugin } from './types'
 
@@ -21,5 +22,14 @@ import type { IndicatorPlugin } from './types'
 // the server computes but the quote half of the bars themselves.
 
 export function builtinPlugins(): IndicatorPlugin[] {
-  return [createRegistryPlugin(), createArevLabPlugin(), createMtfPlugin(), createMtf01Plugin(), createBooksPlugin(), createBooksPlugin(DEV_BOOKS), createBidAskPlugin()]
+  return [
+    createRegistryPlugin(),
+    createArevLabPlugin(),
+    // One per overlay: AREV21 MTF and the arev21_outlier rank overlays (mtf/overlays.ts).
+    ...MTF_OVERLAYS.map((overlay) => createMtfPlugin(overlay)),
+    createMtf01Plugin(),
+    createBooksPlugin(),
+    createBooksPlugin(DEV_BOOKS),
+    createBidAskPlugin()
+  ]
 }

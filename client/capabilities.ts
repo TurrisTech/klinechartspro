@@ -41,6 +41,10 @@ export type Feature =
   // GET /arev/values — AREV research predictions (wdashboard-server services/arev.py).
   // The client only registers its AREV templates and picker entries when advertised.
   | 'arev'
+  // GET /plugins/arev21_outlier/values — arev21's p against adaptive lines, computed per read
+  // (wdashboard-server services/arev21outlier.py). The registry rows gate on it by name; the
+  // client's own outlier MTF overlays (client/mtf/overlays.ts) gate on it here.
+  | 'arev21_outlier'
   // GET /krev/values — krev01 k-NN reversal votes (wdashboard-server services/krev.py).
   // The client only registers its KREV template and picker entry when advertised.
   | 'krev'

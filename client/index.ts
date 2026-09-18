@@ -7,6 +7,7 @@ import { WdashboardDatafeed } from './datafeed'
 import {
   defaultLayout,
   hydrateLayout,
+  overlayPaneState,
   toPaneOptions,
   toPersistedLayout,
   type PanePluginState,
@@ -282,7 +283,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // The AREV lab's, carried the same way.
       arevlab: Object.fromEntries(
         hydrated.panes.flatMap((pane, index) => (pane.labConfig ? [[index, pane.labConfig]] : []))
-      )
+      ),
+      // The other MTF overlays' (the arev21_outlier rank ones), each under its plugin id.
+      ...overlayPaneState(hydrated.panes)
     }
   })
 

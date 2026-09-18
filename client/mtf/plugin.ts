@@ -1,12 +1,14 @@
 import type { IndicatorGroup } from '../../src'
-import { GRID_ARRAY, registrySourceKey, storeFactory } from '../tsregistry/store'
+import { GRID_ARRAY, storeFactory } from '../tsregistry/store'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
-import { MTF_GENERATION, type ArevPoint, fetchMtfBarGrid, fetchMtfPoints, type MtfInterval } from './api'
+import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
 import { MTF_DEFAULTS, MTF_FIELDS, enabledIntervals, type MtfConfig } from './config'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
-import { TEMPLATE_NAME, isMtfIndicator, registerMtfIndicators } from './templates'
+import { AREV21_MTF, type MtfOverlay } from './overlays'
+import { registerMtfIndicators } from './templates'
 
-// The AREV21 multi-timeframe overlay as a client plugin. Where the AREV plugin binds one
+// A multi-timeframe signal overlay as a client plugin -- AREV21 MTF, and the arev21_outlier
+// rank overlays built on the same machinery (overlays.ts says what differs between them). Where the AREV plugin binds one
 // source per pane, this binds N -- one per source timeframe the pane's settings switch on
 // -- and each source fetches a BAR GRID as well as the votes, because placing a vote one
 // source bar forward is a question about that timeframe's candle boundaries (shift.ts).
@@ -40,7 +42,8 @@ const GRID_CHUNK_BARS = 4000
  * below the legend the gear sits in. */
 const LEGEND_ROW_HEIGHT = 24
 
-export function createMtfPlugin(): IndicatorPlugin {
+export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlugin {
+  const title = overlay.title
   let facilities: PluginFacilities | null = null
   /** Every pane's settings by pane index -- the accumulated set: seeded from the document
    * and updated on every edit, so it survives a pane being unwired. */
@@ -62,11 +65,11 @@ export function createMtfPlugin(): IndicatorPlugin {
     const chunk = GRID_CHUNK_BARS * f.resolutionDurationMs(interval)
     return {
       id: interval,
-      // The same key the AREV plugin would give arev21 at this interval: a sub-pane and
-      // the overlay reading the same votes share one store. Sharing a key means sharing
+      // The same key the registry sub-pane for this series would use at this interval
+      // (overlays.ts): a sub-pane and the overlay reading the same votes share one store. Sharing a key means sharing
       // the row type and the factory as well -- see tsregistry/store.ts for what went wrong when
       // these two wrote different things under it.
-      key: registrySourceKey(MTF_GENERATION, ctx.vendor, ctx.ticker, interval),
+      key: overlay.sourceKey(ctx.vendor, ctx.ticker, interval),
       // The SOURCE timeframe, not the chart's: this is what its points are dated on. The
       // AREV sub-pane's spec for this key says the same, so a replay step forgets one
       // amount rather than two (plugins/horizon.ts).
@@ -90,13 +93,16 @@ export function createMtfPlugin(): IndicatorPlugin {
       // one. It therefore has no cursor of its own; `nextFrom` is driven by the chunk.
       fetch: async (range, limit) => {
         const to = Math.min(range.to, range.from + chunk)
-        const [points, grid] = await Promise.all([
-          fetchMtfPoints(vendorSymbol, interval, range.from, to, limit),
+        const [votes, grid] = await Promise.all([
+          overlay.fetchPoints(f, vendorSymbol, interval, range.from, to, limit),
           fetchMtfBarGrid(vendorSymbol, interval, range.from, to)
         ])
+        // A vote page capped short of the chunk resumes where it stopped; the grid for the
+        // rest of the chunk is fetched again then, which the store's grid set absorbs.
+        const capped = votes.nextFrom !== null && votes.nextFrom < to ? votes.nextFrom : null
         return {
-          points,
-          nextFrom: to < range.to ? to : null,
+          points: votes.points,
+          nextFrom: capped ?? (to < range.to ? to : null),
           arrays: { [GRID_ARRAY]: grid.map((date) => ({ date })) }
         }
       }
@@ -107,16 +113,16 @@ export function createMtfPlugin(): IndicatorPlugin {
     const shown = drawable(config, state.chartInterval)
     if (shown.length === 0) {
       const on = enabledIntervals(config)
-      return on.length === 0 ? 'AREV21 MTF · none on' : `AREV21 MTF · needs ≥ ${state.chartInterval} chart`
+      return on.length === 0 ? `${title} · none on` : `${title} · needs ≥ ${state.chartInterval} chart`
     }
     const stores = shown.map((interval) => state.sources.find((s) => s.id === interval)?.store)
-    if (stores.some((s) => s?.phase === 'error')) return 'AREV21 MTF · error'
+    if (stores.some((s) => s?.phase === 'error')) return `${title} · error`
     if (stores.some((s) => !s || s.phase === 'idle' || s.phase === 'loading')) {
-      return `AREV21 MTF ${shown.join(' ')} · loading`
+      return `${title} ${shown.join(' ')} · loading`
     }
     // Names the active set, which is the one thing eight separate legend rows used to say
     // for free.
-    return `AREV21 MTF ${shown.join(' ')}`
+    return `${title} ${shown.join(' ')}`
   }
 
   const openPanel = (paneId: string): boolean => {
@@ -144,7 +150,7 @@ export function createMtfPlugin(): IndicatorPlugin {
       anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
       // Names the pane, because the settings are that pane's alone and a wall can have
       // twelve of them open on different instruments.
-      title: `AREV21 MTF · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
+      title: `${title} · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
       // No enable row: this overlay's on/off is the indicator being on the pane at all,
       // which the picker and the legend's own close icon already own.
       fields: MTF_FIELDS,
@@ -166,15 +172,13 @@ export function createMtfPlugin(): IndicatorPlugin {
   }
 
   return {
-    id: 'mtf',
-    // Reads the same `/arev/values` the AREV panes do, which is why it gates on 'arev'
-    // and not on a capability of its own -- there is no new server surface behind it.
-    feature: 'arev',
+    id: overlay.id,
+    feature: overlay.feature,
     register(f: PluginFacilities): IndicatorGroup[] {
       facilities = f
-      return registerMtfIndicators()
+      return registerMtfIndicators(overlay)
     },
-    matches: isMtfIndicator,
+    matches: (name) => name === overlay.templateName,
     signature: (ctx) => [configRevs[ctx.paneIndex] ?? 0, enabledIntervals(configFor(ctx.paneIndex))],
     bind(ctx: BindContext): BindingSpec | null {
       const f = facilities
@@ -190,7 +194,7 @@ export function createMtfPlugin(): IndicatorPlugin {
       }
     },
     handleSettings(request: SettingsRequest): boolean {
-      if (request.indicatorName !== TEMPLATE_NAME) return false
+      if (request.indicatorName !== overlay.templateName) return false
       return openPanel(request.paneId)
     },
     paneState: {
