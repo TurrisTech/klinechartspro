@@ -1343,6 +1343,20 @@
 	left: 0;
 	width: 100%;
 	max-width: none;
+	/* Beats the inline drag offset: a shell that shrank to phone size while the dialog was open. */
+	translate: none !important;
+}
+
+/* The header moves the dialog (IndicatorManager.svelte); `translate` composes with the
+   centring transform rather than replacing it. Not on a phone, where the dialog is the screen. */
+.kc-dialog-drag-handle {
+	cursor: move;
+	touch-action: none;
+	user-select: none;
+}
+
+.klinecharts-pro-shell[data-size='phone'] .kc-dialog-drag-handle {
+	cursor: auto;
 }
 
 .kc-matrix-scroll {
