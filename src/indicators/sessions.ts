@@ -43,7 +43,7 @@ import type { SymbolInfo } from '../types'
  * labelled strip per session along the bottom of the pane. Colours are fixed per session
  * rather than themed so a session reads the same on every pane of a wall.
  *
- * `week` (0 or 1) draws a dashed line, labelled with the week's Monday, where each trading
+ * `week` (0 or 1) draws a bright red dashed line, labelled with the week's Monday, where each trading
  * week opens -- on intraday AND daily charts. That instant is the weekly candle's open on the
  * instrument's own schedule, never a constant: forex Sunday 17:00 New York, crypto Monday
  * 00:00 UTC, US equities Monday 09:00 New York (the 09:00 anchor, not the 09:30 open). It is
@@ -247,7 +247,8 @@ export function weekLabel(week: number): string {
   return `${monday.getUTCDate()} ${MONTHS[monday.getUTCMonth()]}`
 }
 
-const WEEK_COLOR = '#9e9e9e'
+// Bright red so the week boundary stands out against the session bands and the candles.
+const WEEK_COLOR = '#ff1744'
 
 const DEFAULT_FILL = 8
 const DEFAULT_RIBBON = 1
