@@ -43,6 +43,10 @@ interface PersistedPane {
   // timeframe, which is the whole reason that overlay owns a settings panel of its own.
   // Omitted for a pane that has never been configured, which reads as the defaults.
   mtf?: StoredMtfConfig
+  // The other multi-timeframe overlays' settings (client/mtf/overlays.ts -- the arev21_outlier
+  // rank ones), the same diff-from-defaults shape as `mtf`, keyed by the overlay's plugin id
+  // (`mtf_<name>`). Omitted when no overlay on this pane has been configured.
+  mx?: Record<string, StoredMtfConfig>
   // The AREV lab's settings for THIS pane -- which generations it draws, each one's colour and
   // signal rule and that rule's levers -- for the same reason as `mtf`, and stored the same
   // way: only what differs from the defaults, omitted for a pane never configured.
@@ -87,6 +91,8 @@ export interface HydratedPane {
   indicatorParams: Record<string, number[]>
   /** Undefined for a pane never configured; the overlay seeds those itself. */
   mtfConfig?: MtfConfig
+  /** The other MTF overlays' settings by plugin id; only the configured ones. */
+  mtfOverlayConfigs?: Record<string, MtfConfig>
   /** Undefined for a pane never configured; the AREV lab seeds those itself. */
   labConfig?: LabConfig
   view: PaneViewState | null
@@ -278,6 +284,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
   const panes: HydratedPane[] = layout.panes.map((pane, index) => {
     const mtfConfig = fromStoredMtfConfig(pane.mtf)
     const labConfig = fromStoredLabConfig(pane.al)
+    const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
     return {
       symbol: symbols[index],
       period: periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
@@ -289,6 +296,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
       // as a half-object.
       ...(mtfConfig ? { mtfConfig } : {}),
       ...(labConfig ? { labConfig } : {}),
+      ...(mtfOverlayConfigs ? { mtfOverlayConfigs } : {}),
       view: hydrateView(pane)
     }
   })
@@ -373,6 +381,49 @@ export interface PanePluginState {
   mtf?: Record<number, MtfConfig>
   /** The AREV lab's. */
   arevlab?: Record<number, LabConfig>
+  /** Every other MTF overlay's, under its plugin id -- which is always `mtf_<name>`
+   * (client/mtf/overlays.ts), so a new overlay persists without a change here. */
+  [overlayId: `${typeof MTF_OVERLAY_PREFIX}${string}`]: Record<number, MtfConfig> | undefined
+}
+
+/** The prefix every non-original MTF overlay's plugin id carries (client/mtf/overlays.ts). */
+export const MTF_OVERLAY_PREFIX = 'mtf_'
+
+/** A pane's stored `mx`, each entry validated as `mtf` is; undefined when nothing survives. */
+function hydrateOverlayConfigs(stored: unknown): Record<string, MtfConfig> | undefined {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
+  const out: Record<string, MtfConfig> = {}
+  for (const [id, diff] of Object.entries(stored as Record<string, unknown>)) {
+    if (!id.startsWith(MTF_OVERLAY_PREFIX)) continue
+    const config = fromStoredMtfConfig(diff)
+    if (config) out[id] = config
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** The hydrated panes' `mx`, turned round into the plugin host's shape: plugin id -> pane
+ * index -> config. Seeds each overlay plugin with its own panes' settings. */
+export function overlayPaneState(panes: readonly HydratedPane[]): Record<string, Record<number, MtfConfig>> {
+  const out: Record<string, Record<number, MtfConfig>> = {}
+  panes.forEach((pane, index) => {
+    for (const [id, config] of Object.entries(pane.mtfOverlayConfigs ?? {})) {
+      out[id] ??= {}
+      out[id][index] = config
+    }
+  })
+  return out
+}
+
+/** One pane's `mx`: every overlay whose settings differ from the defaults. */
+function storedOverlayConfigs(pluginState: PanePluginState, index: number): Record<string, StoredMtfConfig> | undefined {
+  const out: Record<string, StoredMtfConfig> = {}
+  for (const [id, configs] of Object.entries(pluginState)) {
+    if (!id.startsWith(MTF_OVERLAY_PREFIX)) continue
+    const config = (configs as Record<number, MtfConfig> | undefined)?.[index]
+    const stored = config ? toStoredMtfConfig(config) : undefined
+    if (stored) out[id] = stored
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 export function toPersistedLayout(
@@ -390,7 +441,8 @@ export function toPersistedLayout(
       const persisted: PersistedPane = toPersistedPane(pane)
       const mtf = pluginState.mtf?.[index] ? toStoredMtfConfig(pluginState.mtf[index]) : undefined
       const al = pluginState.arevlab?.[index] ? toStoredLabConfig(pluginState.arevlab[index]) : undefined
-      return { ...persisted, ...(mtf ? { mtf } : {}), ...(al ? { al } : {}) }
+      const mx = storedOverlayConfigs(pluginState, index)
+      return { ...persisted, ...(mtf ? { mtf } : {}), ...(al ? { al } : {}), ...(mx ? { mx } : {}) }
     }),
     sync
   }

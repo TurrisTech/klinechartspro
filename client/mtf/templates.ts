@@ -1,14 +1,15 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
-import { MTF_GENERATION, type MtfInterval } from './api'
+import type { MtfInterval } from './api'
 import { MTF_DEFAULTS, enabledIntervals, type MtfConfig, type MtfTimeframeStyle } from './config'
+import type { MtfOverlay } from './overlays'
 import { shiftSignals, type ShiftedSignal } from './shift'
 import { peekStore } from '../plugins/store'
 import type { ArevPoint } from '../arev/api'
 import type { RegistryStore } from '../tsregistry/store'
 
-// ONE klinecharts indicator template, on the price pane, drawing arev21's signals from as
-// many timeframes as the user has switched on.
+// ONE klinecharts indicator template per overlay (overlays.ts), on the price pane, drawing
+// that overlay's signals from as many timeframes as the user has switched on.
 //
 // It was eight templates — one per timeframe, ticked from the picker — and folding them
 // into one is what makes per-timeframe STYLE possible at all. Eight picker entries gave a
@@ -32,12 +33,6 @@ import type { RegistryStore } from '../tsregistry/store'
 // With nothing declared to suppress, `draw` returns TRUE — the opposite of the AREV
 // sub-panes, which declare four lines and must return false or klinecharts renders none of
 // them (`if (!isCover)`; klinechartspro #6 was that bug).
-
-export const TEMPLATE_NAME = `MTF:${MTF_GENERATION}`
-
-export function isMtfIndicator(name: string): boolean {
-  return name === TEMPLATE_NAME
-}
 
 export interface ExtendData {
   /** Store key per source timeframe, for the timeframes currently switched on. */
@@ -158,16 +153,16 @@ function label(
   ctx.restore()
 }
 
-let registered = false
+const registered = new Set<string>()
 
-// Registers the one template and returns the picker group for
-// ChartProOptions.indicatorGroups. Call only when the server advertises 'arev' — the same
-// capability the AREV panes gate on, because this reads the same GET /arev/values.
-export function registerMtfIndicators(): IndicatorGroup[] {
-  if (!registered) {
+// Registers the overlay's one template and returns its picker group for
+// ChartProOptions.indicatorGroups. Call only when the server advertises the overlay's
+// feature -- the host does, off the plugin's `feature`.
+export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
+  if (!registered.has(overlay.templateName)) {
     const template: IndicatorTemplate<Value, number, ExtendData> = {
-      name: TEMPLATE_NAME,
-      shortName: 'AREV21 MTF',
+      name: overlay.templateName,
+      shortName: overlay.title,
       precision: 3,
       // Deliberately empty, and it must stay empty: klinecharts prints calcParams into the
       // legend, and this indicator's settings are not numbers. See config.ts.
@@ -239,18 +234,17 @@ export function registerMtfIndicators(): IndicatorGroup[] {
       }
     }
     registerIndicator(template)
-    registered = true
+    registered.add(overlay.templateName)
   }
   return [
     {
-      label: 'AREV21 multi-timeframe · price pane',
+      label: overlay.groupLabel,
       main: true,
       items: [
         {
-          name: TEMPLATE_NAME,
-          label: 'AREV21 MTF',
-          description:
-            'arev21 signals from several timeframes at once, each drawn one bar of its own timeframe forward. Timeframes, colours and sizes are on the gear.'
+          name: overlay.templateName,
+          label: overlay.title,
+          description: overlay.description
         }
       ]
     }

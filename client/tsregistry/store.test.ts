@@ -250,3 +250,78 @@ describe('a stored row with params', () => {
     expect(storedSource(f, arev21Entry, ctx('1h')).key).toBe(registrySourceKey('arev21', 'oanda', 'EURUSD', '1h'))
   })
 })
+
+describe('the outlier rank overlays share the sub-pane store at the same numbers', () => {
+  // The overlay sends its params in full, in the row's declared order, so a TS sub-pane
+  // dialled to the same numbers lands on the byte-identical key (mtf/overlays.ts).
+  const rank = {
+    name: 'arev21_outlier_rank',
+    template: 'TS:arev21_outlier_rank',
+    title: 'AREV21 OUTLIER RANK',
+    source: { kind: 'table', fold_by: null },
+    wire: { plugin: 'arev21_outlier', variant: 'arev21_outlier_rank' },
+    params: [
+      { name: 'bars', type: 'int', default: 200, min: 20, max: 5000 },
+      { name: 'q', type: 'float', default: 0.85, min: 0.5, max: 1 },
+      { name: 'samples_only', type: 'int', default: 0, min: 0, max: 1 }
+    ]
+  } as unknown as RegistryIndicator
+
+  for (const [percent, q] of [
+    [90, 0.9],
+    [85, 0.85]
+  ] as const) {
+    test(`rank ${percent}: same key and factory as the sub-pane at q=${q}, and asks the wire for q=${q}`, async () => {
+      const { createMtfPlugin } = await import('../mtf/plugin')
+      const { outlierRankMtf } = await import('../mtf/overlays')
+      const { fakeChart, fakeIndicator, fakePane } = await import('../plugins/testing')
+      const seen: Array<Record<string, unknown>> = []
+      const facilities = {
+        points: async (request: Record<string, unknown>) => {
+          seen.push(request)
+          return { points: [], nextFrom: null }
+        },
+        resolutionDurationMs: () => 14_400_000,
+        openSettingsPanel: () => ({ close() {} }),
+        requestPersist: () => {},
+        paneInfo: () => null,
+        requestReconcile: () => {}
+      } as unknown as PluginFacilities
+
+      const overlay = outlierRankMtf(percent)
+      expect(overlay.templateName).toBe(`MTF:arev21_outlier_rank_${percent}`)
+      const plugin = createMtfPlugin(overlay)
+      plugin.register(facilities)
+      expect(plugin.id).toBe(`mtf_arev21_outlier_rank_${percent}`)
+      expect(plugin.matches(`MTF:arev21_outlier_rank_${percent}`)).toBe(true)
+      expect(plugin.matches('MTF:arev21')).toBe(false)
+      const fc = fakeChart()
+      const spec = plugin.bind({
+        chart: fc.chart,
+        pane: fakePane('p1', fc.chart),
+        paneIndex: 0,
+        indicator: fakeIndicator(overlay.templateName, 'i1'),
+        symbol: { ticker: 'EURUSD' } as never,
+        vendor: 'oanda',
+        ticker: 'EURUSD',
+        interval: '1h',
+        siblings: []
+      })
+      const source = spec?.sources.find((s) => s.id === '4h')
+      const pane = storedSource(facilities, rank, ctx('4h'), storedParams(rank, [200, q, 0]))
+      expect(source?.key).toBe(pane.key)
+      expect(source?.createStore).toBe(pane.createStore)
+      expect(source?.resolution).toBe(pane.resolution)
+
+      // Only the votes go through `points`; the grid comes off the bar history path, which a
+      // missing `fetchBars` here makes fail -- the vote request is recorded before that.
+      await source?.fetch({ from: 0, to: 1 }, 100).catch(() => {})
+      expect(seen[0]).toMatchObject({
+        pluginId: 'arev21_outlier',
+        variant: 'arev21_outlier_rank',
+        resolution: '4h',
+        params: { bars: 200, q, samples_only: 0 }
+      })
+    })
+  }
+})

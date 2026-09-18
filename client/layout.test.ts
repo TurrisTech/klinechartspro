@@ -11,9 +11,9 @@ const hadWindow = 'window' in globalThis
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 }
 
-const { defaultLayout, isPersistedLayout, toPersistedLayout } = await import('./layout')
+const { defaultLayout, isPersistedLayout, overlayPaneState, toPersistedLayout } = await import('./layout')
 const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
-const { MTF_DEFAULTS } = await import('./mtf/config')
+const { MTF_DEFAULTS, fromStoredMtfConfig } = await import('./mtf/config')
 
 afterAll(() => {
   if (!hadWindow) delete (globalThis as Record<string, unknown>).window
@@ -94,5 +94,27 @@ describe('a round trip through the document', () => {
     expect(isPersistedLayout(written)).toBe(true)
     // What hydrateLayout does with the field, minus the symbol lookup it needs a server for.
     expect(fromStoredLabConfig(JSON.parse(JSON.stringify(written.panes[0].al)))).toEqual(lab)
+  })
+
+  test("the outlier MTF overlays' settings ride in `mx`, by plugin id, apart from AREV21 MTF's", () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const r90 = structuredClone(MTF_DEFAULTS)
+    r90.timeframes['1D'].color = '#123456'
+    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, {
+      mtf: { 0: structuredClone(MTF_DEFAULTS) },
+      mtf_arev21_outlier_rank_90: { 1: r90 },
+      mtf_arev21_outlier_rank_85: { 0: structuredClone(MTF_DEFAULTS) }
+    })
+    // Defaults store nothing, whichever overlay they belong to.
+    expect('mx' in written.panes[0]).toBe(false)
+    expect('mtf' in written.panes[0]).toBe(false)
+    expect(written.panes[1].mx).toEqual({ mtf_arev21_outlier_rank_90: { '1D': { color: '#123456' } } })
+    expect('mtf' in written.panes[1]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+    // And back: what hydrateLayout files per pane, turned round into the host's shape.
+    const back = fromStoredMtfConfig(JSON.parse(JSON.stringify(written.panes[1].mx?.mtf_arev21_outlier_rank_90)))
+    expect(back).toEqual(r90)
+    const panes = [{}, { mtfOverlayConfigs: { mtf_arev21_outlier_rank_90: r90 } }] as never
+    expect(overlayPaneState(panes)).toEqual({ mtf_arev21_outlier_rank_90: { 1: r90 } })
   })
 })
