@@ -170,5 +170,11 @@
   "swing_right_bars": "Bars after (future)",
   "swing_marker": "Marker: 0 circle, 1 signal, 2 both",
   "sessions_fill": "Shading opacity (%)",
-  "sessions_ribbon": "Ribbon: 0 hide, 1 show"
+  "sessions_ribbon": "Ribbon: 0 hide, 1 show",
+
+  "indicator_manager": "Indicator Manager",
+  "indicator_manager_hint": "Every indicator in use, on each pane of the wall",
+  "indicator_manager_empty": "No pane carries an indicator yet. Add one from the Indicator picker.",
+  "all_panes": "All",
+  "pane": "Pane"
 }

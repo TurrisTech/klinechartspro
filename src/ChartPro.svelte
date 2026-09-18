@@ -41,6 +41,7 @@
   import CandlestickIcon from '@lucide/svelte/icons/chart-candlestick'
   import ClockIcon from '@lucide/svelte/icons/clock'
   import EllipsisIcon from '@lucide/svelte/icons/ellipsis'
+  import MatrixIcon from '@lucide/svelte/icons/grid-3x3'
   import {
     Avatar,
     Checkbox,
@@ -76,7 +77,9 @@
     translateTimezone
   } from './config/timezones'
   import ChartPane from './ChartPane.svelte'
+  import IndicatorManager from './IndicatorManager.svelte'
   import LayoutPicker from './LayoutPicker.svelte'
+  import type { IndicatorRow } from './state/indicatorMatrix'
   import { Wall } from './state/wall.svelte'
   import { clone } from './utils/object'
   import { SyncBus } from './sync/bus'
@@ -156,6 +159,7 @@
 
   let symbolDialogOpen = $state(false)
   let indicatorDialogOpen = $state(false)
+  let indicatorManagerOpen = $state(false)
   let timezoneDialogOpen = $state(false)
   let settingsDialogOpen = $state(false)
   let screenshotDialogOpen = $state(false)
@@ -307,6 +311,20 @@
     return title === key ? name : title
   }
 
+  // The indicator manager's row heading: an app group's own label for its templates (an
+  // `S:<name>@<version>` name means nothing on screen), else the picker's locale label for a
+  // built-in, else the settings dialog's title.
+  const groupLabels = $derived(new Map(
+    (indicatorGroups ?? []).flatMap((group) => group.items.map((item) => [`${group.main}:${item.name}`, item.label] as const))
+  ))
+  function indicatorRowLabel(row: IndicatorRow): string {
+    const grouped = groupLabels.get(`${row.main}:${row.name}`)
+    if (grouped) return grouped
+    const key = row.name.toLowerCase()
+    const label = i18n(key, locale)
+    return label === key ? indicatorTitle(row.name) : label
+  }
+
   const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SWING', 'SESSIONS']
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
@@ -452,6 +470,7 @@
 
   const toolbarActions = $derived([
     { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
+    { label: i18n('indicator_manager', locale), icon: MatrixIcon, action: () => { indicatorManagerOpen = true } },
     { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
     { label: i18n('setting', locale), icon: SettingsIcon, action: openSettings },
     { label: i18n('screenshot', locale), icon: CameraIcon, action: takeScreenshot }
@@ -665,7 +684,7 @@
   })
 
   $effect(() => {
-    const open = symbolDialogOpen || indicatorDialogOpen || timezoneDialogOpen ||
+    const open = symbolDialogOpen || indicatorDialogOpen || indicatorManagerOpen || timezoneDialogOpen ||
       settingsDialogOpen || screenshotDialogOpen || indicatorSettingsOpen
     if (!open || size !== 'wide') {
       dialogAnchorX = null
@@ -1258,6 +1277,15 @@
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+
+    <IndicatorManager
+      bind:open={indicatorManagerOpen}
+      panes={wall.visiblePanes}
+      activeId={wall.activeId}
+      {locale}
+      {portalProps}
+      labelFor={indicatorRowLabel}
+    />
 
     <Dialog.Root bind:open={timezoneDialogOpen}>
       <Dialog.Portal {...portalProps}>
