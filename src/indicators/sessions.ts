@@ -14,10 +14,12 @@
 
 import type { Chart, IndicatorTemplate, KLineData, TooltipLegend } from 'klinecharts'
 
+import type { SymbolInfo } from '../types'
+
 /**
  * SESSIONS -- the trading sessions of the instrument's asset class, shaded on the price pane.
  *
- * Parameters: [fill, ribbon], default [8, 1].
+ * Parameters: [fill, ribbon, week], default [8, 1, 1].
  *
  * Which sessions are drawn follows the instrument's asset class (`SymbolInfo.market`, the
  * normalised class the server stores on the instrument's configuration):
@@ -40,6 +42,12 @@ import type { Chart, IndicatorTemplate, KLineData, TooltipLegend } from 'klinech
  * off; overlaps -- London into New York -- stack and read darker). `ribbon` (0 or 1) adds a
  * labelled strip per session along the bottom of the pane. Colours are fixed per session
  * rather than themed so a session reads the same on every pane of a wall.
+ *
+ * `week` (0 or 1) draws a dashed line, labelled with the week's Monday, where each trading
+ * week opens -- on intraday AND daily charts. That instant is the weekly candle's open on the
+ * instrument's own schedule, never a constant: forex Sunday 17:00 New York, crypto Monday
+ * 00:00 UTC, US equities Monday 09:00 New York (the 09:00 anchor, not the 09:30 open). It is
+ * read off `SymbolInfo.timezone` + `dayGeometry`; an instrument without them gets no line.
  *
  * Everything is computed in `draw` and the tooltip from the bars on screen -- a session is a
  * fact about the clock, not about the series -- so `calc` produces no values and nothing
@@ -181,8 +189,69 @@ function planFor(chart: Chart): Plan | null {
   return { sessions: sessionsFor(typeof market === 'string' ? market : undefined), spanMs: unit * period.span }
 }
 
+/** The clock a week boundary is read on: the instrument's zone, the hours from the midnight
+ * that dates a session to that session's open, and whether bars are dated by their open
+ * (intraday) or by the session date itself (daily -- the wire's canonical date, already that
+ * midnight on the instrument's clock). */
+export interface WeekClock {
+  timezone: string
+  openOffset: number
+  sessionDated: boolean
+}
+
+/** The week clock for this chart, or null where there is nothing to mark: a weekly or coarser
+ * period (every bar is a week or more), or an instrument whose schedule the chart was not
+ * given -- a guessed zone would put the line in the wrong place without looking wrong. */
+function weekClockFor(chart: Chart): WeekClock | null {
+  const period = chart.getPeriod()
+  if (period === null) return null
+  const sessionDated = period.type === 'day'
+  if (!sessionDated && PERIOD_MS[period.type] === undefined) return null
+  // The chart holds the pro SymbolInfo spread whole (ChartPane's toChartSymbol).
+  const symbol = chart.getSymbol() as SymbolInfo | null
+  const timezone = symbol?.timezone
+  const day = symbol?.dayGeometry
+  if (!timezone || !day) return null
+  return { timezone, openOffset: day.openOffset, sessionDated }
+}
+
+/** The trading week a bar belongs to, as Monday-based weeks since the epoch of its SESSION
+ * date. A bar before its day's open (forex Sunday 17:00, an equity pre-market bar) belongs
+ * to the session its open offset names, so the Sunday-evening forex bars are Monday's. */
+export function sessionWeek(ms: number, clock: WeekClock): number {
+  const local = ms + zoneOffsetMinutes(clock.timezone, ms) * MINUTE_MS
+  const shifted = clock.sessionDated ? local : local - clock.openOffset * 60 * MINUTE_MS
+  const day = Math.floor(shifted / DAY_MS)
+  // 1970-01-01 was a Thursday: day + 3 counts from the Monday before it.
+  return Math.floor((day + 3) / 7)
+}
+
+/** Indices in [from, to] whose bar opens a new trading week relative to the bar before it.
+ * `from` is never itself a start: with no earlier bar there is nothing to change from. */
+export function weekStarts(bars: readonly KLineData[], from: number, to: number, clock: WeekClock): number[] {
+  const starts: number[] = []
+  let previous = from >= 1 ? sessionWeek(bars[from - 1].timestamp, clock) : undefined
+  for (let i = Math.max(from, 0); i <= to; i++) {
+    const week = sessionWeek(bars[i].timestamp, clock)
+    if (previous !== undefined && week !== previous) starts.push(i)
+    previous = week
+  }
+  return starts
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** The Monday a week index names, as "14 Sep". */
+export function weekLabel(week: number): string {
+  const monday = new Date((week * 7 - 3) * DAY_MS)
+  return `${monday.getUTCDate()} ${MONTHS[monday.getUTCMonth()]}`
+}
+
+const WEEK_COLOR = '#9e9e9e'
+
 const DEFAULT_FILL = 8
 const DEFAULT_RIBBON = 1
+const DEFAULT_WEEK = 1
 
 function percentParam(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) / 100 : fallback / 100
@@ -219,7 +288,7 @@ const sessions: IndicatorTemplate<SessionsResult, number> = {
   name: 'SESSIONS',
   shortName: 'SESSIONS',
   series: 'price',
-  calcParams: [DEFAULT_FILL, DEFAULT_RIBBON],
+  calcParams: [DEFAULT_FILL, DEFAULT_RIBBON, DEFAULT_WEEK],
   precision: 0,
   shouldOhlc: false,
   // No figures: nothing enters the y-axis, and the tooltip is built below.
@@ -251,10 +320,13 @@ const sessions: IndicatorTemplate<SessionsResult, number> = {
   },
   draw: ({ ctx, chart, indicator, bounding, xAxis }) => {
     const plan = planFor(chart)
-    if (plan === null) return true
     const fill = percentParam(indicator.calcParams[0], DEFAULT_FILL)
     const ribbon = indicator.calcParams[1] !== 0
-    if (fill === 0 && !ribbon) return true
+    // Absent on a layout saved before the parameter existed: it reads as the default, on.
+    const week = (indicator.calcParams[2] ?? DEFAULT_WEEK) !== 0
+    const clock = week ? weekClockFor(chart) : null
+    const shading = plan !== null && (fill > 0 || ribbon)
+    if (!shading && clock === null) return true
 
     const bars = chart.getDataList()
     const range = chart.getVisibleRange()
@@ -262,15 +334,17 @@ const sessions: IndicatorTemplate<SessionsResult, number> = {
     const to = Math.min(bars.length - 1, range.realTo + 1)
     if (to < from) return true
     const pitch = chart.getBarSpace().bar
-    const rows = plan.sessions.length
 
     ctx.save()
     ctx.textBaseline = 'middle'
     ctx.textAlign = 'left'
     ctx.font = 'bold 10px sans-serif'
-    plan.sessions.forEach((session, row) => {
+    const sessionList = shading && plan !== null ? plan.sessions : []
+    const spanMs = plan?.spanMs ?? 0
+    const rows = sessionList.length
+    sessionList.forEach((session, row) => {
       const rowTop = bounding.height - RIBBON_PAD - (rows - row) * (RIBBON_ROW + RIBBON_GAP)
-      for (const [a, b] of coveredRuns(session, bars, from, to, plan.spanMs)) {
+      for (const [a, b] of coveredRuns(session, bars, from, to, spanMs)) {
         const x0 = xAxis.convertToPixel(a) - pitch / 2
         const x1 = xAxis.convertToPixel(b) + pitch / 2
         ctx.fillStyle = session.color
@@ -292,6 +366,24 @@ const sessions: IndicatorTemplate<SessionsResult, number> = {
         }
       }
     })
+    if (clock !== null) {
+      // The line sits on the boundary between the last bar of one week and the first of the
+      // next -- the weekend gap, on a market that has one, collapses onto it.
+      ctx.strokeStyle = WEEK_COLOR
+      ctx.fillStyle = WEEK_COLOR
+      ctx.lineWidth = 1
+      ctx.setLineDash([4, 3])
+      ctx.globalAlpha = 0.9
+      ctx.textBaseline = 'top'
+      for (const i of weekStarts(bars, from, to, clock)) {
+        const x = Math.round(xAxis.convertToPixel(i) - pitch / 2) + 0.5
+        ctx.beginPath()
+        ctx.moveTo(x, 0)
+        ctx.lineTo(x, bounding.height)
+        ctx.stroke()
+        ctx.fillText(weekLabel(sessionWeek(bars[i].timestamp, clock)), x + 3, 3)
+      }
+    }
     ctx.restore()
     return true
   }

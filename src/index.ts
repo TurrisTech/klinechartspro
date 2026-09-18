@@ -44,6 +44,7 @@ export type {
   PaneYAxisRange,
   Period,
   SymbolInfo,
+  DayGeometry,
   SyncOptions
 } from './types'
 export type { LayoutPreset } from './config/layouts'

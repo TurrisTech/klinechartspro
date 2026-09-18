@@ -1,5 +1,6 @@
 import type { SymbolInfo } from '../src'
 import { apiGet } from './config'
+import { dayGeometryOf } from './daygeometry'
 
 // wdashboard-server has no vendor/exchange field name of its own — `/search` returns
 // `description` as "{vendor}:{symbol}". We fold vendor into SymbolInfo.exchange since
@@ -101,7 +102,8 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
     // showing this instrument displays on it (UTC for a Coinbase pair), and its
     // daily-and-coarser session dates are read on it -- the FX +7h/-New-York rules do
     // not apply to a market whose days run midnight to midnight.
-    timezone: config?.marketHours?.timezone
+    timezone: config?.marketHours?.timezone,
+    dayGeometry: dayGeometryOf(config?.marketHours) ?? undefined
   }
 }
 

@@ -171,6 +171,7 @@
   "swing_marker": "Marker: 0 circle, 1 signal, 2 both",
   "sessions_fill": "Shading opacity (%)",
   "sessions_ribbon": "Ribbon: 0 hide, 1 show",
+  "sessions_week": "Week start line: 0 hide, 1 show",
 
   "indicator_manager": "Indicator Manager",
   "indicator_manager_hint": "Every indicator in use, on each pane of the wall",
