@@ -144,5 +144,11 @@
   "swing_right_bars": "右侧K线数",
   "swing_marker": "标记: 0 圆圈, 1 信号, 2 两者",
   "sessions_fill": "背景透明度 (%)",
-  "sessions_ribbon": "时段条: 0 隐藏, 1 显示"
+  "sessions_ribbon": "时段条: 0 隐藏, 1 显示",
+
+  "indicator_manager": "指标管理",
+  "indicator_manager_hint": "所有在用指标，按窗格启用或停用",
+  "indicator_manager_empty": "尚无窗格使用指标，请先在指标面板中添加。",
+  "all_panes": "全部",
+  "pane": "窗格"
 }
