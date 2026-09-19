@@ -193,6 +193,7 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
         const data = chart.getDataList()
         const range = chart.getVisibleRange()
         const intervals = enabledIntervals(config)
+        const zoneAbove = overlay.placement === 'zone'
         // Lane offsets accumulate the heights of the lanes BELOW each one, so a timeframe
         // with big arrows and a label pushes the ones outside it out rather than being
         // drawn over by them.
@@ -214,18 +215,24 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
             const offset = offsets[mark.lane] ?? LANE_INSET
             const size = style.arrowSize
             const text = `${mark.interval} ${mark.p.toFixed(2)}`
-            if (mark.up) {
-              // Below the low, pointing up into it.
-              const tipY = yAxis.convertToPixel(bar.low) + offset
-              arrow(ctx, x, tipY, size, style.color, true)
+            // `'zone'` placement puts a long above the high and a short below the low; the
+            // arrow still points the signal's way, so there it points away from the candle.
+            const above = zoneAbove ? mark.up : !mark.up
+            const armLength = size * 1.4
+            if (!above) {
+              // Below the low: an up arrow's tip touches the lane, a down arrow's base does.
+              const nearY = yAxis.convertToPixel(bar.low) + offset
+              const tipY = mark.up ? nearY : nearY + armLength
+              arrow(ctx, x, tipY, size, style.color, mark.up)
               if (style.textSize > 0) {
-                label(ctx, x, tipY + size * 1.4 + 2, text, style.color, style.textSize, false)
+                label(ctx, x, nearY + armLength + 2, text, style.color, style.textSize, false)
               }
             } else {
-              const tipY = yAxis.convertToPixel(bar.high) - offset
-              arrow(ctx, x, tipY, size, style.color, false)
+              const nearY = yAxis.convertToPixel(bar.high) - offset
+              const tipY = mark.up ? nearY - armLength : nearY
+              arrow(ctx, x, tipY, size, style.color, mark.up)
               if (style.textSize > 0) {
-                label(ctx, x, tipY - size * 1.4 - 2, text, style.color, style.textSize, true)
+                label(ctx, x, nearY - armLength - 2, text, style.color, style.textSize, true)
               }
             }
           }
