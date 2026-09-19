@@ -384,13 +384,41 @@ export function roundToward(value: number, anchor: number, precision: number): n
  * `entry` -- floored to the instrument's unit precision, so the loss never exceeds the budget.
  * Null with no conversion to the account currency, no distance, or no budget. */
 export function unitsForRisk(riskPercent: number, entry: number, stop: number, ctx: PricingContext): number | null {
+  return unitsForRiskAmount((ctx.account.balance * riskPercent) / 100, entry, stop, ctx)
+}
+
+/** The units that lose `budget` (account currency) if a stop at `stop` is hit after entering at
+ * `entry`, floored like `unitsForRisk`. */
+export function unitsForRiskAmount(budget: number, entry: number, stop: number, ctx: PricingContext): number | null {
   const rate = quoteToAccountRate(ctx)
-  const budget = (ctx.account.balance * riskPercent) / 100
   if (rate === null || !(budget > 0)) return null
   const lossPerUnit = Math.abs(entry - stop) * rate
   if (!(lossPerUnit > 0)) return null
+  return floorUnits(budget / lossPerUnit, ctx)
+}
+
+/** `units` floored to the instrument's unit precision: a size derived from a budget never
+ * spends more than it. The epsilon keeps an exact result where it is. */
+export function floorUnits(units: number, ctx: PricingContext): number {
   const factor = 10 ** ctx.info.unitsPrecision
-  return Math.floor((budget / lossPerUnit) * factor + 1e-9) / factor
+  // Relative as well as absolute: 150 / (1.1 - 1.097) is 49,999.9999999981 in floating point.
+  return Math.floor(units * factor * (1 + 1e-10) + 1e-9) / factor
+}
+
+/** The units whose value at the mid is `notional` in the account currency; null without a
+ * conversion. */
+export function unitsForNotional(notional: number, ctx: PricingContext): number | null {
+  const perUnit = sizeFigures(1, ctx).notionalAccount
+  if (perUnit === null || !(perUnit > 0) || !(notional > 0)) return null
+  return floorUnits(notional / perUnit, ctx)
+}
+
+/** The units whose margin is `percent` of the balance; null without a margin rate or a
+ * conversion. */
+export function unitsForMarginPercent(percent: number, ctx: PricingContext): number | null {
+  const rate = ctx.info.marginRate
+  if (rate === null || !(rate > 0) || !(percent > 0) || !(ctx.account.balance > 0)) return null
+  return unitsForNotional((ctx.account.balance * percent) / 100 / rate, ctx)
 }
 
 /** The stop (or target) at which `units` entered at `from` lose (or make) `percent` of the

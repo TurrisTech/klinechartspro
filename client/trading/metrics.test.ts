@@ -15,7 +15,10 @@ import {
   restingPriceValid,
   targetForReward,
   tradeFigures,
-  unitsForRisk
+  unitsForMarginPercent,
+  unitsForNotional,
+  unitsForRisk,
+  unitsForRiskAmount
 } from './metrics'
 
 const ACCOUNT: SimAccount = { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 }
@@ -280,5 +283,30 @@ describe('sizing by risk', () => {
     expect(targetForReward('buy', 1.1, 1.098, 2, 5)).toBeCloseTo(1.104, 12)
     expect(targetForReward('sell', 1.1, 1.103, 1.5, 5)).toBeCloseTo(1.0955, 12)
     expect(targetForReward('buy', 1.1, 1.101, 2, 5)).toBeNull() // stop past entry: no risk
+  })
+})
+
+describe('other ways to size', () => {
+  const quote = { time: 0, bid: 1.0999, ask: 1.1001 }
+  const ctx = pricingContext('oanda:EURUSD', EURUSD, ACCOUNT, quote)
+
+  test('a risk amount in the account currency: 150 USD over 30 pips = 50,000', () => {
+    expect(unitsForRiskAmount(150, 1.1, 1.097, ctx)).toBe(50_000)
+    expect(unitsForRiskAmount(0, 1.1, 1.097, ctx)).toBeNull()
+  })
+
+  test('a notional value, through the mid: 22,000 USD of EURUSD at 1.1 = 20,000 units', () => {
+    expect(unitsForNotional(22_000, ctx)).toBe(20_000)
+    // USD base: a unit is worth one dollar.
+    const jpy = pricingContext('oanda:USDJPY', USDJPY, ACCOUNT, { time: 0, bid: 150, ask: 150 })
+    expect(unitsForNotional(5_000, jpy)).toBe(5_000)
+    // No conversion (EURGBP on a USD account without a GBP quote): refused, not guessed.
+    expect(unitsForNotional(1_000, pricingContext('oanda:EURGBP', EURUSD, ACCOUNT, quote))).toBeNull()
+  })
+
+  test('a share of the balance as margin: 10% of 10,000 at 3.33% margin = 30,030 USD notional', () => {
+    // 1,000 / 0.0333 = 30,030.03 USD -> / 1.1 = 27,300.02 -> floored.
+    expect(unitsForMarginPercent(10, ctx)).toBe(27_300)
+    expect(unitsForMarginPercent(10, pricingContext('oanda:EURUSD', { ...EURUSD, marginRate: null }, ACCOUNT, quote))).toBeNull()
   })
 })

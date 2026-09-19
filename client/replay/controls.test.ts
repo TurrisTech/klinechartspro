@@ -118,6 +118,7 @@ interface Mounted extends Fake {
   stops: AdvanceResult[]
   exits: number
   account: { open: boolean; toggles: number }
+  trade: { open: boolean; toggles: number }
   dispose(): void
   /** A button in the window by its visible label (badge excluded). */
   button(label: string): HTMLButtonElement
@@ -133,6 +134,7 @@ function mount(f: Fake = fake(), opts: { account?: boolean } = {}): Mounted {
   const stops: AdvanceResult[] = []
   const state = { exits: 0 }
   const account = { open: false, toggles: 0 }
+  const trade = { open: false, toggles: 0 }
   const controls = createReplayControls({
     controller: f.controller,
     intervalsInUse: () => [...f.controller.intervalsInUse],
@@ -151,7 +153,15 @@ function mount(f: Fake = fake(), opts: { account?: boolean } = {}): Mounted {
               account.open = !account.open
               return account.open
             }
-          }
+          },
+    trade: {
+      isOpen: () => trade.open,
+      toggle: () => {
+        trade.toggles++
+        trade.open = !trade.open
+        return trade.open
+      }
+    }
   })
   const root = controls.element
   const label = (b: Element): string => {
@@ -169,6 +179,7 @@ function mount(f: Fake = fake(), opts: { account?: boolean } = {}): Mounted {
       return state.exits
     },
     account,
+    trade,
     dispose: () => controls.dispose(),
     maybeButton,
     button(text) {
@@ -453,15 +464,25 @@ describe('the panels', () => {
   test('Account mirrors the dock and toggles it', () => {
     const m = mount()
     expect(m.button('Account').getAttribute('aria-pressed')).toBe('false')
-    expect(m.button('Account').title).toBe('Show the account, ticket and tables')
+    expect(m.button('Account').title).toBe('Show the account and tables')
     m.button('Account').click()
     expect(m.account.toggles).toBe(1)
     expect(m.button('Account').getAttribute('aria-pressed')).toBe('true')
-    expect(m.button('Account').title).toBe('Hide the account, ticket and tables')
+    expect(m.button('Account').title).toBe('Hide the account and tables')
 
     // Without an account to show there is no toggle at all.
     const bare = mount(fake(), { account: false })
     expect(bare.maybeButton('Account')).toBeNull()
+  })
+
+  test('Trade mirrors the trade box and toggles it, apart from the account', () => {
+    const m = mount()
+    expect(m.button('Trade').getAttribute('aria-pressed')).toBe('false')
+    m.button('Trade').click()
+    expect(m.trade.toggles).toBe(1)
+    expect(m.account.toggles).toBe(0)
+    expect(m.button('Trade').getAttribute('aria-pressed')).toBe('true')
+    expect(m.button('Trade').title).toBe('Hide the order ticket')
   })
 })
 

@@ -58,7 +58,7 @@ import type { TradingSession } from './session'
 // the pane redraws from the snapshot. The amendment is kept until the answer arrives, so a
 // confirmed line does not flick back to its old price in between.
 //
-// THE DRAFT. While the account window is open, the order being written in the ticket is drawn
+// THE DRAFT. While the trade box is open, the order being written in the ticket is drawn
 // too (`ctx.draft`): its entry, stop and target, a bracket, outlined labels and a row on
 // the card. Its lines drag like the rest, but a drag lands in the ticket's fields as it moves --
 // nothing is sent until it is placed, from the ticket or from the chart.
@@ -178,15 +178,16 @@ export function overlaysFor(
   }
   for (const order of orders) {
     if (order.stopLoss === null && order.takeProfit === null) continue
-    const datum = bracketDatum('order', order.id, order.side, order.price as number, order.stopLoss, order.takeProfit, !drafting && order.id === selected, colors)
+    const datum = bracketDatum('order', order.id, order.side, order.price as number, order.stopLoss, order.takeProfit, order.id === selected, colors)
     out.push(bracketOverlay(order.createdAt, datum, span) as OverlayCreate)
   }
   for (const trade of trades) {
-    const datum = bracketDatum('trade', trade.id, trade.side, trade.entryPrice, trade.stopLoss, trade.takeProfit, !drafting && trade.id === selected, colors)
+    const datum = bracketDatum('trade', trade.id, trade.side, trade.entryPrice, trade.stopLoss, trade.takeProfit, trade.id === selected, colors)
     out.push(bracketOverlay(trade.openedAt, datum, span) as OverlayCreate)
   }
   for (const line of linesFor(snapshot, key, d)) {
-    out.push(lineOverlay(line, span, colors, drafting && line.owner !== 'draft') as OverlayCreate)
+    // The draft's lines read over what is working -- except the position the user selected.
+    out.push(lineOverlay(line, span, colors, drafting && line.owner !== 'draft' && line.id !== selected) as OverlayCreate)
   }
   return out
 }
@@ -197,7 +198,7 @@ export interface TradingOverlayContext {
   /** Console-prefix tag ('paper', 'replay'). */
   tag: string
   colors?: OverlayColors
-  /** The ticket's order, drawn as a draft while the account window is open. */
+  /** The ticket's order, drawn as a draft while the trade box is open. */
   draft?: DraftController
 }
 
@@ -221,6 +222,10 @@ export class TradingOverlays {
   private panes = new Map<string, PaneEntry>()
   private snapshot: SimSnapshot | null = null
   private selected: string | null = null
+  /** The selection last told to `selectionListeners`, so each change is told once. */
+  private toldSelection: string | null = null
+  private readonly selectionListeners = new Set<(id: string | null) => void>()
+  private readonly inspectListeners = new Set<(id: string) => void>()
   private amendment: Amendment | null = null
   private sending = false
   private readonly amendmentListeners = new Set<() => void>()
@@ -272,6 +277,7 @@ export class TradingOverlays {
         instrumentFor: this.ctx.instrumentFor,
         selected: () => this.selected,
         select: (id) => this.select(id),
+        inspect: (id) => this.inspect(id),
         previewLine: (line, price) => this.preview(entry, line, price),
         hold: () => this.hold(entry),
         release: (restore) => this.release(entry, restore),
@@ -320,6 +326,36 @@ export class TradingOverlays {
     this.refreshAll()
   }
 
+  /** The selected trade or order -- one for the whole wall, so every pane showing its instrument
+   * shows it selected. */
+  selectedId(): string | null {
+    return this.selected
+  }
+
+  /** A click on a position (a line, a label, a card row, a table row): select it on every pane,
+   * and tell whoever shows its stats (the position popup). A closed trade has nothing on the
+   * panes to select, but its stats can still be shown. */
+  inspect(id: string): void {
+    if (this.snapshot && isWorking(this.snapshot, id)) this.select(id)
+    for (const listener of [...this.inspectListeners]) listener(id)
+  }
+
+  onInspect(listener: (id: string) => void): () => void {
+    this.inspectListeners.add(listener)
+    return () => {
+      this.inspectListeners.delete(listener)
+    }
+  }
+
+  /** Told whenever the selection changes, whatever changed it: a click, a fill selecting the new
+   * trade, a proposal, or the selected position closing. */
+  onSelectionChange(listener: (id: string | null) => void): () => void {
+    this.selectionListeners.add(listener)
+    return () => {
+      this.selectionListeners.delete(listener)
+    }
+  }
+
   // -- confirmation -------------------------------------------------------------------------
 
   /** The snapshot as every pane draws it: with the amendment waiting for confirmation applied. */
@@ -332,6 +368,10 @@ export class TradingOverlays {
     for (const entry of this.panes.values()) {
       this.redraw(entry, force)
       entry.layer.render(view)
+    }
+    if (this.toldSelection !== this.selected) {
+      this.toldSelection = this.selected
+      for (const listener of [...this.selectionListeners]) listener(this.selected)
     }
   }
 
@@ -401,6 +441,8 @@ export class TradingOverlays {
   }
 
   teardown(): void {
+    this.selectionListeners.clear()
+    this.inspectListeners.clear()
     this.unsubscribePrefs()
     for (const entry of this.panes.values()) this.detach(entry)
     this.panes.clear()
@@ -525,7 +567,7 @@ export class TradingOverlays {
       }
       if (line.owner !== 'draft') {
         created.onClick = () => {
-          this.select(line.id)
+          this.inspect(line.id)
         }
       }
       // klinecharts REMOVES an overlay on right-click unless the default is prevented.

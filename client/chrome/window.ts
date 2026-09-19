@@ -68,11 +68,19 @@ export function clampPosition(pos: Point, size: Size, bounds: Bounds, margin = E
  * `bottom` is for a small window that belongs near the chart's own controls: centred on the
  * bottom, above the time axis — the least valuable strip of a chart, and where the eye is.
  * `center` is for a large one, which would otherwise cover exactly the strip the small ones
- * anchor to. Two windows sharing an anchor would open stacked on each other.
+ * anchor to. Two windows sharing an anchor would open stacked on each other. `right` is for a
+ * window that works on the price (the trade box): top right, clear of the price axis and the
+ * toolbar, beside the latest bars. `centerX` does not move it.
  *
  * `centerX`, when given, replaces the bounds' own horizontal centre: on a page spanning
  * displays that is the active pane's (./focus.ts), not the bezel between two monitors. */
-export type FloatAnchor = 'bottom' | 'center'
+export type FloatAnchor = 'bottom' | 'center' | 'right'
+
+/** Room left right of a `right`-anchored window for the chart's price axis. */
+export const PRICE_AXIS_CLEARANCE = 80
+
+/** Room left above a `right`-anchored window for the chart's toolbar. */
+export const TOOLBAR_CLEARANCE = 48
 
 export function defaultPosition(
   size: Size,
@@ -80,6 +88,13 @@ export function defaultPosition(
   anchor: FloatAnchor = 'bottom',
   centerX?: number
 ): Point {
+  if (anchor === 'right') {
+    return clampPosition(
+      { x: bounds.right - PRICE_AXIS_CLEARANCE - size.width, y: bounds.top + TOOLBAR_CLEARANCE },
+      size,
+      bounds
+    )
+  }
   const x =
     centerX === undefined ? bounds.left + (bounds.right - bounds.left - size.width) / 2 : centerX - size.width / 2
   const y =
@@ -265,6 +280,9 @@ export interface DockableWindowOptions {
   onClose?: () => void
   /** Told after the mode changed, for a caller that renders differently docked. */
   onModeChange?: (mode: WindowMode) => void
+  /** False for a window that only ever floats (the trade box, the position popup): no dock
+   * button, no drop strip, and a stored docked placement is ignored. Default true. */
+  dockable?: boolean
 }
 
 export interface DockableWindow {
@@ -283,6 +301,9 @@ export interface DockableWindow {
   setMode(mode: WindowMode): void
   setCollapsed(collapsed: boolean): void
   setVisible(visible: boolean): void
+  /** Float and show it beside `point` (viewport pixels) -- a popup opened by a click, placed next
+   * to that click rather than at its anchor. Kept inside the bounds like any floating window. */
+  showNear(point: Point): void
   /** Re-clamp: the content, the bounds or the viewport changed size. */
   reflow(): void
   dispose(): void
@@ -294,7 +315,8 @@ let topZ = 40
 export function createDockableWindow(options: DockableWindowOptions): DockableWindow {
   const min = options.minSize ?? { width: 260, height: 120 }
   const stored = readPlacement(options.key)
-  let mode: WindowMode = stored?.mode ?? options.defaultMode ?? 'float'
+  const dockable = options.dockable !== false
+  let mode: WindowMode = dockable ? (stored?.mode ?? options.defaultMode ?? 'float') : 'float'
   let collapsed = stored?.collapsed === true
   let visible = true
   let position: Point | null = stored?.x !== undefined && stored?.y !== undefined ? { x: stored.x, y: stored.y } : null
@@ -341,7 +363,8 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
   controls.className = 'wd-window-controls'
   const collapseButton = iconButton('', () => setCollapsed(!collapsed))
   const modeButton = iconButton('', () => setMode(mode === 'dock' ? 'float' : 'dock'))
-  controls.append(collapseButton, modeButton)
+  controls.append(collapseButton)
+  if (dockable) controls.appendChild(modeButton)
   if (options.onClose) {
     const close = iconButton('×', () => options.onClose?.())
     close.title = 'Hide'
@@ -449,7 +472,7 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
   }
 
   function setMode(next: WindowMode): void {
-    if (next === mode) return
+    if (next === mode || (next === 'dock' && !dockable)) return
     mode = next
     // A window floated for the first time has no remembered spot, so it opens at the default
     // one rather than wherever it last was as a docked strip.
@@ -477,6 +500,20 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
       if (anchored) focusX = focusCenter()
       reflow()
     }
+  }
+
+  function showNear(point: Point): void {
+    setMode('float')
+    // Off to the right of the pointer and a little above it, so the click's target stays in view;
+    // clampPosition keeps it inside the chart whichever way that runs out.
+    const width = root.offsetWidth || size?.width || 300
+    const box = bounds()
+    const right = point.x + 16
+    const x = right + width + EDGE_MARGIN > box.right ? point.x - 16 - width : right
+    anchored = false
+    position = { x, y: point.y - 40 }
+    root.style.zIndex = String(++topZ)
+    setVisible(true)
   }
 
   // -- dragging (and drag to dock / out of the dock) ---------------------------------------
@@ -544,7 +581,7 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
     const box = bounds()
     const current = { width: root.offsetWidth, height: root.offsetHeight }
     applyPosition(clampPosition({ x: event.clientX - grab.dx, y: event.clientY - grab.dy }, current, box))
-    showDrop(inDropZone(event.clientY, box))
+    showDrop(dockable && inDropZone(event.clientY, box))
   }
 
   function onPointerUp(event: PointerEvent): void {
@@ -672,6 +709,7 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
     setMode,
     setCollapsed,
     setVisible,
+    showNear,
     reflow,
     dispose(): void {
       reflows.delete(reflow)

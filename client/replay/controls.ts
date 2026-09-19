@@ -16,10 +16,10 @@ import { createDockableWindow } from '../chrome/window'
 //   title bar   the cursor, Step, collapse, dock/float, Exit -- and the drag handle
 //   advance     the timeframe picker x a multiple, and Next signal
 //   last stop   why the last advance stopped (absent until one has)
-//   toggles     Signals / Base / Account, one panel open at a time
+//   toggles     Signals / Base, one panel open at a time; Account and Trade, the two windows
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
-// permanently on screen, and the account window is opened from here rather than taking half
+// permanently on screen, and the account window and the trade box are opened from here rather than taking half
 // the wall from the moment replay starts.
 
 /** Identity of the window: its stored placement, and `data-window` on the card. */
@@ -42,6 +42,8 @@ export interface ReplayControlsOptions {
   onStop?: (result: AdvanceResult) => void
   /** The trading dock the Account toggle shows and hides. */
   account?: { isOpen: () => boolean; toggle: () => boolean }
+  /** The trade box (the order ticket's floating window) the Trade toggle shows and hides. */
+  trade?: { isOpen: () => boolean; toggle: () => boolean }
 }
 
 export interface ReplayControls {
@@ -190,7 +192,17 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         account.toggle()
         renderBody()
       })
-      toggle.title = open ? 'Hide the account, ticket and tables' : 'Show the account, ticket and tables'
+      toggle.title = open ? 'Hide the account and tables' : 'Show the account and tables'
+      row.appendChild(toggle)
+    }
+    if (options.trade) {
+      const trade = options.trade
+      const open = trade.isOpen()
+      const toggle = toggleButton('Trade', '', open, () => {
+        trade.toggle()
+        renderBody()
+      })
+      toggle.title = open ? 'Hide the order ticket' : 'Buy or sell: show the order ticket'
       row.appendChild(toggle)
     }
     return row

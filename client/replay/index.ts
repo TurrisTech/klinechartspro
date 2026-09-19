@@ -292,7 +292,8 @@ export async function mountBarReplay(
     // Whatever opens or closes the dock -- the Account toggle, or the panel's own close
     // button -- redraws that toggle, so it never disagrees with what is on screen. Safe as a
     // forward reference: nothing calls setOpen before the controls exist.
-    onOpenChange: () => controls.refresh()
+    onOpenChange: () => controls.refresh(),
+    onTicketOpenChange: () => controls.refresh()
   })
   // It starts CLOSED (mountTradingDock's default): the wall is what a replay is for, and the
   // Account toggle is what opens the account, ticket and tables. An advance that produced
@@ -316,7 +317,8 @@ export async function mountBarReplay(
       dock.setOpen(true)
       dock.panel.showTab(result.events.some((e) => e.kind === 'close') ? 'history' : 'positions')
     },
-    account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() }
+    account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() },
+    trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() }
   })
   await session.primeQuote()
 

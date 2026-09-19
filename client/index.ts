@@ -531,6 +531,16 @@ function mountChartExtras(
     // Driven by the window, not by the click: it can also be closed from its own title bar.
     paper.onOpenChange((open) => paperButton.classList.toggle('is-on', open))
     footer.appendChild(paperButton)
+
+    // The trade box: the order ticket in a floating window of its own, apart from the account.
+    const tradeButton = document.createElement('button')
+    tradeButton.type = 'button'
+    tradeButton.className = 'wd-rail-button'
+    tradeButton.textContent = 'Trade'
+    tradeButton.title = 'Order ticket: buy or sell'
+    tradeButton.addEventListener('click', () => paper.toggleTicket())
+    paper.onTicketOpenChange((open) => tradeButton.classList.toggle('is-on', open))
+    footer.appendChild(tradeButton)
   }
 
   // Bar replay toggle, right next to Paper. On a live wall it opens the start dialog (and

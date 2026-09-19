@@ -140,3 +140,16 @@ export function moveText(outcome: { pips: number | null; percent: number } | nul
   }
   return signed ? formatPercent(outcome.percent) : `${Math.abs(outcome.percent).toFixed(2)}%`
 }
+
+/** How long something has been open, to the two largest units: '3d 4h', '2h 05m', '12m', '45s'. */
+export function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return '—'
+  const s = Math.floor(ms / 1000)
+  const d = Math.floor(s / 86_400)
+  const h = Math.floor((s % 86_400) / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  if (m > 0) return `${m}m`
+  return `${s}s`
+}

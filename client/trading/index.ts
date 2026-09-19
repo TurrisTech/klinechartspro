@@ -22,6 +22,9 @@ export interface PaperTradingController {
   /** Told whenever the window is shown or hidden, by whatever did it: the rail button, or
    * the window's own close. */
   onOpenChange(listener: (open: boolean) => void): void
+  /** The trade box (the order ticket's own floating window), shown and hidden on its own. */
+  toggleTicket(): boolean
+  onTicketOpenChange(listener: (open: boolean) => void): void
   /** Resync overlays and the ticket to the current wall panes (the wall's onPanesChange). */
   sync(panes: ChartProPane[]): void
   /** The instrument's bid/ask as the account holds it now. Watches the instrument first --
@@ -35,12 +38,14 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
 
   const session = new PaperTradingSession()
   let onOpenChange: (open: boolean) => void = () => {}
+  let onTicketOpenChange: (open: boolean) => void = () => {}
   const dock = mountTradingDock(session, {
     chartPro,
     container,
     title: 'Paper account',
     tag: 'paper',
-    onOpenChange: (open) => onOpenChange(open)
+    onOpenChange: (open) => onOpenChange(open),
+    onTicketOpenChange: (open) => onTicketOpenChange(open)
   })
 
   // Load the account and bring the active instrument in at once, so the ticket has a quote
@@ -56,6 +61,10 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
     isOpen: () => dock.isOpen(),
     onOpenChange(listener: (open: boolean) => void): void {
       onOpenChange = listener
+    },
+    toggleTicket: () => dock.toggleTicket(),
+    onTicketOpenChange(listener: (open: boolean) => void): void {
+      onTicketOpenChange = listener
     },
     sync(panes: ChartProPane[]): void {
       dock.sync(panes)
