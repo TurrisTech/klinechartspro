@@ -162,10 +162,10 @@ describe('the draft', () => {
     expect(linesFor(snapshot(), 'oanda:GBP_USD', d)).toHaveLength(0)
   })
 
-  test('while composing, working lines are dimmed and no working bracket is drawn selected', () => {
+  test('while composing, working lines are dimmed and an unselected bracket is not drawn selected', () => {
     const s = snapshot({ trades: [trade({ stopLoss: 1.09 })] })
     const d = draft({ stop: 1.095 })
-    const overlays = overlaysFor(s, KEY, SPAN, DEFAULT_COLORS, 't1', d)
+    const overlays = overlaysFor(s, KEY, SPAN, DEFAULT_COLORS, null, d)
     const lineColors = overlays
       .filter((o) => o.name === 'wdTradeLine')
       .map((o) => [(o.extendData as { wd: { owner: string } }).wd.owner, (o.styles as { line: { color: string } }).line.color])
@@ -173,6 +173,15 @@ describe('the draft', () => {
     expect(lineColors.filter(([owner]) => owner === 'draft').every(([, c]) => c.startsWith('#'))).toBe(true)
     const brackets = overlays.filter((o) => o.name === 'wdTradeBracket').map((o) => (o.extendData as { wd: { owner: string; selected: boolean } }).wd)
     expect(brackets).toEqual([expect.objectContaining({ owner: 'draft', selected: true }), expect.objectContaining({ owner: 'trade', selected: false })])
+  })
+
+  test('a position the user selected stays selected and undimmed beside a draft', () => {
+    const s = snapshot({ trades: [trade({ stopLoss: 1.09 })] })
+    const overlays = overlaysFor(s, KEY, SPAN, DEFAULT_COLORS, 't1', draft({ stop: 1.095 }))
+    const trade1 = overlays.filter((o) => o.name === 'wdTradeLine' && (o.extendData as { wd: { owner: string } }).wd.owner === 'trade')
+    expect(trade1.every((o) => (o.styles as { line: { color: string } }).line.color.startsWith('#'))).toBe(true)
+    const bracket = overlays.find((o) => o.name === 'wdTradeBracket' && (o.extendData as { wd: { owner: string } }).wd.owner === 'trade')
+    expect(bracket?.extendData).toMatchObject({ wd: { selected: true } })
   })
 })
 

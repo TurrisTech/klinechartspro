@@ -737,31 +737,21 @@ body.wd-has-dock > #app {
 
 .wd-trade-panel-body {
   display: grid;
-  grid-template-columns: 17rem 1fr;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto auto 1fr;
   grid-template-areas:
-    'account account'
-    'ticket tabs'
-    'ticket tables';
+    'account'
+    'tabs'
+    'tables';
   gap: 0.5rem 1rem;
   padding: 0.5rem 0.75rem;
   overflow: hidden;
   min-height: 0;
 }
 
-/* Floated small (or on a narrow screen) the three areas stop sharing rows: ticket above
-   tables, each scrolling on its own, so nothing is cut off at any size the window allows. */
+/* Floated small (or on a narrow screen) the whole body scrolls rather than only the tables,
+   so the account strip can wrap without squeezing the tables to nothing. */
 .wd-trade-panel.is-narrow .wd-trade-panel-body {
-  /* minmax(0, ...), not 1fr: a bare fr track never shrinks below its content's min-content,
-     and the ticket's inputs have an intrinsic width -- on a phone the whole column was wider
-     than the screen, clipping Flatten, the quote and the submit button off the right. */
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto 1fr;
-  grid-template-areas:
-    'account'
-    'ticket'
-    'tabs'
-    'tables';
   gap: 0.5rem;
   overflow-y: auto;
 }
@@ -832,15 +822,117 @@ body.wd-has-dock > #app {
   color: #ef5350;
 }
 
-.wd-trade-flatten {
+.wd-trade-new-order {
   margin-left: auto;
   height: 1.75rem;
   font-size: 0.75rem;
 }
 
+.wd-trade-flatten {
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+/* The trade box: the order ticket in a floating window of its own, sized by its content. */
+.wd-ticket-window {
+  width: 19rem;
+  max-width: calc(100vw - 16px);
+}
+
+.wd-ticket-window > .wd-window-body {
+  padding: 0.5rem 0.75rem 0.75rem;
+  overflow-y: auto;
+  max-height: calc(100vh - 7rem);
+}
+
+.wd-trade-size-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+/* The position popup. */
+.wd-pos-window {
+  width: 20rem;
+  max-width: calc(100vw - 16px);
+}
+
+.wd-pos-window > .wd-window-body {
+  padding: 0.5rem 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wd-pos-window[data-side='buy'] .wd-window-title {
+  color: #26a69a;
+}
+
+.wd-pos-window[data-side='sell'] .wd-window-title {
+  color: #ef5350;
+}
+
+.wd-pos-headline {
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-pos-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.wd-pos-label {
+  color: var(--muted-foreground);
+}
+
+.wd-pos-value {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.wd-pos-headline.is-up,
+.wd-pos-value.is-up {
+  color: #26a69a;
+}
+
+.wd-pos-headline.is-down,
+.wd-pos-value.is-down {
+  color: #ef5350;
+}
+
+.wd-pos-actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wd-pos-action {
+  flex: 1 1 0;
+  height: 1.75rem;
+  font-size: 0.75rem;
+}
+
+.wd-pos-action.is-armed {
+  border-color: #ef5350;
+  color: #ef5350;
+}
+
+.wd-pos-error {
+  margin: 0;
+}
+
+.wd-pos-window [hidden] {
+  display: none;
+}
+
 /* The order ticket. */
 .wd-trade-ticket {
-  grid-area: ticket;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -1051,6 +1143,19 @@ body.wd-has-dock > #app {
 .wd-trade-table td {
   padding: 0.1875rem 0.5rem;
   border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+/* A table row is a click target: it selects the position and opens its stats. */
+.wd-trade-row {
+  cursor: pointer;
+}
+
+.wd-trade-row:hover > td {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.wd-trade-row.is-selected > td {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
 }
 
 .wd-trade-side-badge {
@@ -1394,11 +1499,11 @@ body.wd-has-dock > #app {
 
 /* Composing a draft, what is already working recedes -- and comes back under the pointer, so it
    can still be managed. */
-.wd-oc.is-drafting .wd-oc-tag:not(.is-draft):not(:hover) {
+.wd-oc.is-drafting .wd-oc-tag:not(.is-draft):not(.is-selected):not(:hover) {
   opacity: 0.45;
 }
 
-.wd-oc.is-drafting .wd-oc-row:not(.is-draft) {
+.wd-oc.is-drafting .wd-oc-row:not(.is-draft):not(.is-expanded) {
   opacity: 0.65;
 }
 

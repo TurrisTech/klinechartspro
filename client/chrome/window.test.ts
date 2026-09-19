@@ -5,6 +5,8 @@ import {
   clampPosition,
   clampSize,
   defaultPosition,
+  PRICE_AXIS_CLEARANCE,
+  TOOLBAR_CLEARANCE,
   DOCK_ZONE,
   EDGE_MARGIN,
   inDropZone,
@@ -44,6 +46,12 @@ describe('clampPosition', () => {
 })
 
 describe('defaultPosition', () => {
+  it('puts a price-side window top right, clear of the price axis and toolbar, wherever the focus is', () => {
+    const pos = defaultPosition(SIZE, CHART, 'right', CHART.left + 10)
+    expect(pos.x + SIZE.width).toBe(CHART.right - PRICE_AXIS_CLEARANCE)
+    expect(pos.y).toBe(CHART.top + TOOLBAR_CLEARANCE)
+  })
+
   it('opens centred on the bottom of the chart, clear of the time axis', () => {
     const pos = defaultPosition(SIZE, CHART)
     expect(pos.x + SIZE.width / 2).toBe((CHART.left + CHART.right) / 2)

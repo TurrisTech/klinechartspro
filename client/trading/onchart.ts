@@ -92,6 +92,8 @@ export interface LayerHost {
   instrumentFor(key: string): InstrumentInfo
   selected(): string | null
   select(id: string | null): void
+  /** A click on a position: select it everywhere and show its stats. */
+  inspect(id: string): void
   /** Move a canvas line (and its bracket) to `price` without committing. */
   previewLine(line: LineSpec, price: number): void
   /** Hold canvas rebuilds for a drag and its amendment; `release(true)` redraws from the snapshot. */
@@ -106,7 +108,7 @@ export interface LayerHost {
   cancelAmendment(): void
   /** The session's snapshot without the waiting change applied -- what is working now. */
   realSnapshot(): SimSnapshot | null
-  /** The ticket's order, while the account window is open. */
+  /** The ticket's order, while the trade box is open. */
   readonly draft?: DraftController
   isCollapsed(compact: boolean): boolean
   setCollapsed(compact: boolean, collapsed: boolean): void
@@ -385,8 +387,9 @@ export class OnChartLayer {
     this.draft = draftFor(this.host.draft?.draft() ?? null, key)
     const composing = isComposing(this.draft)
     this.root.classList.toggle('is-drafting', composing)
-    // Composing a draft, nothing else is selected: its card row stays shut and its band faint.
-    const selected = composing ? null : this.effectiveSelection(trades, orders)
+    // Composing a draft, nothing is selected implicitly -- only what the user clicked, which is
+    // selected on every pane whether or not the trade box holds a draft (user, 2026-09-19).
+    const selected = composing ? this.explicitSelection(trades, orders) : this.effectiveSelection(trades, orders)
     this.lines = linesFor(snapshot, key, this.draft)
 
     const wanted = new Set<string>()
@@ -427,6 +430,12 @@ export class OnChartLayer {
       confirm: this.describeAmendment(snapshot, ctx, key)
     })
     this.schedule()
+  }
+
+  /** The selection, when it is working on this pane's instrument. */
+  private explicitSelection(trades: SimTrade[], orders: SimOrder[]): string | null {
+    const selected = this.host.selected()
+    return selected && (trades.some((t) => t.id === selected) || orders.some((o) => o.id === selected)) ? selected : null
   }
 
   /** The selection, or -- when only one thing is working -- that one, so a single trade shows its
@@ -682,7 +691,9 @@ export class OnChartLayer {
         this.render(snapshot)
         return
       case 'select':
-        this.host.select(this.host.selected() === action.id ? null : action.id)
+        // A second click on the selected one lets it go (and the popup with it).
+        if (this.host.selected() === action.id) this.host.select(null)
+        else this.host.inspect(action.id)
         return
       case 'close': {
         const partial = action.units !== undefined && action.units > 0 && action.units < action.trade.units

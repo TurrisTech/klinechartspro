@@ -32,8 +32,9 @@ mode only for its title.
 - `api.ts` — the `/sim` wire (types + `simApi`). Owner is the signed-in user (dev) or a minted
   `X-Sim-Owner` token kept in `localStorage`, sent on every call.
 - `session.ts` — the `TradingSession` interface and `PaperTradingSession` (load, poll, act).
-- `panel.ts` — the contents: account strip (balance / equity / unrealized / open +
-  flatten-all), the order ticket, and the positions / orders / history tabs. Plain DOM,
+- `panel.ts` — the account window's contents: account strip (balance / equity / unrealized /
+  open + New order + flatten-all) and the positions / orders / history tabs. A click on a row
+  selects that position on every pane and opens its popup. Plain DOM,
   `kc-*`/`wd-trade-*`. It owns no chrome — the title bar, close and drag are the window's —
   but it does own its shape: below 620px (a window floated small) the three grid areas stop
   sharing rows and stack into one column (`is-narrow`, from its OWN width, not the page's).
@@ -42,7 +43,10 @@ mode only for its title.
   pure "which lines does this snapshot draw" (`linesFor`, `workingFor`).
 - `onchart.ts` — the HTML layer per pane: a label on every line, dragging, and the actions.
 - `ordercard.ts` — the collapsible order card in that layer.
-- `ticket.ts` — the order ticket (below), built once and updated in place.
+- `ticket.ts` — the order ticket (below), built once and updated in place. It lives in the
+  **trade box**, a window of its own.
+- `inspector.ts` + `stats.ts` — the **position popup** (below): the window, and the PURE rows it
+  shows (tested).
 - `prefs.ts` — the choices kept per browser (ticket size/stop modes, risk %, R, whether the order
   card is rolled up), and the channel that keeps every pane, the ticket and other tabs in step.
 - `metrics.ts` — PURE forex figures, risk sizing, the engine's refusal rules, label placement.
@@ -51,8 +55,8 @@ mode only for its title.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
 - `format.ts` — pure price / pip / P&L helpers.
-- `dock.ts` — `mountTradingDock(session, opts)`: the mode-agnostic dock — panel, overlays, the
-  window it lives in, open/close, teardown. The window is a `DockableWindow`
+- `dock.ts` — `mountTradingDock(session, opts)`: the mode-agnostic dock — panel, ticket, popup,
+  overlays, the three windows they live in, open/close, teardown. The window is a `DockableWindow`
   (`client/chrome/window.ts`): **docked below the chart by default** (the account strip, the
   ticket and the tables want the width), floated over it on request, resizable in both, and
   hidden until asked for, so it costs the wall nothing until then. Equity and open P&L are
@@ -60,9 +64,40 @@ mode only for its title.
   controls are a second window of the same kind, and drive this one from their Account
   toggle.
 - `index.ts` — `mountPaperTrading(chartPro, container)`: a `PaperTradingSession` on the dock;
-  returns `{ toggle, isOpen, sync, teardown }`. The "Paper" button in the drawing rail's
-  footer (`client/index.ts` `mountChartExtras`) calls `toggle`; "Replay" beside it is
-  `client/replay`.
+  returns `{ toggle, toggleTicket, isOpen, sync, teardown }`. The "Paper" button in the drawing
+  rail's footer (`client/index.ts` `mountChartExtras`) calls `toggle`, "Trade" below it
+  `toggleTicket`; "Replay" is `client/replay`, whose controls carry their own Account and Trade
+  toggles.
+
+## The trade box (2026-09-19)
+
+The order ticket is a **non-modal, floating window of its own** — the trade box — not a part of
+the account window (user, 2026-09-19). One per wall, it follows the active pane's instrument, opens
+top right beside the price (clear of the axis and toolbar: `floatAnchor: 'right'`), never docks
+(`dockable: false`), and keeps its place per browser. Opened from the rail's **Trade** button, the
+account strip's **New order**, or the replay controls' **Trade** toggle; the chart stays fully
+usable while it is open. **While it is open its order is the draft on the chart** (the account
+window no longer decides that).
+
+## The position popup (2026-09-19)
+
+A click on a position — its line or label on a pane, its row on the order card, its row in the
+account tables — **selects it on every pane** showing its instrument (one selection per wall,
+`TradingOverlays`) and opens a small floating window beside the click with its stats, live:
+
+- an open trade: P&L (quote and, where exact, account currency), entry, mark on the closing side,
+  move, share of the balance, **where it stands in R**, stop and target (price · pips · amount ·
+  % of balance), R:R, size / lots / value / margin / pip value, opened and for how long; Close ½
+  and Close (two presses);
+- a pending order: its price, the market and how far away, stop/target, R:R, size, placed; Cancel;
+- a closed trade (a History row, or a trade that closes while shown): realised P&L, entry, exit
+  and why, move, opened / closed / held.
+
+It follows the selection while open (a click elsewhere, or a fill selecting the new trade, switches
+it; a pending order that fills becomes its trade), and closing it lets the selection go. **An
+explicit selection is shown even while a draft is being composed** — the draft used to hide every
+selection, which was right while the ticket lived in a window opened only to write an order, and
+wrong once the trade box can stay open.
 
 ## On the price pane
 
@@ -161,14 +196,20 @@ The whole feature is gated on the server's `sim` capability: `mountPaperTrading`
 
 ## The order ticket
 
-- **Size by** Units, or **Risk %**: the units that lose that share of the balance if the stop is
-  hit (`unitsForRisk`), floored to the instrument's unit precision so the loss never exceeds it.
+- **Size by** one of six (a picker, `prefs.ts` `SizeMode`): **Units**; **Lots** (100K units,
+  forex only); **Risk % of balance** or **Risk amount** (account currency) — the units that lose
+  that much if the stop is hit (`unitsForRisk` / `unitsForRiskAmount`), floored to the
+  instrument's unit precision so the loss never exceeds it; **Position value** in the account
+  currency (`unitsForNotional`, at the mid); **Margin % of balance** (`unitsForMarginPercent`,
+  needs `/instrument`'s `marginRate`). Everything ends as units. Switching carries the order's
+  current size across (1% risk at a 20-pip stop becomes that many lots, that value, that margin),
+  and each mode's number is remembered.
 - **SL / TP as** Pips, Price, or **% bal** — the balance lost at the stop or made at the target at
   the planned size (`levelForBalancePercent`, rounded toward the entry). % bal is disabled while
-  sizing by risk, which already fixes the loss. Switching how a level is stated converts what was
+  sizing by risk (% or amount), which already fixes the loss. Switching how a level is stated converts what was
   typed.
 - **Target at 1R / 2R / 3R** once there is a stop.
-- A **summary** of the order as it would be sent: units, lots, margin (flagged when it is more
+- A **summary** of the order as it would be sent: units, lots, value, margin (flagged when it is more
   than the equity — the paper engine does not enforce margin, a live account would), risk and
   reward with their share of the balance, R:R — or the reason it cannot be sent yet.
 

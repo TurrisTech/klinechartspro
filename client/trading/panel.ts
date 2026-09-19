@@ -1,4 +1,3 @@
-import type { SymbolInfo } from '../../src'
 import { OhlcvApiError } from '../config'
 import type { SimSnapshot } from './api'
 import {
@@ -15,11 +14,14 @@ import { amendmentRefusal, describeAmendment, type ProposedChange } from './amen
 import type { InstrumentInfo } from './instrument'
 import { type Amendment, applyAmendment } from './lines'
 import type { TradingSession } from './session'
-import { OrderTicket } from './ticket'
 
-// The trading panel: an account strip, an order ticket, and the working-orders /
-// open-positions / history tables. It reads and acts ONLY through the `TradingSession`
-// interface, so the same panel serves a replay unchanged.
+// The trading panel: an account strip and the working-orders / open-positions / history tables.
+// It reads and acts ONLY through the `TradingSession` interface, so the same panel serves a
+// replay unchanged. The order ticket is NOT in here: it is the trade box, a window of its own
+// (dock.ts), which "New order" in the account strip opens.
+//
+// A click on a row -- anywhere but its inputs and buttons -- selects that position on every pane
+// and opens its stats in the position popup (inspector.ts); the selected row is marked.
 //
 // It does not own its chrome: the title bar, close, dock/float and the drag live on the
 // window it is mounted in (../chrome/window.ts). What it does own is its own SHAPE -- the
@@ -39,12 +41,16 @@ import { OrderTicket } from './ticket'
 // library's own token classes (kc-button, kc-input, kc-field) so it reads as native.
 
 export interface PanelContext {
-  /** The active pane's instrument, kept current by the caller on pane/symbol change. */
-  activeSymbol: () => SymbolInfo
   /** Instrument facts (precision + pip size) for a key, from the config cache. */
   instrumentFor: (key: string) => InstrumentInfo
   /** The waiting change shared with the chart (TradingOverlays). */
   amendments: PanelAmendments
+  /** The wall's selection, and a click on a row (TradingOverlays.inspect). */
+  selected(): string | null
+  onSelectionChange(listener: () => void): () => void
+  inspect(id: string): void
+  /** Show the trade box. */
+  openTicket(): void
 }
 
 export interface PanelAmendments {
@@ -56,7 +62,7 @@ export interface PanelAmendments {
   onChange(listener: () => void): () => void
 }
 
-/** Below this width the ticket stops sharing a row with the tables. */
+/** Below this width the account strip wraps tighter and the tables scroll sideways. */
 const NARROW_PANEL = 620
 
 type Tab = 'positions' | 'orders' | 'history'
@@ -65,7 +71,6 @@ export class TradingPanel {
   readonly element: HTMLElement
   private body: HTMLElement
   private accountStrip: HTMLElement
-  readonly ticket: OrderTicket
   private tablesHost: HTMLElement
   private tableContent: HTMLElement
   private confirmBar: HTMLElement
@@ -76,6 +81,7 @@ export class TradingPanel {
   private noticeTimer: ReturnType<typeof setTimeout> | null = null
   private renderTimer: ReturnType<typeof setTimeout> | null = null
   private unsubAmendments: () => void
+  private unsubSelection: () => void
   private tabsBar: HTMLElement
   private tab: Tab = 'positions'
   private unsub: () => void
@@ -91,9 +97,6 @@ export class TradingPanel {
 
     this.accountStrip = el('div', 'wd-trade-account')
     this.body.appendChild(this.accountStrip)
-
-    this.ticket = new OrderTicket(session, ctx)
-    this.body.appendChild(this.ticket.element)
 
     this.tabsBar = this.buildTabs()
     this.tablesHost = el('div', 'wd-trade-tables')
@@ -122,6 +125,7 @@ export class TradingPanel {
 
     this.unsub = session.subscribe(() => this.render())
     this.unsubAmendments = ctx.amendments.onChange(() => this.scheduleRender())
+    this.unsubSelection = ctx.onSelectionChange(() => this.scheduleRender())
     // The panel is as wide as whatever window it is in, which the user can resize; the
     // layout follows the box rather than the page.
     this.shape = new ResizeObserver(() => this.syncShape())
@@ -146,7 +150,6 @@ export class TradingPanel {
 
   /** Called when the active pane's instrument changes. */
   syncInstrument(): void {
-    this.ticket.syncInstrument()
     this.render()
   }
 
@@ -169,16 +172,13 @@ export class TradingPanel {
     if (!this.session.ready) {
       this.accountStrip.innerHTML = ''
       this.accountStrip.appendChild(emptyRow(`Connecting to your ${this.session.mode ?? 'paper'} account…`))
-      this.ticket.element.style.display = 'none'
       this.tabsBar.style.display = 'none'
       this.tableContent.innerHTML = ''
       this.confirmBar.hidden = true
       return
     }
-    this.ticket.element.style.display = ''
     this.tabsBar.style.display = ''
     this.renderAccount(s)
-    this.ticket.render()
     for (const b of this.tabsBar.querySelectorAll<HTMLElement>('.wd-trade-tab')) {
       b.classList.toggle('is-active', b.dataset.tab === this.tab)
     }
@@ -256,13 +256,15 @@ export class TradingPanel {
       stat('Unrealized', `${formatPnl(s.account.unrealizedPnl)} ${c}`, upnlCls),
       stat('Open', String(s.trades.filter((t) => t.closedAt === null).length))
     )
+    const newOrder = button('kc-button kc-button-primary wd-trade-new-order', 'New order', () => this.ctx.openTicket())
+    newOrder.title = 'Open the trade box'
     const flatten = button('kc-button kc-button-outline wd-trade-flatten', 'Flatten all', () => {
       void this.session.flatten().catch((err) => this.reportError(err))
     })
     if (s.trades.every((t) => t.closedAt !== null) && s.orders.every((o) => o.status !== 'pending')) {
       flatten.disabled = true
     }
-    this.accountStrip.appendChild(flatten)
+    this.accountStrip.append(newOrder, flatten)
   }
 
   private renderPositions(s: SimSnapshot): HTMLElement {
@@ -279,7 +281,7 @@ export class TradingPanel {
       const pnl = tradePnl(trade, quote)
       const pips = tradePips(trade, quote, info.pipSize)
       const dir = pnl !== null && pnl > 0 ? 'is-up' : pnl !== null && pnl < 0 ? 'is-down' : ''
-      const row = document.createElement('tr')
+      const row = this.row(trade.id)
       row.append(
         cell(sideBadge(trade.side)),
         cell(shortSymbol(key)),
@@ -308,7 +310,7 @@ export class TradingPanel {
     const tbody = table.tBodies[0]
     for (const order of pending) {
       const prec = this.ctx.instrumentFor(order.symbol).precision
-      const row = document.createElement('tr')
+      const row = this.row(order.id)
       row.append(
         cell(sideBadge(order.side)),
         cell(shortSymbol(order.symbol)),
@@ -349,7 +351,7 @@ export class TradingPanel {
               info.pipSize
             )
           : null
-      const row = document.createElement('tr')
+      const row = this.row(trade.id)
       row.append(
         cell(sideBadge(trade.side)),
         cell(shortSymbol(trade.symbol)),
@@ -364,6 +366,20 @@ export class TradingPanel {
       tbody.appendChild(row)
     }
     return table
+  }
+
+  /** A table row that selects its position and shows its stats when clicked -- anywhere but on
+   * one of its own inputs or buttons, which keep their clicks. */
+  private row(id: string): HTMLTableRowElement {
+    const row = document.createElement('tr')
+    row.className = 'wd-trade-row'
+    row.classList.toggle('is-selected', this.ctx.selected() === id)
+    row.title = 'Show this position'
+    row.addEventListener('click', (event) => {
+      if ((event.target as Element).closest('input, button')) return
+      this.ctx.inspect(id)
+    })
+    return row
   }
 
   /** An edited cell proposes its change; nothing is sent until it is confirmed. A value that is not
@@ -381,16 +397,16 @@ export class TradingPanel {
     const message = err instanceof OhlcvApiError ? err.message : 'Request failed'
     // A refused edit leaves the state as it was: redraw the tables so the typed value goes.
     this.render()
-    this.ticket.showError(message)
+    this.notice(message)
   }
 
   dispose(): void {
     this.unsub()
     this.unsubAmendments()
+    this.unsubSelection()
     if (this.renderTimer) clearTimeout(this.renderTimer)
     if (this.noticeTimer) clearTimeout(this.noticeTimer)
     this.shape.disconnect()
-    this.ticket.dispose()
   }
 }
 

@@ -40,7 +40,8 @@ export interface DraftOrder {
   target: number | null
   /** Why the ticket cannot send it as it stands; null when it can. */
   problem: string | null
-  /** Set when the size comes from a risk %, so a moved stop changes the units, not the loss. */
+  /** Set when the size comes from the stop (a risk % or amount, as a share of the balance), so a
+   * moved stop changes the units, not the loss. */
   riskPercent: number | null
 }
 

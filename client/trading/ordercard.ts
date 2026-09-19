@@ -117,7 +117,7 @@ export { moveText } from './format'
 
 /** An amount in the quote currency, then -- only where it differs and converts exactly -- the
  * account-currency figure. */
-function amountText(
+export function amountText(
   amount: number | null,
   accountAmount: number | null,
   ctx: PricingContext,

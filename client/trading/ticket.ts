@@ -15,18 +15,33 @@ import {
   roundTo,
   sizeFigures,
   targetForReward,
-  unitsForRisk
+  unitsForMarginPercent,
+  unitsForNotional,
+  unitsForRisk,
+  unitsForRiskAmount
 } from './metrics'
-import { type ProtectMode, setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
+import {
+  type ProtectMode,
+  SIZE_MODES,
+  type SizeMode,
+  setTradePrefs,
+  sizedByStop,
+  subscribeTradePrefs,
+  type TradePrefs,
+  tradePrefs
+} from './prefs'
 import type { TradingSession } from './session'
 
 // The order ticket. Side, type, size, price, stop and target -- and what they add up to before
 // anything is sent.
 //
-// SIZE is units, or RISK %: the units that lose that share of the balance if the stop is hit,
-// floored so the loss never exceeds it. A stop and a target are stated in PIPS (forex), as a
-// PRICE, or as a PERCENT of the balance lost or made -- the last needs a size, so it is not
-// offered while the size itself comes from the risk. 1R/2R/3R put the target at that multiple of
+// SIZE is given one of six ways (`SizeMode`): units; standard lots (forex); RISK % or a RISK
+// AMOUNT -- the units that lose that share of the balance, or that much money, if the stop is
+// hit, floored so the loss never exceeds it; the position's VALUE in the account currency; or the
+// MARGIN it ties up as a share of the balance. Every way ends as units, which is what is sent, and
+// switching carries the size across rather than reinterpreting the number. A stop and a target are
+// stated in PIPS (forex), as a PRICE, or as a PERCENT of the balance lost or made -- the last needs
+// a size, so it is not offered while the size itself comes from the stop. 1R/2R/3R put the target at that multiple of
 // the stop's distance. Switching how a level is stated converts what was typed rather than
 // reinterpreting the digits.
 //
@@ -34,13 +49,17 @@ import type { TradingSession } from './session'
 // the loss at the stop and the gain at the target (with their share of the balance), and R:R --
 // or the reason it cannot be sent yet.
 //
+// It lives in the TRADE BOX (dock.ts): a floating, non-modal window of its own, one per wall, that
+// follows the active pane's instrument -- apart from the account window, so an order can be written
+// with the chart in full view and the account closed.
+//
 // ON THE CHART the order being written is a DRAFT (`draft()`), which the trading layer draws on
-// the instrument's panes while the account window is open. Dragging its lines calls `setLevel`,
+// the instrument's panes while the trade box is open. Dragging its lines calls `setLevel`,
 // which writes the new price back into these fields in whatever way they are stated -- so the
 // ticket stays the one place the order lives, and the chart and the fields cannot disagree.
 //
-// BUILT ONCE and updated in place. The panel re-renders on every session notification, which is
-// every two seconds while anything is working; a ticket rebuilt each time took the focus (and a
+// BUILT ONCE and updated in place. It re-renders on every session notification, which is every
+// two seconds while anything is working; a ticket rebuilt each time took the focus (and a
 // half-typed price) away from whoever was typing in it.
 
 export interface TicketContext {
@@ -49,6 +68,23 @@ export interface TicketContext {
 }
 
 const REWARD_RATIOS = [1, 2, 3]
+
+const LOT = 100_000
+
+/** Each way of sizing: its name in the picker, the field's label, and the preference it reads. */
+const SIZE_SPECS: Record<SizeMode, { option: string; label: (currency: string) => string; pref: keyof TradePrefs; max?: number }> = {
+  units: { option: 'Units', label: () => 'Units', pref: 'units' },
+  lots: { option: 'Lots', label: () => 'Lots (100K units)', pref: 'lots' },
+  risk: { option: 'Risk % of balance', label: () => 'Risk (% of balance)', pref: 'riskPercent', max: 100 },
+  riskAmount: { option: 'Risk amount', label: (c) => `Risk (${c})`, pref: 'riskAmount' },
+  notional: { option: 'Position value', label: (c) => `Value (${c})`, pref: 'notional' },
+  margin: { option: 'Margin % of balance', label: () => 'Margin (% of balance)', pref: 'marginPercent', max: 100 }
+}
+
+/** A number for a field: no float noise, at most `digits` decimals. */
+function tidy(value: number, digits = 2): string {
+  return String(Number(value.toFixed(digits)))
+}
 
 interface Plan {
   units: number | null
@@ -132,9 +168,8 @@ export class OrderTicket implements DraftController {
   private readonly quoteNode: HTMLElement
   private readonly sideControl: Segmented<SimSide>
   private readonly typeControl: Segmented<SimOrderType>
-  private readonly sizeControl: Segmented<'units' | 'risk'>
-  private readonly unitsField: Field
-  private readonly riskField: Field
+  private readonly sizeSelect: HTMLSelectElement
+  private readonly sizeField: Field
   private readonly priceField: Field
   private readonly stopField: Field
   private readonly targetField: Field
@@ -146,6 +181,7 @@ export class OrderTicket implements DraftController {
   private readonly errorNode: HTMLElement
   private readonly submitButton: HTMLButtonElement
   private readonly unsubscribe: () => void
+  private readonly unsubscribeSession: () => void
   private draftListener: (() => void) | null = null
 
   constructor(
@@ -180,28 +216,29 @@ export class OrderTicket implements DraftController {
     )
     controls.append(this.sideControl.element, this.typeControl.element)
 
-    // Size: units, or the units a risk budget buys.
+    // Size: six ways of saying it, one number field that follows the choice.
     const sizeRow = el('div', 'wd-trade-ticket-mode')
-    this.sizeControl = new Segmented<'units' | 'risk'>(
-      [
-        ['units', 'Units'],
-        ['risk', 'Risk %']
-      ],
-      (v) => this.setSizeMode(v)
-    )
-    sizeRow.append(el('span', 'wd-trade-field-label', 'Size by'), this.sizeControl.element)
+    this.sizeSelect = el('select', 'kc-input wd-trade-size-select')
+    for (const mode of SIZE_MODES) {
+      const option = el('option', '', SIZE_SPECS[mode].option)
+      option.value = mode
+      this.sizeSelect.appendChild(option)
+    }
+    this.sizeSelect.addEventListener('change', () => this.setSizeMode(this.sizeSelect.value as SizeMode))
+    sizeRow.append(el('span', 'wd-trade-field-label', 'Size by'), this.sizeSelect)
 
     const fields = el('div', 'wd-trade-ticket-fields')
-    this.unitsField = field('Units', (v) => this.change(() => setTradePrefs({ units: Number(v) || tradePrefs().units })), 'wd-trade-units')
-    this.riskField = field('Risk (% of balance)', (v) => {
+    this.sizeField = field('Units', (v) => {
+      const spec = SIZE_SPECS[this.sizeMode()]
       const n = Number(v)
-      if (n > 0 && n <= 100) setTradePrefs({ riskPercent: n })
+      this.error = ''
+      if (n > 0 && n <= (spec.max ?? Number.POSITIVE_INFINITY)) setTradePrefs({ [spec.pref]: n })
       else this.refresh()
-    })
+    }, 'wd-trade-units')
     this.priceField = field('Price', (v) => this.change(() => (this.price = v)))
     this.stopField = field('Stop loss', (v) => this.change(() => (this.stopLoss = v)))
     this.targetField = field('Take profit', (v) => this.change(() => (this.takeProfit = v)))
-    fields.append(this.unitsField.element, this.riskField.element, this.priceField.element, this.stopField.element, this.targetField.element)
+    fields.append(this.sizeField.element, this.priceField.element, this.stopField.element, this.targetField.element)
 
     this.ratioRow = el('div', 'wd-trade-ticket-mode wd-trade-ratios')
     this.ratioRow.appendChild(el('span', 'wd-trade-field-label', 'Target at'))
@@ -229,14 +266,10 @@ export class OrderTicket implements DraftController {
     this.submitButton = button('kc-button kc-button-primary wd-trade-submit', '', () => void this.submit().catch(() => {}))
 
     this.element.append(head, controls, sizeRow, fields, this.ratioRow, this.modeRow, this.summary, this.errorNode, this.submitButton)
-    this.unitsField.input.value = String(tradePrefs().units)
-    this.riskField.input.value = String(tradePrefs().riskPercent)
     // Another tab, or the card, changed a shared number: show it unless it is being typed here.
-    this.unsubscribe = subscribeTradePrefs((prefs) => {
-      if (document.activeElement !== this.unitsField.input) this.unitsField.input.value = String(prefs.units)
-      if (document.activeElement !== this.riskField.input) this.riskField.input.value = String(prefs.riskPercent)
-      this.refresh()
-    })
+    this.unsubscribe = subscribeTradePrefs(() => this.refresh())
+    // New quotes and a new balance re-price the order; nothing being typed is touched.
+    this.unsubscribeSession = session.subscribe(() => this.refresh())
     this.refresh()
   }
 
@@ -260,7 +293,7 @@ export class OrderTicket implements DraftController {
       stop: plan.stop ?? null,
       target: plan.target ?? null,
       problem: plan.problem,
-      riskPercent: prefs.sizeMode === 'risk' ? prefs.riskPercent : null
+      riskPercent: this.riskPercentOf(prefs, plan)
     }
   }
 
@@ -339,10 +372,33 @@ export class OrderTicket implements DraftController {
     return this.ctx.instrumentFor(this.key)
   }
 
+  /** Why a way of sizing is not open to this instrument, or null when it is. */
+  private sizeRefusal(mode: SizeMode): string | null {
+    const info = this.info()
+    if (mode === 'lots' && info.assetClass !== 'forex') return 'Lots are a forex convention'
+    if (mode === 'margin' && info.marginRate === null) return 'No margin rate for this instrument'
+    return null
+  }
+
+  /** The stored way of sizing, or units where this instrument does not allow it. */
+  private sizeMode(): SizeMode {
+    const mode = tradePrefs().sizeMode
+    return this.sizeRefusal(mode) === null ? mode : 'units'
+  }
+
+  /** The share of the balance the order risks, when its size comes from the stop; the draft
+   * carries it so the chart re-sizes rather than re-prices when the stop moves. */
+  private riskPercentOf(prefs: TradePrefs, plan: Plan): number | null {
+    const mode = this.sizeMode()
+    if (mode === 'risk') return prefs.riskPercent
+    if (mode === 'riskAmount' && plan.ctx.account.balance > 0) return (prefs.riskAmount / plan.ctx.account.balance) * 100
+    return null
+  }
+
   /** The stored mode, or the nearest one this instrument and size mode allow. */
   private protectMode(): ProtectMode {
-    const { protectMode, sizeMode } = tradePrefs()
-    if (protectMode === 'percent' && sizeMode === 'risk') return this.info().pipSize !== null ? 'pips' : 'price'
+    const { protectMode } = tradePrefs()
+    if (protectMode === 'percent' && sizedByStop(this.sizeMode())) return this.info().pipSize !== null ? 'pips' : 'price'
     if (protectMode === 'pips' && this.info().pipSize === null) return 'price'
     return protectMode
   }
@@ -361,19 +417,45 @@ export class OrderTicket implements DraftController {
     this.refresh()
   }
 
-  private setSizeMode(next: 'units' | 'risk'): void {
+  private setSizeMode(next: SizeMode): void {
+    if (this.sizeRefusal(next) !== null) {
+      this.refresh()
+      return
+    }
     const plan = this.plan()
-    // Leaving risk sizing keeps the size it had worked out, rather than jumping back.
-    if (next === 'units' && plan.units !== null && plan.units > 0) setTradePrefs({ units: plan.units })
-    // Entering it, a stop stated as a share of the balance is re-stated in pips or price first.
-    if (next === 'risk' && this.protectMode() === 'percent' && plan.stop !== undefined) {
+    // The size the order has now, stated the new way, so switching does not change the order.
+    const carried = plan.units !== null && plan.units > 0 && plan.entry !== null ? this.sizeAs(next, plan) : null
+    if (carried !== null) setTradePrefs({ [SIZE_SPECS[next].pref]: carried })
+    // Sizing from the stop, a stop stated as a share of the balance is re-stated in pips or price first.
+    if (sizedByStop(next) && this.protectMode() === 'percent' && plan.stop !== undefined) {
       const to: ProtectMode = this.info().pipSize !== null ? 'pips' : 'price'
       this.stopLoss = this.express(plan.stop, to, plan)
       if (plan.target !== undefined) this.takeProfit = this.express(plan.target, to, plan)
       this.stopField.input.value = this.stopLoss
       this.targetField.input.value = this.takeProfit
     }
+    this.error = ''
     setTradePrefs({ sizeMode: next })
+  }
+
+  /** `plan`'s size stated as `mode` would state it, or null where that cannot be worked out (a
+   * risk with no stop, a value with no conversion). */
+  private sizeAs(mode: SizeMode, plan: Plan): number | null {
+    const units = plan.units
+    if (units === null || plan.entry === null) return null
+    const size = sizeFigures(units, plan.ctx)
+    const balance = plan.ctx.account.balance
+    const risk = plan.stop !== undefined ? outcome(this.side, units, plan.entry, plan.stop, plan.ctx) : null
+    const loss = risk?.amountAccount !== null && risk?.amountAccount !== undefined && risk.amountAccount < 0 ? -risk.amountAccount : null
+    let value: number | null = null
+    if (mode === 'units') value = units
+    else if (mode === 'lots') value = units / LOT
+    else if (mode === 'risk') value = loss !== null && balance > 0 ? (loss / balance) * 100 : null
+    else if (mode === 'riskAmount') value = loss
+    else if (mode === 'notional') value = size.notionalAccount
+    else value = size.margin !== null && balance > 0 ? (size.margin / balance) * 100 : null
+    if (value === null || !(value > 0)) return null
+    return Number(value.toFixed(mode === 'lots' || mode === 'units' ? 5 : 2))
   }
 
   private targetAtRatio(ratio: number): void {
@@ -448,19 +530,29 @@ export class OrderTicket implements DraftController {
     plan.entry = plan.price ?? fillingPrice(this.side, quote)
     if (!quote) fail('No quote yet')
 
+    const mode = this.sizeMode()
+    const noRate = `No ${ctx.account.currency} rate for ${ctx.currencies.quote}: size in units instead`
     try {
-      if (prefs.sizeMode === 'risk') {
+      if (sizedByStop(mode)) {
         // The stop decides the size, so it resolves first, without one.
         plan.stop = this.resolve(this.stopLoss, 'stop', plan.entry, null, ctx)
         if (plan.stop === undefined) return fail('Sizing by risk needs a stop loss')
         if (plan.entry === null) return plan
-        if (quoteToAccountRate(ctx) === null) {
-          return fail(`No ${ctx.account.currency} rate for ${ctx.currencies.quote}: size in units instead`)
-        }
-        plan.units = unitsForRisk(prefs.riskPercent, plan.entry, plan.stop, ctx)
+        if (quoteToAccountRate(ctx) === null) return fail(noRate)
+        plan.units =
+          mode === 'risk'
+            ? unitsForRisk(prefs.riskPercent, plan.entry, plan.stop, ctx)
+            : unitsForRiskAmount(prefs.riskAmount, plan.entry, plan.stop, ctx)
         if (plan.units === null || plan.units <= 0) return fail('The risk is too small for a single unit at that stop')
       } else {
-        plan.units = prefs.units
+        if (mode === 'units') plan.units = prefs.units
+        else if (mode === 'lots') plan.units = Math.round(prefs.lots * LOT * 10 ** info.unitsPrecision) / 10 ** info.unitsPrecision
+        else if (mode === 'notional') plan.units = unitsForNotional(prefs.notional, ctx)
+        else plan.units = unitsForMarginPercent(prefs.marginPercent, ctx)
+        if (plan.units === null) {
+          return fail(quote ? noRate : 'No quote yet')
+        }
+        if (plan.units <= 0) return fail('Too small for a single unit')
         plan.stop = this.resolve(this.stopLoss, 'stop', plan.entry, plan.units, ctx)
       }
       plan.target = this.resolve(this.takeProfit, 'target', plan.entry, plan.units, ctx)
@@ -494,15 +586,22 @@ export class OrderTicket implements DraftController {
         `${formatPrice(quote.bid, info.precision)} / ${formatPrice(quote.ask, info.precision)}` +
         (spread !== null ? ` · ${spread.toFixed(1)} pip${spread === 1 ? '' : 's'}` : '')
     } else {
-      this.quoteNode.textContent = 'no quote yet'
+      this.quoteNode.textContent = this.session.ready ? 'no quote yet' : 'connecting…'
     }
 
     this.sideControl.set(this.side)
     this.typeControl.set(this.type)
-    this.sizeControl.set(prefs.sizeMode)
-    const byRisk = prefs.sizeMode === 'risk'
-    this.unitsField.element.hidden = byRisk
-    this.riskField.element.hidden = !byRisk
+    const sizeMode = this.sizeMode()
+    const byRisk = sizedByStop(sizeMode)
+    this.sizeSelect.value = sizeMode
+    for (const option of this.sizeSelect.options) {
+      const refusal = this.sizeRefusal(option.value as SizeMode)
+      option.disabled = refusal !== null
+      option.title = refusal ?? ''
+    }
+    const spec = SIZE_SPECS[sizeMode]
+    this.sizeField.label.textContent = spec.label(s.account.currency)
+    if (document.activeElement !== this.sizeField.input) this.sizeField.input.value = tidy(Number(prefs[spec.pref]), 5)
     this.priceField.element.hidden = this.type === 'market'
 
     const mode = this.protectMode()
@@ -542,7 +641,7 @@ export class OrderTicket implements DraftController {
       return node
     }
     if (plan.units === null || plan.entry === null) {
-      if (plan.problem && tradePrefs().sizeMode === 'risk') line('is-muted').textContent = plan.problem
+      if (plan.problem && this.sizeMode() !== 'units') line('is-muted').textContent = plan.problem
       return
     }
     const size = sizeFigures(plan.units, ctx)
@@ -553,6 +652,7 @@ export class OrderTicket implements DraftController {
     const first = line()
     const bits = [`${formatUnits(plan.units)} units`]
     if (size.lots !== null) bits.push(formatLots(size.lots))
+    if (size.notionalAccount !== null) bits.push(`value ${formatMoney(size.notionalAccount, ctx.account.currency, false)}`)
     if (size.margin !== null) bits.push(`margin ${formatMoney(size.margin, ctx.account.currency, false)}`)
     first.textContent = bits.join(' · ')
     // The engine does not enforce margin, but a live account would refuse this.
@@ -609,5 +709,6 @@ export class OrderTicket implements DraftController {
 
   dispose(): void {
     this.unsubscribe()
+    this.unsubscribeSession()
   }
 }
