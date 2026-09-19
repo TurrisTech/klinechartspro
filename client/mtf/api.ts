@@ -37,14 +37,16 @@ export const MTF_GENERATION = 'arev21' as const
 
 // The timeframes offered in the picker: exactly the intervals arev21 has actually been
 // generated on for EURUSD (verified on pg-algo.dev, 2026-08-23 — 3m, 5m, 15m, 30m, 1h,
-// 4h, 8h and 1D, ~3.5M prediction rows in total). Deliberately not every interval the
+// 4h, 8h and 1D, ~3.5M prediction rows in total), plus 20m and 2h (2026-09-19): the prod
+// arev21 backfill of 2026-09-14 wrote both for the majors, the minors and BTCUSD, though
+// EURUSD itself still has no 20m. Deliberately not every interval the
 // server can serve bars for: a picker entry for 1W or 1M would be a checkbox that can
 // only ever draw an empty pane, because no run has ever written those rows.
 //
 // Ordered shortest-first, and that order is load-bearing twice over — it is the order
 // the picker lists them in, and it is what the controller assigns drawing lanes from,
 // so a 4h marker always sits closer to the candle than a 1D one.
-export const MTF_INTERVALS = ['3m', '5m', '15m', '30m', '1h', '4h', '8h', '1D'] as const
+export const MTF_INTERVALS = ['3m', '5m', '15m', '20m', '30m', '1h', '2h', '4h', '8h', '1D'] as const
 export type MtfInterval = (typeof MTF_INTERVALS)[number]
 
 export function isMtfInterval(code: string): code is MtfInterval {

@@ -47,8 +47,10 @@ const PALETTE: Record<MtfInterval, string> = {
   '3m': '#7E57C2',
   '5m': '#5C6BC0',
   '15m': '#42A5F5',
+  '20m': '#26C6DA',
   '30m': '#26A69A',
   '1h': '#9CCC65',
+  '2h': '#D4E157',
   '4h': '#FFCA28',
   '8h': '#FF7043',
   '1D': '#EF5350'
@@ -58,18 +60,36 @@ const PALETTE: Record<MtfInterval, string> = {
 // rarer and worth more room. Only 1h and up are on by default — the sub-hour series exist
 // and can be ticked, but eight timeframes at once is not a chart anyone can read, and the
 // hourly-and-up set is what the research is actually calibrated on.
-function defaultStyle(interval: MtfInterval, index: number): MtfTimeframeStyle {
+// The sizes are a step per timeframe along the ORIGINAL eight. 20m and 2h came later and sit
+// half a step between their neighbours rather than renumbering the rest: a stored wall keeps
+// only its diff from these defaults (toStoredMtfConfig), so shifting one existing default
+// would silently restyle every saved pane that relies on it.
+const SIZE_STEP: Record<MtfInterval, number> = {
+  '3m': 0,
+  '5m': 1,
+  '15m': 2,
+  '20m': 2.5,
+  '30m': 3,
+  '1h': 4,
+  '2h': 4.5,
+  '4h': 5,
+  '8h': 6,
+  '1D': 7
+}
+
+function defaultStyle(interval: MtfInterval): MtfTimeframeStyle {
+  const step = SIZE_STEP[interval]
   return {
-    enabled: index >= MTF_INTERVALS.indexOf('1h'),
+    enabled: step >= SIZE_STEP['1h'],
     color: PALETTE[interval],
-    arrowSize: 4 + index * 0.5,
-    textSize: 9 + (index >= MTF_INTERVALS.indexOf('4h') ? 1 : 0)
+    arrowSize: 4 + step * 0.5,
+    textSize: 9 + (step >= SIZE_STEP['4h'] ? 1 : 0)
   }
 }
 
 export const MTF_DEFAULTS: MtfConfig = {
   timeframes: Object.fromEntries(
-    MTF_INTERVALS.map((interval, index) => [interval, defaultStyle(interval, index)])
+    MTF_INTERVALS.map((interval) => [interval, defaultStyle(interval)])
   ) as Record<MtfInterval, MtfTimeframeStyle>
 }
 
