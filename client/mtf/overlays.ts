@@ -27,6 +27,12 @@ export interface MtfOverlay {
   description: string
   /** The server capability this overlay's votes need. */
   feature: Feature
+  /** Where a mark sits relative to its bar. `'direction'` (the default) puts a long below the
+   * low and a short above the high, the arrow pointing into the candle. `'zone'` puts it on
+   * the side of the zone `p` entered: a top-zone (long) signal above the high and a
+   * bottom-zone (short) one below the low. The arrow keeps pointing the signal's way either
+   * way, so a long is still an up arrow -- only its position moves. */
+  placement?: 'direction' | 'zone'
   /** The series' identity for one source timeframe -- the key the registry sub-pane for the
    * same series uses. The overlay's store is this plus `|mtf` (plugin.ts says why it must not
    * be the sub-pane's own). */
@@ -78,7 +84,7 @@ const OUTLIER_RANK = 'arev21_outlier_rank'
  * `TS:arev21_outlier_rank` sub-pane set to the same numbers; the overlay's store is kept apart
  * from that sub-pane's all the same (plugin.ts).
  */
-export function outlierRankMtf(percent: number): MtfOverlay {
+export function outlierRankMtf(percent: number, placement: MtfOverlay['placement'] = 'direction'): MtfOverlay {
   const params = { bars: 200, q: percent / 100, samples_only: 0 }
   const tuned = `|${JSON.stringify(params)}`
   const name = `arev21_outlier_rank_${percent}`
@@ -89,6 +95,7 @@ export function outlierRankMtf(percent: number): MtfOverlay {
     groupLabel: `AREV21 outlier rank ${percent} multi-timeframe · price pane`,
     description: `arev21's p entering the top or bottom ${100 - percent}% of its last 200 bars, from several timeframes at once, each drawn one bar of its own timeframe forward. Timeframes, colours and sizes are on the gear.`,
     feature: 'arev21_outlier',
+    placement,
     sourceKey: (vendor, ticker, interval) => `${registrySourceKey(OUTLIER_RANK, vendor, ticker, interval)}${tuned}`,
     fetchPoints: async (f, vendorSymbol, interval, from, to, limit) => {
       const page = await f.points<ArevPoint>({
@@ -107,7 +114,8 @@ export function outlierRankMtf(percent: number): MtfOverlay {
 }
 
 export const AREV21_OUTLIER_RANK_90_MTF = outlierRankMtf(90)
-export const AREV21_OUTLIER_RANK_85_MTF = outlierRankMtf(85)
+/** Top-zone signals over the price, bottom-zone ones under it (user, 2026-09-19). */
+export const AREV21_OUTLIER_RANK_85_MTF = outlierRankMtf(85, 'zone')
 
 /** Every overlay, in picker order. The first is the original, whose settings keep their own
  * `mtf` field in the wall document; the rest are filed under `mx` by id (layout.ts). */
