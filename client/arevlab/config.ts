@@ -88,8 +88,16 @@ function defaultGeneration(generation: ArevGeneration): LabGeneration {
     lines: false,
     arrowSize: 5,
     minNeighbours: 50,
-    // Off: every bar with a usable p is compared and may print an arrow (the user's choice,
-    // 2026-09-16). On, the lab draws the published arrows and nothing else.
+    // Off: every bar with a usable p is compared and may print an arrow. On, the lab draws the
+    // published arrows and nothing else.
+    //
+    // SETTLED, twice: chosen 2026-09-16, and kept on 2026-09-19 after the measurement that
+    // argued against it. Off a sample bar arev21's arrows are weaker (+3.5 points over base
+    // against +7.6) while arev19's and arev23's are WRONG (-14.8 and -16.0, against +10.0 and
+    // +11.5 gated) -- the user has those numbers and wants every bar eligible on every
+    // generation anyway, with this switch for the pane that wants the published behaviour
+    // back. Do not flip the default on the strength of that table
+    // (notes/research/arev21-outlier/README.md §7).
     samplesOnly: false,
     // The research defaults: wdashboard-server services/arev.py SIGNAL_CONFIDENCE and
     // services/arev21outlier.py VARIANTS. The spans are the lab's own -- 90 days is a quarter of
