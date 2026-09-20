@@ -32,6 +32,9 @@ export type SettingsField =
       min: number
       max: number
       step: number
+      /** The consumer keeps this lever whole (the lab's `coerce` rounds it), so the box has to
+       * settle on a whole number too -- see `settleNumber`. */
+      integer?: boolean
       when?: SettingsFieldCondition
     }
   | { kind: 'switch'; key: string; label: string; when?: SettingsFieldCondition }
@@ -56,6 +59,18 @@ function setByPath(target: object, path: string, value: unknown): void {
     current = current[key] as Record<string, unknown>
   }
   current[keys.at(-1) as string] = value
+}
+
+/** What a typed number becomes once the field's own limits are applied: the value the layer
+ * will draw with, and therefore the value the box must end up showing. Mirrors what a
+ * consumer's own normaliser does (the lab's `coerce` in client/arevlab/config.ts) rather than
+ * trusting it -- the panel has the min/max/integer in hand and has to state them honestly. */
+export function settleNumber(
+  field: { min: number; max: number; integer?: boolean },
+  value: number
+): number {
+  const clamped = Math.min(field.max, Math.max(field.min, value))
+  return field.integer ? Math.round(clamped) : clamped
 }
 
 export interface SettingsPanelHandle {
@@ -246,8 +261,28 @@ export function openSettingsPanel<T extends object>(
     input.value = String(getByPath(config, field.key))
     input.addEventListener('input', () => {
       if (input.value === '') return
+      const typed = Number(input.value)
+      if (!Number.isFinite(typed)) return
       const next = structuredClone(config)
-      setByPath(next, field.key, Number(input.value))
+      // Clamped on the way in as well, so the stored config is never a value the layer cannot
+      // draw. The BOX is deliberately left alone here: rewriting it mid-keystroke would fight
+      // the caret (someone typing 500 into a min-20 field passes through 5), which is the same
+      // reason a number edit does not re-render the panel.
+      setByPath(next, field.key, settleNumber(field, typed))
+      commit(next)
+    })
+    // 'change' fires on blur or Enter, never mid-keystroke, so this is where the text can
+    // safely be corrected to what the layer is actually drawing with. Without it the box goes
+    // on claiming an out-of-range number -- 9999 in a field that maxes at 5000 -- until the
+    // panel is closed and reopened. An emptied box settles back to the stored value.
+    input.addEventListener('change', () => {
+      const stored = Number(getByPath(config, field.key))
+      const typed = Number(input.value)
+      const settled = input.value !== '' && Number.isFinite(typed) ? settleNumber(field, typed) : stored
+      input.value = String(settled)
+      if (settled === stored) return
+      const next = structuredClone(config)
+      setByPath(next, field.key, settled)
       commit(next)
     })
     return input
