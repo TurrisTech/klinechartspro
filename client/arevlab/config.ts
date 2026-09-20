@@ -197,7 +197,18 @@ export const LAB_FIELDS: SettingsField[] = AREV_GENERATIONS.map(
                 when
               }
             }
-            return { kind: 'number', key, label: lever.label, min: lever.min, max: lever.max, step: lever.step, when }
+            // `integer` travels with the field so the panel settles the box on the same value
+            // `coerce` below stores -- a lever that rounds must not read back a fraction.
+            return {
+              kind: 'number',
+              key,
+              label: lever.label,
+              min: lever.min,
+              max: lever.max,
+              step: lever.step,
+              ...(lever.integer ? { integer: true } : {}),
+              when
+            }
           })
         }
       ]
