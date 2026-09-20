@@ -1,12 +1,14 @@
-import { apiGet } from '../config'
+import { cachedInstrumentConfig, instrumentConfig } from '../instrumentconfig'
 import type { InstrumentConfig } from '../symbols'
 
 // Per-instrument facts the trading panel needs to price in pips the OANDA way, cached by
 // `vendor:TICKER` and fetched once from `GET /instrument`. A pip is the instrument's
 // `forexPipLocation` decimal (EURUSD -4 → 0.0001, USDJPY -2 → 0.01); the display precision
 // is one finer (the pipette). Non-forex instruments carry no pip location, so the panel
-// falls back to price-only for them. `/instrument` has no client cache of its own, so this
-// module is the one.
+// falls back to price-only for them. The REQUEST is cached in client/instrumentconfig.ts,
+// shared with the pane's own SymbolInfo lookup (before 2026-09-20 this module fetched
+// `/instrument` a second time for every instrument on the wall); what is cached HERE is the
+// derived, trading-shaped view of that config.
 
 export interface InstrumentInfo {
   precision: number
@@ -37,17 +39,24 @@ function placeholder(vendorSymbol: string): InstrumentInfo {
 export function instrumentInfo(vendorSymbol: string, onLoad?: () => void): InstrumentInfo {
   const hit = cache.get(vendorSymbol)
   if (hit) return hit
+  const key = vendorSymbol.includes(':') ? vendorSymbol : `oanda:${vendorSymbol}`
+  // Already fetched for the pane's own SymbolInfo: derive from it now rather than asking a
+  // second time, which is what this module used to do for every instrument on the wall.
+  const known = cachedInstrumentConfig(key)
+  if (known !== undefined) {
+    const info = known ? fromConfig(known) : placeholder(vendorSymbol)
+    cache.set(vendorSymbol, info)
+    return info
+  }
   if (!inflight.has(vendorSymbol)) {
     inflight.add(vendorSymbol)
-    const [vendor, ticker] = vendorSymbol.includes(':')
-      ? vendorSymbol.split(':', 2)
-      : ['oanda', vendorSymbol]
-    void apiGet<InstrumentConfig>('/instrument', { symbol: `${vendor}:${ticker}` })
+    void instrumentConfig(key)
       .then((config) => {
-        cache.set(vendorSymbol, fromConfig(config))
-        onLoad?.()
+        cache.set(vendorSymbol, config ? fromConfig(config) : placeholder(vendorSymbol))
+        // Only a real config is news to the caller: a placeholder is what it is already
+        // drawing, so redrawing for one would be a redraw that changes nothing.
+        if (config) onLoad?.()
       })
-      .catch(() => cache.set(vendorSymbol, placeholder(vendorSymbol)))
       .finally(() => inflight.delete(vendorSymbol))
   }
   return placeholder(vendorSymbol)
