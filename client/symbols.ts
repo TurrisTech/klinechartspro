@@ -1,6 +1,7 @@
 import type { SymbolInfo } from '../src'
 import { apiGet } from './config'
 import { dayGeometryOf } from './daygeometry'
+import { instrumentConfig } from './instrumentconfig'
 
 // wdashboard-server has no vendor/exchange field name of its own — `/search` returns
 // `description` as "{vendor}:{symbol}". We fold vendor into SymbolInfo.exchange since
@@ -130,12 +131,10 @@ export async function fetchSymbols(search = ''): Promise<SymbolInfo[]> {
 // Resolve one instrument without running a search first — what the initial symbol needs,
 // since it is named in configuration rather than picked from search results.
 export async function fetchSymbolInfo(ticker: string, vendor = 'oanda'): Promise<SymbolInfo> {
-  let config: InstrumentConfig | null = null
-  try {
-    config = await apiGet<InstrumentConfig>('/instrument', { symbol: `${vendor}:${ticker}` })
-  } catch (err) {
-    console.warn(`[symbols] /instrument failed for ${vendor}:${ticker}`, err)
-  }
+  // Shared with the trading panel's own reader (client/instrumentconfig.ts): one request per
+  // instrument per page, not one per caller per hydration. It never rejects -- a failure
+  // reads as `null` here, exactly as the try/catch this replaced did.
+  const config = await instrumentConfig(`${vendor}:${ticker}`)
   return toSymbolInfo({
     symbol: ticker,
     description: `${vendor}:${ticker}`,
