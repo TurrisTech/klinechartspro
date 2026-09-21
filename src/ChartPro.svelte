@@ -1271,7 +1271,7 @@
               {/each}
             </div>
           </fieldset>
-          {#each indicatorGroups as group, groupIndex (group.label)}
+          {#each indicatorGroups as group, groupIndex (`${group.main}|${group.label}`)}
           <Separator.Root class="kc-separator kc-dialog-separator" />
           <fieldset class="kc-fieldset">
             <legend>{group.label}</legend>

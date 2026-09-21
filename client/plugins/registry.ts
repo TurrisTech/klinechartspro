@@ -1,3 +1,4 @@
+import { createArev21DivergencePlugin } from '../arev21div/plugin'
 import { createArevLabPlugin } from '../arevlab/plugin'
 import { createBidAskPlugin } from '../bidask/plugin'
 import { DEV_BOOKS } from '../books/api'
@@ -19,14 +20,16 @@ import type { IndicatorPlugin } from './types'
 // what the registry deliberately does not cover: the multi-timeframe overlays, whose sources
 // read timeframes that are not the chart's; the book profiles, which are not a
 // scalar-per-bar series at all; the AREV lab, which reads several registry rows into one
-// pane and computes its own signal rules over them; bid/ask, which is not an indicator the
-// server computes but the quote half of the bars themselves; and TradeTalk, which is a
-// trading method computed here from daily bars and the bars the pane already holds.
+// pane and computes its own signal rules over them; the arev21 divergence, which compares
+// arev21's p with the pane's own price swings and draws in both panes; bid/ask, which is not
+// an indicator the server computes but the quote half of the bars themselves; and TradeTalk,
+// which is a trading method computed here from daily bars and the bars the pane already holds.
 
 export function builtinPlugins(): IndicatorPlugin[] {
   return [
     createRegistryPlugin(),
     createArevLabPlugin(),
+    createArev21DivergencePlugin(),
     // One per overlay: AREV21 MTF and the arev21_outlier rank overlays (mtf/overlays.ts).
     ...MTF_OVERLAYS.map((overlay) => createMtfPlugin(overlay)),
     createMtf01Plugin(),
