@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { Candle } from './calendar'
-import { heathLevels, isLive, LOOKBACK, originOf, type HeathLevelSettings } from './heathlevels'
+import { heathLevels, isLive, LOOKBACK, originOf, zoneOf, type HeathLevelSettings } from './heathlevels'
 import { emptyText, levelLabel, settingsOf, DEFAULT_PARAMS } from './heathtemplate'
 
 const bar = (open: number, high: number, low: number, close: number): Candle => ({
@@ -84,30 +84,62 @@ describe('demand', () => {
 })
 
 describe('the life of a level', () => {
-  test('price coming back to it marks it tested, and it is no longer fresh', () => {
+  test('price coming back INTO the area marks it tested, and it is no longer fresh', () => {
     const bars = dated([
       ...RALLY,
       bar(10.9, 11.5, 10.8, 11.4),
-      bar(11.4, 12.4, 11.3, 12.3) // reaches back up to the 12.3 line
+      bar(11.4, 12.4, 11.3, 12.3) // reaches back up past the 12.3 edge, not through the area
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.testedIndex).toBe(8)
     expect(heathLevels(bars, { ...SETTINGS, freshOnly: true })).toHaveLength(0)
   })
 
-  test('a close beyond the stop finishes it, and nothing is recorded after', () => {
+  test('one candle passing entirely through the area erases it', () => {
+    // The area is 12.3 (the open) to 13 (the wick). This candle's RANGE covers all of it.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
-      bar(11.9, 13.4, 11.8, 13.3), // closes above the origin candle's high of 13
-      bar(13.3, 14, 13.2, 13.9)
+      bar(11.9, 13.1, 11.8, 12.6),
+      bar(12.6, 13, 12.5, 12.9)
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.brokenIndex).toBe(8)
     expect(isLive(level, 7)).toBe(true)
     expect(isLive(level, 8)).toBe(false)
-    // The bar that broke it also reached the line, which is the last thing it records.
+    // The candle that erased it also reached into it, which is the last thing recorded.
     expect(level.testedIndex).toBe(8)
+  })
+
+  test('a wick covering only part of the area leaves it live', () => {
+    // High 12.8 is inside the 12.3-13 area, so the candle did not pass through it.
+    const bars = dated([
+      ...RALLY,
+      bar(10.9, 12, 10.8, 11.9),
+      bar(11.9, 12.8, 11.8, 12),
+      bar(12, 12.5, 11.9, 12.1)
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.brokenIndex).toBeNull()
+    expect(level.testedIndex).toBe(8)
+    expect(isLive(level, 9)).toBe(true)
+  })
+
+  test('closing beyond the area is not enough on its own -- the candle has to trade through it', () => {
+    // Gaps over the whole area: it closes above 13 but its LOW never reached 12.3.
+    const bars = dated([
+      ...RALLY,
+      bar(10.9, 12, 10.8, 11.9),
+      bar(13.2, 13.6, 13.1, 13.5)
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.brokenIndex).toBeNull()
+  })
+
+  test('the area runs from the line to the stop, both sides', () => {
+    const [supply] = heathLevels(RALLY, SETTINGS)
+    expect(zoneOf(supply)).toEqual({ low: 12.3, high: 13 })
+    expect(zoneOf({ price: 11.1, stop: 10 })).toEqual({ low: 10, high: 11.1 })
   })
 
   test('a level is not on the chart before its own candle', () => {
@@ -173,9 +205,11 @@ describe('no lookahead', () => {
 
 describe('the chart half', () => {
   test('the defaults are the ones the picker offers', () => {
-    expect(settingsOf(DEFAULT_PARAMS)).toEqual({ left: 5, right: 5, sides: 0, freshOnly: false, stopLine: false })
+    expect(settingsOf(DEFAULT_PARAMS)).toEqual({ left: 5, right: 5, sides: 0, freshOnly: false, stopLine: false, fill: 12 })
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
-    expect(settingsOf([0, 999, 7, 1, 1])).toEqual({ left: 1, right: 200, sides: 2, freshOnly: true, stopLine: true })
+    expect(settingsOf([0, 999, 7, 1, 1, 200])).toEqual({ left: 1, right: 200, sides: 2, freshOnly: true, stopLine: true, fill: 100 })
+    // A layout saved before the shading parameter existed reads its default, not zero.
+    expect(settingsOf([5, 5, 0, 0, 0]).fill).toBe(12)
   })
 
   test('a level says whether price has been back to it', () => {

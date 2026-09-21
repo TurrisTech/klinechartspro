@@ -12,6 +12,13 @@ import type { Candle } from './calendar'
 //   The stop goes above the wick HIGH (supply) or below the wick LOW (demand) of that same
 //   candle. A fresh, untested level is worth far more than one price has already visited.
 //
+// The line is one edge of an AREA and the stop is the other -- open to wick -- which is what
+// the chart shades. A level is ERASED when one candle passes entirely through that area
+// (user, 2026-09-21): a wick that covers the whole of it consumes it, while a wick that
+// reaches only part way in leaves it live. Containment is of the candle's whole range, wicks
+// included, so a candle that closed beyond the area but never traded through its far edge
+// does not erase it either.
+//
 // Two things in that definition have to be made mechanical, and both are parameters rather
 // than opinions buried in code:
 //
@@ -38,12 +45,19 @@ export interface HeathLevel {
   confirmIndex: number
   /** The line: that candle's open. */
   price: number
-  /** Where the stop goes: that candle's wick extreme. */
+  /** Where the stop goes: that candle's wick extreme, and the area's far edge. */
   stop: number
-  /** First bar, after price left the level, whose range reached back to it. Null while fresh. */
+  /** First bar, after price left the area, whose range reached back into it. Null while fresh. */
   testedIndex: number | null
-  /** First bar to CLOSE beyond the stop -- the level is finished. Null while it stands. */
+  /** First bar whose whole range covered the area -- it passed entirely through, so the level
+   * is erased. Null while it stands. */
   brokenIndex: number | null
+}
+
+/** The shaded area: between the line (the open) and the stop (the wick). Always has height --
+ * an up-close candle opens below its high, a down-close one above its low. */
+export function zoneOf(level: Pick<HeathLevel, 'price' | 'stop'>): { low: number; high: number } {
+  return { low: Math.min(level.price, level.stop), high: Math.max(level.price, level.stop) }
 }
 
 export interface HeathLevelSettings {
@@ -70,12 +84,12 @@ export function originOf(bars: readonly Candle[], turn: number, side: 'supply' |
 /**
  * Every supply and demand line the method would have on this chart, in the order they formed.
  *
- * A level's life, after the origin candle: it is **armed** once price has left it (a close on
- * the far side), **tested** the first time a later bar's range reaches back to it, and
- * **broken** the first time a candle closes beyond the stop -- beyond the origin candle's own
- * wick, which is exactly where the method puts the stop, so a level dies where the trade would
- * have. Arming is what stops the sell-off that created a supply from instantly "testing" it:
- * the line is the origin candle's open, so the bars around the turn are still standing on it.
+ * A level's life, after the origin candle: it is **armed** once price has closed clear of the
+ * area, **tested** the first time a later bar's range reaches back INTO it, and **erased** the
+ * first time one candle's range covers the whole of it. Arming is what stops the move that
+ * created the level from counting as its first test -- the area is the origin candle's own
+ * open-to-wick, so the bars around the turn are still standing in it, and the departure would
+ * otherwise read as a return.
  *
  * Nothing here reads a bar later than the one being judged.
  */
@@ -108,17 +122,19 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
   }
 
   for (const level of levels) {
+    const zone = zoneOf(level)
     let armed = false
     for (let i = level.originIndex + 1; i < n; i++) {
       const bar = bars[i]
       if (!armed) {
-        armed = level.side === 'supply' ? bar.close < level.price : bar.close > level.price
+        armed = level.side === 'supply' ? bar.close < zone.low : bar.close > zone.high
         continue
       }
-      if (level.testedIndex === null && (level.side === 'supply' ? bar.high >= level.price : bar.low <= level.price)) {
-        level.testedIndex = i
-      }
-      if (level.side === 'supply' ? bar.close > level.stop : bar.close < level.stop) {
+      // Reached back into the area at all.
+      if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
+      // Passed entirely through it: the whole area is inside this candle's range, wicks and
+      // all. A wick that covers only part of the area leaves the level live.
+      if (bar.low <= zone.low && bar.high >= zone.high) {
         level.brokenIndex = i
         break
       }
