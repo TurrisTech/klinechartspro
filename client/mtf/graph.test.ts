@@ -4,8 +4,8 @@ import { installWindow } from '../plugins/testing'
 // The signal graph's rules (graph.ts): where a graph starts and resets, which lower-timeframe
 // signal steps from which, and how a stored config carries the graph's settings.
 installWindow()
-const { buildGraphs, canStep, graphStart, storeGraphSignals } = await import('./graph')
-const { MTF_DEFAULTS, fromStoredMtfConfig, toStoredMtfConfig } = await import('./config')
+const { buildGraphs, buildRootGraphs, canStep, graphStart, storeGraphSignals } = await import('./graph')
+const { MTF_DEFAULTS, fromStoredMtfConfig, graphRoots, toStoredMtfConfig } = await import('./config')
 const { GRID_ARRAY, RegistryStore } = await import('../tsregistry/store')
 
 import type { ArevPoint } from '../arev/api'
@@ -177,30 +177,86 @@ describe('storeGraphSignals', () => {
   const point = (date: number, signal: 'long' | 'short' | null): ArevPoint =>
     ({ date, prediction: 0, n: 200, p: signal === 'long' ? 0.7 : 0.3, confidence: 0.2, atCross: true, signal }) as ArevPoint
 
-  test('prices a top signal at its source bar high and a bottom one at its low, at the close', () => {
+  test('prices a top signal at the top of its candle BODY and a bottom one at its bottom, at the close', () => {
     const store = new RegistryStore<ArevPoint>('k', (p) => p as ArevPoint)
-    store.ingest([point(0, 'long'), point(4 * H, 'short'), point(8 * H, 'long')], { from: 0, to: 12 * H }, {
+    store.ingest([point(0, 'long'), point(4 * H, 'short'), point(8 * H, 'long'), point(12 * H, 'short')], { from: 0, to: 20 * H }, {
       [GRID_ARRAY]: [
-        { date: 0, high: 1.2, low: 1.0 },
-        { date: 4 * H, high: 1.3, low: 1.1 },
-        { date: 8 * H, high: 1.4, low: 1.2 }
+        // A rising candle: its body's top is the close, its bottom the open.
+        { date: 0, open: 1.05, close: 1.15 },
+        // A falling candle: its body's top is the open, its bottom the close.
+        { date: 4 * H, open: 1.25, close: 1.12 },
+        { date: 8 * H, open: 1.3, close: 1.35 },
+        { date: 12 * H, open: 1.34, close: 1.28 },
+        { date: 16 * H, open: 1.28, close: 1.3 }
       ]
     })
     const out = storeGraphSignals('4h', store)
-    // The 8h bar has no successor in the grid: not closed, not knowable.
     expect(out.map(({ side, price, knownAt }) => ({ side, price, knownAt }))).toEqual([
-      { side: 'top', price: 1.2, knownAt: 4 * H },
-      { side: 'bottom', price: 1.1, knownAt: 8 * H }
+      { side: 'top', price: 1.15, knownAt: 4 * H },
+      { side: 'bottom', price: 1.12, knownAt: 8 * H },
+      { side: 'top', price: 1.35, knownAt: 12 * H },
+      { side: 'bottom', price: 1.28, knownAt: 16 * H }
     ])
   })
 
-  test('a signal whose bar range is not held is left out, and a dateless re-fetch keeps a known range', () => {
+  test('a signal whose bar has not closed is not knowable, and is left out', () => {
+    const store = new RegistryStore<ArevPoint>('k', (p) => p as ArevPoint)
+    store.ingest([point(0, 'long'), point(4 * H, 'long')], { from: 0, to: 8 * H }, {
+      [GRID_ARRAY]: [
+        { date: 0, open: 1.0, close: 1.1 },
+        { date: 4 * H, open: 1.1, close: 1.2 }
+      ]
+    })
+    expect(storeGraphSignals('4h', store).map((s) => s.knownAt)).toEqual([4 * H])
+  })
+
+  test('a signal whose candle body is not held is left out, and a price-less re-fetch keeps a known body', () => {
     const store = new RegistryStore<ArevPoint>('k', (p) => p as ArevPoint)
     store.ingest([point(0, 'long')], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0 }, { date: 4 * H }] })
     expect(storeGraphSignals('4h', store)).toEqual([])
-    store.ingest([], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0, high: 1.2, low: 1.0 }] })
+    store.ingest([], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0, open: 1.1, close: 1.2 }] })
     store.ingest([], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0 }] })
     expect(storeGraphSignals('4h', store).map((s) => s.price)).toEqual([1.2])
+  })
+})
+
+describe('several roots at once', () => {
+  // A 1D bottom run and, inside it, an 8h TOP run: two graphs over the same bars, running
+  // opposite ways. Each root resets only on its own signals.
+  const signals = [
+    sig('1D', 0, 'bottom', 1.1),
+    sig('8h', 8 * H, 'top', 1.09),
+    sig('4h', 12 * H, 'bottom', 1.08),
+    sig('4h', 16 * H, 'top', 1.095),
+    sig('1h', 17 * H, 'top', 1.1),
+    sig('1h', 18 * H, 'bottom', 1.07)
+  ]
+
+  test('each root builds its own graphs, and they may overlap in time and run opposite ways', () => {
+    const graphs = buildRootGraphs(signals, ['8h', '1D'], 8, Number.NEGATIVE_INFINITY)
+    expect(graphs.map((g) => `${g.root} ${g.side}`)).toEqual(['1D bottom', '8h top'])
+    expect(shape(graphs[0].nodes)).toEqual(['1D@1.1', '4h@1.08 <- 1D@1.1', '1h@1.07 <- 4h@1.08'])
+    expect(shape(graphs[1].nodes)).toEqual(['8h@1.09', '4h@1.095 <- 8h@1.09', '1h@1.1 <- 4h@1.095'])
+  })
+
+  test('a signal can root one graph and step in another', () => {
+    const graphs = buildRootGraphs(
+      [sig('1D', 0, 'top', 1.1), sig('8h', 8 * H, 'top', 1.12), sig('1h', 9 * H, 'top', 1.13)],
+      ['1D', '8h'],
+      8,
+      Number.NEGATIVE_INFINITY
+    )
+    expect(shape(graphs[0].nodes)).toEqual(['1D@1.1', '8h@1.12 <- 1D@1.1', '1h@1.13 <- 8h@1.12'])
+    expect(shape(graphs[1].nodes)).toEqual(['8h@1.12', '1h@1.13 <- 8h@1.12'])
+  })
+
+  test('the roots switched on, longest first', () => {
+    const config = structuredClone(MTF_DEFAULTS)
+    config.graph.roots['4h'] = true
+    config.graph.roots['1D'] = false
+    config.graph.roots['8h'] = true
+    expect(graphRoots(config)).toEqual(['8h', '4h'])
+    expect(graphRoots(MTF_DEFAULTS)).toEqual(['1D'])
   })
 })
 
@@ -208,16 +264,27 @@ describe('graph settings in the stored config', () => {
   test('on the defaults nothing is stored; a change round-trips as a diff', () => {
     expect(toStoredMtfConfig(structuredClone(MTF_DEFAULTS))).toBeUndefined()
     const config = structuredClone(MTF_DEFAULTS)
-    config.graph.from = '8h'
+    config.graph.roots['8h'] = true
     config.graph.maxStep = 4
     const stored = toStoredMtfConfig(config)
-    expect(stored).toEqual({ graph: { from: '8h', maxStep: 4 } })
-    expect(fromStoredMtfConfig(JSON.parse(JSON.stringify(stored)))?.graph).toEqual({ ...MTF_DEFAULTS.graph, from: '8h', maxStep: 4 })
+    expect(stored).toEqual({ graph: { roots: { '8h': true }, maxStep: 4 } })
+    const back = fromStoredMtfConfig(JSON.parse(JSON.stringify(stored)))
+    expect(back?.graph).toEqual({ ...MTF_DEFAULTS.graph, roots: { ...MTF_DEFAULTS.graph.roots, '8h': true }, maxStep: 4 })
+  })
+
+  test('the single root client-a2c8f6c saved reads as that one root on, and nothing else', () => {
+    expect(graphRoots(fromStoredMtfConfig({ graph: { from: '8h' } }))).toEqual(['8h'])
+    expect(graphRoots(fromStoredMtfConfig({ graph: { from: 'off' } }))).toEqual([])
+    // A document that states roots is read by them, whatever else it says.
+    expect(graphRoots(fromStoredMtfConfig({ graph: { from: '8h', roots: { '4h': true } } }))).toEqual(['1D', '4h'])
   })
 
   test('a bad value falls back to its default, and a document from before the graph reads unchanged', () => {
-    const back = fromStoredMtfConfig({ graph: { from: '3m', maxStep: 1, lineWidth: 2 }, '4h': { color: '#000000' } })
-    expect(back?.graph).toEqual({ ...MTF_DEFAULTS.graph, lineWidth: 2 })
+    const back = fromStoredMtfConfig({
+      graph: { from: '3m', roots: { '1D': 'yes', '2h': true, '3m': true }, maxStep: 1, lineWidth: 2 },
+      '4h': { color: '#000000' }
+    })
+    expect(back?.graph).toEqual({ ...MTF_DEFAULTS.graph, roots: { ...MTF_DEFAULTS.graph.roots, '2h': true }, lineWidth: 2 })
     expect(back?.timeframes['4h'].color).toBe('#000000')
     expect(fromStoredMtfConfig({ '1h': { enabled: false } })?.graph).toEqual(MTF_DEFAULTS.graph)
   })

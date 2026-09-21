@@ -3,7 +3,7 @@ import { peekStore } from '../plugins/store'
 import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
 import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
-import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphConfig, type MtfConfig } from './config'
+import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphRoots, type MtfConfig } from './config'
 import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
@@ -34,9 +34,9 @@ import { registerMtfIndicators } from './templates'
 const WINDOW_PAD_BARS = 4
 const WINDOW_PAD_FLOOR_MS = 7 * 86_400_000
 
-// With the signal graph on, every timeframe below the root is fetched back to the start of the
-// graph in force at the chart's loaded left edge (graph.ts `graphStart`), because what a node
-// hangs from can lie anywhere between there and the node. Bounded, so a 1D root's months-long
+// With the signal graphs on, every timeframe below a root is fetched back to the start of that
+// root's graph in force at the chart's loaded left edge (graph.ts `graphStart`), because what a
+// node hangs from can lie anywhere between there and the node. Bounded, so a 1D root's months-long
 // graph cannot pull months of 3m votes: past this many of its own bars a timeframe's oldest
 // nodes are missing, which changes only where a node of a still-shorter timeframe hangs from.
 const GRAPH_LOOKBACK_MAX_BARS = 10_000
@@ -69,14 +69,13 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
   const drawable = (config: MtfConfig, chartInterval: string): MtfInterval[] =>
     enabledIntervals(config).filter((interval) => !isFinerThan(interval, chartInterval))
 
-  /** The timeframe this pane's graphs start from, or null when it draws none: the overlay
-   * offers no graph, the setting is off, or the root is not among the timeframes drawn. The
-   * graph is made of drawn signals only -- a node with no marker would be a line to nothing. */
-  const graphRoot = (config: MtfConfig, chartInterval: string): MtfInterval | null => {
-    if (!overlay.graph) return null
-    const from = graphConfig(config).from
-    if (from === 'off') return null
-    return drawable(config, chartInterval).includes(from) ? from : null
+  /** The roots this pane's graphs start from, longest first: none when the overlay offers no
+   * graph or none is switched on, and only the ones among the timeframes drawn. The graphs are
+   * made of drawn signals only -- a node with no marker would be a line to nothing. */
+  const graphRootsFor = (config: MtfConfig, chartInterval: string): MtfInterval[] => {
+    if (!overlay.graph) return []
+    const shown = drawable(config, chartInterval)
+    return graphRoots(config).filter((root) => shown.includes(root))
   }
 
   // The series' key plus `|mtf`: the overlay's OWN store, never the registry sub-pane's.
@@ -92,27 +91,31 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
     f: PluginFacilities,
     ctx: BindContext,
     interval: MtfInterval,
-    root: MtfInterval | null
+    roots: readonly MtfInterval[]
   ): SourceSpec<ArevPoint> => {
     const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
     const durationMs = f.resolutionDurationMs(interval)
     const chunk = GRID_CHUNK_BARS * durationMs
-    // How much further back than the chart the graph needs this timeframe, from the chart's
-    // loaded left edge (absolute) -- 0 when it takes no part in a graph.
+    // How much further back than the chart the graphs need this timeframe, from the chart's
+    // loaded left edge (absolute) -- 0 when it takes part in no graph.
     //
-    // The root looks back a fixed number of its own bars, to find the run of same-side root
-    // signals in force at the left edge. Every timeframe under it then reaches back to where
-    // that run began, which it reads off the root's store: the host covers a binding's sources
-    // in order and awaits each, and the root is listed first (`bind`), so the root's window is
-    // already fetched when these are sized.
+    // A root looks back a fixed number of its own bars, to find the run of same-side root
+    // signals in force at the left edge. Every timeframe under a root then reaches back to where
+    // that run began, which it reads off the root's store -- the furthest any root above it
+    // asks, since one timeframe serves every graph it is a node of (an 8h source is the 8h
+    // graphs' root AND a node of the 1D graph). The host covers a binding's sources in order and
+    // awaits each, and they are listed longest first when graphs are on (`bind`), so every
+    // root above a timeframe has been fetched by the time its window is sized.
     const graphReach = (loadedFrom: number): number => {
-      if (!root) return 0
-      if (interval === root) return rootLookbackMs(root)
-      if (durationMs > f.resolutionDurationMs(root)) return 0
-      const rootStore = peekStore<RegistryStore<ArevPoint>>(storeKey(ctx, root))
-      if (!rootStore) return 0
-      const start = graphStart(storeGraphSignals(root, rootStore), loadedFrom, rootLookbackMs(root))
-      return Math.min(Math.max(0, loadedFrom - start), GRAPH_LOOKBACK_MAX_BARS * durationMs)
+      let reach = roots.includes(interval) ? rootLookbackMs(interval) : 0
+      for (const root of roots) {
+        if (!(durationMs < f.resolutionDurationMs(root))) continue
+        const rootStore = peekStore<RegistryStore<ArevPoint>>(storeKey(ctx, root))
+        if (!rootStore) continue
+        const start = graphStart(storeGraphSignals(root, rootStore), loadedFrom, rootLookbackMs(root))
+        reach = Math.max(reach, Math.min(Math.max(0, loadedFrom - start), GRAPH_LOOKBACK_MAX_BARS * durationMs))
+      }
+      return reach
     }
     return {
       id: interval,
@@ -157,15 +160,18 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
     }
   }
 
-  /** What the legend says about the graph: nothing when the overlay offers none or it is
-   * off, where it starts from, or why it cannot be drawn on this pane. */
+  /** What the legend says about the graphs: nothing when the overlay offers none or no root
+   * is on, which roots they start from, and why any root switched on cannot draw here. */
   const graphLabel = (config: MtfConfig, chartInterval: string): string => {
     if (!overlay.graph) return ''
-    const from = graphConfig(config).from
-    if (from === 'off') return ''
-    if (graphRoot(config, chartInterval)) return ` · graph from ${from}`
+    const drawn = graphRootsFor(config, chartInterval)
+    const parts = drawn.length > 0 ? [`graph from ${drawn.join(' ')}`] : []
     // Named rather than silently skipped, like a timeframe the chart is too coarse for.
-    return isFinerThan(from, chartInterval) ? ` · graph needs ≤ ${from} chart` : ` · graph needs ${from} on`
+    for (const root of graphRoots(config)) {
+      if (drawn.includes(root)) continue
+      parts.push(isFinerThan(root, chartInterval) ? `graph ${root} needs ≤ ${root} chart` : `graph ${root} needs ${root} on`)
+    }
+    return parts.map((part) => ` · ${part}`).join('')
   }
 
   const label = (config: MtfConfig, state: BindingState): string => {
@@ -244,15 +250,17 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
       if (!f) return null
       const config = configFor(ctx.paneIndex)
       const shown = drawable(config, ctx.interval)
-      const root = graphRoot(config, ctx.interval)
-      // The graph's root first: the others' windows are sized from what it holds.
-      const ordered = root ? [root, ...shown.filter((interval) => interval !== root)] : shown
+      const roots = graphRootsFor(config, ctx.interval)
+      // Longest first when graphs are on: a timeframe's window is sized from the stores of
+      // the roots above it.
+      const ordered =
+        roots.length > 0 ? [...shown].sort((a, b) => f.resolutionDurationMs(b) - f.resolutionDurationMs(a)) : shown
       return {
         // Stores are created only for timeframes switched on: switching all eight on and
         // off again should not leave eight populated caches behind.
-        sources: ordered.map((interval) => source(f, ctx, interval, root)),
+        sources: ordered.map((interval) => source(f, ctx, interval, roots)),
         label: (state) => label(config, state),
-        extendData: () => ({ chartInterval: ctx.interval, config, graphRoot: root })
+        extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: roots })
       }
     },
     handleSettings(request: SettingsRequest): boolean {

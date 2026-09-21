@@ -38,10 +38,12 @@ export function isGraphRoot(code: unknown): code is GraphRoot {
   return (GRAPH_ROOTS as readonly unknown[]).includes(code)
 }
 
-/** The signal graph drawn over the markers (graph.ts), on an overlay that offers one. */
+/** The signal graphs drawn over the markers (graph.ts), on an overlay that offers them. */
 export interface MtfGraphConfig {
-  /** The timeframe every graph starts from, or `'off'`. */
-  from: GraphRoot | 'off'
+  /** The timeframes graphs start from. Any number may be on at once (user, 2026-09-21): each
+   * builds and resets its own graphs, and they are drawn together, crossing where they cross.
+   * None on is the graph switched off. */
+  roots: Record<GraphRoot, boolean>
   /** The most one step may shrink the timeframe by: 8 lets 8h reach 1h but not 30m. */
   maxStep: number
   /** The graph's line width, in pixels. */
@@ -113,12 +115,18 @@ export const MTF_DEFAULTS: MtfConfig = {
   ) as Record<MtfInterval, MtfTimeframeStyle>,
   // On from the highest timeframe, which is where the user's list starts. Only an overlay
   // that offers a graph (overlays.ts `graph`) reads this at all; the others carry it inertly.
-  graph: { from: '1D', maxStep: 8, lineWidth: 1.5 }
+  graph: { roots: { '1D': true, '8h': false, '4h': false, '2h': false, '1h': false }, maxStep: 8, lineWidth: 1.5 }
 }
 
 /** The graph settings, or the defaults for a config that has none. */
 export function graphConfig(config: MtfConfig | undefined): MtfGraphConfig {
   return config?.graph ?? MTF_DEFAULTS.graph
+}
+
+/** The roots switched on, longest first -- the order graphs are fetched and layered in. */
+export function graphRoots(config: MtfConfig | undefined): GraphRoot[] {
+  const roots = graphConfig(config).roots ?? MTF_DEFAULTS.graph.roots
+  return GRAPH_ROOTS.filter((root) => roots[root] === true)
 }
 
 // One collapsible group per timeframe, each holding the four fields for it. Grouping by
@@ -140,18 +148,14 @@ export const MTF_FIELDS: SettingsField[] = MTF_INTERVALS.map(
 )
 
 /** The graph's settings, as one group ahead of the timeframes on an overlay that offers one.
- * The graph is drawn in each step's timeframe colour, so it has no colour of its own. */
+ * A graph is drawn in its root timeframe's colour, so it has no colour of its own. */
 export const MTF_GRAPH_FIELDS: SettingsField[] = [
   {
     kind: 'group',
     label: 'Graph',
     fields: [
-      {
-        kind: 'select',
-        key: 'graph.from',
-        label: 'Start from',
-        options: [{ value: 'off', label: 'Off' }, ...GRAPH_ROOTS.map((root) => ({ value: root, label: root }))]
-      },
+      // A switch per root rather than one choice: several may be on at once.
+      ...GRAPH_ROOTS.map((root): SettingsField => ({ kind: 'switch', key: `graph.roots.${root}`, label: `Start from ${root}` })),
       { kind: 'number', key: 'graph.maxStep', label: 'Largest step (×)', min: 2, max: 480, step: 1 },
       { kind: 'number', key: 'graph.lineWidth', label: 'Line width', min: 0.5, max: 6, step: 0.5 }
     ]
@@ -181,7 +185,16 @@ export function enabledIntervals(config: MtfConfig | undefined): MtfInterval[] {
  * in that document by an order of magnitude, for a user who typically changes one colour.
  * A diff makes the common case a few dozen bytes and costs one merge on the way back in. */
 export type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeStyle>>> & {
-  graph?: Partial<MtfGraphConfig>
+  graph?: StoredGraphConfig
+}
+
+/** The graph's diff. `from` is the single root `client-a2c8f6c` stored (`'off'` or one
+ * timeframe) before several could be on; it is read, never written. */
+interface StoredGraphConfig {
+  roots?: Partial<Record<GraphRoot, boolean>>
+  maxStep?: number
+  lineWidth?: number
+  from?: string
 }
 
 const STYLE_KEYS = ['enabled', 'color', 'arrowSize', 'textSize'] as const
@@ -192,10 +205,9 @@ function validStyleValue(key: (typeof STYLE_KEYS)[number], value: unknown): bool
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-const GRAPH_KEYS = ['from', 'maxStep', 'lineWidth'] as const
+const GRAPH_KEYS = ['maxStep', 'lineWidth'] as const
 
-function validGraphValue(key: (typeof GRAPH_KEYS)[number], value: unknown): boolean {
-  if (key === 'from') return value === 'off' || isGraphRoot(value)
+function validGraphNumber(key: (typeof GRAPH_KEYS)[number], value: unknown): value is number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
   // A step under 2 admits no timeframe pair at all, and a width of 0 or less draws nothing
   // while the legend says the graph is on.
@@ -216,9 +228,15 @@ export function toStoredMtfConfig(config: MtfConfig): StoredMtfConfig | undefine
     if (Object.keys(diff).length > 0) stored[interval] = diff
   }
   const graph = graphConfig(config)
-  const graphDiff: Partial<MtfGraphConfig> = {}
+  const graphDiff: StoredGraphConfig = {}
+  const roots: Partial<Record<GraphRoot, boolean>> = {}
+  for (const root of GRAPH_ROOTS) {
+    const on = graph.roots?.[root] === true
+    if (on !== MTF_DEFAULTS.graph.roots[root]) roots[root] = on
+  }
+  if (Object.keys(roots).length > 0) graphDiff.roots = roots
   for (const key of GRAPH_KEYS) {
-    if (graph[key] !== MTF_DEFAULTS.graph[key]) (graphDiff as Record<string, unknown>)[key] = graph[key]
+    if (graph[key] !== MTF_DEFAULTS.graph[key]) graphDiff[key] = graph[key]
   }
   if (Object.keys(graphDiff).length > 0) stored.graph = graphDiff
   return Object.keys(stored).length > 0 ? stored : undefined
@@ -239,10 +257,24 @@ export function fromStoredMtfConfig(stored: unknown): MtfConfig | undefined {
   // timeframe it does not know, and reads the rest of the document unchanged.
   const { graph, ...timeframes } = stored as Record<string, unknown>
   if (graph && typeof graph === 'object' && !Array.isArray(graph)) {
+    const g = graph as Record<string, unknown>
     for (const key of GRAPH_KEYS) {
-      const value = (graph as Record<string, unknown>)[key]
-      if (value === undefined || !validGraphValue(key, value)) continue
-      ;(config.graph as unknown as Record<string, unknown>)[key] = value
+      const value = g[key]
+      if (!validGraphNumber(key, value)) continue
+      config.graph[key] = value
+      touched = true
+    }
+    const roots = g.roots
+    if (roots && typeof roots === 'object' && !Array.isArray(roots)) {
+      for (const root of GRAPH_ROOTS) {
+        const on = (roots as Record<string, unknown>)[root]
+        if (typeof on !== 'boolean') continue
+        config.graph.roots[root] = on
+        touched = true
+      }
+    } else if (g.from === 'off' || isGraphRoot(g.from)) {
+      // A single root saved before several could be on: that one, and only that one.
+      for (const root of GRAPH_ROOTS) config.graph.roots[root] = root === g.from
       touched = true
     }
   }
