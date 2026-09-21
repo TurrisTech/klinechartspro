@@ -1,17 +1,19 @@
 import { registerIndicator, type Chart, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
-import { peekStore, type WindowStore } from '../plugins/store'
-import type { DailyPoint } from './api'
+import type { Unit } from './calendar'
 import {
-  mergeSessions,
-  sessionDay,
-  sessionsFromBars,
-  unitRank,
-  type Level,
-  type SessionBar,
-  type SessionClock,
-  type Unit
-} from './calendar'
+  chartSessions,
+  chipText,
+  drawLevelLabels,
+  drawLevelLines,
+  LABEL_FONT,
+  lineTo,
+  MUTED,
+  paneBackground,
+  UNIT_COLOR,
+  type Axis,
+  type ExtendData
+} from './levelmap'
 import { computeTradeTalk, type BarValue, type Settings, type Skips, type Trade } from './rules'
 
 // TT:entries -- where TradeTalk would enter, drawn on the price pane.
@@ -25,17 +27,6 @@ import { computeTradeTalk, type BarValue, type Settings, type Skips, type Trade 
 // chart does not already ask for.
 
 export const TEMPLATE_NAME = 'TT:entries'
-
-export interface ExtendData {
-  seriesKey: string
-  rev: number
-  /** How a bar of THIS chart is dated to a session (the instrument's schedule). */
-  clock: SessionClock
-  /** The chart's own bar span. */
-  barMs: number
-  /** The instrument's price tick. */
-  tick: number
-}
 
 /** [min R:R, bias, hours, order life, smallest unit, level lines]. */
 export const DEFAULT_PARAMS = [2, 1, 1, 5, 0, 1]
@@ -82,30 +73,11 @@ export interface TradeTalkValue extends BarValue {
   summary?: Summary
 }
 
-/** The daily feed's bars as sessions. Their dates are canonical -- midnight on the
- * instrument's own clock, of the session -- so they are read `sessionDated`, whatever the
- * chart's own bars are dated by. */
-export function sessionsFromDaily(store: WindowStore<DailyPoint> | undefined, clock: SessionClock): SessionBar[] {
-  if (!store) return []
-  const dailyClock: SessionClock = { ...clock, sessionDated: true }
-  const points = [...store.values.values()].sort((a, b) => a.date - b.date)
-  return points.map((point) => ({
-    day: sessionDay(point.date, dailyClock),
-    open: point.open,
-    high: point.high,
-    low: point.low,
-    close: point.close
-  }))
-}
-
 function calc(dataList: KLineData[], indicator: { extendData?: ExtendData; calcParams?: unknown[] }): TradeTalkValue[] {
   const extend = indicator.extendData
   if (!extend?.clock) return dataList.map(() => ({}))
   const settings = settingsOf(indicator.calcParams)
-  const fed = sessionsFromDaily(peekStore<WindowStore<DailyPoint>>(extend.seriesKey), extend.clock)
-  // The sessions the daily feed has not served: the one forming, any that closed since the
-  // page loaded, and -- on a daily-or-coarser chart -- simply the bars themselves.
-  const sessions = mergeSessions(fed, sessionsFromBars(dataList, extend.clock))
+  const sessions = chartSessions(dataList, { ...extend, clock: extend.clock })
   const { values, trades, units, skips } = computeTradeTalk({
     bars: dataList,
     sessions,
@@ -132,61 +104,9 @@ function calc(dataList: KLineData[], indicator: { extendData?: ExtendData; calcP
 
 // -- drawing ------------------------------------------------------------------------------
 
-const UNIT_COLOR: Record<Unit, string> = {
-  Y: '#d4a017',
-  Q: '#9575cd',
-  M: '#4fc3f7',
-  W: '#4db6ac',
-  D: '#8d9aa5'
-}
-
-const UNIT_ALPHA: Record<Unit, number> = { Y: 0.95, Q: 0.8, M: 0.7, W: 0.6, D: 0.45 }
-
-const MUTED = '#8d9aa5'
-const LABEL_FONT = '10px sans-serif'
-const LABEL_GAP = 11
 /** The zones read against candles, not against the ground, so they are just strong enough to
  * be seen over a wick and no stronger. */
 const ZONE_ALPHA = 0.16
-
-/** The pane's own background, for the chip a label sits on -- resolved from the DOM rather
- * than assumed, so it follows the theme. Null when nothing up the tree paints one. */
-function paneBackground(chart: Chart): string | null {
-  let node: HTMLElement | null = null
-  try {
-    node = chart.getDom() as HTMLElement | null
-  } catch {
-    return null
-  }
-  for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
-    const color = getComputedStyle(node).backgroundColor
-    if (color && !color.startsWith('rgba(0, 0, 0, 0)') && color !== 'transparent') return color
-  }
-  return null
-}
-
-/** Text on a chip of the pane's own background, so a label over a candle stays readable. */
-function chipText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, color: string, background: string | null): void {
-  if (background !== null) {
-    const width = ctx.measureText(text).width
-    // The chip follows the caller's alignment; the right-hand level labels are right-aligned.
-    const left = ctx.textAlign === 'right' ? x - width - 2 : x - 2
-    ctx.globalAlpha = 0.8
-    ctx.fillStyle = background
-    ctx.fillRect(left, y - 6, width + 4, 12)
-  }
-  ctx.globalAlpha = 1
-  ctx.fillStyle = color
-  ctx.fillText(text, x, y)
-}
-
-function lineTo(ctx: CanvasRenderingContext2D, x0: number, x1: number, y: number): void {
-  const at = Math.round(y) + 0.5
-  ctx.beginPath()
-  ctx.moveTo(x0, at)
-  ctx.lineTo(x1, at)
-  ctx.stroke()
-}
 
 /** A filled triangle whose tip is at (x, y), pointing up for a long and down for a short. */
 function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, up: boolean, color: string): void {
@@ -249,7 +169,7 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
       shouldFormatBigNumber: false,
       visible: true,
       zLevel: 0,
-      extendData: { seriesKey: '', rev: 0, clock: { timezone: 'UTC', openOffset: 0, sessionDated: false }, barMs: 0, tick: 0 },
+      extendData: { seriesKey: '', rev: 0, clock: null, barMs: 0, tick: 0 },
       series: 'price',
       // Entry and stop only, and no `type` on either: they are the signal candle's own high
       // and low, so the tooltip can read them without the y-axis moving. The target is
@@ -285,7 +205,10 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
         ctx.textBaseline = 'middle'
         if (to >= from) {
           const background = paneBackground(chart)
-          if (settings.lines) drawLevels(ctx, result, from, to, xAxis, yAxis, bounding, chart, background)
+          if (settings.lines) {
+            drawLevelLines(ctx, result, from, to, xAxis, yAxis, bounding, chart)
+            drawLevelLabels(ctx, result, to, yAxis, bounding, background)
+          }
           drawTrades(ctx, result, data, from, to, xAxis, yAxis, chart, background)
         }
         const summary = result[result.length - 1]?.summary
@@ -324,72 +247,6 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
       ]
     }
   ]
-}
-
-type Axis = { convertToPixel(value: number): number }
-
-function drawLevels(
-  ctx: CanvasRenderingContext2D,
-  result: readonly TradeTalkValue[],
-  from: number,
-  to: number,
-  xAxis: Axis,
-  yAxis: Axis,
-  bounding: { width: number; height: number },
-  chart: Chart,
-  background: string | null
-): void {
-  const pitch = chart.getBarSpace().bar
-  ctx.lineWidth = 1
-  ctx.textAlign = 'left'
-  // Bars sharing a level map share the ARRAY, by reference (rules.ts caches it per session),
-  // so one line per run of bars rather than one per bar.
-  let runFrom = from
-  let runLevels = result[from]?.levels
-  for (let i = from + 1; i <= to + 1; i++) {
-    const levels = i <= to ? result[i]?.levels : undefined
-    if (levels === runLevels) continue
-    if (runLevels) drawLevelRun(ctx, runLevels, runFrom, i - 1, xAxis, yAxis, bounding, pitch)
-    runFrom = i
-    runLevels = levels
-  }
-  // The right-hand labels, on the newest map on screen: what every line IS, which is the
-  // whole point of drawing the map at all. Coarsest first, and a label that would collide
-  // with one already drawn is dropped rather than overprinted.
-  const latest = result[to]?.levels
-  if (!latest) return
-  ctx.textAlign = 'right'
-  const taken: number[] = []
-  for (const level of [...latest].sort((a, b) => unitRank(b.unit) - unitRank(a.unit))) {
-    const y = yAxis.convertToPixel(level.price)
-    if (y < 8 || y > bounding.height - 16) continue
-    if (taken.some((at) => Math.abs(at - y) < LABEL_GAP)) continue
-    taken.push(y)
-    chipText(ctx, level.label, bounding.width - 6, y - 6, UNIT_COLOR[level.unit], background)
-  }
-}
-
-function drawLevelRun(
-  ctx: CanvasRenderingContext2D,
-  levels: readonly Level[],
-  fromIndex: number,
-  toIndex: number,
-  xAxis: Axis,
-  yAxis: Axis,
-  bounding: { width: number; height: number },
-  pitch: number
-): void {
-  const x0 = xAxis.convertToPixel(fromIndex) - pitch / 2
-  const x1 = xAxis.convertToPixel(toIndex) + pitch / 2
-  for (const level of levels) {
-    const y = yAxis.convertToPixel(level.price)
-    if (y < -20 || y > bounding.height + 20) continue
-    ctx.globalAlpha = UNIT_ALPHA[level.unit]
-    ctx.strokeStyle = UNIT_COLOR[level.unit]
-    ctx.setLineDash(level.kind === 'mid' ? [2, 3] : level.kind === 'open' ? [] : [6, 3])
-    lineTo(ctx, x0, x1, y)
-  }
-  ctx.setLineDash([])
 }
 
 function drawTrades(
@@ -471,8 +328,4 @@ function drawTrades(
       ctx.fillRect(xAxis.convertToPixel(trade.exitIndex) - 2.5, y - 2.5, 5, 5)
     }
   }
-}
-
-export function isTradeTalkIndicator(name: string): boolean {
-  return name === TEMPLATE_NAME
 }

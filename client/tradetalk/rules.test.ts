@@ -4,6 +4,7 @@ import { mergeSessions, sessionsFromBars, type Candle, type Level, type SessionB
 import {
   computeTradeTalk,
   dedupeLevels,
+  levelMap,
   inTradingWindow,
   nextTarget,
   pickLevel,
@@ -367,6 +368,31 @@ describe('the skip counters', () => {
     const bars = [...STOP_RUN]
     bars[3] = bar(5, 3, 90.4, 91, 88.5, 89)
     expect(run(bars).skips.invalidated).toBe(1)
+  })
+})
+
+describe('the level map both indicators draw', () => {
+  const sessions = mergeSessions(BASE, sessionsFromBars(STOP_RUN, CLOCK))
+
+  test('is exactly the map the entries indicator trades from', () => {
+    const map = levelMap(STOP_RUN, sessions, CLOCK, HOUR, TICK, 'D')
+    const { values } = run(STOP_RUN)
+    const drawn = values.map((v) => (v.levels ?? []).map((l) => l.label))
+    expect(map?.levels.map((levels) => levels.map((l) => l.label))).toEqual(drawn)
+  })
+
+  test('bars sharing a map share the array, which is what a drawer groups runs by', () => {
+    const map = levelMap(STOP_RUN, sessions, CLOCK, HOUR, TICK, 'D')
+    // Bar 0 opens the day, so its map lacks the day's own open; bars 1-4 share one.
+    expect(map?.levels[0]).not.toBe(map?.levels[1])
+    expect(map?.levels[1]).toBe(map?.levels[4])
+  })
+
+  test('is null when there is nothing to draw it from', () => {
+    expect(levelMap([], sessions, CLOCK, HOUR, TICK, 'D')).toBeNull()
+    expect(levelMap(STOP_RUN, [], CLOCK, HOUR, TICK, 'D')).toBeNull()
+    // No calendar unit is as long as a 400-day bar.
+    expect(levelMap(STOP_RUN, sessions, CLOCK, 400 * DAY, TICK, 'D')).toBeNull()
   })
 })
 

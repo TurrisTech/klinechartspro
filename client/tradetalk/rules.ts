@@ -11,6 +11,7 @@ import {
   unitRank,
   type Candle,
   type Level,
+  type PeriodMap,
   type SessionBar,
   type SessionClock,
   type Unit
@@ -222,29 +223,41 @@ export function unitsFor(minUnit: Unit, barMs: number): Unit[] {
   return UNITS.filter((unit) => UNIT_SPAN_MS[unit] >= UNIT_SPAN_MS[minUnit] && barMs <= UNIT_SPAN_MS[unit])
 }
 
-export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
-  const { bars, sessions, clock, barMs, tick, settings } = input
-  const values: BarValue[] = bars.map(() => ({}))
-  const trades: Trade[] = []
-  const skips: Skips = { bias: 0, rr: 0, hours: 0, invalidated: 0, expired: 0 }
-  const units = unitsFor(settings.minUnit, barMs)
-  if (bars.length === 0 || sessions.length === 0 || units.length === 0) return { values, trades, units, skips }
+/** The calendar level map over a run of bars: what every bar has in force. */
+export interface LevelMap {
+  /** One array per bar, SHARED by reference between bars with the same map (cached per
+   * session and exclusion mask) -- which is what lets a drawer group bars into runs. */
+  levels: Level[][]
+  units: Unit[]
+  maps: Map<Unit, PeriodMap>
+  /** Each bar's session day. */
+  days: number[]
+}
 
+/**
+ * The objective calendar levels in force on every bar -- the map both TradeTalk indicators
+ * draw. Null when there is nothing to draw it from: no bars, no sessions, or no calendar unit
+ * at least as long as the chart's own bar.
+ *
+ * A period's open is not a line on the bar that opened it: on a 1h chart the 17:00 candle IS
+ * the daily open, and every bullish candle with a lower wick would "sweep and reclaim" it.
+ * So each bar's map drops the opens of any period it is the first bar of.
+ */
+export function levelMap(
+  bars: readonly Candle[],
+  sessions: readonly SessionBar[],
+  clock: SessionClock,
+  barMs: number,
+  tick: number,
+  minUnit: Unit
+): LevelMap | null {
+  const units = unitsFor(minUnit, barMs)
+  if (bars.length === 0 || sessions.length === 0 || units.length === 0) return null
   const maps = periodMaps(sessions, units)
-  const yearly = maps.get('Y')
-  const emaValues = ema(
-    sessions.map((session) => session.close),
-    EMA_PERIOD
-  )
   const days = bars.map((bar) => sessionDay(bar.timestamp, clock))
-  const half = tick > 0 ? tick / 2 : 0
-
-  // The levels in force on one bar. Cached per (session, which current-period opens are
-  // excluded): a period's open is not a line on the bar that opened it -- on a 1h chart the
-  // 17:00 candle IS the daily open, and every bullish candle with a lower wick would "sweep
-  // and reclaim" it.
   const cache = new Map<string, Level[]>()
-  const levelsAt = (i: number, day: number): Level[] => {
+  const levels = bars.map((_, i) => {
+    const day = days[i]
     let mask = 0
     units.forEach((unit, bit) => {
       const spans = barMs < UNIT_SPAN_MS[unit]
@@ -261,7 +274,25 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
     const deduped = dedupeLevels(all, tick)
     cache.set(key, deduped)
     return deduped
-  }
+  })
+  return { levels, units, maps, days }
+}
+
+export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
+  const { bars, sessions, clock, barMs, tick, settings } = input
+  const values: BarValue[] = bars.map(() => ({}))
+  const trades: Trade[] = []
+  const skips: Skips = { bias: 0, rr: 0, hours: 0, invalidated: 0, expired: 0 }
+  const map = levelMap(bars, sessions, clock, barMs, tick, settings.minUnit)
+  if (map === null) return { values, trades, units: unitsFor(settings.minUnit, barMs), skips }
+
+  const { maps, days, units } = map
+  const yearly = maps.get('Y')
+  const emaValues = ema(
+    sessions.map((session) => session.close),
+    EMA_PERIOD
+  )
+  const half = tick > 0 ? tick / 2 : 0
 
   // The last session that had CLOSED before a bar's own session -- what the bias is read
   // off. Walks forward with the bars; both are ascending.
@@ -301,7 +332,7 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
     dayHigh = Math.max(dayHigh, bar.high)
     dayLow = Math.min(dayLow, bar.low)
 
-    const levels = levelsAt(i, day)
+    const levels = map.levels[i]
     values[i].levels = levels
 
     // 1. An open position: does this bar end it? A bar that reaches both is read as the
