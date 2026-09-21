@@ -136,6 +136,10 @@ entry and stop prices at the crosshair bar.
 - **`ChartPane` installs its own `createTooltipDataSource`** on every indicator it creates and only
   asks *this library's* templates for theirs, so an app-registered template cannot supply legends.
   The corner summary is drawn on the canvas for that reason.
+- **`paneBackground` reads the DOM once per `draw`**, walking up to eight parents for the first
+  painted background. Measured in the running client at **3.5 µs per call** (1,000 walks in 3.5 ms,
+  Chrome, 2026-09-21) — 0.02% of a 60 fps frame, so it is not worth caching; it is here so nobody
+  "optimises" it on suspicion.
 - **The level array is shared by reference** between bars of a session (cached per session and
   mask), which is what lets `draw` group bars into runs. Do not rebuild it per bar.
 
