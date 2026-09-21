@@ -106,6 +106,15 @@ export function drawLabel(ctx: CanvasRenderingContext2D, x: number, y: number, t
   ctx.restore()
 }
 
+/** How a link is stroked. `dotted` is round dots as wide as the line, so a thick dotted line
+ * reads as a row of beads rather than a dash pattern. */
+export interface LinkStyle {
+  style: 'solid' | 'dashed' | 'dotted'
+  width: number
+  /** 0..1; a fainter line for a weaker reading. */
+  alpha?: number
+}
+
 /** A straight line between two points -- a divergence's two swings -- drawn under the mark that
  * goes with it, so the mark stays legible. */
 export function drawLink(
@@ -113,12 +122,18 @@ export function drawLink(
   from: { x: number; y: number },
   to: { x: number; y: number },
   color: string,
-  style: 'solid' | 'dashed'
+  style: LinkStyle
 ): void {
   ctx.save()
-  ctx.lineWidth = 1.5
+  ctx.globalAlpha = style.alpha ?? 1
+  ctx.lineWidth = style.width
   ctx.strokeStyle = color
-  ctx.setLineDash(style === 'dashed' ? [4, 3] : [])
+  // A zero-length dash with round caps is a dot of the line's width, and the gap is measured
+  // between dot centres; both patterns scale with the width, so a thick line keeps its shape.
+  ctx.lineCap = style.style === 'dotted' ? 'round' : 'butt'
+  ctx.setLineDash(
+    style.style === 'dotted' ? [0, style.width * 2.5] : style.style === 'dashed' ? [style.width * 3, style.width * 2] : []
+  )
   ctx.beginPath()
   ctx.moveTo(from.x, from.y)
   ctx.lineTo(to.x, to.y)

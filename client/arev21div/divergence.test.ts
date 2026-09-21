@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { AREV21_LOOKBACK, DEFAULT_PARAMS, divergences, ruleOf, swings, type Divergence, type Rule } from './divergence'
+import { DIV_DEFAULTS } from './config'
+import { AREV21_LOOKBACK, divergences, swings, type Divergence, type Rule } from './divergence'
 
 // The rule, with no chart: a swing is strict on its left and confirmed on its right, each swing is
 // compared with the one immediately before it, and a divergence belongs to the bar that confirmed
@@ -61,7 +62,7 @@ describe('swings', () => {
 
   test("at the default left, every swing is a fresh arev21 extreme -- a bar it sampled", () => {
     const { low, high } = market(3000)
-    const rule = ruleOf(DEFAULT_PARAMS)
+    const rule = DIV_DEFAULTS.rule
     for (const [side, values] of [['low', low], ['high', high]] as const) {
       const at = swings(values, rule.left, rule.right, side)
       expect(at.some(Boolean)).toBe(true)
@@ -151,7 +152,7 @@ describe('divergences', () => {
     // The no-lookahead property, directly: cut the series anywhere, and the divergences found on
     // what is left are exactly the whole series' ones confirmed before the cut.
     const m = market(2500)
-    const rule = { ...ruleOf(DEFAULT_PARAMS), hidden: true }
+    const rule = { ...DIV_DEFAULTS.rule, hidden: true }
     const key = (d: Divergence) => `${d.side}|${d.label}|${d.confirm}|${d.swing}|${d.previous}`
     const whole = divergences(m.low, m.high, m.p, m.usable, rule)
     expect(new Set(whole.map((d) => d.label))).toEqual(new Set(['bull', 'bear', 'hidden_bull', 'hidden_bear']))
@@ -159,22 +160,5 @@ describe('divergences', () => {
       const seen = divergences(m.low.slice(0, cut), m.high.slice(0, cut), m.p.slice(0, cut), m.usable.slice(0, cut), rule)
       expect(new Set(seen.map(key))).toEqual(new Set(whole.filter((d) => d.confirm < cut).map(key)))
     }
-  })
-})
-
-describe('the rule from the settings dialog', () => {
-  test('the defaults', () => {
-    expect(ruleOf(DEFAULT_PARAMS)).toEqual({ left: 10, right: 5, minGap: 5, maxGap: 60, minDp: 0, hidden: false })
-    expect(ruleOf(undefined)).toEqual(ruleOf(DEFAULT_PARAMS))
-  })
-
-  test('clamped, coerced, and junk falls back to the default', () => {
-    expect(ruleOf([1, '7', 5, 1e6, 'x', 1])).toEqual({ left: 2, right: 7, minGap: 5, maxGap: 1000, minDp: 0, hidden: true })
-    expect(ruleOf([10.4, 5, 5, 60, 0.0123, 0]).left).toBe(10)
-    expect(ruleOf([10, 5, 5, 60, 0.0123, 0]).minDp).toBeCloseTo(0.0123)
-  })
-
-  test('an inverted gap window is widened rather than left to match nothing', () => {
-    expect(ruleOf([10, 5, 90, 20, 0, 0]).maxGap).toBe(90)
   })
 })

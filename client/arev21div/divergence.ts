@@ -55,41 +55,6 @@ export interface Rule {
   hidden: boolean
 }
 
-/** The settings dialog's numbers, in calcParams order, each with its bounds. `hidden` is a 0/1
- * number because that dialog edits a flat numeric array. */
-export const PARAMS = [
-  { name: 'left', label: 'swing left bars', default: AREV21_LOOKBACK, min: 2, max: 100, isInt: true },
-  { name: 'right', label: 'swing right bars', default: 5, min: 1, max: 50, isInt: true },
-  { name: 'minGap', label: 'min bars between swings', default: 5, min: 1, max: 500, isInt: true },
-  { name: 'maxGap', label: 'max bars between swings', default: 60, min: 2, max: 1000, isInt: true },
-  { name: 'minDp', label: 'min p change', default: 0, min: 0, max: 0.5, isInt: false },
-  { name: 'hidden', label: 'hidden (0/1)', default: 0, min: 0, max: 1, isInt: true }
-] as const
-
-export const DEFAULT_PARAMS: number[] = PARAMS.map((p) => p.default)
-
-/** calcParams -> a rule: each number coerced and clamped, junk falling back to its default. The
- * dialog commits every keystroke, so half-typed values arrive here. An inverted gap window is
- * widened rather than left to match nothing. */
-export function ruleOf(calcParams: readonly unknown[] | undefined): Rule {
-  const value = (i: number): number => {
-    const spec = PARAMS[i]
-    const raw = calcParams?.[i]
-    const n = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : Number.NaN
-    const clamped = Math.min(spec.max, Math.max(spec.min, Number.isFinite(n) ? n : spec.default))
-    return spec.isInt ? Math.round(clamped) : clamped
-  }
-  const minGap = value(2)
-  return {
-    left: value(0),
-    right: value(1),
-    minGap,
-    maxGap: Math.max(minGap, value(3)),
-    minDp: value(4),
-    hidden: value(5) !== 0
-  }
-}
-
 /** Per bar: a confirmed swing low (`side = 'low'`) or high.
  *
  * Strictly beyond each of the previous `left` values -- the same strict comparison arev21's

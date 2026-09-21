@@ -1,10 +1,11 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
-import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
+import type { IndicatorGroup } from '../../src'
 import type { ArevPoint } from '../arev/api'
 import { peekStore } from '../plugins/store'
 import { drawLink, drawMark } from '../tsregistry/marks'
 import type { RegistryStore } from '../tsregistry/store'
-import { DEFAULT_PARAMS, MIN_NEIGHBOURS, PARAMS, divergences, ruleOf, type Label, type Side } from './divergence'
+import { DIV_DEFAULTS, type DivConfig } from './config'
+import { MIN_NEIGHBOURS, divergences, type Label, type Rule, type Side } from './divergence'
 
 // The two halves of one argument, each a klinecharts template computed in the browser:
 //
@@ -16,7 +17,8 @@ import { DEFAULT_PARAMS, MIN_NEIGHBOURS, PARAMS, divergences, ruleOf, type Label
 // Nothing is asked of the server that the chart does not already ask for. The bars are the
 // pane's own (`calc`'s dataList), and p is arev21's stored series through the registry's own
 // source for it -- the very store an AREV21 pane on the same instrument reads, tiles first.
-// Each template has its own settings (the rule's six numbers); the defaults agree.
+// Both read the pane's one DivConfig (config.ts) from extendData: the rule, and how the lines are
+// drawn. calcParams stay empty, because klinecharts prints them into the legend.
 //
 // Computed over the bars the pane HOLDS, so a divergence within `left + right + maxGap` bars of
 // the oldest loaded bar can change as older history loads: the swing it compared against may not
@@ -29,14 +31,13 @@ export function isDivergenceIndicator(name: string): boolean {
   return name === SUB_TEMPLATE || name === PRICE_TEMPLATE
 }
 
-const UP_COLOR = '#26A69A'
-const DOWN_COLOR = '#EF5350'
 const P_COLOR = '#426EFF'
 const NEUTRAL_COLOR = '#787B86'
 
 export interface ExtendData {
   seriesKey: string
   rev: number
+  config: DivConfig
 }
 
 /** One divergence on the bar that confirmed it: which kind, and the two swings as (bar index,
@@ -52,11 +53,15 @@ export type DivValue = { p?: number; mid?: number; __div?: DivMark[] }
 
 type Kind = 'sub' | 'price'
 
+function configOf(indicator: { extendData?: Partial<ExtendData> }): DivConfig {
+  return indicator.extendData?.config ?? DIV_DEFAULTS
+}
+
 /** Bars -> values, for either pane. Exported for the tests. */
 export function computeValues(
   dataList: readonly KLineData[],
   points: { get(date: number): ArevPoint | undefined } | undefined,
-  calcParams: readonly unknown[] | undefined,
+  rule: Rule,
   kind: Kind
 ): DivValue[] {
   const n = dataList.length
@@ -78,7 +83,7 @@ export function computeValues(
   // nothing it returns can enter -- and flatten -- the candles' axis.
   const out: DivValue[] = new Array(n)
   for (let i = 0; i < n; i++) out[i] = kind === 'sub' ? { ...(Number.isFinite(p[i]) ? { p: p[i] } : {}), mid: 0.5 } : {}
-  for (const d of divergences(low, high, p, usable, ruleOf(calcParams))) {
+  for (const d of divergences(low, high, p, usable, rule)) {
     const at = kind === 'sub' ? p : d.side === 'low' ? low : high
     const value = out[d.confirm]
     value.__div ??= []
@@ -95,26 +100,28 @@ export function computeValues(
 function calcFor(kind: Kind) {
   return (dataList: KLineData[], indicator: Indicator<DivValue, number, ExtendData>): DivValue[] => {
     const store = peekStore<RegistryStore<ArevPoint>>(indicator.extendData?.seriesKey)
-    return computeValues(dataList, store?.values, indicator.calcParams, kind)
+    return computeValues(dataList, store?.values, configOf(indicator).rule, kind)
   }
 }
 
+/** Recompute when the data or the RULE changed; a line-style edit only redraws. */
 function shouldUpdate(prev: Indicator<DivValue, number, ExtendData>, cur: Indicator<DivValue, number, ExtendData>) {
   const changed =
     prev.extendData?.seriesKey !== cur.extendData?.seriesKey ||
     prev.extendData?.rev !== cur.extendData?.rev ||
-    JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
+    JSON.stringify(configOf(prev).rule) !== JSON.stringify(configOf(cur).rule)
   return { calc: changed, draw: true }
 }
 
 function drawFor(kind: Kind): NonNullable<IndicatorTemplate<DivValue, number, ExtendData>['draw']> {
   return ({ ctx, chart, indicator, xAxis, yAxis }) => {
+    const { rule, line } = configOf(indicator)
     const data = chart.getDataList()
     const range = chart.getVisibleRange()
     const size = Math.max(3, Math.min(9, chart.getBarSpace().bar * 0.45))
     // A divergence is carried by the bar `right` after its swing, so that bar can sit just off
     // the right edge while the line it draws is on screen: visit that far past the view.
-    const last = Math.min(indicator.result.length - 1, range.realTo + ruleOf(indicator.calcParams).right)
+    const last = Math.min(indicator.result.length - 1, range.realTo + rule.right)
     for (let i = Math.max(0, range.realFrom); i <= last; i++) {
       const value = indicator.result[i]
       const marks = value?.__div
@@ -123,11 +130,12 @@ function drawFor(kind: Kind): NonNullable<IndicatorTemplate<DivValue, number, Ex
       for (const mark of marks) {
         const up = mark.side === 'low'
         const hidden = mark.label === 'hidden_bull' || mark.label === 'hidden_bear'
-        const color = up ? UP_COLOR : DOWN_COLOR
+        const color = up ? line.bullColor : line.bearColor
+        const alpha = hidden ? line.hiddenOpacity : 1
         const point = (end: { index: number; value: number }) => ({ x: xAxis.convertToPixel(end.index), y: yAxis.convertToPixel(end.value) })
-        drawLink(ctx, point(mark.from), point(mark.to), color, hidden ? 'dashed' : 'solid')
+        drawLink(ctx, point(mark.from), point(mark.to), color, { style: line.style, width: line.width, alpha })
         // The arrow on the confirming bar, pointing at what it marks: at p in the sub-pane, clear
-        // of the candle in the price pane. Smaller for a hidden divergence, as its line is dashed.
+        // of the candle in the price pane. Smaller for a hidden divergence, as its line is fainter.
         let y: number | null = null
         if (kind === 'sub') {
           if (value.p != null) y = yAxis.convertToPixel(value.p)
@@ -153,12 +161,14 @@ export function buildTemplate(kind: Kind): IndicatorTemplate<DivValue, number, E
     name: sub ? SUB_TEMPLATE : PRICE_TEMPLATE,
     shortName: 'AREV21 DIVERGENCE',
     precision: sub ? 3 : 5,
-    calcParams: [...DEFAULT_PARAMS],
+    // Must stay empty: klinecharts prints calcParams into the legend, and the settings are the
+    // pane's DivConfig, edited on the gear (plugin.ts).
+    calcParams: [],
     shouldOhlc: false,
     shouldFormatBigNumber: false,
     visible: true,
     zLevel: 0,
-    extendData: { seriesKey: '', rev: 0 },
+    extendData: { seriesKey: '', rev: 0, config: DIV_DEFAULTS },
     series: sub ? 'normal' : 'price',
     figures: sub
       ? [
@@ -191,18 +201,11 @@ let registered = false
 
 export function registerDivergenceIndicators(): IndicatorGroup[] {
   if (!registered) {
-    for (const kind of ['sub', 'price'] as const) {
-      const t = buildTemplate(kind)
-      registerIndicator(t)
-      registerIndicatorSettings(
-        t.name,
-        PARAMS.map((p) => ({ paramNameKey: p.label, precision: p.isInt ? 0 : 4, min: p.min, max: p.max, default: p.default }))
-      )
-    }
+    for (const kind of ['sub', 'price'] as const) registerIndicator(buildTemplate(kind))
     registered = true
   }
   const what =
-    "Where price and arev21's p disagree at a swing: a lower low with a higher p is bullish, a higher high with a lower p bearish. Marked on the bar that confirmed the swing, computed in the browser."
+    "Where price and arev21's p disagree at a swing: a lower low with a higher p is bullish, a higher high with a lower p bearish. Marked on the bar that confirmed the swing, computed in the browser; rule, line style, width and colours on the gear."
   return [
     {
       label: 'AREV21 divergence',

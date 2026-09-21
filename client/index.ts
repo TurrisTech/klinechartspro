@@ -284,6 +284,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       arevlab: Object.fromEntries(
         hydrated.panes.flatMap((pane, index) => (pane.labConfig ? [[index, pane.labConfig]] : []))
       ),
+      // The AREV21 divergence's, likewise.
+      arev21div: Object.fromEntries(
+        hydrated.panes.flatMap((pane, index) => (pane.divConfig ? [[index, pane.divConfig]] : []))
+      ),
       // The other MTF overlays' (the arev21_outlier rank ones), each under its plugin id.
       ...overlayPaneState(hydrated.panes)
     }

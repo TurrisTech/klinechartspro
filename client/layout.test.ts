@@ -14,6 +14,7 @@ const hadWindow = 'window' in globalThis
 const { defaultLayout, isPersistedLayout, overlayPaneState, toPersistedLayout } = await import('./layout')
 const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
 const { MTF_DEFAULTS, fromStoredMtfConfig } = await import('./mtf/config')
+const { DIV_DEFAULTS, fromStoredDivConfig } = await import('./arev21div/config')
 
 afterAll(() => {
   if (!hadWindow) delete (globalThis as Record<string, unknown>).window
@@ -94,6 +95,21 @@ describe('a round trip through the document', () => {
     expect(isPersistedLayout(written)).toBe(true)
     // What hydrateLayout does with the field, minus the symbol lookup it needs a server for.
     expect(fromStoredLabConfig(JSON.parse(JSON.stringify(written.panes[0].al)))).toEqual(lab)
+  })
+
+  test("the AREV21 divergence's settings ride in `dv`, only what differs from the defaults", () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const div = structuredClone(DIV_DEFAULTS)
+    div.line.style = 'dashed'
+    div.line.bullColor = '#00ff88'
+    div.rule.hidden = true
+    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, {
+      arev21div: { 0: div, 1: structuredClone(DIV_DEFAULTS) }
+    })
+    expect(written.panes[0].dv).toEqual({ 'rule.hidden': true, 'line.style': 'dashed', 'line.bullColor': '#00ff88' })
+    expect('dv' in written.panes[1]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+    expect(fromStoredDivConfig(JSON.parse(JSON.stringify(written.panes[0].dv)))).toEqual(div)
   })
 
   test("the outlier MTF overlays' settings ride in `mx`, by plugin id, apart from AREV21 MTF's", () => {
