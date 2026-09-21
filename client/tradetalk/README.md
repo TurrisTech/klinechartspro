@@ -72,7 +72,7 @@ half of the method that is about one candle rather than one calendar period:
 | **supply** (above price) | the **open** of the last **up-close** candle before a sell-off |
 | **demand** (below price) | the **open** of the last **down-close** candle before a rally |
 | stop | above the wick **high** (supply) or below the wick **low** (demand) of that same candle |
-| the **area** | between those two: the line is one edge, the stop is the other, and that band is what the chart shades |
+| the **area** | that candle's **body** — open to close, not open to wick (user, 2026-09-21) — which is what the chart shades; the stop sits beyond the wick, outside it |
 | worth | "a **fresh, untested** level is worth far more than one price has already visited" |
 
 Two words in that definition have to be made mechanical, and both are parameters rather than
@@ -85,7 +85,7 @@ within 20 bars there is no level, rather than an arbitrary one.
 
 A level's life, all of it forward-looking: **armed** once price has closed clear of the area
 (without which the sell-off that created a supply would instantly "test" it, the area being
-that candle's own open-to-wick), **tested** the first time a later bar's range reaches back
+that candle's own body), **tested** the first time a later bar's range reaches back
 *into* it, and **erased** the first time **one candle passes entirely through it** (user,
 2026-09-21).
 
@@ -96,12 +96,9 @@ That last rule is containment of the *whole* candle range, wicks included:
 - a candle that *closed* beyond the area but never traded through its far edge does **not**
   erase it either — gapping over an area is not passing through it.
 
-Measured on dev EURUSD 1h: the supply at 1.14796–1.14889 (2026-09-18 03:00Z) was reached into
-by the 05:00, 06:00 and 07:00 candles and survived all three; the 08:00 candle (L 1.14779,
-H 1.14908) swallowed the whole band and erased it.
-
-Drawn: the area shaded from its origin candle, with the line (the open) solid along one edge
-and the stop dotted along the other; the line is **dashed until the swing is confirmed** (that
+Drawn: the body shaded from its origin candle, with the line (the open) solid along one edge
+and the close faint along the other; the stop is its own dotted line beyond the wick, drawn
+only when the parameter asks for it. The line is **dashed until the swing is confirmed** (that
 stretch exists in hindsight only, and dashing it is the difference between showing the method
 and flattering it). Everything dims once tested. Live levels are named at the right edge —
 `supply`, `demand · tested`. Params: `[left, right, sides, fresh only, stop edge, shading %]`,
