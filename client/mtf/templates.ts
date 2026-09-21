@@ -1,8 +1,8 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import type { MtfInterval } from './api'
-import { MTF_DEFAULTS, enabledIntervals, graphConfig, type MtfConfig, type MtfTimeframeStyle } from './config'
-import { buildGraphs, type GraphSide, type GraphSignal, graphStart, rootLookbackMs, storeGraphSignals } from './graph'
+import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, type MtfConfig, type MtfTimeframeStyle } from './config'
+import { buildRootGraphs, type GraphSide, type GraphSignal, storeGraphSignals } from './graph'
 import type { MtfOverlay } from './overlays'
 import { chartBarAt, chartOpens, shiftSignals, type ShiftedSignal } from './shift'
 import { resolutionDurationMs } from '../periods'
@@ -47,10 +47,10 @@ export interface ExtendData {
   chartInterval: string
   /** The live settings, so a colour or size change repaints without refetching anything. */
   config: MtfConfig
-  /** The timeframe this pane's signal graphs start from, or null for none. The controller
-   * decides it (plugin.ts `graphRoot`): only on an overlay that offers a graph, with the
-   * setting on and the root among the timeframes drawn. */
-  graphRoot?: MtfInterval | null
+  /** The timeframes this pane's signal graphs start from, longest first; empty for none. The
+   * controller decides them (plugin.ts `graphRootsFor`): only on an overlay that offers a
+   * graph, and only roots switched on and among the timeframes drawn. */
+  graphRoots?: MtfInterval[]
 }
 
 /** One placed signal, plus which timeframe placed it — the template draws several at once
@@ -61,12 +61,13 @@ interface Marked extends ShiftedSignal {
   lane: number
 }
 
-/** One graph node, on the chart bar its marker sits on. */
+/** One graph node, on the chart bar its marker sits on -- once, however many graphs it is
+ * in (an 8h signal can root the 8h graphs and step in the 1D one). */
 interface GraphDot {
   interval: MtfInterval
   price: number
   side: GraphSide
-  /** A root-timeframe signal: where a graph starts. */
+  /** Where some graph starts: drawn as a ring. */
   root: boolean
 }
 
@@ -77,8 +78,11 @@ interface GraphEdge {
   fromIndex: number
   fromPrice: number
   toPrice: number
-  /** The child's timeframe, whose colour the edge takes. */
-  interval: MtfInterval
+  /** The root timeframe of the graph the edge belongs to, whose colour it takes. With several
+   * roots on, graphs overlap and cross, and the root's colour is what says which graph a line
+   * is part of; the dots keep their own timeframe's colour, so each step still names its
+   * timeframe. */
+  root: MtfInterval
 }
 
 export interface Value {
@@ -125,17 +129,17 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
     const marks = byBar.get(bar.timestamp)
     return marks ? { marks } : {}
   })
-  if (extend.graphRoot) placeGraphs(values, dataList, extend, extend.graphRoot)
+  if (extend.graphRoots?.length) placeGraphs(values, dataList, extend, extend.graphRoots)
   return values
 }
 
 /**
  * The signal graphs (graph.ts), filed on the chart bars their markers sit on.
  *
- * Built from every signal the drawn timeframes' stores hold, from the start of the graph in
- * force at the loaded left edge -- the same `graphStart` the controller sized those stores'
- * windows by, so the walk begins where the fetched history is known to be whole. A node on
- * no loaded bar is not drawn.
+ * Every root's graphs, each built from every signal the drawn timeframes' stores hold, from
+ * the start of that root's graph in force at the loaded left edge -- the same `graphStart` the
+ * controller sized those stores' windows by, so each walk begins where the fetched history is
+ * known to be whole. A node on no loaded bar is not drawn.
  *
  * An edge INTO a drawn node from a parent older than the loaded bars is drawn all the same,
  * from where that parent would sit. On a short chart that is most of them -- a 5m chart holds
@@ -146,25 +150,17 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
  * loads the parent's bar. An edge's child is never newer than the loaded bars (that would be
  * lookahead, and `chartBarAt` refuses it), so nothing is extrapolated to the right.
  */
-function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, root: MtfInterval): void {
+function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, roots: MtfInterval[]): void {
   if (dataList.length === 0) return
   const signals: GraphSignal[] = []
-  const rootSignals: GraphSignal[] = []
   for (const [interval, key] of Object.entries(extend.seriesKeys)) {
     const store = peekStore<RegistryStore<ArevPoint>>(key)
-    if (!store) continue
-    const read = storeGraphSignals(interval, store)
-    signals.push(...read)
-    if (interval === root) rootSignals.push(...read)
+    if (store) signals.push(...storeGraphSignals(interval, store))
   }
   const chartAbs = chartOpens(extend.chartInterval, dataList)
-  const settings = graphConfig(extend.config)
-  const graphs = buildGraphs(signals, {
-    root,
-    // The settings panel commits every keystroke, so a half-typed number reaches here.
-    maxStep: Math.max(2, settings.maxStep),
-    from: graphStart(rootSignals, chartAbs[0], rootLookbackMs(root))
-  })
+  // The settings panel commits every keystroke, so a half-typed number reaches here.
+  const maxStep = Math.max(2, graphConfig(extend.config).maxStep)
+  const graphs = buildRootGraphs(signals, roots, maxStep, chartAbs[0])
   const last = chartAbs.length - 1
   const msPerBar = last > 0 ? (chartAbs[last] - chartAbs[0]) / last : resolutionDurationMs(extend.chartInterval)
   /** Where a parent sits: its bar, or an extrapolated index left of the loaded bars. */
@@ -174,25 +170,24 @@ function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData,
     return at < 0 ? null : at
   }
   for (const graph of graphs) {
+    const root = graph.root as MtfInterval
     const at = graph.nodes.map((node) => chartBarAt(node.signal.knownAt, chartAbs, extend.chartInterval))
     graph.nodes.forEach((node, k) => {
       const index = at[k]
       if (index < 0) return
       const value = values[index]
       const interval = node.signal.interval as MtfInterval
+      const price = node.signal.price
       value.dots = value.dots ?? []
-      value.dots.push({ interval, price: node.signal.price, side: graph.side, root: node.parent < 0 })
+      const same = value.dots.find((d) => d.interval === interval && d.price === price && d.side === graph.side)
+      if (same) same.root ||= node.parent < 0
+      else value.dots.push({ interval, price, side: graph.side, root: node.parent < 0 })
       if (node.parent < 0) return
       const parent = graph.nodes[node.parent].signal
       const fromIndex = parentIndex(parent.knownAt)
       if (fromIndex === null) return
       value.edges = value.edges ?? []
-      value.edges.push({
-        fromIndex,
-        fromPrice: parent.price,
-        toPrice: node.signal.price,
-        interval
-      })
+      value.edges.push({ fromIndex, fromPrice: parent.price, toPrice: price, root })
     })
   }
 }
@@ -203,7 +198,7 @@ function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator
   const dataChanged =
     a?.rev !== b?.rev ||
     a?.chartInterval !== b?.chartInterval ||
-    a?.graphRoot !== b?.graphRoot ||
+    JSON.stringify(a?.graphRoots) !== JSON.stringify(b?.graphRoots) ||
     JSON.stringify(a?.seriesKeys) !== JSON.stringify(b?.seriesKeys) ||
     // A style-only edit still has to recalc, because which timeframes are ENABLED decides
     // both what `calc` places and each one's lane. Comparing the whole config rather than
@@ -254,7 +249,11 @@ function label(
 
 /** The signal graphs: every edge whose span reaches the visible range, then every node in
  * it. Edges are filed on their later end, so one reaching in from the right has its child
- * off screen -- hence the walk runs to the end of the data, not to the visible range's. */
+ * off screen -- hence the walk runs to the end of the data, not to the visible range's.
+ *
+ * One pass per root, shortest first, so where two graphs share a segment -- an 8h node's step
+ * to a 1h signal is often the same line in the 8h graph and the 1D graph -- the longer root's
+ * colour is the one on top. */
 function drawGraphs(
   ctx: CanvasRenderingContext2D,
   result: Value[],
@@ -273,18 +272,20 @@ function drawGraphs(
   ctx.lineWidth = width
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
-  for (let i = from; i < result.length; i++) {
-    const edges = result[i]?.edges
-    if (!edges) continue
-    for (const edge of edges) {
-      if (edge.fromIndex > to) continue
-      const color = config.timeframes[edge.interval]?.color
-      if (!color) continue
-      ctx.strokeStyle = color
-      ctx.beginPath()
-      ctx.moveTo(x(edge.fromIndex), y(edge.fromPrice))
-      ctx.lineTo(x(i), y(edge.toPrice))
-      ctx.stroke()
+  for (const layer of [...GRAPH_ROOTS].reverse()) {
+    const color = config.timeframes[layer]?.color
+    if (!color) continue
+    ctx.strokeStyle = color
+    for (let i = from; i < result.length; i++) {
+      const edges = result[i]?.edges
+      if (!edges) continue
+      for (const edge of edges) {
+        if (edge.root !== layer || edge.fromIndex > to) continue
+        ctx.beginPath()
+        ctx.moveTo(x(edge.fromIndex), y(edge.fromPrice))
+        ctx.lineTo(x(i), y(edge.toPrice))
+        ctx.stroke()
+      }
     }
   }
   for (let i = from; i <= Math.min(to, result.length - 1); i++) {
@@ -332,7 +333,7 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
       // The real defaults, not an empty shell: klinecharts draws an indicator the moment it
       // is created, which is before the controller's next poll applies anything, so this
       // placeholder is what the first frames actually render against.
-      extendData: { seriesKeys: {}, rev: 0, chartInterval: '', config: MTF_DEFAULTS, graphRoot: null },
+      extendData: { seriesKeys: {}, rev: 0, chartInterval: '', config: MTF_DEFAULTS, graphRoots: [] },
       series: 'price',
       figures: [],
       minValue: null,
@@ -351,7 +352,7 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
         const data = chart.getDataList()
         const range = chart.getVisibleRange()
         // Under the markers, so a line never hides an arrow or its label.
-        if (indicator.extendData?.graphRoot) {
+        if (indicator.extendData?.graphRoots?.length) {
           drawGraphs(
             ctx,
             indicator.result,

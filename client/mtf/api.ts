@@ -72,14 +72,14 @@ export async function fetchMtfPoints(
 /** One source bar as the overlay keeps it: its wire date, and its range. */
 export interface MtfGridBar {
   date: number
-  high: number
-  low: number
+  open: number
+  close: number
 }
 
 /** The source timeframe's bars over `[from, to)`, ascending — the grid shift.ts walks to
- * find each vote's successor bar, and the high and low graph.ts prices a signal at (the
- * extreme of the bar the signal was cast on). The open, close and volume are dropped here
- * rather than being carried through every store and template. */
+ * find each vote's successor bar, and the open and close graph.ts prices a signal at (the
+ * body of the bar the signal was cast on). The high, low and volume are dropped here rather
+ * than being carried through every store and template. */
 export async function fetchMtfBarGrid(
   vendorSymbol: string,
   interval: MtfInterval,
@@ -92,7 +92,7 @@ export async function fetchMtfBarGrid(
   // Observed as `resolution=1h&from=…&to=…` firing on a 15m or 3m chart, where 1h is not
   // the pane's own interval and so could only have come from here.
   const bars = await fetchBars(vendorSymbol, interval, from, to, null)
-  return bars.map((bar) => ({ date: bar.timestamp, high: bar.high, low: bar.low }))
+  return bars.map((bar) => ({ date: bar.timestamp, open: bar.open, close: bar.close }))
 }
 
 export type { KLineData }

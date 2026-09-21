@@ -1,6 +1,6 @@
 import type { ArevPoint } from '../arev/api'
 import { resolutionDurationMs } from '../periods'
-import type { GridExtremes } from '../tsregistry/store'
+import type { GridBody } from '../tsregistry/store'
 import { knowableSignals } from './shift'
 
 // The signal GRAPH a multi-timeframe overlay can draw over its markers (user, 2026-09-21):
@@ -10,7 +10,11 @@ import { knowableSignals } from './shift'
 //
 // The rules, as the user gave them, and what each became here:
 //
-//   * a graph starts from a signal on the ROOT timeframe (1D, 8h, 4h, 2h or 1h);
+//   * a graph starts from a signal on a ROOT timeframe (1D, 8h, 4h, 2h or 1h). Several roots
+//     may be on at once (user, 2026-09-21: "allow for different roots to intersect"); each
+//     builds and resets its own graphs from its own signals, blind to the others, so a 1D
+//     bottom graph and an 8h top graph can run over the same bars and cross (`buildRootGraphs`).
+//     On prod EURUSD the 1D and 8h graphs in force point opposite ways 39% of the time;
 //   * when the root timeframe's signal switches SIDE the graph resets: the root's first signal
 //     of the other side starts a new graph, and nothing joins the old one after that instant.
 //     A further root signal of the SAME side joins the current graph as another root;
@@ -26,11 +30,12 @@ import { knowableSignals } from './shift'
 //
 // Three choices the rules leave open, made here:
 //
-//   * A signal's HEIGHT is the high (top) or low (bottom) of the bar it was cast on. That is
-//     the price at which `p` entered its zone, and it is fully known by the instant the
+//   * A signal's HEIGHT is the top (top signal) or bottom (bottom signal) of the BODY of the
+//     candle it was cast on -- the higher or the lower of its open and close (user, 2026-09-21;
+//     it was the wick's high or low until then). The body is fully known by the instant the
 //     signal is -- the source bar's close, where its marker sits. The bar the marker is drawn
-//     on would be the other candidate, and it is lookahead: its high is still forming when the
-//     signal arrives. It would also make the graph depend on the chart's interval.
+//     on would be lookahead: it is still forming when the signal arrives. It would also make
+//     the graph depend on the chart's interval.
 //   * TIME is the instant each signal became knowable (shift.ts), and a step must go strictly
 //     later: the multi-timeframe ordering rule in the workspace CLAUDE.md, under which two
 //     signals that arrived at the same instant cannot be cause and effect.
@@ -52,7 +57,8 @@ export interface GraphSignal {
   /** The instant the signal became knowable, absolute. */
   knownAt: number
   side: GraphSide
-  /** The high of the bar it was cast on for a top signal, the low for a bottom one. */
+  /** The top of the body of the candle it was cast on for a top signal, the bottom of that
+   * body for a bottom one. */
   price: number
 }
 
@@ -144,6 +150,33 @@ export function rootLookbackMs(root: string): number {
   return ROOT_LOOKBACK_BARS * resolutionDurationMs(root)
 }
 
+/** A graph and the root timeframe it grew from. */
+export interface RootedGraph<S extends GraphSignal = GraphSignal> extends Graph<S> {
+  root: string
+}
+
+/**
+ * Every root's graphs, each root built on its own: its own signals start and reset its
+ * graphs, from its own `graphStart`, over the same pool of signals. A signal can therefore sit
+ * in several graphs at once -- an 8h signal is a root of the 8h graphs and, when it steps the
+ * right way, a node of the 1D graph in force -- and graphs of different roots overlap in time
+ * and may run opposite ways. Longest root first.
+ */
+export function buildRootGraphs<S extends GraphSignal>(
+  signals: readonly S[],
+  roots: readonly string[],
+  maxStep: number,
+  loadedFrom: number
+): RootedGraph<S>[] {
+  const out: RootedGraph<S>[] = []
+  for (const root of [...roots].sort((a, b) => resolutionDurationMs(b) - resolutionDurationMs(a))) {
+    const rootSignals = signals.filter((s) => s.interval === root)
+    const from = graphStart(rootSignals, loadedFrom, rootLookbackMs(root))
+    for (const graph of buildGraphs(signals, { root, maxStep, from })) out.push({ ...graph, root })
+  }
+  return out
+}
+
 /**
  * The instant graphs are built from, for a chart whose loaded bars begin at `loadedFrom`
  * (absolute): the first signal of the run of same-side root signals in force there, looked
@@ -172,23 +205,23 @@ export function graphStart(rootSignals: readonly GraphSignal[], loadedFrom: numb
 export interface GraphSourceStore {
   values: Map<number, ArevPoint>
   grid(): number[]
-  gridExtremes(date: number): GridExtremes | undefined
+  gridBody(date: number): GridBody | undefined
 }
 
-/** One timeframe's knowable signals as graph signals, priced at their source bars. A signal
- * whose bar's range is not held is left out rather than guessed. */
+/** One timeframe's knowable signals as graph signals, priced at their source candles' bodies.
+ * A signal whose candle's body is not held is left out rather than guessed. */
 export function storeGraphSignals(interval: string, store: GraphSourceStore): GraphSignal[] {
   const durationMs = resolutionDurationMs(interval)
   const out: GraphSignal[] = []
   for (const signal of knowableSignals(interval, store.values.values(), store.grid())) {
-    const extremes = store.gridExtremes(signal.sourceDate)
-    if (!extremes) continue
+    const body = store.gridBody(signal.sourceDate)
+    if (!body) continue
     out.push({
       interval,
       durationMs,
       knownAt: signal.knownAt,
       side: signal.up ? 'top' : 'bottom',
-      price: signal.up ? extremes.high : extremes.low
+      price: signal.up ? body.top : body.bottom
     })
   }
   return out
