@@ -105,6 +105,7 @@ describe('the life of a level', () => {
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.brokenIndex).toBe(8)
+    expect(level.brokenBy).toBe('through')
     expect(isLive(level, 7)).toBe(true)
     expect(isLive(level, 8)).toBe(false)
     // The candle that erased it also reached into it, which is the last thing recorded.
@@ -125,15 +126,17 @@ describe('the life of a level', () => {
     expect(isLive(level, 9)).toBe(true)
   })
 
-  test('closing beyond the area is not enough on its own -- the candle has to trade through it', () => {
-    // Gaps over the whole area: it closes well above it but its LOW never reached 12.3.
+  test('a candle that gaps clean over the area ends it by the body rule, not the through rule', () => {
+    // Its LOW never reached 12.3, so nothing passed through the area -- but its body sits
+    // above it, and a body beyond the level is the end of the level.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
       bar(13.2, 13.6, 13.1, 13.5)
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level.brokenIndex).toBeNull()
+    expect(level.brokenIndex).toBe(8)
+    expect(level.brokenBy).toBe('beyond')
   })
 
   test('the area is the origin candle\'s BODY, and the stop is outside it', () => {
@@ -144,6 +147,53 @@ describe('the life of a level', () => {
     expect(supply.stop).toBeGreaterThan(zoneOf(supply).high)
     // Demand mirrors it: the body, with the stop below.
     expect(zoneOf({ price: 11.1, close: 10.2 })).toEqual({ low: 10.2, high: 11.1 })
+  })
+
+  test('a BODY clear above a supply ends it -- price is trading past the level', () => {
+    // Body 12.92-12.98 sits entirely above the 12.3-12.9 area; its wick never covered it.
+    const bars = dated([
+      ...RALLY,
+      bar(10.9, 12, 10.8, 11.9),
+      bar(12.92, 13.05, 12.91, 12.98)
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.brokenIndex).toBe(8)
+    expect(level.brokenBy).toBe('beyond')
+  })
+
+  test('a WICK beyond the level is not a body, and leaves it live', () => {
+    // High 13.05 pokes above the area but the body, 12.5-12.7, is still inside it.
+    const bars = dated([
+      ...RALLY,
+      bar(10.9, 12, 10.8, 11.9),
+      bar(12.5, 13.05, 12.4, 12.7)
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.brokenIndex).toBeNull()
+    expect(level.testedIndex).toBe(8)
+  })
+
+  test('the move that created the level runs the other way, so it never ends it', () => {
+    // The sell-off's bodies sit BELOW a supply; only a body above one ends it.
+    const [level] = heathLevels(RALLY, SETTINGS)
+    expect(level.brokenIndex).toBeNull()
+  })
+
+  test('a body below a demand ends it, mirrored', () => {
+    const bars = dated([
+      bar(13, 13.2, 12.5, 12.6),
+      bar(12.6, 12.8, 11.8, 11.9),
+      bar(11.9, 12, 11, 11.1),
+      bar(11.1, 11.2, 10, 10.2), // demand: body 10.2-11.1, stop 10
+      bar(10.2, 11.3, 10.1, 11.2),
+      bar(11.2, 12, 11.1, 11.9),
+      bar(11.9, 12.5, 11.8, 12.4),
+      bar(10.1, 10.15, 9.5, 9.6) // body 9.6-10.1, clear below the area
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.side).toBe('demand')
+    expect(level.brokenIndex).toBe(7)
+    expect(level.brokenBy).toBe('beyond')
   })
 
   test('a candle covering the body but not the wick still erases it', () => {

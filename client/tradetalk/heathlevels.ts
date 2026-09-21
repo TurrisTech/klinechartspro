@@ -14,10 +14,13 @@ import type { Candle } from './calendar'
 //
 // The area is the origin candle's BODY -- open to close, not open to wick (user, 2026-09-21).
 // The line he draws is its open edge; the stop still sits beyond the wick, outside the area
-// entirely. A level is ERASED when one candle passes entirely through that body (user):
-// a wick that covers the whole of it consumes it, while a wick that reaches only part way in
-// leaves it live. Containment is of the candle's whole range, wicks included, so a candle that
-// closed beyond the area but never traded through it does not erase it either.
+// entirely. A level is ERASED two ways, both the user's (2026-09-21):
+//
+//   * a candle passes entirely THROUGH the area -- its whole range, wicks included, covering
+//     the band. A wick that reaches only part way in leaves the level live.
+//   * a later candle's BODY sits clear BEYOND it -- above a supply, below a demand. Price is
+//     trading past the level rather than at it, so it is no longer supply or demand. A WICK
+//     beyond the area does not count: that is the distinction the rule turns on.
 //
 // Two things in that definition have to be made mechanical, and both are parameters rather
 // than opinions buried in code:
@@ -51,9 +54,11 @@ export interface HeathLevel {
   stop: number
   /** First bar, after price left the area, whose range reached back into it. Null while fresh. */
   testedIndex: number | null
-  /** First bar whose whole range covered the area -- it passed entirely through, so the level
-   * is erased. Null while it stands. */
+  /** First bar to erase the level. Null while it stands. */
   brokenIndex: number | null
+  /** How it was erased: a candle passing entirely `through` the area, or a body settling
+   * `beyond` it. Null while it stands. */
+  brokenBy: 'through' | 'beyond' | null
 }
 
 /** The shaded area: the origin candle's BODY, open to close. Always has height -- the origin
@@ -87,11 +92,13 @@ export function originOf(bars: readonly Candle[], turn: number, side: 'supply' |
  * Every supply and demand line the method would have on this chart, in the order they formed.
  *
  * A level's life, after the origin candle: it is **armed** once price has closed clear of the
- * area, **tested** the first time a later bar's range reaches back INTO it, and **erased** the
- * first time one candle's range covers the whole of it. Arming is what stops the move that
- * created the level from counting as its first test -- the area is the origin candle's own
- * body, so the bars around the turn are still standing in it, and the departure would
- * otherwise read as a return.
+ * area, **tested** the first time a later bar's range reaches back INTO it, and **erased**
+ * either by a candle passing entirely through it or by a body settling beyond it. Arming is
+ * what stops the move that created the level from counting as its first test -- the area is
+ * the origin candle's own body, so the bars around the turn are still standing in it, and the
+ * departure would otherwise read as a return. The body-beyond rule needs no such guard: the
+ * departure runs the other way (down from a supply, up from a demand), so a body beyond the
+ * level is never the move that made it.
  *
  * Nothing here reads a bar later than the one being judged.
  */
@@ -119,7 +126,8 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
         close: origin.close,
         stop: side === 'supply' ? origin.high : origin.low,
         testedIndex: null,
-        brokenIndex: null
+        brokenIndex: null,
+        brokenBy: null
       })
     }
   }
@@ -129,6 +137,17 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
     let armed = false
     for (let i = level.originIndex + 1; i < n; i++) {
       const bar = bars[i]
+      // A body clear beyond the level -- above a supply, below a demand -- ends it wherever
+      // in its life it happens, including before price has left the area. Bodies only: a
+      // wick beyond the level is exactly what this rule does not count.
+      const bodyLow = Math.min(bar.open, bar.close)
+      const bodyHigh = Math.max(bar.open, bar.close)
+      if (level.side === 'supply' ? bodyLow >= zone.high : bodyHigh <= zone.low) {
+        if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
+        level.brokenIndex = i
+        level.brokenBy = 'beyond'
+        break
+      }
       if (!armed) {
         armed = level.side === 'supply' ? bar.close < zone.low : bar.close > zone.high
         continue
@@ -139,6 +158,7 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
       // all. A wick that covers only part of the area leaves the level live.
       if (bar.low <= zone.low && bar.high >= zone.high) {
         level.brokenIndex = i
+        level.brokenBy = 'through'
         break
       }
     }
