@@ -2,6 +2,7 @@ import type { IndicatorGroup, SymbolInfo } from '../../src'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import { dailySource } from './api'
 import type { SessionClock } from './calendar'
+import { registerHeathLevelsIndicator } from './heathtemplate'
 import { isTradeTalkIndicator, registerTradeTalkIndicator, TEMPLATE_NAME } from './templates'
 
 // TradeTalk as a client plugin: one template on the price pane, one source (daily bars), and
@@ -55,7 +56,14 @@ export function createTradeTalkPlugin(): IndicatorPlugin {
     feature: null,
     register(f: PluginFacilities): IndicatorGroup[] {
       facilities = f
-      return registerTradeTalkIndicator()
+      // Two templates in one picker group. The entries indicator is bound by the host (it
+      // reads daily bars); Heath levels needs nothing but the pane's own candles, so it is
+      // registered here and deliberately NOT matched -- an unmatched template is left to
+      // klinecharts, which is all it wants.
+      const groups = registerTradeTalkIndicator()
+      const levels = registerHeathLevelsIndicator()
+      if (groups[0]) groups[0].items = [...groups[0].items, ...levels]
+      return groups
     },
     matches: isTradeTalkIndicator,
     bind(ctx: BindContext): BindingSpec | null {
