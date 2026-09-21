@@ -1,7 +1,7 @@
 import { swingMask } from '../../src/indicators/swing'
 import type { Candle } from './calendar'
 
-// "Heath levels" -- supply and demand as the TradeTalk method draws them (dossier §3.2).
+// "Heath levels" -- supply and demand as the TradeTalk method draws them (dossier §3).
 //
 //   "I only draw my supply and demand zones with a SINGLE LINE AT THE OPEN ... because I like
 //    to keep my charts neat. Also this gives me pinpoint accuracy when taking my entries,
