@@ -4,6 +4,7 @@ import {
   type OrderRequest,
   type SimAnswer,
   type SimEvent,
+  type SimQuote,
   type SimSnapshot,
   type TradePatch,
   simApi
@@ -69,6 +70,10 @@ export class PaperTradingSession implements TradingSession {
   snapshot: SimSnapshot = PLACEHOLDER
   private listeners = new Set<SessionListener>()
   private loadPromise: Promise<void> | null = null
+  /** Each instrument's watch, in flight or done -- see `watch`. A plain field is enough: this
+   * object resolves its session once (`load`) and never changes id, so nothing here can
+   * outlive the session it was sent to. */
+  private watches = new Map<string, Promise<void>>()
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   private polling = false
   private disposed = false
@@ -116,11 +121,52 @@ export class PaperTradingSession implements TradingSession {
     this.startPolling()
   }
 
+  /** The instrument's bid/ask as the server holds it NOW: brought in first (once, as `watch`
+   * does), then read fresh. The fresh read is the point -- a repeat `watch` sends nothing, so
+   * the snapshot can be a poll old, and the price-watch menu's "Fetch bid/ask" copies what
+   * this returns. */
+  async quote(instrument: string): Promise<SimQuote | undefined> {
+    await this.watch(instrument)
+    const answer = await simApi.get(this.id)
+    this.accept({ ...answer, events: [] })
+    return answer.session.quotes[instrument]
+  }
+
   // -- actions (each ensures the session is loaded first) ------------------------------
 
-  async watch(instrument: string): Promise<void> {
+  /** At most one `POST .../watch` per instrument per session. A pane load used to send four
+   * (the load; the wall's pane sync, twice, once through the ticket; the ticket again when
+   * the instrument's config arrives) and every trade-box open one more, each persisting and
+   * returning the whole session to change nothing: the server's watch is set membership, and
+   * a pod restart re-subscribes stored sessions itself (`restore` + `rewatch`), so a repeat
+   * has nothing to repair. Concurrent callers share the request in flight.
+   *
+   * Only a watch that TOOK is kept. A failure is forgotten so the next call retries -- unlike
+   * client/instrumentconfig.ts, which caches failure -- and so is a 200 with no quote for the
+   * instrument: the server swallows a failed subscribe or seed read and answers 200 anyway,
+   * so a missing quote is the one sign of it that reaches the client. */
+  watch(instrument: string): Promise<void> {
+    const known = this.watches.get(instrument)
+    if (known) return known
+    const pending = this.bringIn(instrument).then(
+      (quoted) => {
+        if (!quoted) this.watches.delete(instrument)
+      },
+      (err: unknown) => {
+        this.watches.delete(instrument)
+        throw err
+      }
+    )
+    this.watches.set(instrument, pending)
+    return pending
+  }
+
+  /** The watch itself; true if the reply holds a quote for the instrument. */
+  private async bringIn(instrument: string): Promise<boolean> {
     await this.load()
-    this.accept(await simApi.watch(this.id, instrument))
+    const answer = await simApi.watch(this.id, instrument)
+    this.accept(answer)
+    return answer.session.quotes[instrument] !== undefined
   }
 
   async placeOrder(order: OrderRequest): Promise<void> {

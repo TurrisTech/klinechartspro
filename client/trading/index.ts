@@ -28,7 +28,8 @@ export interface PaperTradingController {
   /** Resync overlays and the ticket to the current wall panes (the wall's onPanesChange). */
   sync(panes: ChartProPane[]): void
   /** The instrument's bid/ask as the account holds it now. Watches the instrument first --
-   * idempotent, and the server never lets a stored seed overwrite a live tick. */
+   * idempotent, and the server never lets a stored seed overwrite a live tick -- then reads
+   * the account fresh, since a repeat watch sends nothing (`PaperTradingSession.quote`). */
   quote(key: string): Promise<SimQuote | undefined>
   teardown(): void
 }
@@ -70,10 +71,7 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
       dock.sync(panes)
       void session.watch(dock.activeKey()).catch(() => {})
     },
-    async quote(key: string): Promise<SimQuote | undefined> {
-      await session.watch(key)
-      return session.snapshot.quotes[key]
-    },
+    quote: (key: string): Promise<SimQuote | undefined> => session.quote(key),
     teardown(): void {
       dock.teardown()
       session.dispose()
