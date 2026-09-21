@@ -18,9 +18,11 @@
 //   * The fixed rule is the published one, a LEVEL: every counting bar with `|p - 0.5| >=
 //     confidence`, long when p > 0.5 (wdashboard-server services/arev.py `signal_of`).
 //
-// Quantiles are numpy's default (linear interpolation), which is what the server uses, and
-// `rules.test.ts` holds a fixture generated from services/arev21outlier.py for the two pieces
-// the lab still shares with it: the quantile and the entry rule.
+// Quantiles are numpy's default (linear interpolation), which is what the server uses. The
+// server holds the same rules in services/arev21outlier.py -- `rolling_lines` counts bars for
+// rank and spans days for median, exactly as here -- and generates the fixture `rules.test.ts`
+// runs (wdashboard-server tests/arevlab/), which pins the quantile, the band, both rolling
+// windows and the arrows. A rule changed on one side fails on the other.
 
 export interface LabPoint {
   date: number

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Vendor the parity fixtures from wdashboard-server into the client, or check that the two
 # copies are identical (`--check`, what `bun test` runs through client/replay/fixtures.test.ts
-# and client/watch/fixtures.test.ts when the server repo is reachable).
+# when the server repo is reachable -- one run covers every pair below, and each area's own
+# suite asserts its file's provenance line for an environment without the sibling repo).
 #
 #   scripts/sync-engine-fixtures.sh            copy
 #   scripts/sync-engine-fixtures.sh --check    exit 1 if any file differs
@@ -10,10 +11,14 @@
 # worktree); SERVER_FIXTURES still overrides the sim fixture directory on its own. Every file
 # is GENERATED there and never edited here:
 #
-#   tests/sim/fixtures    engine_cases.json  the fill rules as data (gen_engine_cases.py)
-#                         boundaries.json    candle boundaries from wmarkettypes
-#   tests/watch/fixtures  watch_cases.json   when a watch fires (gen_watch_cases.py) -- the
-#                                            rule a bar replay evaluates in the browser
+#   tests/sim/fixtures     engine_cases.json  the fill rules as data (gen_engine_cases.py)
+#                          boundaries.json    candle boundaries from wmarkettypes
+#   tests/watch/fixtures   watch_cases.json   when a watch fires (gen_watch_cases.py) -- the
+#                                             rule a bar replay evaluates in the browser
+#   tests/arevlab/fixtures rules_parity.json  the AREV lab's rules (gen_rules_parity.py) --
+#                                             the quantile, the bands, the rolling lines and
+#                                             the arrows, which the lab recomputes in the
+#                                             browser (client/arevlab/rules.ts)
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 root=${SERVER_ROOT:-$here/../../wdashboard-server/main}
@@ -23,6 +28,7 @@ pairs=(
   "$sim|$here/client/replay/fixtures|engine_cases.json"
   "$sim|$here/client/replay/fixtures|boundaries.json"
   "$root/tests/watch/fixtures|$here/client/watch/fixtures|watch_cases.json"
+  "$root/tests/arevlab/fixtures|$here/client/arevlab/fixtures|rules_parity.json"
 )
 status=0
 for pair in "${pairs[@]}"; do

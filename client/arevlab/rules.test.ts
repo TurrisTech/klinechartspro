@@ -12,17 +12,43 @@ import {
   type LabPoint
 } from './rules'
 
-// Two halves. The parity cases are wdashboard-server's own output (fixtures/generate.py) for the
-// pieces the lab still shares with services/arev21outlier.py -- the quantile, the band and the
-// entry rule -- since the lab's windows are spans of days, which that module has no form of. The
-// rest pins the day window itself, in cases small enough to check by eye.
+// Two halves. The parity cases are wdashboard-server's own output, generated and checked there
+// by tests/arevlab/ and vendored here by scripts/sync-engine-fixtures.sh: the quantile, the band
+// around a prior, and the rolling `rank` and `median` lines, each with the arrows the server
+// prints from them. The rest pins the day window itself, in cases small enough to check by eye.
+//
+// Every case carries the `samplesOnly` it was generated with, and this file reads it rather than
+// assuming it. Assuming it is how these cases went stale once before: `Variant.samples_only`
+// arrived in wdashboard-server 0.51.0 defaulting to false, a regeneration would have moved 49 and
+// 76 of 300 `side` values, and a hard-coded `true` here kept the suite green either way.
 
 const HOUR = 3_600_000
 const DAY = 86_400_000
 
 const points: LabPoint[] = fixture.rows.map((r) => ({ date: r.date, p: r.p ?? Number.NaN, n: r.n, atCross: r.atCross }))
 
+/** One line against the server's, value by value; `null` in the fixture is a NaN -- a bar whose
+ * window had not filled, which must be blank here too and not merely different. */
+function expectLine(actual: Float64Array, want: readonly (number | null)[], where: string): void {
+  want.forEach((v, i) => {
+    if (v === null) expect(Number.isNaN(actual[i]), `${where}[${i}] should be blank`).toBe(true)
+    else expect(Math.abs(actual[i] - v), `${where}[${i}]`).toBeLessThan(1e-12)
+  })
+}
+
 describe('parity with the server', () => {
+  test('the fixture is vendored from the server, not written here', () => {
+    expect(String(fixture.$comment)).toContain('GENERATED')
+    expect(String(fixture.$comment)).toContain('gen_rules_parity.py')
+  })
+
+  test("the blank-window rule is the server's own MIN_WINDOW_VALUES", () => {
+    // Both sides keep their own copy of this constant, so a change to one that is not made to
+    // the other moves the first drawn bar on one side only -- which no line comparison catches,
+    // because the fixture would have been regenerated with the new one.
+    expect(MIN_WINDOW_VALUES).toBe(fixture.minWindowValues)
+  })
+
   test('the quantile is numpy linear, on every shape the fixture holds', () => {
     for (const c of fixture.quantiles) {
       expect(Math.abs(quantileSorted(c.sorted, c.q) - c.value), `q=${c.q} n=${c.sorted.length}`).toBeLessThan(1e-12)
@@ -30,25 +56,47 @@ describe('parity with the server', () => {
   })
 
   test('the band and the entry rule match `derive` + `sides`', () => {
-    // `sides()` counts a bar only at a sample, which is `samplesOnly`.
-    const counts = countingBars(points, fixture.minNeighbours, true)
     for (const c of fixture.entryCases) {
-      const centre = Float64Array.from(c.centreIn.map((v) => v ?? Number.NaN))
-      const lines = bandLines(centre, c.width)
-      c.hi.forEach((want, i) => {
-        if (want === null) expect(Number.isNaN(lines.hi[i])).toBe(true)
-        else expect(Math.abs(lines.hi[i] - want)).toBeLessThan(1e-12)
-      })
-      c.lo.forEach((want, i) => {
-        if (want === null) expect(Number.isNaN(lines.lo[i])).toBe(true)
-        else expect(Math.abs(lines.lo[i] - want)).toBeLessThan(1e-12)
-      })
-      expect(Array.from(entrySides(points, counts, lines))).toEqual(c.side)
+      const where = `prior width=${c.width}`
+      const counts = countingBars(points, fixture.minNeighbours, c.samplesOnly)
+      const lines = bandLines(Float64Array.from(c.centreIn.map((v) => v ?? Number.NaN)), c.width)
+      expectLine(lines.hi, c.hi, `${where} hi`)
+      expectLine(lines.lo, c.lo, `${where} lo`)
+      expect(Array.from(entrySides(points, counts, lines)), where).toEqual(c.side)
+    }
+  })
+
+  test('rank matches `rolling_lines` + `sides`', () => {
+    // The server rolls over the counting bars alone and carries the answer forward to the bars
+    // in between; this walks the same bars with a sorted window. A count window is where the two
+    // are easiest to part company, because "the last 40 readings" is not "the last 40 bars".
+    for (const c of fixture.rankCases) {
+      const where = `rank bars=${c.bars} q=${c.q} samplesOnly=${c.samplesOnly}`
+      const counts = countingBars(points, fixture.minNeighbours, c.samplesOnly)
+      const lines = rankLines(points, counts, c.bars, c.q)
+      expectLine(lines.centre, c.centre, `${where} centre`)
+      expectLine(lines.hi, c.hi, `${where} hi`)
+      expectLine(lines.lo, c.lo, `${where} lo`)
+      expect(Array.from(entrySides(points, counts, lines)), where).toEqual(c.side)
+    }
+  })
+
+  test('median matches `rolling_lines` + `sides`', () => {
+    // pandas' offset window with closed="left" is [t - span, t), which is what rollingSpan
+    // admits and evicts -- including the MIN_WINDOW_VALUES gate that leaves the head blank.
+    for (const c of fixture.medianCases) {
+      const where = `median days=${c.days} width=${c.width} samplesOnly=${c.samplesOnly}`
+      const counts = countingBars(points, fixture.minNeighbours, c.samplesOnly)
+      const lines = medianLines(points, counts, c.days * DAY, c.width)
+      expectLine(lines.centre, c.centre, `${where} centre`)
+      expectLine(lines.hi, c.hi, `${where} hi`)
+      expectLine(lines.lo, c.lo, `${where} lo`)
+      expect(Array.from(entrySides(points, counts, lines)), where).toEqual(c.side)
     }
   })
 
   test('the fixture exercises both sides', () => {
-    for (const c of fixture.entryCases) {
+    for (const c of [...fixture.entryCases, ...fixture.rankCases, ...fixture.medianCases]) {
       expect(c.side.filter((s) => s === 1).length).toBeGreaterThan(0)
       expect(c.side.filter((s) => s === -1).length).toBeGreaterThan(0)
     }
@@ -169,6 +217,9 @@ describe('fixedSides', () => {
   test("with samplesOnly on it is the server's published `signal`, float comparison included", () => {
     // services/arev.py: `abs(p - 0.5) >= SIGNAL_CONFIDENCE` on a sample bar with a full
     // neighbourhood. 0.575 - 0.5 is a hair under 0.075 in binary, so neither side fires there.
+    // The `true` here is this test's subject and not an assumption about the fixture: the
+    // published rule is sample-gated by definition (arev.py, `at_cross and ...`), unlike the
+    // outlier variants, whose cases each carry the gate they were generated with.
     const counts = countingBars(points, fixture.minNeighbours, true)
     const expected = points.map((pt, i) =>
       counts[i] && Math.abs(pt.p - 0.5) >= 0.075 ? (pt.p > 0.5 ? 1 : -1) : 0
