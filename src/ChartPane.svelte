@@ -277,6 +277,30 @@
     })
   }
 
+  // The candle legend, compact: panes on a wall are narrow, and klinecharts' 'Time: ' /
+  // 'Open: ' / ... labels cost them a row. A date needs no label, and O/H/L/C/V is the
+  // convention every trading platform uses. Each item keeps a fixed-width slot while the
+  // crosshair moves (patches/klinecharts@10.0.0.patch), so the row breaks in the same place
+  // on every bar -- and the indicator rows and their buttons below it stay put.
+  function applyCandleLegend() {
+    widget?.setStyles({
+      candle: {
+        tooltip: {
+          legend: {
+            template: [
+              { title: '', value: '{time}' },
+              { title: 'O ', value: '{open}' },
+              { title: 'H ', value: '{high}' },
+              { title: 'L ', value: '{low}' },
+              { title: 'C ', value: '{close}' },
+              { title: 'V ', value: '{volume}' }
+            ]
+          }
+        }
+      }
+    })
+  }
+
   const toChartSymbol = (value: SymbolInfo): ChartSymbolInfo => ({
     ...value,
     pricePrecision: value.pricePrecision ?? 2,
@@ -904,6 +928,7 @@
     if (!mounted || !widget) return
     widget.setStyles(theme)
     applyIndicatorIcons()
+    applyCandleLegend()
   })
 
   $effect(() => {
@@ -1128,6 +1153,7 @@
     widget.setLocale(locale)
     widget.setTimezone(displayTimezone)
     applyIndicatorIcons()
+    applyCandleLegend()
     defaultStyles = clone(widget.getStyles())
     mounted = true
     // Sizes the axis gutters the jump-to-live control is inset by, before any range change has

@@ -10,6 +10,9 @@ WORKDIR /app
 # --frozen-lockfile so an image build can never silently resolve a different dependency
 # version than the one committed — the same reason the Python images use `uv sync --frozen`.
 COPY package.json bun.lock bunfig.toml ./
+# Before the install, which applies them: package.json's patchedDependencies (the stable
+# tooltip legends in patches/klinecharts@10.0.0.patch) must exist or the install fails.
+COPY patches ./patches
 RUN bun install --frozen-lockfile
 
 COPY tsconfig.json ./

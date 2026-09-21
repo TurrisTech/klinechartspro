@@ -74,5 +74,8 @@
   },
   "peerDependencies": {
     "klinecharts": "^10.0.0"
+  },
+  "patchedDependencies": {
+    "klinecharts@10.0.0": "patches/klinecharts@10.0.0.patch"
   }
 }

@@ -1,0 +1,332 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index d3fd656bd65efdafebecf1760877d4b5b96a82b6..62f0e0fbe7195ad94198dee7c162c59a977ca8b4 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -142,6 +142,12 @@ export type TooltipLegendStyle = TooltipTextStyle & {
+ export interface TooltipLegendChild {
+ 	text: string;
+ 	color: string;
++	/**
++	 * PATCH (klinechartspro): on a legend's value, the widest text this item will show. The
++	 * item is laid out at least that wide, so the row does not move as the value changes.
++	 * Computed from the data where the chart knows it (figure legends, candle placeholders).
++	 */
++	reserve?: string;
+ }
+ export interface TooltipLegend {
+ 	title: string | TooltipLegendChild;
+diff --git a/dist/index.esm.js b/dist/index.esm.js
+index 7b7d9f2157b5010f138f77a72f652955270c4d34..3b68898c9698ad73d5c61e5087fae9fb50a2ad02 100644
+--- a/dist/index.esm.js
++++ b/dist/index.esm.js
+@@ -8372,10 +8372,68 @@ var CrosshairLineView = /** @class */ (function (_super) {
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++// PATCH (klinechartspro, patches/klinecharts@10.0.0.patch) -- stable tooltip legends.
++//
++// Upstream lays a legend row out from the text it shows right now, so every value that changes
++// length under the crosshair -- a volume of 7 against one of 289, an 'n/a' warm-up, a minus
++// sign -- slides the items after it and can re-wrap the row, and with it every indicator row
++// and button below. Here each legend item owns a SLOT: at least as wide as the widest value its
++// series holds (a `reserve` text computed from the data), and never narrower than it has been
++// for this symbol and period. The value is drawn at the start of its slot, beside its title, and
++// the slot's unused width becomes space before the next item -- which therefore never moves, and
++// a row breaks in the same place on every bar.
++function createLegendValueStats() {
++    return { count: 0, min: Infinity, max: -Infinity, bandMax: [-Infinity, -Infinity, -Infinity, -Infinity], other: null };
++}
++function addLegendValue(stats, value, fallback) {
++    if (isNumber(value)) {
++        stats.count++;
++        stats.min = Math.min(stats.min, value);
++        stats.max = Math.max(stats.max, value);
++        // formatBigNumber's own thresholds
++        var band = value > 1000000000 ? 3 : (value > 1000000 ? 2 : (value > 1000 ? 1 : 0));
++        stats.bandMax[band] = Math.max(stats.bandMax[band], value);
++    }
++    else {
++        stats.other = longerText(stats.other, "".concat(value !== null && value !== void 0 ? value : fallback));
++    }
++}
++function longerText(a, b) {
++    return a === null || b.length > a.length ? b : a;
++}
++// The widest text `format` gives any value added to `stats`. Fixed-precision text is monotone in
++// magnitude, so the two extremes bound it. Big-number text is not -- "999.999K" is wider than
++// "1.5M" -- so each magnitude band contributes its largest value, with the fraction widened to
++// the three digits formatBigNumber can show.
++function widestLegendValue(stats, format, bigNumber) {
++    var widest = stats.other;
++    if (stats.count > 0) {
++        widest = longerText(widest, format(stats.min));
++        widest = longerText(widest, format(stats.max));
++        if (bigNumber) {
++            stats.bandMax.forEach(function (value, band) {
++                if (value > -Infinity) {
++                    var text = format(value);
++                    if (band > 0) {
++                        text = text.replace(/^(.*?)(?:\.(\d*))?([KMB])$/, function (_, integer, fraction, unit) {
++                            return "".concat(integer, ".").concat((fraction !== null && fraction !== void 0 ? fraction : '').padEnd(3, '0')).concat(unit);
++                        });
++                    }
++                    widest = longerText(widest, text);
++                }
++            });
++        }
++    }
++    return widest !== null && widest !== void 0 ? widest : '';
++}
+ var IndicatorTooltipView = /** @class */ (function (_super) {
+     __extends(IndicatorTooltipView, _super);
+     function IndicatorTooltipView(widget) {
+         var _this = _super.call(this, widget) || this;
++        // PATCH: see createLegendValueStats
++        _this._legendSlots = new Map();
++        _this._legendSlotContext = null;
++        _this._legendReserveCache = new WeakMap();
+         _this._activeFeatureInfo = null;
+         _this._featureClickEvent = function (type, featureInfo) { return function () {
+             var pane = _this.getWidget().getPane();
+@@ -8427,6 +8485,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+                         if (calcParamsText.length > 0) {
+                             text = "".concat(text).concat(calcParamsText);
+                         }
++                        // PATCH: see _fitTooltipName
++                        text = _this._fitTooltipName(ctx, text, coordinate.x, maxWidth, tooltipTitleStyles_1, features[1]);
+                         var color = tooltipTitleStyles_1.color;
+                         prevRowHeight = _this.drawStandardTooltipLegends(ctx, [
+                             {
+@@ -8437,7 +8497,10 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+                     }
+                     prevRowHeight = _this.drawStandardTooltipFeatures(ctx, features[1], coordinate, indicator, left, prevRowHeight, maxWidth);
+                     if (legendValid) {
+-                        prevRowHeight = _this.drawStandardTooltipLegends(ctx, legends, coordinate, left, prevRowHeight, maxWidth, tooltipLegendStyles_1);
++                        // PATCH: slotted -- see createLegendValueStats. Keyed by parameters too, so a
++                        // re-parameterised indicator sizes its slots afresh.
++                        var slotScope = "".concat(indicator.id, "(").concat(indicator.calcParams.join(','), ")");
++                        prevRowHeight = _this.drawStandardTooltipLegends(ctx, legends, coordinate, left, prevRowHeight, maxWidth, tooltipLegendStyles_1, slotScope);
+                     }
+                     // draw right features
+                     prevRowHeight = _this.drawStandardTooltipFeatures(ctx, features[2], coordinate, indicator, left, prevRowHeight, maxWidth);
+@@ -8551,18 +8614,23 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+         }
+         return prevRowHeight;
+     };
+-    IndicatorTooltipView.prototype.drawStandardTooltipLegends = function (ctx, legends, coordinate, left, prevRowHeight, maxWidth, styles) {
++    IndicatorTooltipView.prototype.drawStandardTooltipLegends = function (ctx, legends, coordinate, left, prevRowHeight, maxWidth, styles, slotScope) {
+         var _this = this;
+         if (legends.length > 0) {
+             var marginLeft_1 = styles.marginLeft, marginTop_1 = styles.marginTop, marginRight_1 = styles.marginRight, marginBottom_1 = styles.marginBottom, size_1 = styles.size, family_1 = styles.family, weight_1 = styles.weight;
+             ctx.font = createFont(size_1, weight_1, family_1);
+-            legends.forEach(function (data) {
++            legends.forEach(function (data, index) {
+                 var _a, _b;
+                 var title = data.title;
+                 var value = data.value;
+                 var titleTextWidth = ctx.measureText(title.text).width;
+                 var valueTextWidth = ctx.measureText(value.text).width;
+-                var totalTextWidth = titleTextWidth + valueTextWidth;
++                // PATCH: a slotted legend is laid out at its slot's width, not its text's -- see
++                // createLegendValueStats. Unslotted (a title) keeps upstream's behaviour.
++                var valueSlotWidth = isString(slotScope)
++                    ? _this._legendSlotWidth(ctx, "".concat(slotScope, "\0").concat(index, "\0").concat(title.text), valueTextWidth, value.reserve)
++                    : valueTextWidth;
++                var totalTextWidth = titleTextWidth + valueSlotWidth;
+                 var h = marginTop_1 + size_1 + marginBottom_1;
+                 if (coordinate.x + marginLeft_1 + totalTextWidth + marginRight_1 > maxWidth) {
+                     coordinate.x = left;
+@@ -8589,6 +8657,93 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+         }
+         return prevRowHeight;
+     };
++    // PATCH: the width a slotted legend's value is laid out in -- see createLegendValueStats.
++    // `ctx.font` must be the legend's font, as it is inside drawStandardTooltipLegends.
++    IndicatorTooltipView.prototype._legendSlotWidth = function (ctx, key, valueWidth, reserve) {
++        var _a;
++        var chartStore = this.getWidget().getPane().getChart().getChartStore();
++        var symbol = chartStore.getSymbol();
++        var period = chartStore.getPeriod();
++        var context = [symbol === null || symbol === void 0 ? void 0 : symbol.ticker, period === null || period === void 0 ? void 0 : period.span, period === null || period === void 0 ? void 0 : period.type].join('\0');
++        // Another symbol or period starts over, and so does an unbounded number of slots (an
++        // indicator re-parameterised over and over) rather than keeping every one ever drawn.
++        if (context !== this._legendSlotContext || this._legendSlots.size > 256) {
++            this._legendSlots = new Map();
++            this._legendSlotContext = context;
++        }
++        var slotKey = "".concat(ctx.font, "\0").concat(key);
++        var width = Math.max(valueWidth, (_a = this._legendSlots.get(slotKey)) !== null && _a !== void 0 ? _a : 0, isString(reserve) ? ctx.measureText(reserve).width : 0);
++        this._legendSlots.set(slotKey, width);
++        return width;
++    };
++    // PATCH: the widest text each titled figure of `indicator` can show in its legend, formatted
++    // exactly as getIndicatorTooltipData formats the value at the crosshair. Cached per result:
++    // a recalculation replaces the array, and a crosshair move reuses it.
++    IndicatorTooltipView.prototype._figureLegendReserves = function (indicator, defaultValue, formatter, decimalFold, thousandsSeparator) {
++        var result = indicator.result;
++        var signature = [indicator.precision, indicator.shouldFormatBigNumber, defaultValue, thousandsSeparator.sign, decimalFold.threshold].join('\0');
++        var cached = this._legendReserveCache.get(result);
++        if (isValid(cached) && cached.signature === signature) {
++            return cached.reserves;
++        }
++        var keys = indicator.figures.filter(function (figure) { return isString(figure.title); }).map(function (figure) { return figure.key; });
++        var stats = keys.map(function () { return createLegendValueStats(); });
++        for (var i = 0; i < result.length; i++) {
++            var data = result[i];
++            keys.forEach(function (key, k) {
++                addLegendValue(stats[k], data === null || data === void 0 ? void 0 : data[key], defaultValue);
++            });
++        }
++        var format = function (value) {
++            var text = formatPrecision(value, indicator.precision);
++            if (indicator.shouldFormatBigNumber) {
++                text = formatter.formatBigNumber(text);
++            }
++            return decimalFold.format(thousandsSeparator.format(text));
++        };
++        var reserves = {};
++        keys.forEach(function (key, k) {
++            reserves[key] = widestLegendValue(stats[k], format, indicator.shouldFormatBigNumber);
++        });
++        this._legendReserveCache.set(result, { signature: signature, reserves: reserves });
++        return reserves;
++    };
++    // PATCH: an indicator's name is shortened with an ellipsis rather than letting it push the
++    // middle features -- the visibility / settings / close buttons -- onto a row of their own, so
++    // those sit on the name's row at any pane width. (Upstream draws a name wider than the pane
++    // straight past its edge.)
++    IndicatorTooltipView.prototype._fitTooltipName = function (ctx, text, x, maxWidth, styles, features) {
++        var featuresWidth = 0;
++        features.forEach(function (feature) {
++            var _a = feature.marginLeft, marginLeft = _a === void 0 ? 0 : _a, _b = feature.marginRight, marginRight = _b === void 0 ? 0 : _b, _c = feature.paddingLeft, paddingLeft = _c === void 0 ? 0 : _c, _d = feature.paddingRight, paddingRight = _d === void 0 ? 0 : _d, _e = feature.size, size = _e === void 0 ? 0 : _e, type = feature.type, content = feature.content;
++            var contentWidth = size;
++            if (type === 'icon_font') {
++                ctx.font = createFont(size, 'normal', content.family);
++                contentWidth = ctx.measureText(content.code).width;
++            }
++            featuresWidth += marginLeft + paddingLeft + contentWidth + paddingRight + marginRight;
++        });
++        ctx.font = createFont(styles.size, styles.weight, styles.family);
++        var available = maxWidth - x - styles.marginLeft - styles.marginRight - featuresWidth;
++        if (ctx.measureText(text).width <= available) {
++            return text;
++        }
++        var ellipsis = '…';
++        // The longest prefix that fits with its ellipsis; at least one character, so a pane too
++        // narrow for anything still names the indicator rather than showing a bare ellipsis.
++        var low = 1;
++        var high = text.length - 1;
++        while (low < high) {
++            var mid = Math.ceil((low + high) / 2);
++            if (ctx.measureText("".concat(text.slice(0, mid).trimEnd()).concat(ellipsis)).width <= available) {
++                low = mid;
++            }
++            else {
++                high = mid - 1;
++            }
++        }
++        return "".concat(text.slice(0, low).trimEnd()).concat(ellipsis);
++    };
+     IndicatorTooltipView.prototype.isDrawTooltip = function (crosshair, styles) {
+         var showRule = styles.showRule;
+         return showRule === 'always' ||
+@@ -8624,6 +8779,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+             var barSpace = chartStore.getBarSpace();
+             var data_1 = (_a = result[dataIndex]) !== null && _a !== void 0 ? _a : {};
+             var defaultValue_1 = tooltipStyles.legend.defaultValue;
++            // PATCH: see createLegendValueStats
++            var reserves_1 = this._figureLegendReserves(indicator, defaultValue_1, formatter, decimalFold, thousandsSeparator);
+             eachFigures(indicator, dataIndex, barSpace, styles, function (figure, figureStyles) {
+                 if (isString(figure.title)) {
+                     var color = figureStyles.color;
+@@ -8636,7 +8793,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+                         }
+                         value = decimalFold.format(thousandsSeparator.format(value));
+                     }
+-                    legends.push({ title: { text: figure.title, color: color }, value: { text: (value !== null && value !== void 0 ? value : defaultValue_1), color: color } });
++                    legends.push({ title: { text: figure.title, color: color }, value: { text: (value !== null && value !== void 0 ? value : defaultValue_1), color: color, reserve: reserves_1[figure.key] } });
+                 }
+             });
+             tooltipData.legends = legends;
+@@ -9859,7 +10016,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
+             prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[0], coordinate, null, left, prevRowHeight, maxWidth);
+             prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[1], coordinate, null, left, prevRowHeight, maxWidth);
+             if (legends.length > 0) {
+-                prevRowHeight = this.drawStandardTooltipLegends(ctx, legends, coordinate, left, prevRowHeight, maxWidth, tooltipLegendStyles);
++                // PATCH: slotted -- see createLegendValueStats
++                prevRowHeight = this.drawStandardTooltipLegends(ctx, legends, coordinate, left, prevRowHeight, maxWidth, tooltipLegendStyles, 'candle');
+             }
+             prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[2], coordinate, null, left, prevRowHeight, maxWidth);
+         }
+@@ -10081,6 +10239,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
+         var prevClose = (_d = prev === null || prev === void 0 ? void 0 : prev.close) !== null && _d !== void 0 ? _d : current.close;
+         var changeValue = current.close - prevClose;
+         var mapping = __assign(__assign({}, current), { time: formatter.formatDate(current.timestamp, PeriodTypeCrosshairTooltipFormat[(_e = period === null || period === void 0 ? void 0 : period.type) !== null && _e !== void 0 ? _e : 'day'], 'tooltip'), open: decimalFold.format(thousandsSeparator.format(formatPrecision(current.open, pricePrecision))), high: decimalFold.format(thousandsSeparator.format(formatPrecision(current.high, pricePrecision))), low: decimalFold.format(thousandsSeparator.format(formatPrecision(current.low, pricePrecision))), close: decimalFold.format(thousandsSeparator.format(formatPrecision(current.close, pricePrecision))), volume: decimalFold.format(thousandsSeparator.format(formatter.formatBigNumber(formatPrecision((_f = current.volume) !== null && _f !== void 0 ? _f : defaultValue, volumePrecision)))), turnover: decimalFold.format(thousandsSeparator.format(formatPrecision((_g = current.turnover) !== null && _g !== void 0 ? _g : defaultValue, pricePrecision))), change: prevClose === 0 ? defaultValue : "".concat(thousandsSeparator.format(formatPrecision(changeValue / prevClose * 100)), "%") });
++        // PATCH: see createLegendValueStats. Other keys (a raw bar field) reserve their current text.
++        var reserveMapping = __assign(__assign({}, mapping), this._candleLegendReserves(dataList, formatter, decimalFold, thousandsSeparator, pricePrecision, volumePrecision, defaultValue, PeriodTypeCrosshairTooltipFormat[(_e = period === null || period === void 0 ? void 0 : period.type) !== null && _e !== void 0 ? _e : 'day']));
+         var legends = (isFunction(template)
+             ? template({ prev: prev, current: current, next: (_h = dataList[dataIndex + 1]) !== null && _h !== void 0 ? _h : null }, styles)
+             : template);
+@@ -10104,10 +10264,62 @@ var CandleTooltipView = /** @class */ (function (_super) {
+             if (isValid(/{change}/.exec(v.text))) {
+                 v.color = changeValue === 0 ? styles.priceMark.last.noChangeColor : (changeValue > 0 ? styles.priceMark.last.upColor : styles.priceMark.last.downColor);
+             }
++            // PATCH: a template's own `reserve` wins; otherwise its placeholders against the widest
++            if (!isString(v.reserve)) {
++                v.reserve = formatTemplateString(v.text, reserveMapping);
++            }
+             v.text = formatTemplateString(v.text, mapping);
+             return { title: t, value: v };
+         });
+     };
++    // PATCH: the widest text each field of the legend mapping can show over the bars held,
++    // formatted exactly as _getCandleTooltipLegends formats the bar at the crosshair. Recomputed
++    // only when the bars change -- a live tick moves the last bar, a page of history the first --
++    // and reused by every crosshair move in between.
++    CandleTooltipView.prototype._candleLegendReserves = function (dataList, formatter, decimalFold, thousandsSeparator, pricePrecision, volumePrecision, defaultValue, timeFormat) {
++        var first = dataList[0];
++        var last = dataList[dataList.length - 1];
++        if (!isValid(first) || !isValid(last)) {
++            return {};
++        }
++        var signature = [dataList.length, first.timestamp, last.timestamp, last.high, last.low, last.close, last.volume, last.turnover, pricePrecision, volumePrecision, defaultValue, timeFormat, thousandsSeparator.sign, decimalFold.threshold].join('\0');
++        if (this._candleReserveSignature === signature) {
++            return this._candleReserves;
++        }
++        var price = createLegendValueStats();
++        var volume = createLegendValueStats();
++        var turnover = createLegendValueStats();
++        var change = createLegendValueStats();
++        for (var i = 0; i < dataList.length; i++) {
++            var bar = dataList[i];
++            // open and close lie within [low, high]
++            addLegendValue(price, bar.high, defaultValue);
++            addLegendValue(price, bar.low, defaultValue);
++            addLegendValue(volume, bar.volume, defaultValue);
++            addLegendValue(turnover, bar.turnover, defaultValue);
++            var prevClose = i > 0 ? dataList[i - 1].close : bar.close;
++            if (prevClose === 0) {
++                change.other = longerText(change.other, defaultValue);
++            }
++            else {
++                addLegendValue(change, (bar.close - prevClose) / prevClose * 100, defaultValue);
++            }
++        }
++        var formatPrice = function (value) { return decimalFold.format(thousandsSeparator.format(formatPrecision(value, pricePrecision))); };
++        var widestPrice = widestLegendValue(price, formatPrice, false);
++        this._candleReserves = {
++            time: longerText(formatter.formatDate(first.timestamp, timeFormat, 'tooltip'), formatter.formatDate(last.timestamp, timeFormat, 'tooltip')),
++            open: widestPrice,
++            high: widestPrice,
++            low: widestPrice,
++            close: widestPrice,
++            volume: widestLegendValue(volume, function (value) { return decimalFold.format(thousandsSeparator.format(formatter.formatBigNumber(formatPrecision(value, volumePrecision)))); }, true),
++            turnover: widestLegendValue(turnover, formatPrice, false),
++            change: widestLegendValue(change, function (value) { return "".concat(thousandsSeparator.format(formatPrecision(value)), "%"); }, false)
++        };
++        this._candleReserveSignature = signature;
++        return this._candleReserves;
++    };
+     return CandleTooltipView;
+ }(IndicatorTooltipView));
+ 
