@@ -57,6 +57,55 @@ the way he labels lines (`2026 open`, `Q3 open`, `Aug high`, `last week mid`, `p
 Two prices that agree are one line, kept under the coarser unit's name (`dedupeLevels`): at a year
 boundary the yearly, quarterly, monthly and weekly opens are all the same number.
 
+## The other family: Heath levels (`TT:heathlevels`)
+
+A second template in the same plugin, and a different kind of line. The calendar map above is
+§3.4; this is **§3.2, supply and demand** — what his community named "Heath levels", and the
+half of the method that is about one candle rather than one calendar period:
+
+> I only draw my supply and demand zones with a **single line at the open**… because I like to
+> keep my charts neat. Also this gives me pinpoint accuracy when taking my entries, giving me
+> the ability to have the smallest stop loss distance to increase position size. — #73
+
+| | |
+|---|---|
+| **supply** (above price) | the **open** of the last **up-close** candle before a sell-off |
+| **demand** (below price) | the **open** of the last **down-close** candle before a rally |
+| stop | above the wick **high** (supply) or below the wick **low** (demand) of that same candle |
+| worth | "a **fresh, untested** level is worth far more than one price has already visited" |
+
+Two words in that definition have to be made mechanical, and both are parameters rather than
+opinions buried in the code. **"Before a turn"** is a swing top or bottom, found with the same
+rule the chart's own Tops and Bottoms indicator uses (`swingMask`, `left`/`right`) — so a level
+is knowable only `right` bars after the candle that made it. **"The last opposite-colour
+candle"** is searched backwards from the turn, the turn's own candle included (a rally's final
+candle usually *is* the up-close one), and bounded by `LOOKBACK`: with nothing of that colour
+within 20 bars there is no level, rather than an arbitrary one.
+
+A level's life, all of it forward-looking: **armed** once price has left it (a close on the far
+side — without which the sell-off that created a supply would instantly "test" it, since the
+line is that candle's own open), **tested** the first time a later bar's range reaches back to
+it, **broken** the first time a candle closes beyond the stop. It dies where the trade would
+have, which is the point of putting the stop there.
+
+Drawn: a horizontal line from its origin candle, **dashed until the swing is confirmed** (that
+stretch exists in hindsight only, and dashing it is the difference between showing the method
+and flattering it), solid after, dimmed once tested, ending at the candle that closed through
+the stop. Live levels are named at the right edge — `supply`, `demand · tested`. Params:
+`[left, right, sides, fresh only, stop line]`, default `[5, 5, 0, 0, 0]`.
+
+It reads **nothing** — not even daily bars — so the plugin registers it and deliberately does
+not `match` it: an unmatched template is left to klinecharts, which is all it wants.
+
+**It does not feed the entries.** `TT:entries` trades the calendar map only. The method's own
+setups do reach for these (§7 setup 1 pulls back "into a level"), so wiring them in is a real
+option — but it changes which trades appear, so it is a decision rather than a detail.
+
+Not implemented from §3: the close-based support and resistance of **§3.1** (the highest
+bullish close / the lowest bearish close), and the intra-trend counter-trend levels of **§3.3**.
+The note that "one candle can be both — its open is demand, its close is support" belongs to
+§3.1 and arrives with it.
+
 ## Where the levels come from
 
 A calendar candle is the sessions it holds, and a session comes from the **instrument's own
@@ -145,7 +194,8 @@ entry and stop prices at the crosshair bar.
 
 ## Tests
 
-`bun test client/tradetalk` — `calendar.test.ts` (session dating on all three geometries, period
+`bun test client/tradetalk` — `heathlevels.test.ts` (the supply/demand definition on both
+sides, the origin walk-back, arming/testing/breaking, prefix invariance), `calendar.test.ts` (session dating on all three geometries, period
 folding, the labels, the EMA), `rules.test.ts` (the worked stop-run, every refusal, the filters,
 prefix invariance, the bar that reaches both), `plugin.test.ts` (the clock, the daily window, the
 parameters, the corner summary).
