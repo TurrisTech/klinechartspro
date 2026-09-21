@@ -2,7 +2,7 @@ import { registerIndicator, type IndicatorTemplate, type KLineData } from 'kline
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import { heathLevels, isLive, type HeathLevel, type HeathLevelSettings } from './heathlevels'
 
-// TT:heathlevels -- "Heath levels", the method's supply and demand lines (dossier §3.2), drawn
+// TT:heathlevels -- "Heath levels", the method's supply and demand lines (dossier §3), drawn
 // on the price pane from the bars the pane already holds. Nothing is fetched: a Heath level is
 // a statement about one candle, so the chart has everything it needs.
 //

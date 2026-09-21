@@ -8,7 +8,8 @@ bars**, off `/getbars` (and the chart tiles in front of it). **No server change 
 The method it implements is the dossier built from the channel's complete long-form archive
 (237 videos, 2020-11 → 2026-08): `/workspace/notes/research/tradetalk-heath-method.md`, published
 at <https://claude.ai/code/artifact/2f402fe4-1f56-4eaf-b6f4-caa263d328d3>. Section numbers below
-are that document's. **Nothing in the method is validated** — every performance claim in the
+are that document's as revised on 2026-09-21, when Heath levels became its section 3 and every
+later section moved down one. **Nothing in the method is validated** — every performance claim in the
 corpus is self-reported — and this indicator does not validate it either. It shows what the rules
 say, faithfully, so the rules can be looked at.
 
@@ -16,12 +17,12 @@ say, faithfully, so the rules can be looked at.
 
 Two of his five setups share one mechanic, so they are one rule here:
 
-> **Setup 2, "his favourite" (§7)** — Price runs *below* a swing low or support, triggering sell
+> **Setup 2, "his favourite" (§8)** — Price runs *below* a swing low or support, triggering sell
 > stops. That candle *closes back above* the level. Enter when the **high of the stop-run candle**
 > is taken out. Stop below the **low of the stop-run candle** — *"if price goes back down to those
 > lows then it is continuation and not a stop run."*
 
-> **Setup 1, the CTM entry (§7)** — Wait for a pullback into a level *in the direction of trend*;
+> **Setup 1, the CTM entry (§8)** — Wait for a pullback into a level *in the direction of trend*;
 > wait for price to show it will trade away — *"wicks through the level, bodies closing on the
 > right side"*; enter when a candle takes out the high of the last counter-trend candle; stop below
 > its low; target the next opposing level, minimum 2:1.
@@ -34,15 +35,15 @@ So, on every bar:
 | which level | the coarsest unit swept, then the more significant kind, then the nearest to the close | `pickLevel` |
 | entry | a stop order at the signal candle's extreme, filled when a **later** bar takes it out (strictly — "takes out" is the same test his *trending candle* is defined by), at the trigger or at the open if the bar gapped past it | the order loop in `computeTradeTalk` |
 | stop | the signal candle's other extreme | same |
-| target | "the next opposing level", or the high/low of the day when that is nearer (§8); with nothing beyond, the minimum reward stands in and the label says `no level` (at an all-time high he switches to Fibonacci extensions, which this does not draw) | `nextTarget` |
-| refuse | reward:risk under the minimum — *"if the geometry doesn't give you 2:1, there is no trade"* (§9) | `signalAt` |
-| half size | another objective level sits between entry and stop, "because price usually runs it first" (§9) | `signalAt` |
+| target | "the next opposing level", or the high/low of the day when that is nearer (§9); with nothing beyond, the minimum reward stands in and the label says `no level` (at an all-time high he switches to Fibonacci extensions, which this does not draw) | `nextTarget` |
+| refuse | reward:risk under the minimum — *"if the geometry doesn't give you 2:1, there is no trade"* (§10) | `signalAt` |
+| half size | another objective level sits between entry and stop, "because price usually runs it first" (§10) | `signalAt` |
 | cancel | price goes back through the signal candle's other extreme before the order fills — that was continuation | the order loop |
-| one at a time | no new entry while a position is open — *"one trade a day is enough"* (§9) | the order loop |
-| bias | *"the daily 21 EMA is the day-trade bias switch"*; above/below the **yearly open** is the structural bias (§3.4, §5) | `biasOf`, `yearOpen` |
-| hours | *"nothing after 11:00 a.m. ET"*, no Asian session, no weekends (§8, §13) — applied to the bar that would FILL, and only on charts of an hour or less | `inTradingWindow` |
+| one at a time | no new entry while a position is open — *"one trade a day is enough"* (§10) | the order loop |
+| bias | *"the daily 21 EMA is the day-trade bias switch"*; above/below the **yearly open** is the structural bias (§4.3, §6) | `biasOf`, `yearOpen` |
+| hours | *"nothing after 11:00 a.m. ET"*, no Asian session, no weekends (§9, §14) — applied to the bar that would FILL, and only on charts of an hour or less | `inTradingWindow` |
 
-**The level map (§3.4)** is his mature framework: *"for each of yearly, quarterly, monthly, weekly,
+**The level map (§4.3)** is his mature framework: *"for each of yearly, quarterly, monthly, weekly,
 daily he marks five data points: open, high, low, close and midpoint"*. Per unit this draws **the
 open of the period in progress** and **the high, low and midpoint of the one before it**, labelled
 the way he labels lines (`2026 open`, `Q3 open`, `Aug high`, `last week mid`, `prev day low`) —
@@ -52,7 +53,7 @@ the way he labels lines (`2026 open`, `Q3 open`, `Aug high`, `last week mid`, `p
   second line on one price;
 - **the developing high and low of the period in progress** — price is *at* them by definition
   whenever it makes a new one, which is not a line to trade against. The day's running high and
-  low are used, but as **targets**, which is what §8 uses them for.
+  low are used, but as **targets**, which is what §9 uses them for.
 
 Two prices that agree are one line, kept under the coarser unit's name (`dedupeLevels`): at a year
 boundary the yearly, quarterly, monthly and weekly opens are all the same number.
@@ -60,7 +61,7 @@ boundary the yearly, quarterly, monthly and weekly opens are all the same number
 ## The other family: Heath levels (`TT:heathlevels`)
 
 A second template in the same plugin, and a different kind of line. The calendar map above is
-§3.4; this is **§3.2, supply and demand** — what his community named "Heath levels", and the
+§4.3; this is **§3, supply and demand** — what his community named "Heath levels", and the
 half of the method that is about one candle rather than one calendar period:
 
 > I only draw my supply and demand zones with a **single line at the open**… because I like to
@@ -118,14 +119,22 @@ it existed reads the default rather than zero.
 It reads **nothing** — not even daily bars — so the plugin registers it and deliberately does
 not `match` it: an unmatched template is left to klinecharts, which is all it wants.
 
+**Where the chart is more lenient than he is.** The study's §3.8 maps every rule to its source,
+re-read from all 227 captioned videos on 2026-09-21. Two readings here are deliberately the looser
+of his: a level counts once price **closes clear of the body**, where his worked examples wait for a
+close beyond the origin candle's **low** (supply) or **high** (demand) (#73, #64, #158); and it is
+scrapped by a body crossing the **far** edge (#145), where on hourly charts drawn from the single
+line he scraps it on a close through **the open** itself (#93, #94). Either is a one-line change if
+the stricter reading is wanted.
+
 **It does not feed the entries.** `TT:entries` trades the calendar map only. The method's own
-setups do reach for these (§7 setup 1 pulls back "into a level"), so wiring them in is a real
+setups do reach for these (§8 setup 1 pulls back "into a level"), so wiring them in is a real
 option — but it changes which trades appear, so it is a decision rather than a detail.
 
-Not implemented from §3: the close-based support and resistance of **§3.1** (the highest
-bullish close / the lowest bearish close), and the intra-trend counter-trend levels of **§3.3**.
+Not implemented from §4 of the study: the close-based support and resistance of **§4.1** (the highest
+bullish close / the lowest bearish close), and the intra-trend counter-trend levels of **§4.2**.
 The note that "one candle can be both — its open is demand, its close is support" belongs to
-§3.1 and arrives with it.
+§4.1 and arrives with it.
 
 ## Where the levels come from
 
@@ -157,7 +166,7 @@ identically, in a run over the bars up to its own entry. A rule that peeked woul
 
 | # | parameter | default | values |
 |---|---|---|---|
-| 1 | minimum reward:risk | 2 | his own floor (§9) |
+| 1 | minimum reward:risk | 2 | his own floor (§10) |
 | 2 | bias | 1 | 0 none, 1 the daily 21 EMA, 2 the daily 21 EMA **and** the yearly open agreeing |
 | 3 | hours | 1 | 0 any, 1 03:00–11:00 New York (London through the New York morning), 2 07:00–11:00 |
 | 4 | entry order lives for | 5 bars | he states no expiry; this is the one invented number, and it is a parameter |
@@ -186,11 +195,11 @@ entry and stop prices at the crosshair bar.
   trip measured in `notes/research/brk01/` is **2.05–2.34 pips**, and several 1h signals here have
   stops under 4 pips. The R multiples drawn are gross.
 - **His exits.** He takes two thirds off at the first target and runs the rest from break-even
-  (§8). A trade here ends at its first target, whole.
+  (§9). A trade here ends at its first target, whole.
 - **Discretion.** *"Wait for price to show it will trade away"* is a judgement; the body-close test
   is the mechanical half of it.
-- The **news liquidation break** (§7 setup 3), the **currency-strength pair selection** (§8), the
-  **options and hedging layer** (§10) and position sizing in cash (§9).
+- The **news liquidation break** (§8 setup 3), the **currency-strength pair selection** (§9), the
+  **options and hedging layer** (§11) and position sizing in cash (§10).
 
 ## Traps, for whoever edits this
 
