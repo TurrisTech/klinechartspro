@@ -6,17 +6,19 @@ import { heathLevels, isLive, type HeathLevel, type HeathLevelSettings } from '.
 // on the price pane from the bars the pane already holds. Nothing is fetched: a Heath level is
 // a statement about one candle, so the chart has everything it needs.
 //
-// A level is drawn from the candle whose open it is. Until the swing that defines it is
-// confirmed -- `right` bars later -- the segment is DASHED: that is the stretch where the line
-// exists in hindsight only, and dashing it is the difference between showing the method and
-// flattering it. Solid from the confirming bar, dimmed once price has been back to it ("a
-// fresh, untested level is worth far more"), and it stops at the candle that closes through
-// the stop.
+// A level is an AREA, shaded: the line (the candle's open) is one edge and the stop (its wick)
+// is the other. It is drawn from the candle it belongs to. Until the swing that defines it is
+// confirmed -- `right` bars later -- the line is DASHED: that is the stretch where it exists in
+// hindsight only, and dashing it is the difference between showing the method and flattering
+// it. Solid from the confirming bar, dimmed once price has been back into the area ("a fresh,
+// untested level is worth far more"), and gone at the first candle that passes entirely
+// through it.
 
 export const TEMPLATE_NAME = 'TT:heathlevels'
 
-/** [left, right, sides, fresh only, stop line]. */
-export const DEFAULT_PARAMS = [5, 5, 0, 0, 0]
+/** [left, right, sides, fresh only, stop line, fill]. `fill` was appended rather than
+ * replacing anything, so a layout saved before it existed reads the default. */
+export const DEFAULT_PARAMS = [5, 5, 0, 0, 0, 12]
 
 function numberAt(calcParams: unknown[] | undefined, at: number, fallback: number): number {
   const raw = calcParams?.[at]
@@ -24,14 +26,20 @@ function numberAt(calcParams: unknown[] | undefined, at: number, fallback: numbe
   return Number.isFinite(value) ? value : fallback
 }
 
-export function settingsOf(calcParams: unknown[] | undefined): HeathLevelSettings {
+export interface ChartSettings extends HeathLevelSettings {
+  /** Opacity of the shaded area, in percent. 0 draws the edges only. */
+  fill: number
+}
+
+export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
   const sides = Math.min(2, Math.max(0, Math.round(numberAt(calcParams, 2, DEFAULT_PARAMS[2]))))
   return {
     left: Math.min(200, Math.max(1, Math.round(numberAt(calcParams, 0, DEFAULT_PARAMS[0])))),
     right: Math.min(200, Math.max(1, Math.round(numberAt(calcParams, 1, DEFAULT_PARAMS[1])))),
     sides: sides as HeathLevelSettings['sides'],
     freshOnly: Math.round(numberAt(calcParams, 3, DEFAULT_PARAMS[3])) !== 0,
-    stopLine: Math.round(numberAt(calcParams, 4, DEFAULT_PARAMS[4])) !== 0
+    stopLine: Math.round(numberAt(calcParams, 4, DEFAULT_PARAMS[4])) !== 0,
+    fill: Math.min(100, Math.max(0, numberAt(calcParams, 5, DEFAULT_PARAMS[5])))
   }
 }
 
@@ -43,7 +51,7 @@ export interface HeathValue {
 
 /** What the corner says when there is nothing to draw -- a silent pane and a broken one look
  * the same otherwise. */
-export function emptyText(bars: number, settings: HeathLevelSettings): string {
+export function emptyText(bars: number, settings: ChartSettings): string {
   if (bars === 0) return 'Heath levels · no bars'
   if (bars <= settings.left + settings.right) return `Heath levels · needs more than ${settings.left + settings.right} bars`
   return settings.freshOnly ? 'Heath levels · none untested in view' : 'Heath levels · no turn in view'
@@ -121,9 +129,18 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           const color = level.side === 'supply' ? downColor : upColor
           const alpha = level.testedIndex === null ? FRESH_ALPHA : TESTED_ALPHA
           const y = yAxis.convertToPixel(level.price)
+          const yStop = yAxis.convertToPixel(level.stop)
           const xStart = xAxis.convertToPixel(level.originIndex) - pitch / 2
           const xConfirm = xAxis.convertToPixel(Math.min(level.confirmIndex, lastIndex))
           const xEnd = xAxis.convertToPixel(lastIndex) + pitch / 2
+
+          // The area itself: open to wick, the two prices the method names. A tested area is
+          // shaded at half strength, the same statement the line makes.
+          if (settings.fill > 0) {
+            ctx.globalAlpha = (settings.fill / 100) * (level.testedIndex === null ? 1 : 0.5)
+            ctx.fillStyle = color
+            ctx.fillRect(xStart, Math.min(y, yStop), Math.max(1, xEnd - xStart), Math.max(1, Math.abs(yStop - y)))
+          }
 
           ctx.strokeStyle = color
           ctx.globalAlpha = alpha
@@ -135,12 +152,12 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           ctx.setLineDash([])
           if (xEnd > xConfirm) line(ctx, xConfirm, xEnd, y)
 
-          if (settings.stopLine) {
-            ctx.globalAlpha = STOP_ALPHA
-            ctx.setLineDash([1, 2])
-            line(ctx, xStart, xEnd, yAxis.convertToPixel(level.stop))
-            ctx.setLineDash([])
-          }
+          // The far edge is the stop. Always drawn faintly -- it is where the area ends and
+          // what a candle has to cover to erase it -- and emphasised when asked for.
+          ctx.globalAlpha = settings.stopLine ? alpha * 0.8 : STOP_ALPHA
+          ctx.setLineDash([1, 2])
+          line(ctx, xStart, xEnd, yStop)
+          ctx.setLineDash([])
 
           // Only a level still standing at the right edge is named there.
           if (isLive(level, to) && y > 8 && y < bounding.height - 16) {
@@ -176,7 +193,8 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       { paramNameKey: 'Bars after a turn (confirmation)', precision: 0, min: 1, max: 200, default: DEFAULT_PARAMS[1] },
       { paramNameKey: 'Draw: 0 both, 1 supply, 2 demand', precision: 0, min: 0, max: 2, default: DEFAULT_PARAMS[2] },
       { paramNameKey: 'Fresh (untested) only (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[3] },
-      { paramNameKey: 'Draw the stop line (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[4] }
+      { paramNameKey: 'Emphasise the stop edge (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[4] },
+      { paramNameKey: 'Shading opacity %', precision: 0, min: 0, max: 100, default: DEFAULT_PARAMS[5] }
     ])
     registered = true
   }
@@ -185,7 +203,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       name: TEMPLATE_NAME,
       label: 'Heath levels (supply & demand)',
       description:
-        'Supply and demand the way the TradeTalk method draws them: a single line at the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand) — with the stop at that candle’s wick. Dashed until the swing that defines it is confirmed, dimmed once price has been back to it, and gone once a candle closes through the stop. Params: bars before / after a turn, which side, fresh only, stop line.'
+        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand) — as a line, with the area between it and that candle’s wick (where the stop goes) shaded. Dashed until the swing that defines it is confirmed, dimmed once price has been back into it, and erased when one candle passes entirely through it. Params: bars before / after a turn, which side, fresh only, stop edge, shading opacity.'
     }
   ]
 }
