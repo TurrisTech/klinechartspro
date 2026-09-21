@@ -105,3 +105,23 @@ export function drawLabel(ctx: CanvasRenderingContext2D, x: number, y: number, t
   ctx.fillText(text, x, y)
   ctx.restore()
 }
+
+/** A straight line between two points -- a divergence's two swings -- drawn under the mark that
+ * goes with it, so the mark stays legible. */
+export function drawLink(
+  ctx: CanvasRenderingContext2D,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  color: string,
+  style: 'solid' | 'dashed'
+): void {
+  ctx.save()
+  ctx.lineWidth = 1.5
+  ctx.strokeStyle = color
+  ctx.setLineDash(style === 'dashed' ? [4, 3] : [])
+  ctx.beginPath()
+  ctx.moveTo(from.x, from.y)
+  ctx.lineTo(to.x, to.y)
+  ctx.stroke()
+  ctx.restore()
+}
