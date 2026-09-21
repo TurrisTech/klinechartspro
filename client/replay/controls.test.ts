@@ -44,7 +44,9 @@ interface Fake {
   }
   /** What the controller's own change notification does: every listener re-renders. */
   emit(): void
-  listeners: Set<() => void>
+  /** A walk's progress report: only `walkedTo` moved. */
+  emitWalk(): void
+  listeners: Set<(change?: 'walk') => void>
 }
 
 function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
@@ -52,10 +54,13 @@ function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
 }
 
 function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
-  const listeners = new Set<() => void>()
+  const listeners = new Set<(change?: 'walk') => void>()
   const calls: Fake['calls'] = { step: 0, nextSignal: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
   const emit = (): void => {
     for (const l of [...listeners]) l()
+  }
+  const emitWalk = (): void => {
+    for (const l of [...listeners]) l('walk')
   }
   const controller: Mutable<ReplayController> = {
     cursor: Date.UTC(2024, 2, 4, 14, 0),
@@ -64,6 +69,8 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
     pauseOnFill: false,
     busy: false,
     cancelling: false,
+    advanceFrom: null,
+    walkedTo: null,
     lastStop: null,
     signals: new SignalBook(entries, { points: async () => [] }),
     armedStops: 0,
@@ -110,7 +117,7 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
       calls.persist++
     }
   }
-  return { controller, calls, emit, listeners }
+  return { controller, calls, emit, emitWalk, listeners }
 }
 
 interface Mounted extends Fake {
@@ -254,6 +261,32 @@ describe('the title bar', () => {
     expect(m.button('Exit').disabled).toBe(false)
   })
 
+  test('while an advance runs, the clock shows where it started, never where the walk has got', () => {
+    const m = mount()
+    const clock = (): HTMLElement => m.q('.wd-replay-clock-value') as HTMLElement
+    const from = m.controller.cursor
+    m.controller.busy = true
+    m.controller.advanceFrom = from
+    m.emit()
+    // Mid-walk the session has moved the cursor days ahead of anything drawn; the title bar
+    // re-renders (here: Stop pressed) and must still read the chart's position.
+    const walked = from + 5 * 24 * H
+    m.controller.cursor = walked
+    m.controller.walkedTo = walked
+    m.button('Stop').click()
+    expect(clock().textContent).toBe(formatInstant(from))
+    expect(clock().title).toBe(new Date(from).toISOString())
+    expect(clock().textContent).not.toBe(formatInstant(walked))
+
+    // Landed: the chart is at the cursor now, and so is the clock.
+    m.controller.busy = false
+    m.controller.cancelling = false
+    m.controller.advanceFrom = null
+    m.controller.walkedTo = null
+    m.emit()
+    expect(clock().textContent).toBe(formatInstant(walked))
+  })
+
   test('Exit leaves', () => {
     const m = mount()
     m.button('Exit').click()
@@ -342,6 +375,51 @@ describe('the status line', () => {
   test('is absent until an advance has stopped', () => {
     const m = mount()
     expect(m.q('.wd-replay-stop-reason')).toBeNull()
+    expect(m.q('.wd-replay-walk')).toBeNull()
+  })
+
+  test('while a walk runs, says how far it has got -- in place of the last stop, patched per report', () => {
+    const m = mount()
+    const from = m.controller.cursor
+    m.controller.lastStop = result({ reason: 'target', walked: true, bars: [{}] as never })
+    m.emit()
+    m.controller.busy = true
+    m.controller.advanceFrom = from
+    m.emit()
+    // Busy but not walking yet (still planning, or a seek): the last stop stays.
+    expect(m.q('.wd-replay-walk')).toBeNull()
+    expect((m.q('.wd-replay-stop-reason') as HTMLElement).textContent).toBe('Advanced 1 bar')
+
+    // The first report: there is no line to patch yet, so the window renders it.
+    const first = from + 26 * H
+    m.controller.walkedTo = first
+    m.emitWalk()
+    const line = m.q('.wd-replay-walk') as HTMLElement
+    expect(line.textContent).toBe(`Walking… reached ${formatInstant(first)}`)
+    expect(line.title).toContain(new Date(first).toISOString())
+    expect(line.title).toContain('The chart and the clock move when it stops')
+    // The stale reason is gone, and the clock still reads the start.
+    expect(m.q('.wd-replay-stop-reason')).toBeNull()
+    expect((m.q('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatInstant(from))
+
+    // Later reports patch the one line: the Stop button is the SAME element, so a press on it
+    // is not released onto a replacement (which would be no click at all).
+    const stop = m.button('Stop')
+    const later = from + 9 * 24 * H
+    m.controller.walkedTo = later
+    m.emitWalk()
+    expect(m.q('.wd-replay-walk')).toBe(line)
+    expect(line.textContent).toBe(`Walking… reached ${formatInstant(later)}`)
+    expect(m.button('Stop')).toBe(stop)
+
+    // Ended: the reach goes and why it stopped comes back.
+    m.controller.busy = false
+    m.controller.advanceFrom = null
+    m.controller.walkedTo = null
+    m.controller.lastStop = result({ reason: 'cancel', walked: true, bars: [{}, {}] as never })
+    m.emit()
+    expect(m.q('.wd-replay-walk')).toBeNull()
+    expect((m.q('.wd-replay-stop-reason') as HTMLElement).textContent).toBe('Stopped by you after 2 bars')
   })
 
   for (const [name, stop, text] of reasons) {
