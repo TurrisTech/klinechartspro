@@ -297,11 +297,28 @@ describe('no lookahead', () => {
 
 describe('the chart half', () => {
   test('the defaults are the ones the picker offers', () => {
-    expect(settingsOf(DEFAULT_PARAMS)).toEqual({ left: 5, right: 5, sides: 0, freshOnly: false, stopLine: false, fill: 12 })
+    expect(settingsOf(DEFAULT_PARAMS)).toEqual({
+      left: 5,
+      right: 5,
+      sides: 0,
+      freshOnly: false,
+      stopLine: false,
+      fill: 12,
+      calendar: true
+    })
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
-    expect(settingsOf([0, 999, 7, 1, 1, 200])).toEqual({ left: 1, right: 200, sides: 2, freshOnly: true, stopLine: true, fill: 100 })
-    // A layout saved before the shading parameter existed reads its default, not zero.
+    expect(settingsOf([0, 999, 7, 1, 1, 200, 0])).toEqual({
+      left: 1,
+      right: 200,
+      sides: 2,
+      freshOnly: true,
+      stopLine: true,
+      fill: 100,
+      calendar: false
+    })
+    // Layouts saved before the shading and calendar parameters existed read their defaults.
     expect(settingsOf([5, 5, 0, 0, 0]).fill).toBe(12)
+    expect(settingsOf([5, 5, 0, 0, 0, 12]).calendar).toBe(true)
   })
 
   test('a level says whether price has been back to it', () => {

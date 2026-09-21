@@ -116,8 +116,21 @@ and flattering it). Everything dims once tested. Live levels are named at the ri
 default `[5, 5, 0, 0, 0, 12]`; the shading parameter was **appended**, so a layout saved before
 it existed reads the default rather than zero.
 
-It reads **nothing** — not even daily bars — so the plugin registers it and deliberately does
-not `match` it: an unmatched template is left to klinecharts, which is all it wants.
+**The calendar levels, optionally underneath** (2026-09-21). A seventh parameter,
+`calendar` (0/1, default on), lays the objective calendar map of TradeTalk entries under the
+supply and demand — the yearly, quarterly, monthly, weekly and daily opens and the previous
+period's high, low and midpoint. It is **the same map**, computed by the one function both
+indicators call (`levelMap` in `rules.ts`) and drawn by the one module (`levelmap.ts`), so the two
+indicators can never disagree about a line. The calendar lines sit *under* the zones, and the
+right-hand labels share one collision list: supply and demand are named first, the calendar levels
+fill whatever room is left. The parameter was appended, so a layout saved before it existed reads
+it as on.
+
+That half needs daily bars, which is why Heath levels is now **bound by the plugin host** like
+TradeTalk entries. With the switch off its binding has **no sources** and reads nothing at all;
+calcParams are part of a binding's identity, so flipping the switch rebinds. The legend says what
+the calendar half is waiting for (`Heath levels · calendar levels loading`, `… no schedule for
+calendar levels`) and says nothing extra when it is off.
 
 **Where the chart is more lenient than he is.** The study's §3.8 maps every rule to its source,
 re-read from all 227 captioned videos on 2026-09-21. Two readings here are deliberately the looser

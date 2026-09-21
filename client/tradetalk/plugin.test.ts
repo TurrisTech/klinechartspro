@@ -3,9 +3,10 @@ import { installWindow } from '../plugins/testing'
 
 installWindow()
 const { dailyWindow } = await import('./api')
-const { clockFor, isSessionDated } = await import('./plugin')
+const { clockFor, createTradeTalkPlugin, isSessionDated } = await import('./plugin')
 const { DEFAULT_PARAMS, settingsOf, summaryText, tradeLabel } = await import('./templates')
 import type { SymbolInfo } from '../../src'
+import type { BindContext, BindingState, PluginFacilities } from '../plugins/types'
 import type { Trade } from './rules'
 
 const SYMBOL = {
@@ -92,5 +93,57 @@ describe('the label on an entry', () => {
       halfSize: true
     } as Trade
     expect(tradeLabel(trade)).toBe('L Aug low › week open 2.4R ½')
+  })
+})
+
+describe('the binding', () => {
+  const plugin = createTradeTalkPlugin()
+  plugin.register({ resolutionDurationMs: () => 3_600_000 } as unknown as PluginFacilities)
+  const ctx = (name: string, calcParams: number[], symbol: SymbolInfo = SYMBOL): BindContext =>
+    ({
+      chart: {},
+      pane: {},
+      paneIndex: 0,
+      indicator: { name, calcParams },
+      symbol,
+      vendor: 'oanda',
+      ticker: 'EURUSD',
+      interval: '1h',
+      siblings: []
+    }) as unknown as BindContext
+  const state = (phase: string | null): BindingState =>
+    ({ sources: phase === null ? [] : [{ id: 'daily', key: 'k', store: { phase } }], chartInterval: '1h' }) as unknown as BindingState
+
+  test('both templates are this plugin\'s, and nothing else is', () => {
+    expect(plugin.matches('TT:entries')).toBe(true)
+    expect(plugin.matches('TT:heathlevels')).toBe(true)
+    expect(plugin.matches('SWING')).toBe(false)
+  })
+
+  test('Heath levels reads daily bars only while its calendar switch is on', () => {
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1]))?.sources).toHaveLength(1)
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 0]))?.sources).toHaveLength(0)
+    // A layout saved before the switch existed reads it as on.
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12]))?.sources).toHaveLength(1)
+  })
+
+  test('the legend says what the calendar levels are waiting for, and nothing when they are off', () => {
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1]))?.label(state('loading'))).toBe(
+      'Heath levels · calendar levels loading'
+    )
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1]))?.label(state('ready'))).toBe('Heath levels')
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 0]))?.label(state(null))).toBe('Heath levels')
+  })
+
+  test('an instrument with no schedule reads nothing and says why', () => {
+    const noSchedule = { ...SYMBOL, dayGeometry: undefined } as SymbolInfo
+    const binding = plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1], noSchedule))
+    expect(binding?.sources).toHaveLength(0)
+    expect(binding?.label(state(null))).toBe('Heath levels · no schedule for calendar levels')
+  })
+
+  test('TradeTalk entries always reads daily bars', () => {
+    expect(plugin.bind(ctx('TT:entries', [2, 1, 1, 5, 0, 1]))?.sources).toHaveLength(1)
+    expect(plugin.bind(ctx('TT:entries', [2, 1, 1, 5, 0, 1]))?.label(state('ready'))).toBe('TradeTalk')
   })
 })
