@@ -18,9 +18,15 @@ import type { Candle } from './calendar'
 //
 //   * a candle passes entirely THROUGH the area -- its whole range, wicks included, covering
 //     the band. A wick that reaches only part way in leaves the level live.
-//   * a later candle's BODY sits clear BEYOND it -- above a supply, below a demand. Price is
-//     trading past the level rather than at it, so it is no longer supply or demand. A WICK
-//     beyond the area does not count: that is the distinction the rule turns on.
+//   * a later candle's BODY CROSSES its far edge -- the top of a supply, the bottom of a
+//     demand (user, 2026-09-21). A WICK across that edge does not count: that is the
+//     distinction the rule turns on. The crossing is judged once the level has established
+//     itself -- price having closed clear of the area -- because otherwise the move that
+//     CREATES the level destroys it: measured on 20 days of dev EURUSD 1h, an ungated
+//     crossing rule killed 17 of 30 levels within two bars of their own candle, a median life
+//     of 2 bars against 16. A close past the far edge before the level ever established
+//     itself says the same thing as a crossing and ends it there and then, so a level price
+//     never left cannot outlive being traded through.
 //
 // Two things in that definition have to be made mechanical, and both are parameters rather
 // than opinions buried in code:
@@ -56,9 +62,9 @@ export interface HeathLevel {
   testedIndex: number | null
   /** First bar to erase the level. Null while it stands. */
   brokenIndex: number | null
-  /** How it was erased: a candle passing entirely `through` the area, or a body settling
-   * `beyond` it. Null while it stands. */
-  brokenBy: 'through' | 'beyond' | null
+  /** How it was erased: a candle passing entirely `through` the area, or a body `crossing`
+   * its far edge. Null while it stands. */
+  brokenBy: 'through' | 'crossed' | null
 }
 
 /** The shaded area: the origin candle's BODY, open to close. Always has height -- the origin
@@ -93,12 +99,13 @@ export function originOf(bars: readonly Candle[], turn: number, side: 'supply' |
  *
  * A level's life, after the origin candle: it is **armed** once price has closed clear of the
  * area, **tested** the first time a later bar's range reaches back INTO it, and **erased**
- * either by a candle passing entirely through it or by a body settling beyond it. Arming is
- * what stops the move that created the level from counting as its first test -- the area is
- * the origin candle's own body, so the bars around the turn are still standing in it, and the
- * departure would otherwise read as a return. The body-beyond rule needs no such guard: the
- * departure runs the other way (down from a supply, up from a demand), so a body beyond the
- * level is never the move that made it.
+ * either by a candle passing entirely through it or by a body crossing its far edge. Arming
+ * is what stops the move that created the level from counting against it -- the area is the
+ * origin candle's own body, so the bars around the turn are still standing in it: a return
+ * would read as a test, and a body poking over the edge on the way out would read as a
+ * crossing. Before a level is armed only a CLOSE past its far edge ends it, which is the same
+ * statement the crossing rule makes and leaves no way for a level to outlive being traded
+ * through.
  *
  * Nothing here reads a bar later than the one being judged.
  */
@@ -137,20 +144,26 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
     let armed = false
     for (let i = level.originIndex + 1; i < n; i++) {
       const bar = bars[i]
-      // A body clear beyond the level -- above a supply, below a demand -- ends it wherever
-      // in its life it happens, including before price has left the area. Bodies only: a
-      // wick beyond the level is exactly what this rule does not count.
       const bodyLow = Math.min(bar.open, bar.close)
       const bodyHigh = Math.max(bar.open, bar.close)
-      if (level.side === 'supply' ? bodyLow >= zone.high : bodyHigh <= zone.low) {
-        if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
-        level.brokenIndex = i
-        level.brokenBy = 'beyond'
-        break
-      }
       if (!armed) {
+        // Not established yet: only a CLOSE past the far edge ends it here, so the move that
+        // created the level cannot destroy it on its way out.
+        if (level.side === 'supply' ? bar.close > zone.high : bar.close < zone.low) {
+          level.brokenIndex = i
+          level.brokenBy = 'crossed'
+          break
+        }
         armed = level.side === 'supply' ? bar.close < zone.low : bar.close > zone.high
         continue
+      }
+      // A body across the far edge -- the top of a supply, the bottom of a demand. Bodies
+      // only: a wick across that edge is exactly what this rule does not count.
+      if (level.side === 'supply' ? bodyHigh > zone.high : bodyLow < zone.low) {
+        if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
+        level.brokenIndex = i
+        level.brokenBy = 'crossed'
+        break
       }
       // Reached back into the area at all.
       if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i

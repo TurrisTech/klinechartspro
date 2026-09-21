@@ -94,16 +94,17 @@ that candle's own body), **tested** the first time a later bar's range reaches b
 | | |
 |---|---|
 | **through** | one candle's *whole range*, wicks included, covers the area. A wick that reaches only **part way** in leaves it live (and marks it tested). |
-| **beyond** | a later candle's **body** sits clear above a supply or below a demand — price is trading past the level, so it is no longer supply or demand. A **wick** beyond the area does not count; that is the distinction the rule turns on. |
+| **crossed** | a later candle's **body crosses the far edge** — the top of a supply, the bottom of a demand. A **wick** across that edge does not count; that is the distinction the rule turns on. |
 
-The `beyond` rule needs no arming guard: the move that created the level runs the other way
-(down from a supply, up from a demand), so a body beyond it is never that move. A candle that
-gaps clean over the area ends it by this rule, though nothing passed *through* it.
+**The crossing is judged once the level has established itself** — once price has closed clear
+of the area. Without that guard the move that *creates* a level destroys it: measured over 20
+days of dev EURUSD 1h, an ungated crossing rule killed **17 of 30 levels within two bars of
+their own candle**, a median life of 2 bars against 16. The guard leaves no hole, because a
+**close** past the far edge ends a level even before it is established — that says the same
+thing a crossing says, so a level price never left cannot outlive being traded through.
 
-Measured over 20 days of dev EURUSD 1h: 42 levels, 25 erased `through`, **10 erased `beyond`**,
-7 still live. Two of the `beyond` ones checked by hand — a supply at 1.14665–1.14798 ended by a
-body of 1.14887–1.14912, and a demand at 1.16046–1.16172 by a body of 1.16017–1.16046 — neither
-of which any wick had covered.
+Measured over the same window: 42 levels, 13 erased `through`, **23 erased `crossed`**, 6 still
+live.
 
 Drawn: the body shaded from its origin candle, with the line (the open) solid along one edge
 and the close faint along the other; the stop is its own dotted line beyond the wick, drawn
