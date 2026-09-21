@@ -33,7 +33,7 @@ describe('supply', () => {
 
   test('is the OPEN of the last up-close candle before the sell-off', () => {
     expect(levels).toHaveLength(1)
-    expect(levels[0]).toMatchObject({ side: 'supply', originIndex: 3, turnIndex: 3, price: 12.3 })
+    expect(levels[0]).toMatchObject({ side: 'supply', originIndex: 3, turnIndex: 3, price: 12.3, close: 12.9 })
   })
 
   test('carries the stop at that candle\'s wick high', () => {
@@ -74,7 +74,7 @@ describe('demand', () => {
 
   test('is the OPEN of the last down-close candle before the rally, stop at its wick low', () => {
     expect(levels).toHaveLength(1)
-    expect(levels[0]).toMatchObject({ side: 'demand', originIndex: 3, price: 11.1, stop: 10 })
+    expect(levels[0]).toMatchObject({ side: 'demand', originIndex: 3, price: 11.1, close: 10.2, stop: 10 })
   })
 
   test('only one side is computed when the parameter asks for one', () => {
@@ -96,7 +96,7 @@ describe('the life of a level', () => {
   })
 
   test('one candle passing entirely through the area erases it', () => {
-    // The area is 12.3 (the open) to 13 (the wick). This candle's RANGE covers all of it.
+    // The area is the body, 12.3 (open) to 12.9 (close). This candle's RANGE covers all of it.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
@@ -112,7 +112,7 @@ describe('the life of a level', () => {
   })
 
   test('a wick covering only part of the area leaves it live', () => {
-    // High 12.8 is inside the 12.3-13 area, so the candle did not pass through it.
+    // High 12.8 is inside the 12.3-12.9 body, so the candle did not pass through it.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
@@ -126,7 +126,7 @@ describe('the life of a level', () => {
   })
 
   test('closing beyond the area is not enough on its own -- the candle has to trade through it', () => {
-    // Gaps over the whole area: it closes above 13 but its LOW never reached 12.3.
+    // Gaps over the whole area: it closes well above it but its LOW never reached 12.3.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
@@ -136,10 +136,26 @@ describe('the life of a level', () => {
     expect(level.brokenIndex).toBeNull()
   })
 
-  test('the area runs from the line to the stop, both sides', () => {
+  test('the area is the origin candle\'s BODY, and the stop is outside it', () => {
     const [supply] = heathLevels(RALLY, SETTINGS)
-    expect(zoneOf(supply)).toEqual({ low: 12.3, high: 13 })
-    expect(zoneOf({ price: 11.1, stop: 10 })).toEqual({ low: 10, high: 11.1 })
+    // Origin candle O 12.3 H 13 L 12.2 C 12.9: the body is 12.3-12.9, the stop 13.
+    expect(zoneOf(supply)).toEqual({ low: 12.3, high: 12.9 })
+    expect(supply.stop).toBe(13)
+    expect(supply.stop).toBeGreaterThan(zoneOf(supply).high)
+    // Demand mirrors it: the body, with the stop below.
+    expect(zoneOf({ price: 11.1, close: 10.2 })).toEqual({ low: 10.2, high: 11.1 })
+  })
+
+  test('a candle covering the body but not the wick still erases it', () => {
+    // High 12.95 clears the 12.9 body top but not the 13 wick: the area is the body, so
+    // this candle passed entirely through the level.
+    const bars = dated([
+      ...RALLY,
+      bar(10.9, 12, 10.8, 11.9),
+      bar(11.9, 12.95, 11.8, 12.6)
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.brokenIndex).toBe(8)
   })
 
   test('a level is not on the chart before its own candle', () => {

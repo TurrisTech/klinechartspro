@@ -12,12 +12,12 @@ import type { Candle } from './calendar'
 //   The stop goes above the wick HIGH (supply) or below the wick LOW (demand) of that same
 //   candle. A fresh, untested level is worth far more than one price has already visited.
 //
-// The line is one edge of an AREA and the stop is the other -- open to wick -- which is what
-// the chart shades. A level is ERASED when one candle passes entirely through that area
-// (user, 2026-09-21): a wick that covers the whole of it consumes it, while a wick that
-// reaches only part way in leaves it live. Containment is of the candle's whole range, wicks
-// included, so a candle that closed beyond the area but never traded through its far edge
-// does not erase it either.
+// The area is the origin candle's BODY -- open to close, not open to wick (user, 2026-09-21).
+// The line he draws is its open edge; the stop still sits beyond the wick, outside the area
+// entirely. A level is ERASED when one candle passes entirely through that body (user):
+// a wick that covers the whole of it consumes it, while a wick that reaches only part way in
+// leaves it live. Containment is of the candle's whole range, wicks included, so a candle that
+// closed beyond the area but never traded through it does not erase it either.
 //
 // Two things in that definition have to be made mechanical, and both are parameters rather
 // than opinions buried in code:
@@ -43,9 +43,11 @@ export interface HeathLevel {
   turnIndex: number
   /** When the swing became knowable -- `right` bars after the turn. */
   confirmIndex: number
-  /** The line: that candle's open. */
+  /** The line: that candle's open, and one edge of the body. */
   price: number
-  /** Where the stop goes: that candle's wick extreme, and the area's far edge. */
+  /** The body's other edge: that candle's close. */
+  close: number
+  /** Where the stop goes: that candle's wick extreme. Outside the area, not an edge of it. */
   stop: number
   /** First bar, after price left the area, whose range reached back into it. Null while fresh. */
   testedIndex: number | null
@@ -54,10 +56,10 @@ export interface HeathLevel {
   brokenIndex: number | null
 }
 
-/** The shaded area: between the line (the open) and the stop (the wick). Always has height --
- * an up-close candle opens below its high, a down-close one above its low. */
-export function zoneOf(level: Pick<HeathLevel, 'price' | 'stop'>): { low: number; high: number } {
-  return { low: Math.min(level.price, level.stop), high: Math.max(level.price, level.stop) }
+/** The shaded area: the origin candle's BODY, open to close. Always has height -- the origin
+ * is chosen for closing the other way, so its open and close are never equal. */
+export function zoneOf(level: Pick<HeathLevel, 'price' | 'close'>): { low: number; high: number } {
+  return { low: Math.min(level.price, level.close), high: Math.max(level.price, level.close) }
 }
 
 export interface HeathLevelSettings {
@@ -88,7 +90,7 @@ export function originOf(bars: readonly Candle[], turn: number, side: 'supply' |
  * area, **tested** the first time a later bar's range reaches back INTO it, and **erased** the
  * first time one candle's range covers the whole of it. Arming is what stops the move that
  * created the level from counting as its first test -- the area is the origin candle's own
- * open-to-wick, so the bars around the turn are still standing in it, and the departure would
+ * body, so the bars around the turn are still standing in it, and the departure would
  * otherwise read as a return.
  *
  * Nothing here reads a bar later than the one being judged.
@@ -114,6 +116,7 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
         turnIndex: turn,
         confirmIndex: turn + right,
         price: origin.open,
+        close: origin.close,
         stop: side === 'supply' ? origin.high : origin.low,
         testedIndex: null,
         brokenIndex: null

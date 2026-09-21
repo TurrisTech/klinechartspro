@@ -6,8 +6,9 @@ import { heathLevels, isLive, type HeathLevel, type HeathLevelSettings } from '.
 // on the price pane from the bars the pane already holds. Nothing is fetched: a Heath level is
 // a statement about one candle, so the chart has everything it needs.
 //
-// A level is an AREA, shaded: the line (the candle's open) is one edge and the stop (its wick)
-// is the other. It is drawn from the candle it belongs to. Until the swing that defines it is
+// A level is an AREA, shaded: the origin candle's BODY, its open (the line the method draws)
+// one edge and its close the other. The stop sits beyond the wick, outside the area, and is
+// drawn as its own dotted line. The area starts at the candle it belongs to. Until the swing that defines it is
 // confirmed -- `right` bars later -- the line is DASHED: that is the stretch where it exists in
 // hindsight only, and dashing it is the difference between showing the method and flattering
 // it. Solid from the confirming bar, dimmed once price has been back into the area ("a fresh,
@@ -129,17 +130,18 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           const color = level.side === 'supply' ? downColor : upColor
           const alpha = level.testedIndex === null ? FRESH_ALPHA : TESTED_ALPHA
           const y = yAxis.convertToPixel(level.price)
+          const yClose = yAxis.convertToPixel(level.close)
           const yStop = yAxis.convertToPixel(level.stop)
           const xStart = xAxis.convertToPixel(level.originIndex) - pitch / 2
           const xConfirm = xAxis.convertToPixel(Math.min(level.confirmIndex, lastIndex))
           const xEnd = xAxis.convertToPixel(lastIndex) + pitch / 2
 
-          // The area itself: open to wick, the two prices the method names. A tested area is
-          // shaded at half strength, the same statement the line makes.
+          // The area itself: the origin candle's BODY. A tested area is shaded at half
+          // strength, the same statement the line makes.
           if (settings.fill > 0) {
             ctx.globalAlpha = (settings.fill / 100) * (level.testedIndex === null ? 1 : 0.5)
             ctx.fillStyle = color
-            ctx.fillRect(xStart, Math.min(y, yStop), Math.max(1, xEnd - xStart), Math.max(1, Math.abs(yStop - y)))
+            ctx.fillRect(xStart, Math.min(y, yClose), Math.max(1, xEnd - xStart), Math.max(1, Math.abs(yClose - y)))
           }
 
           ctx.strokeStyle = color
@@ -152,12 +154,18 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           ctx.setLineDash([])
           if (xEnd > xConfirm) line(ctx, xConfirm, xEnd, y)
 
-          // The far edge is the stop. Always drawn faintly -- it is where the area ends and
-          // what a candle has to cover to erase it -- and emphasised when asked for.
-          ctx.globalAlpha = settings.stopLine ? alpha * 0.8 : STOP_ALPHA
-          ctx.setLineDash([1, 2])
-          line(ctx, xStart, xEnd, yStop)
-          ctx.setLineDash([])
+          // The body's other edge, so the shaded band reads as a band even at low opacity.
+          ctx.globalAlpha = alpha * 0.45
+          line(ctx, xStart, xEnd, yClose)
+
+          // The stop sits beyond the wick, OUTSIDE the area: its own dotted line, drawn only
+          // when asked for, since it is a third price on a chart the method keeps neat.
+          if (settings.stopLine) {
+            ctx.globalAlpha = STOP_ALPHA
+            ctx.setLineDash([1, 2])
+            line(ctx, xStart, xEnd, yStop)
+            ctx.setLineDash([])
+          }
 
           // Only a level still standing at the right edge is named there.
           if (isLive(level, to) && y > 8 && y < bounding.height - 16) {
@@ -193,7 +201,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       { paramNameKey: 'Bars after a turn (confirmation)', precision: 0, min: 1, max: 200, default: DEFAULT_PARAMS[1] },
       { paramNameKey: 'Draw: 0 both, 1 supply, 2 demand', precision: 0, min: 0, max: 2, default: DEFAULT_PARAMS[2] },
       { paramNameKey: 'Fresh (untested) only (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[3] },
-      { paramNameKey: 'Emphasise the stop edge (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[4] },
+      { paramNameKey: 'Draw the stop line, beyond the wick (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[4] },
       { paramNameKey: 'Shading opacity %', precision: 0, min: 0, max: 100, default: DEFAULT_PARAMS[5] }
     ])
     registered = true
@@ -203,7 +211,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       name: TEMPLATE_NAME,
       label: 'Heath levels (supply & demand)',
       description:
-        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand) — as a line, with the area between it and that candle’s wick (where the stop goes) shaded. Dashed until the swing that defines it is confirmed, dimmed once price has been back into it, and erased when one candle passes entirely through it. Params: bars before / after a turn, which side, fresh only, stop edge, shading opacity.'
+        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand) — as a line, with that candle’s BODY shaded as the area and the stop beyond its wick. Dashed until the swing that defines it is confirmed, dimmed once price has been back into it, and erased when one candle passes entirely through it. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity.'
     }
   ]
 }
