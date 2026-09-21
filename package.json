@@ -24,7 +24,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/klinecharts/pro"
+    "url": "https://github.com/TurrisTech/klinechartspro"
   },
   "keywords": [
     "klinecharts",
@@ -74,5 +74,8 @@
   },
   "peerDependencies": {
     "klinecharts": "^10.0.0"
+  },
+  "patchedDependencies": {
+    "klinecharts@10.0.0": "patches/klinecharts@10.0.0.patch"
   }
 }
