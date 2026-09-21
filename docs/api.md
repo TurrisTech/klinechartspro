@@ -20,6 +20,11 @@ new KLineChartPro(
     subIndicators?: string[];
     datafeed: Datafeed | ((paneId: string) => Datafeed);
 
+    // 应用自定义指标，见下方"应用自定义指标"一节。
+    indicatorGroups?: IndicatorGroup[];
+    indicatorParamsValidator?: IndicatorParamsValidator | null;
+    indicatorSettingsHandler?: IndicatorSettingsHandler | null;
+
     // 多图布局（1-12 个子图），见下方"多图布局"一节。
     paneLayout?: string;
     panes?: PaneOptions[];
@@ -55,6 +60,45 @@ new KLineChartPro(
 + `mainIndicators` 第一个子图（或 `panes` 缺省时 `paneLayout` 隐含的所有子图）的主图指标
 + `subIndicators` 副图指标，取值规则同 `mainIndicators`
 + `datafeed` 数据接入api实现。当多图布局中子图数大于一、且该实现保有任何按订阅维度的状态时（绝大多数真实实现都是如此），应传入工厂函数 `(paneId) => Datafeed`——共享同一实例仅在该实现完全无状态时才安全，库会在检测到潜在风险时于构造阶段打印一次警告
+
+## 应用自定义指标
+应用若注册了自己的指标模板（klinecharts 的 `registerIndicator`），可以把它们列入指标选择对话框、用只有应用自己掌握的信息校验其参数，或完全接管其设置界面。以下三个选项均可省略；省略时指标选择对话框与指标设置对话框的行为与原来完全一致。相关类型均由本包导出。
+
+```typescript
+interface IndicatorGroup {
+  label: string;
+  main: boolean;
+  items: Array<{ name: string; label: string; description?: string }>;
+}
+
+type IndicatorParamsValidator = (request: {
+  indicatorName: string;
+  calcParams: unknown[];
+  symbol: SymbolInfo;
+  period: Period;
+}) => Promise<IndicatorParamsCheck>;
+
+interface IndicatorParamsCheck {
+  ok: boolean;
+  reason?: string | null;
+  hint?: string | null;
+}
+
+type IndicatorSettingsHandler = (request: {
+  indicatorName: string;
+  paneId: string;
+  chartPaneId: string;
+  calcParams: unknown[];
+}) => boolean;
+```
+
++ `indicatorGroups` 指标选择对话框中额外的指标分组，默认 `[]`。每个分组按数组顺序各占一栏，排在内置的主图指标与副图指标之后，栏目标题即 `label` 原文（不是 i18n 键）。`main: true` 表示该组指标添加到主图（K线图所在面板），`false` 表示每个指标各占一个副图。每一项是一个复选框，在**激活子图**上添加或移除指标模板 `name`（必须是已注册的模板名）；`label` 为复选框文字，`description` 为鼠标悬停提示。同一个 `label` 也用作指标管理器中该指标所在行的标题。分组的 `label` 之间不可重复，同一分组内的 `name` 也不可重复（对话框以它们作为列表的键）。仅在构造时读取一次，没有对应的 setter
++ `indicatorParamsValidator` 校验内置指标设置对话框中的参数；该对话框的输入项来自 `registerIndicatorSettings(name, settings)`（与 `KLineChartPro` 一同导出；未注册输入项的模板打开的对话框中没有输入项）。默认 `null`：不做任何校验，任何参数组合都可以确认。仅在该对话框打开期间调用——打开时调用一次，此后每次修改后再调用，去抖 300 ms——且只采用最新一次的结果：针对用户随后又改动过的参数的结果，以及在对话框关闭后才返回的结果，都会被丢弃。`calcParams` 为对话框中的当前值：数字，或用户清空的输入项对应的 `''`（确认时该项会被替换为参数默认值，但校验函数收到的是 `''`）。`symbol` 与 `period` 取自该指标所在的子图，不一定是激活子图。返回结果对对话框的影响：
+  - 校验进行期间（从对话框打开或某次修改起，直到这次结果返回）确认按钮不可用；
+  - `ok: false` 时确认按钮保持不可用，若提供了 `reason` 则作为错误信息显示；
+  - 未显示 `reason` 时（`ok: true`，或 `ok: false` 且无 `reason`），`hint` 作为提示显示；
+  - Promise 被拒绝视同没有结果：不显示任何信息，确认按钮可用——服务端不可达时也不会锁死对话框
++ `indicatorSettingsHandler` 由应用接管指标的设置界面。默认 `null`：所有指标都使用内置设置对话框。用户在任一子图中点击指标提示栏上的设置按钮时、内置对话框打开之前同步调用。`paneId` 为多图布局中的子图（`'p1'`..`'pN'`），`chartPaneId` 为该子图内部的 klinecharts 面板（主图指标为 `'candle_pane'`），`calcParams` 为该指标当前参数的副本。应用已为该指标打开自己的界面时返回 `true`：内置对话框不会打开（因此也不会调用 `indicatorParamsValidator`），库也不再做任何处理——应用自己的界面所做的修改由应用负责应用与持久化。返回 `false` 则照常打开内置对话框。返回值会被立即按真假判断，因此必须返回布尔值而不是 Promise：Promise 会被视为 `true`
 
 ## 多图布局
 1 到 12 个子图（"pane"）组成可配置的网格，共用一套工具栏，作用于当前**激活**的子图（带彩色边框），支持十字光标联动和点击跳转日期。完全向后兼容：不传入以下任何选项时，行为与单图表完全一致。
