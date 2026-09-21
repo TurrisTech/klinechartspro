@@ -1,6 +1,8 @@
 import type { KLineData } from 'klinecharts'
 import { capabilities } from './capabilities'
 import { apiGet } from './config'
+import { instrumentConfig } from './instrumentconfig'
+import { dropMarketClosedBars } from './marketclosed'
 import { barToKLineData, isNoData, type GetBarsResponse } from './ohlcv'
 import { barsFromTiles } from './tiles'
 
@@ -32,10 +34,23 @@ export async function fetchBars(
   //
   // The split is exact: tiles run to `coveredTo` exclusive and the API is asked from
   // `coveredTo`, so no bar can be served twice or dropped between them.
+  //
+  // The schedule lookup is started alongside the tile read rather than before it: both are
+  // cached for the life of the page, so only the first window per instrument pays anything at
+  // all, and overlapping them makes that first one cost the larger of the two, not the sum.
+  const config = instrumentConfig(vendorSymbol)
   const tiled = await barsFromTiles(vendorSymbol, resolution, from, to)
+  const hours = (await config)?.marketHours
+  // Market-closed labels are dropped HERE, at the one seam both halves of the window pass
+  // through, and always BEFORE `limit`'s tail: trimming first would hand back fewer than
+  // `limit` bars from an already-trimmed array.
+  const keep = (bars: KLineData[]): KLineData[] => {
+    const open = dropMarketClosedBars(bars, resolution, hours)
+    return limit === null ? open : open.slice(-limit)
+  }
   if (tiled !== null && tiled.coveredTo > to) {
     // `limit` means "the last n bars", which the server would have applied for us.
-    return limit === null ? tiled.bars : tiled.bars.slice(-limit)
+    return keep(tiled.bars)
   }
 
   const body = await apiGet<GetBarsResponse>('/getbars', {
@@ -52,11 +67,10 @@ export async function fetchBars(
   })
   // `no_data` is the documented empty answer; `[]` is never sent.
   const fetched = isNoData(body) || !Array.isArray(body) ? [] : body.map(barToKLineData)
-  if (tiled === null) return fetched
+  if (tiled === null) return keep(fetched)
   // The forming period can legitimately hold no bars yet (a request landing in a weekend,
   // or moments after a period opens), which is not a reason to discard the tiled history.
-  const joined = tiled.bars.concat(fetched)
-  return limit === null ? joined : joined.slice(-limit)
+  return keep(tiled.bars.concat(fetched))
 }
 
 // A history fetch covers one fixed-size window, and KLineChart Pro treats an empty response
