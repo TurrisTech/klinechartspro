@@ -23,6 +23,10 @@ export const WALK_CHUNK_BARS = 4000
  * DELIVERED until the walk had finished. */
 export const WALK_YIELD_MS = 50
 
+/** Least time between two reports of how far a walk has got, in ms. Four a second is as fast as
+ * anyone reads a date; a report at every yield (WALK_YIELD_MS) would be twenty. */
+export const WALK_PROGRESS_MS = 250
+
 // GLUE. `ReplayTradingSession` implements `TradingSession` (the seam the whole trading UI
 // acts through) over the client-side engine and the bar caches, and is the
 // `ReplayController` the control strip drives. It owns the clock: nothing else moves the
@@ -82,6 +86,15 @@ export interface ReplayController {
   readonly advance: AdvanceSetting
   readonly pauseOnFill: boolean
   readonly busy: boolean
+  /** Where the running advance started; null when idle. It is what the chart shows until the
+   * advance lands: during a walk `cursor` moves bar by bar, far ahead of the panes, so the
+   * title bar's clock reads this instead. */
+  readonly advanceFrom: number | null
+  /** How far the running advance's walk has got: the close of the last whole base bar it
+   * consumed, which is also the earliest a Stop could leave the cursor. Null when idle, and
+   * throughout an advance that seeks. The walk's reach, NOT the chart's position -- nothing is
+   * drawn there until the advance stops. Reported at most every WALK_PROGRESS_MS. */
+  readonly walkedTo: number | null
   readonly lastStop: AdvanceResult | null
   readonly signals: SignalBook
   /** Armed stops besides the signals (price watches): "next signal" stops at those too. */
@@ -102,7 +115,10 @@ export interface ReplayController {
   cancel(): void
   /** A cancel has been asked for and the advance has not stopped yet. */
   readonly cancelling: boolean
-  onControlChange(listener: () => void): () => void
+  /** `listener` runs on every change the controls should show. `'walk'` says only `walkedTo`
+   * moved -- a progress report, several a second through a long walk -- so a listener can
+   * update that one line instead of rebuilding everything, the Stop button included. */
+  onControlChange(listener: (change?: 'walk') => void): () => void
   /** Persist now (a star/arm change). */
   persist(): void
 }
@@ -140,6 +156,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   advance: AdvanceSetting
   pauseOnFill: boolean
   busy = false
+  advanceFrom: number | null = null
+  walkedTo: number | null = null
   lastStop: AdvanceResult | null = null
   intervalsInUse: string[] = []
   readonly signals: SignalBook
@@ -147,7 +165,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   readonly symbol: string
   private readonly engine: Engine
   private readonly listeners = new Set<SessionListener>()
-  private readonly controlListeners = new Set<() => void>()
+  private readonly controlListeners = new Set<(change?: 'walk') => void>()
   private baseCache: BarCache
   private readonly refinements = new Map<string, BarCache>()
   private rev = 0
@@ -349,17 +367,17 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   // -- ReplayController ----------------------------------------------------------------------
 
-  onControlChange(listener: () => void): () => void {
+  onControlChange(listener: (change?: 'walk') => void): () => void {
     this.controlListeners.add(listener)
     return () => {
       this.controlListeners.delete(listener)
     }
   }
 
-  private controlsChanged(): void {
+  private controlsChanged(change?: 'walk'): void {
     for (const l of [...this.controlListeners]) {
       try {
-        l()
+        l(change)
       } catch (err) {
         console.error('[replay] control listener failed', err)
       }
@@ -432,8 +450,9 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     if (this.busy || this.disposed) return null
     this.busy = true
     this.cancelRequested = false
-    this.controlsChanged()
     const from = this.cursor
+    this.advanceFrom = from
+    this.controlsChanged()
     try {
       const provisional = planAdvance(from, request, [])
       const end = Math.min(provisional.target, this.opts.dataEnd())
@@ -463,7 +482,21 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         const chunk = WALK_CHUNK_BARS * nominalMs(this.base)
         let reach = this.cursor
         let sliceStart = performance.now()
+        // Tell the controls how far the walk has got, or a months-long walk shows a frozen
+        // chart and a Stop button and cannot be told from a hung one. The cursor, not `reach`:
+        // a chunk is fetched ahead of the bars in it, and the date shown must never be past
+        // where a Stop would leave the cursor. Throttled, and skipped when nothing moved.
+        let reportedAt = Number.NEGATIVE_INFINITY
+        const report = (): void => {
+          const now = performance.now()
+          if (this.walkedTo === this.cursor || now - reportedAt < WALK_PROGRESS_MS) return
+          this.walkedTo = this.cursor
+          reportedAt = now
+          this.controlsChanged('walk')
+        }
         walk: for (;;) {
+          // Before the page downloads: that wait is the likeliest to look like a hang.
+          report()
           // One page of the span at a time (WALK_CHUNK_BARS). `reach` moves on by a whole
           // chunk even when the chunk held no bar -- a weekend, a gap in the store -- so the
           // walk always ends, at `stopAt`.
@@ -497,6 +530,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
               break walk
             }
             if (performance.now() - sliceStart > WALK_YIELD_MS) {
+              report()
               await nextTask()
               sliceStart = performance.now()
             }
@@ -512,6 +546,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         await this.quoteAt(stopAt)
         this.opts.observer?.seeked()
       }
+      // The walk is over, however it ended: from here the controls say why it stopped.
+      this.walkedTo = null
       if (paused) reason = 'fill'
       else if (cancelled) reason = 'cancel'
       else if (observed.length === 0) this.cursor = stopAt
@@ -540,6 +576,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     } finally {
       this.busy = false
       this.cancelRequested = false
+      this.advanceFrom = null
+      this.walkedTo = null
       this.controlsChanged()
     }
   }

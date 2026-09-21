@@ -2060,7 +2060,8 @@ body.wd-has-dock > #app {
   color: var(--muted-foreground);
 }
 
-.wd-replay-stop-reason {
+.wd-replay-stop-reason,
+.wd-replay-walk {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2078,6 +2079,11 @@ body.wd-has-dock > #app {
 .wd-replay-stop-reason.is-fill {
   background: color-mix(in oklab, #26a69a 18%, transparent);
   color: var(--foreground);
+}
+
+/* How far a running walk has got: a date that ticks, so the digits hold their width. */
+.wd-replay-walk {
+  font-variant-numeric: tabular-nums;
 }
 
 /* Step while an advance runs: the button stops it, so it should not read as "go". */

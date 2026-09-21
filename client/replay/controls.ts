@@ -15,7 +15,8 @@ import { createDockableWindow } from '../chrome/window'
 //
 //   title bar   the cursor, Step, collapse, dock/float, Exit -- and the drag handle
 //   advance     the timeframe picker x a multiple, and Next signal
-//   last stop   why the last advance stopped (absent until one has)
+//   status      how far a running walk has got; else why the last advance stopped (absent
+//               until one has)
 //   toggles     Signals / Base, one panel open at a time; Account and Trade, the two windows
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
@@ -72,7 +73,16 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // The signal list is the only scrollable thing here and every step re-renders the body,
   // so its scroll position is carried across a render rather than snapping back to the top.
   let signalScroll = 0
-  const unsubscribe = controller.onControlChange(() => render())
+  // The status row's walk line while a walk is in progress, so a progress report can patch it.
+  let walkLine: HTMLElement | null = null
+  const unsubscribe = controller.onControlChange((change) => {
+    // A progress report moves one date, several times a second: patch that line. Rebuilding
+    // the window instead would replace the Stop button under a pointer pressing it, and a
+    // press released on the new button is no click at all.
+    const walked = controller.walkedTo
+    if (change === 'walk' && walked !== null && walkLine) showWalk(walkLine, walked)
+    else render()
+  })
 
   function render(): void {
     renderHeader()
@@ -84,9 +94,14 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   function renderHeader(): void {
     const busy = controller.busy
     win.titleSlot.innerHTML = ''
+    // The chart's position, which is where the running advance STARTED until it lands: a walk
+    // moves `cursor` bar by bar far ahead of the panes, and this re-renders mid-walk (a Stop
+    // click, the walk's first progress report), so reading `cursor` here would show the walk's
+    // reach as if the chart were there.
+    const at = controller.advanceFrom ?? controller.cursor
     const clock = el('span', 'wd-replay-clock-value')
-    clock.textContent = formatInstant(controller.cursor)
-    clock.title = new Date(controller.cursor).toISOString()
+    clock.textContent = formatInstant(at)
+    clock.title = new Date(at).toISOString()
     win.titleSlot.appendChild(clock)
 
     // Step lives in the title bar, not the body: it is the one control used on every single
@@ -118,8 +133,19 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const body = win.body
     body.innerHTML = ''
     body.appendChild(renderAdvance())
+    const walked = controller.walkedTo
     const last = controller.lastStop
-    if (last) {
+    walkLine = null
+    if (walked !== null) {
+      // A walk in progress replaces the last stop's reason, which is stale by now anyway. Its
+      // own words, in the body and not the title bar: the date is the walk's reach, ahead of
+      // everything drawn, and must not read as the replay's clock.
+      const status = el('div', 'wd-replay-status')
+      walkLine = el('span', 'wd-replay-walk')
+      showWalk(walkLine, walked)
+      status.appendChild(walkLine)
+      body.appendChild(status)
+    } else if (last) {
       // Absent until an advance has stopped: an empty row is a row of height for nothing.
       const stop = el('div', 'wd-replay-status')
       const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
@@ -132,6 +158,11 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     if (panel === 'signals') body.appendChild(renderSignals())
     if (panel === 'settings') body.appendChild(renderSettings())
     win.reflow()
+  }
+
+  function showWalk(line: HTMLElement, walked: number): void {
+    line.textContent = `Walking… reached ${formatInstant(walked)}`
+    line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
   }
 
   function renderAdvance(): HTMLElement {

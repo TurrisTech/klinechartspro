@@ -132,6 +132,22 @@ Stop to be hearable at all, and each was a bug before it was a feature:
 A cancel that lands before anything moved does not call `onAdvanced`: nothing the chart shows
 changed, and telling it the clock moved would make every plugin forget and refetch.
 
+**A walk says how far it has got** (user's call, 2026-09-20: the date, not a percentage or a bar
+count). Without it a months-long 1m walk showed a frozen chart and a Stop button, and "working"
+could not be told from "hung". `walkedTo` is the close of the last base bar walked — never
+`reach`, so the date shown is never past where a Stop would leave the cursor — reported at the
+top of every page (before it downloads) and at the yields, at most every `WALK_PROGRESS_MS`
+(250 ms), and null for a seek. The controls show it in the status row as **"Walking… reached
+Mar 04, 10:32"**, never in the title bar: the chart is not drawn there until the advance
+lands. Two traps:
+
+- **The clock reads `advanceFrom` while busy, not `cursor`.** The session moves `cursor` bar
+  by bar mid-walk, so any re-render (a Stop click) used to show the walk's reach as if it
+  were the chart's position.
+- **A report patches its one line; it does not re-render.** Reports go out as
+  `onControlChange('walk')`, and a full render rebuilds the title bar, replacing the Stop
+  button several times a second — a press released on the replacement is no click at all.
+
 ## Price watches
 
 The same lines, the same right-click, the same dialog and the same Notification Center as a

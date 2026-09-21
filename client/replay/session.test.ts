@@ -9,7 +9,7 @@ import { fromWall, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } fr
 
 // session.ts imports ../trading/api -> ../auth -> ../config, which read `window` at import.
 installWindow()
-const { ReplayTradingSession, WALK_CHUNK_BARS } = await import('./session')
+const { ReplayTradingSession, WALK_CHUNK_BARS, WALK_PROGRESS_MS } = await import('./session')
 
 const H = 3_600_000
 const M = 60_000
@@ -461,5 +461,110 @@ describe('cancelling an advance', () => {
     expect(c?.bars).toEqual([])
     expect(paged.calls.length).toBe(1)
     expect(stopped.cursor).toBe(start)
+  })
+})
+
+/** Hold the thread for `ms`: a bar that costs real time, so a walk lasts long enough to report. */
+function spin(ms: number): void {
+  const until = performance.now() + ms
+  while (performance.now() < until) {}
+}
+
+interface Seen {
+  change: 'walk' | undefined
+  busy: boolean
+  cursor: number
+  advanceFrom: number | null
+  walkedTo: number | null
+}
+
+/** Every control change the session announces, with what the controls would read at it. */
+function watchControls(session: Made['session']): Seen[] {
+  const seen: Seen[] = []
+  session.onControlChange((change) =>
+    seen.push({ change, busy: session.busy, cursor: session.cursor, advanceFrom: session.advanceFrom, walkedTo: session.walkedTo })
+  )
+  return seen
+}
+
+describe('reporting how far a walk has got', () => {
+  const start = ny('2024-03-04 09:00')
+
+  test('a walk reports its reach as it goes -- rising, throttled, whole bars -- and clears it at the end', async () => {
+    // 240 base bars at 2 ms each: half a second of walk, so several reports are due.
+    const made = make({ base: '1m', observer: observer(() => spin(2)) })
+    made.session.setIntervalsInUse(['1m'])
+    const seen = watchControls(made.session)
+    const began = performance.now()
+    const r = await made.session.advanceBy({ interval: '1h', multiple: 4 })
+    const elapsed = performance.now() - began
+    expect(r?.reason).toBe('target')
+
+    const reports = seen.filter((s) => s.change === 'walk').map((s) => s.walkedTo as number)
+    // The first before the first page has loaded: the walk has got as far as where it began.
+    expect(reports[0]).toBe(start)
+    expect(reports.length).toBeGreaterThan(1)
+    for (let i = 1; i < reports.length; i++) expect(reports[i]).toBeGreaterThan(reports[i - 1])
+    for (const at of reports) {
+      // The close of a whole base bar the walk consumed, never past where it landed.
+      expect((at - start) % M).toBe(0)
+      expect(at).toBeLessThanOrEqual(r?.to as number)
+    }
+    // At most one per WALK_PROGRESS_MS: the controls redraw on every one.
+    expect(reports.length).toBeLessThanOrEqual(Math.floor(elapsed / WALK_PROGRESS_MS) + 1)
+
+    // While it ran, the session's cursor raced ahead -- and the start stayed on offer for the
+    // title bar's clock, which is what the chart still shows.
+    const during = seen.filter((s) => s.busy)
+    expect(during.some((s) => s.cursor > start)).toBe(true)
+    for (const s of during) expect(s.advanceFrom).toBe(start)
+
+    // Ended: the last announcements carry no reach, and the idle session none either.
+    const after = seen.slice(seen.findLastIndex((s) => s.change === 'walk') + 1)
+    expect(after.length).toBeGreaterThan(0)
+    for (const s of after) expect(s.walkedTo).toBeNull()
+    expect(seen.at(-1)).toMatchObject({ busy: false, advanceFrom: null, walkedTo: null })
+    expect(made.session.walkedTo).toBeNull()
+    expect(made.session.advanceFrom).toBeNull()
+  })
+
+  test('an advance that seeks never reports a reach: it walked nothing', async () => {
+    const { session } = make()
+    const seen = watchControls(session)
+    const r = await session.step()
+    expect(r?.walked).toBe(false)
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.some((s) => s.change === 'walk')).toBe(false)
+    for (const s of seen) expect(s.walkedTo).toBeNull()
+    for (const s of seen.filter((x) => x.busy)) expect(s.advanceFrom).toBe(start)
+    expect(session.advanceFrom).toBeNull()
+  })
+
+  test('a cancelled walk clears its reach, and never reported one past where it stopped', async () => {
+    let session: Made['session'] | null = null
+    const made = make({
+      base: '1m',
+      observer: observer((_bar, n) => {
+        spin(2)
+        if (n === 200) session?.cancel()
+      })
+    })
+    session = made.session
+    made.session.setIntervalsInUse(['1m'])
+    const seen = watchControls(made.session)
+    const r = await made.session.advanceBy({ interval: '1h', multiple: 6 })
+    expect(r?.reason).toBe('cancel')
+    expect(r?.to).toBe(start + 200 * M)
+
+    const reports = seen.filter((s) => s.change === 'walk').map((s) => s.walkedTo as number)
+    expect(reports.length).toBeGreaterThan(1)
+    // The date shown is always somewhere a Stop could still leave the cursor.
+    for (const at of reports) expect(at).toBeLessThanOrEqual(r?.to as number)
+    // While "Stopping…" the walk has not stopped yet, so a reach it reported still stands...
+    const asked = seen.find((s) => s.change === undefined && s.busy && s.cursor > start)
+    expect(reports).toContain(asked?.walkedTo as number)
+    // ...and once it has, it is gone.
+    expect(seen.at(-1)).toMatchObject({ busy: false, walkedTo: null, advanceFrom: null })
+    expect(made.session.walkedTo).toBeNull()
   })
 })
