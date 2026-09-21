@@ -30,8 +30,28 @@ export interface MtfTimeframeStyle {
   textSize: number
 }
 
+/** The timeframes a signal graph may start from (user, 2026-09-21). */
+export const GRAPH_ROOTS = ['1D', '8h', '4h', '2h', '1h'] as const satisfies readonly MtfInterval[]
+export type GraphRoot = (typeof GRAPH_ROOTS)[number]
+
+export function isGraphRoot(code: unknown): code is GraphRoot {
+  return (GRAPH_ROOTS as readonly unknown[]).includes(code)
+}
+
+/** The signal graph drawn over the markers (graph.ts), on an overlay that offers one. */
+export interface MtfGraphConfig {
+  /** The timeframe every graph starts from, or `'off'`. */
+  from: GraphRoot | 'off'
+  /** The most one step may shrink the timeframe by: 8 lets 8h reach 1h but not 30m. */
+  maxStep: number
+  /** The graph's line width, in pixels. */
+  lineWidth: number
+}
+
 export interface MtfConfig {
   timeframes: Record<MtfInterval, MtfTimeframeStyle>
+  /** Read through `graphConfig`: a config built before the field existed has none. */
+  graph: MtfGraphConfig
 }
 
 // Distinct hues rather than the red/green up/down convention the AREV panes and the retired
@@ -90,7 +110,15 @@ function defaultStyle(interval: MtfInterval): MtfTimeframeStyle {
 export const MTF_DEFAULTS: MtfConfig = {
   timeframes: Object.fromEntries(
     MTF_INTERVALS.map((interval) => [interval, defaultStyle(interval)])
-  ) as Record<MtfInterval, MtfTimeframeStyle>
+  ) as Record<MtfInterval, MtfTimeframeStyle>,
+  // On from the highest timeframe, which is where the user's list starts. Only an overlay
+  // that offers a graph (overlays.ts `graph`) reads this at all; the others carry it inertly.
+  graph: { from: '1D', maxStep: 8, lineWidth: 1.5 }
+}
+
+/** The graph settings, or the defaults for a config that has none. */
+export function graphConfig(config: MtfConfig | undefined): MtfGraphConfig {
+  return config?.graph ?? MTF_DEFAULTS.graph
 }
 
 // One collapsible group per timeframe, each holding the four fields for it. Grouping by
@@ -110,6 +138,25 @@ export const MTF_FIELDS: SettingsField[] = MTF_INTERVALS.map(
     ]
   })
 )
+
+/** The graph's settings, as one group ahead of the timeframes on an overlay that offers one.
+ * The graph is drawn in each step's timeframe colour, so it has no colour of its own. */
+export const MTF_GRAPH_FIELDS: SettingsField[] = [
+  {
+    kind: 'group',
+    label: 'Graph',
+    fields: [
+      {
+        kind: 'select',
+        key: 'graph.from',
+        label: 'Start from',
+        options: [{ value: 'off', label: 'Off' }, ...GRAPH_ROOTS.map((root) => ({ value: root, label: root }))]
+      },
+      { kind: 'number', key: 'graph.maxStep', label: 'Largest step (×)', min: 2, max: 480, step: 1 },
+      { kind: 'number', key: 'graph.lineWidth', label: 'Line width', min: 0.5, max: 6, step: 0.5 }
+    ]
+  }
+]
 
 /** The timeframes to draw, shortest-first — which is also the lane order, so the markers
  * nearest the candles come from the timeframe nearest the chart's own.
@@ -133,7 +180,9 @@ export function enabledIntervals(config: MtfConfig | undefined): MtfInterval[] {
  * market pane at thirty bytes. Storing the whole object per pane would be the largest thing
  * in that document by an order of magnitude, for a user who typically changes one colour.
  * A diff makes the common case a few dozen bytes and costs one merge on the way back in. */
-export type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeStyle>>>
+export type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeStyle>>> & {
+  graph?: Partial<MtfGraphConfig>
+}
 
 const STYLE_KEYS = ['enabled', 'color', 'arrowSize', 'textSize'] as const
 
@@ -141,6 +190,16 @@ function validStyleValue(key: (typeof STYLE_KEYS)[number], value: unknown): bool
   if (key === 'enabled') return typeof value === 'boolean'
   if (key === 'color') return typeof value === 'string'
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+const GRAPH_KEYS = ['from', 'maxStep', 'lineWidth'] as const
+
+function validGraphValue(key: (typeof GRAPH_KEYS)[number], value: unknown): boolean {
+  if (key === 'from') return value === 'off' || isGraphRoot(value)
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false
+  // A step under 2 admits no timeframe pair at all, and a width of 0 or less draws nothing
+  // while the legend says the graph is on.
+  return key === 'maxStep' ? value >= 2 : value > 0
 }
 
 /** The diff to store, or undefined when this pane is on the defaults and has nothing to say. */
@@ -156,6 +215,12 @@ export function toStoredMtfConfig(config: MtfConfig): StoredMtfConfig | undefine
     }
     if (Object.keys(diff).length > 0) stored[interval] = diff
   }
+  const graph = graphConfig(config)
+  const graphDiff: Partial<MtfGraphConfig> = {}
+  for (const key of GRAPH_KEYS) {
+    if (graph[key] !== MTF_DEFAULTS.graph[key]) (graphDiff as Record<string, unknown>)[key] = graph[key]
+  }
+  if (Object.keys(graphDiff).length > 0) stored.graph = graphDiff
   return Object.keys(stored).length > 0 ? stored : undefined
 }
 
@@ -170,7 +235,18 @@ export function fromStoredMtfConfig(stored: unknown): MtfConfig | undefined {
   if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
   const config = structuredClone(MTF_DEFAULTS)
   let touched = false
-  for (const [interval, diff] of Object.entries(stored as Record<string, unknown>)) {
+  // `graph` is not a timeframe, so a build from before it existed skips it as it skips any
+  // timeframe it does not know, and reads the rest of the document unchanged.
+  const { graph, ...timeframes } = stored as Record<string, unknown>
+  if (graph && typeof graph === 'object' && !Array.isArray(graph)) {
+    for (const key of GRAPH_KEYS) {
+      const value = (graph as Record<string, unknown>)[key]
+      if (value === undefined || !validGraphValue(key, value)) continue
+      ;(config.graph as unknown as Record<string, unknown>)[key] = value
+      touched = true
+    }
+  }
+  for (const [interval, diff] of Object.entries(timeframes)) {
     if (!isMtfInterval(interval) || !diff || typeof diff !== 'object') continue
     const target = config.timeframes[interval]
     for (const key of STYLE_KEYS) {

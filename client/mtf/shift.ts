@@ -76,7 +76,8 @@ export function isFinerThan(source: string, chart: string): boolean {
   return resolutionDurationMs(source) < resolutionDurationMs(chart)
 }
 
-/** One arev21 signal, placed on the chart bar at which it became knowable. */
+/** One arev21 signal and the instant it became knowable -- which is also what places it on
+ * a chart: on the bar in force at that instant. */
 export interface ShiftedSignal {
   /** Wire date of the SOURCE bar the vote was cast on — what the research row is keyed by. */
   sourceDate: number
@@ -112,14 +113,71 @@ export interface ShiftInput {
 }
 
 /**
+ * Every labelled vote in `points` whose source bar has CLOSED on `grid`, with the instant it
+ * did -- the successor bar's open, in absolute time. A vote whose bar has no successor in the
+ * grid is dropped: the bar has not closed yet, so the vote is not knowable and drawing it (or
+ * building on it) would be lookahead. Unordered, as `points` was.
+ */
+export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoint>, grid: number[]): ShiftedSignal[] {
+  const out: ShiftedSignal[] = []
+  if (grid.length === 0) return out
+  const gridAbs = grid.map((ms) => toAbsolute(sourceInterval, ms))
+  for (const point of points) {
+    const label = arevSignal(point)
+    if (!label) continue
+    const castAbs = toAbsolute(sourceInterval, point.date)
+    // The successor bar: the first grid open strictly after the one the vote was cast on.
+    // Strictly, so a vote is never placed back on its own bar.
+    const next = upperBound(gridAbs, castAbs)
+    if (next >= gridAbs.length) continue // not closed yet, or the grid stops here
+    out.push({ sourceDate: point.date, knownAt: gridAbs[next], p: point.p, up: label === 'long' })
+  }
+  return out
+}
+
+/** The chart's bar opens in absolute time, for `chartBarAt`. */
+export function chartOpens(chartInterval: string, chartBars: KLineData[]): number[] {
+  return chartBars.map((bar) => toAbsolute(chartInterval, bar.timestamp))
+}
+
+/**
+ * Index of the chart bar in force at `knownAt` (absolute), or -1 when no loaded bar is.
+ *
+ * The last one to have opened at or before it. At or before, not strictly after, so a
+ * source close that coincides exactly with a chart bar's open lands ON that bar -- which is
+ * the aligned case and the common one (a 1D close at 17:00 is an hourly bar's open, a 4h
+ * close at 08:00 is an hourly and a 2h bar's open). -1 when it became knowable before the
+ * loaded window began (its place is off screen to the left, not on the leftmost bar).
+ *
+ * The last chart bar is the one bar whose END the chart does not state: every other is
+ * bounded by its successor's open. Left unbounded it swallows everything after it -- every
+ * vote from the controller's forward fetch pad, and at the live edge every vote newer than
+ * the loaded bars, resolves to "the last bar" and stacks there. That is not a cosmetic
+ * pile-up but lookahead: votes that had not been cast yet, drawn on the newest candle. So it
+ * is bounded by the chart interval's nominal length, which decides only WHETHER to draw and
+ * never WHERE -- and which is exact for every interval that can reach this, because a source
+ * is never finer than the chart and no source is coarser than 1D, so the chart is 1D or
+ * intraday. Those bars are a fixed number of milliseconds long: a daily candle spans 17:00 to
+ * 17:00 with no US DST transition inside it, and an intraday one is its own unit. A vote
+ * falling inside the still-forming last bar is kept, which is the point of bounding rather
+ * than dropping the last bar outright.
+ */
+export function chartBarAt(knownAt: number, chartAbs: number[], chartInterval: string): number {
+  const at = upperBound(chartAbs, knownAt) - 1
+  if (at < 0) return -1
+  if (at === chartAbs.length - 1 && knownAt >= chartAbs[at] + resolutionDurationMs(chartInterval)) return -1
+  return at
+}
+
+/**
  * Place each source-timeframe signal on the chart bar that was open when it became
  * knowable, keyed by that bar's own timestamp.
  *
- * A signal is dropped rather than approximated in three cases, all of which are the
+ * A signal is dropped rather than approximated in four cases, all of which are the
  * honest answer:
  *
  *   * its source bar has no successor in the grid — the bar has not closed yet, so the
- *     vote is not knowable and drawing it would be lookahead;
+ *     vote is not knowable and drawing it would be lookahead (`knowableSignals`);
  *   * it became knowable before the first chart bar loaded — its marker is off screen to
  *     the left, not on the leftmost bar;
  *   * it became knowable after the last chart bar had closed — the bar it belongs on is
@@ -137,41 +195,12 @@ export function shiftSignals(input: ShiftInput): Map<number, ShiftedSignal[]> {
   // Both sides onto one clock before anything is compared. See the module note: the wire
   // dates these two intervals on different clocks whenever exactly one of them is
   // daily-or-coarser, which is the common case for this overlay.
-  const gridAbs = grid.map((ms) => toAbsolute(sourceInterval, ms))
-  const chartAbs = chartBars.map((bar) => toAbsolute(chartInterval, bar.timestamp))
+  const chartAbs = chartOpens(chartInterval, chartBars)
 
-  for (const point of points) {
-    const label = arevSignal(point)
-    if (!label) continue
-    const castAbs = toAbsolute(sourceInterval, point.date)
-    // The successor bar: the first grid open strictly after the one the vote was cast on.
-    // Strictly, so a vote is never placed back on its own bar.
-    const next = upperBound(gridAbs, castAbs)
-    if (next >= gridAbs.length) continue // not closed yet, or the grid stops here
-    const knownAt = gridAbs[next]
-    // The chart bar in force at that instant: the last one to have opened at or before
-    // it. At or before, not strictly after, so a source close that coincides exactly with
-    // a chart bar's open lands ON that bar -- which is the aligned case and the common
-    // one (a 1D close at 17:00 is an hourly bar's open, a 4h close at 08:00 is an hourly
-    // and a 2h bar's open).
-    const at = upperBound(chartAbs, knownAt) - 1
-    if (at < 0) continue // knowable before the loaded window began
-    // The last chart bar is the one bar whose END the chart does not state: every other
-    // is bounded by its successor's open. Left unbounded it swallows everything after it
-    // -- every vote from the controller's forward fetch pad, and at the live edge every
-    // vote newer than the loaded bars, resolves to "the last bar" and stacks there. That
-    // is not a cosmetic pile-up but lookahead: votes that had not been cast yet, drawn on
-    // the newest candle. Bounded by the chart interval's nominal length, which decides
-    // only WHETHER to draw and never WHERE -- and which is exact for every interval that
-    // can reach this line, because a source is never finer than the chart (above) and no
-    // source is coarser than 1D, so the chart is 1D or intraday. Those bars are a fixed
-    // number of milliseconds long: a daily candle spans 17:00 to 17:00 with no US DST
-    // transition inside it, and an intraday one is its own unit. A vote falling inside
-    // the still-forming last bar is kept, which is the point of bounding rather than
-    // dropping the last bar outright.
-    if (at === chartBars.length - 1 && knownAt >= chartAbs[at] + resolutionDurationMs(chartInterval)) continue
+  for (const signal of knowableSignals(sourceInterval, points, grid)) {
+    const at = chartBarAt(signal.knownAt, chartAbs, chartInterval)
+    if (at < 0) continue
     const key = chartBars[at].timestamp
-    const signal: ShiftedSignal = { sourceDate: point.date, knownAt, p: point.p, up: label === 'long' }
     const existing = placed.get(key)
     if (existing) existing.push(signal)
     else placed.set(key, [signal])

@@ -26,6 +26,20 @@ import type { Range } from '../plugins/types'
  * one source bar forward). */
 export const GRID_ARRAY = 'grid'
 
+/** One row of that grid: the bar's wire date, and its high and low when the source sent them
+ * (the MTF overlay's graph prices each signal at its source bar's extreme -- mtf/graph.ts). */
+export interface GridRow {
+  date: number
+  high?: number
+  low?: number
+}
+
+/** A grid bar's range. */
+export interface GridExtremes {
+  high: number
+  low: number
+}
+
 /** A served point, by the only property every one of them has. Deliberately NOT an index
  * signature: a row's fields are the registry's business, read through `readField`, and an
  * index signature here would make every other point type in the app (`ArevPoint`,
@@ -43,13 +57,20 @@ export type BarValue = RegistryPoint | Record<string, RegistryPoint>
  * `peekStore<RegistryStore<ArevPoint>>(key)`. It never changes the class -- every
  * registry-driven source shares one -- only what the reader has to narrow. */
 export class RegistryStore<V = BarValue> extends WindowStore<RegistryPoint, V> {
-  private gridSet = new Set<number>()
+  /** Grid bar opens, each with its range when the row carried one. */
+  private gridBars = new Map<number, GridExtremes | null>()
   private gridSorted: number[] | null = null
 
-  override ingest(points: RegistryPoint[], window: Range, arrays?: Record<string, { date: number }[]>): void {
+  override ingest(points: RegistryPoint[], window: Range, arrays?: Record<string, GridRow[]>): void {
     const grid = arrays?.[GRID_ARRAY]
     if (grid?.length) {
-      for (const row of grid) this.gridSet.add(row.date)
+      for (const row of grid) {
+        const { high, low } = row
+        const extremes = Number.isFinite(high) && Number.isFinite(low) ? { high: high as number, low: low as number } : null
+        // A row without a range never erases one already held: two fetches of one bar agree
+        // about its date, and only one of them may have asked for its prices.
+        if (extremes || !this.gridBars.has(row.date)) this.gridBars.set(row.date, extremes)
+      }
       // Invalidated rather than re-sorted here: a pan can land several windows before any
       // template asks to draw, and sorting once on demand beats sorting once per fetch.
       this.gridSorted = null
@@ -59,14 +80,19 @@ export class RegistryStore<V = BarValue> extends WindowStore<RegistryPoint, V> {
 
   /** The source bar grid, ascending. Empty unless some binding on this key fetches one. */
   grid(): number[] {
-    if (this.gridSorted === null) this.gridSorted = [...this.gridSet].sort((a, b) => a - b)
+    if (this.gridSorted === null) this.gridSorted = [...this.gridBars.keys()].sort((a, b) => a - b)
     return this.gridSorted
+  }
+
+  /** The high and low of the grid bar opening at `date` (its wire date), when known. */
+  gridExtremes(date: number): GridExtremes | undefined {
+    return this.gridBars.get(date) ?? undefined
   }
 
   /** The grid goes with the points: a replay step forgets everything the old clock made
    * incomplete, and one rule for both kinds beats two. */
   override forgetAfter(from: number): void {
-    for (const date of [...this.gridSet]) if (date >= from) this.gridSet.delete(date)
+    for (const date of [...this.gridBars.keys()]) if (date >= from) this.gridBars.delete(date)
     this.gridSorted = null
     super.forgetAfter(from)
   }

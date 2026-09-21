@@ -1,8 +1,10 @@
 import type { IndicatorGroup } from '../../src'
-import { GRID_ARRAY, storeFactory } from '../tsregistry/store'
+import { peekStore } from '../plugins/store'
+import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
 import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
-import { MTF_DEFAULTS, MTF_FIELDS, enabledIntervals, type MtfConfig } from './config'
+import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphConfig, type MtfConfig } from './config'
+import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
 import { registerMtfIndicators } from './templates'
@@ -32,6 +34,13 @@ import { registerMtfIndicators } from './templates'
 const WINDOW_PAD_BARS = 4
 const WINDOW_PAD_FLOOR_MS = 7 * 86_400_000
 
+// With the signal graph on, every timeframe below the root is fetched back to the start of the
+// graph in force at the chart's loaded left edge (graph.ts `graphStart`), because what a node
+// hangs from can lie anywhere between there and the node. Bounded, so a 1D root's months-long
+// graph cannot pull months of 3m votes: past this many of its own bars a timeframe's oldest
+// nodes are missing, which changes only where a node of a still-shorter timeframe hangs from.
+const GRAPH_LOOKBACK_MAX_BARS = 10_000
+
 // `/getbars` is bounded by range, not by count, and 413s past the server's per-request bar
 // cap. A gap is therefore fetched in chunks of at most this many NOMINAL source bars --
 // nominal overcounts (the market is shut about a third of the week), so the real reply is
@@ -60,18 +69,54 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
   const drawable = (config: MtfConfig, chartInterval: string): MtfInterval[] =>
     enabledIntervals(config).filter((interval) => !isFinerThan(interval, chartInterval))
 
-  const source = (f: PluginFacilities, ctx: BindContext, interval: MtfInterval): SourceSpec<ArevPoint> => {
+  /** The timeframe this pane's graphs start from, or null when it draws none: the overlay
+   * offers no graph, the setting is off, or the root is not among the timeframes drawn. The
+   * graph is made of drawn signals only -- a node with no marker would be a line to nothing. */
+  const graphRoot = (config: MtfConfig, chartInterval: string): MtfInterval | null => {
+    if (!overlay.graph) return null
+    const from = graphConfig(config).from
+    if (from === 'off') return null
+    return drawable(config, chartInterval).includes(from) ? from : null
+  }
+
+  // The series' key plus `|mtf`: the overlay's OWN store, never the registry sub-pane's.
+  // A store keeps one record of which ranges have been fetched, and a sub-pane fetches no
+  // bar grid -- so sharing its store meant a window the sub-pane loaded first counted as
+  // covered, the overlay never fetched that window's grid, and every vote in it was dropped
+  // as not yet closed (a 1h chart drew only the 8h lane: the one timeframe no pane on the
+  // wall had a sub-pane at). The price is fetching the votes twice when both are on a wall.
+  const storeKey = (ctx: BindContext, interval: MtfInterval): string =>
+    `${overlay.sourceKey(ctx.vendor, ctx.ticker, interval)}|mtf`
+
+  const source = (
+    f: PluginFacilities,
+    ctx: BindContext,
+    interval: MtfInterval,
+    root: MtfInterval | null
+  ): SourceSpec<ArevPoint> => {
     const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
-    const chunk = GRID_CHUNK_BARS * f.resolutionDurationMs(interval)
+    const durationMs = f.resolutionDurationMs(interval)
+    const chunk = GRID_CHUNK_BARS * durationMs
+    // How much further back than the chart the graph needs this timeframe, from the chart's
+    // loaded left edge (absolute) -- 0 when it takes no part in a graph.
+    //
+    // The root looks back a fixed number of its own bars, to find the run of same-side root
+    // signals in force at the left edge. Every timeframe under it then reaches back to where
+    // that run began, which it reads off the root's store: the host covers a binding's sources
+    // in order and awaits each, and the root is listed first (`bind`), so the root's window is
+    // already fetched when these are sized.
+    const graphReach = (loadedFrom: number): number => {
+      if (!root) return 0
+      if (interval === root) return rootLookbackMs(root)
+      if (durationMs > f.resolutionDurationMs(root)) return 0
+      const rootStore = peekStore<RegistryStore<ArevPoint>>(storeKey(ctx, root))
+      if (!rootStore) return 0
+      const start = graphStart(storeGraphSignals(root, rootStore), loadedFrom, rootLookbackMs(root))
+      return Math.min(Math.max(0, loadedFrom - start), GRAPH_LOOKBACK_MAX_BARS * durationMs)
+    }
     return {
       id: interval,
-      // The series' key plus `|mtf`: the overlay's OWN store, never the registry sub-pane's.
-      // A store keeps one record of which ranges have been fetched, and a sub-pane fetches no
-      // bar grid -- so sharing its store meant a window the sub-pane loaded first counted as
-      // covered, the overlay never fetched that window's grid, and every vote in it was dropped
-      // as not yet closed (a 1h chart drew only the 8h lane: the one timeframe no pane on the
-      // wall had a sub-pane at). The price is fetching the votes twice when both are on a wall.
-      key: `${overlay.sourceKey(ctx.vendor, ctx.ticker, interval)}|mtf`,
+      key: storeKey(ctx, interval),
       // The SOURCE timeframe, not the chart's: this is what its points are dated on. The
       // AREV sub-pane's spec for this key says the same, so a replay step forgets one
       // amount rather than two (plugins/horizon.ts).
@@ -82,7 +127,8 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
        * differ whenever exactly one of the two intervals is daily-or-coarser. */
       window: (chartRange: Range): Range => {
         const pad = Math.max(WINDOW_PAD_BARS * f.resolutionDurationMs(interval), WINDOW_PAD_FLOOR_MS)
-        const absFrom = toAbsolute(ctx.interval, chartRange.from) - pad
+        const loadedFrom = toAbsolute(ctx.interval, chartRange.from)
+        const absFrom = loadedFrom - graphReach(loadedFrom) - pad
         const absTo = toAbsolute(ctx.interval, chartRange.to - 1) + pad
         return { from: fromAbsolute(interval, absFrom), to: fromAbsolute(interval, absTo) }
       },
@@ -105,10 +151,21 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
         return {
           points: votes.points,
           nextFrom: capped ?? (to < range.to ? to : null),
-          arrays: { [GRID_ARRAY]: grid.map((date) => ({ date })) }
+          arrays: { [GRID_ARRAY]: grid }
         }
       }
     }
+  }
+
+  /** What the legend says about the graph: nothing when the overlay offers none or it is
+   * off, where it starts from, or why it cannot be drawn on this pane. */
+  const graphLabel = (config: MtfConfig, chartInterval: string): string => {
+    if (!overlay.graph) return ''
+    const from = graphConfig(config).from
+    if (from === 'off') return ''
+    if (graphRoot(config, chartInterval)) return ` · graph from ${from}`
+    // Named rather than silently skipped, like a timeframe the chart is too coarse for.
+    return isFinerThan(from, chartInterval) ? ` · graph needs ≤ ${from} chart` : ` · graph needs ${from} on`
   }
 
   const label = (config: MtfConfig, state: BindingState): string => {
@@ -124,7 +181,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
     }
     // Names the active set, which is the one thing eight separate legend rows used to say
     // for free.
-    return `${title} ${shown.join(' ')}`
+    return `${title} ${shown.join(' ')}${graphLabel(config, state.chartInterval)}`
   }
 
   const openPanel = (paneId: string): boolean => {
@@ -155,7 +212,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
       title: `${title} · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
       // No enable row: this overlay's on/off is the indicator being on the pane at all,
       // which the picker and the legend's own close icon already own.
-      fields: MTF_FIELDS,
+      fields: overlay.graph ? [...MTF_GRAPH_FIELDS, ...MTF_FIELDS] : MTF_FIELDS,
       config: configFor(paneIndex),
       defaults: MTF_DEFAULTS,
       onChange: (next) => {
@@ -187,12 +244,15 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
       if (!f) return null
       const config = configFor(ctx.paneIndex)
       const shown = drawable(config, ctx.interval)
+      const root = graphRoot(config, ctx.interval)
+      // The graph's root first: the others' windows are sized from what it holds.
+      const ordered = root ? [root, ...shown.filter((interval) => interval !== root)] : shown
       return {
         // Stores are created only for timeframes switched on: switching all eight on and
         // off again should not leave eight populated caches behind.
-        sources: shown.map((interval) => source(f, ctx, interval)),
+        sources: ordered.map((interval) => source(f, ctx, interval, root)),
         label: (state) => label(config, state),
-        extendData: () => ({ chartInterval: ctx.interval, config })
+        extendData: () => ({ chartInterval: ctx.interval, config, graphRoot: root })
       }
     },
     handleSettings(request: SettingsRequest): boolean {
