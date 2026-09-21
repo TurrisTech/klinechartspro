@@ -69,23 +69,30 @@ export async function fetchMtfPoints(
   return result.s === 'no_data' ? [] : result.points
 }
 
-/** The source timeframe's bar opens over `[from, to)`, ascending — the grid shift.ts
- * walks to find each vote's successor bar. Only the timestamps are used; `/getbars` has
- * no date-only column selector (`columns` is `core` | `all`), so the OHLC comes along
- * and is dropped here rather than being carried through every store and template. */
+/** One source bar as the overlay keeps it: its wire date, and its range. */
+export interface MtfGridBar {
+  date: number
+  high: number
+  low: number
+}
+
+/** The source timeframe's bars over `[from, to)`, ascending — the grid shift.ts walks to
+ * find each vote's successor bar, and the high and low graph.ts prices a signal at (the
+ * extreme of the bar the signal was cast on). The open, close and volume are dropped here
+ * rather than being carried through every store and template. */
 export async function fetchMtfBarGrid(
   vendorSymbol: string,
   interval: MtfInterval,
   from: number,
   to: number
-): Promise<number[]> {
+): Promise<MtfGridBar[]> {
   // Through the tiled path, not `/getbars` directly. The grid is ordinary bar history --
   // exactly what tiles hold -- and asking the API for it meant panning back through fully
   // tiled history still cost one request per grid window per enabled source timeframe.
   // Observed as `resolution=1h&from=…&to=…` firing on a 15m or 3m chart, where 1h is not
   // the pane's own interval and so could only have come from here.
   const bars = await fetchBars(vendorSymbol, interval, from, to, null)
-  return bars.map((bar) => bar.timestamp)
+  return bars.map((bar) => ({ date: bar.timestamp, high: bar.high, low: bar.low }))
 }
 
 export type { KLineData }
