@@ -13,7 +13,7 @@ import type { GraphSide, GraphSignal } from './graph'
 
 const M = 60_000
 const H = 60 * M
-const DURATION: Record<string, number> = { '1D': 24 * H, '8h': 8 * H, '4h': 4 * H, '1h': H, '15m': 15 * M, '5m': 5 * M, '3m': 3 * M }
+const DURATION: Record<string, number> = { '1D': 24 * H, '8h': 8 * H, '4h': 4 * H, '2h': 2 * H, '1h': H, '15m': 15 * M, '5m': 5 * M, '3m': 3 * M }
 
 const sig = (interval: string, knownAt: number, side: GraphSide, price: number): GraphSignal => ({
   interval,
@@ -66,9 +66,12 @@ describe('buildGraphs', () => {
     expect(canStep(sig('8h', 0, 'top', 1), sig('15m', H, 'top', 2), 8)).toBe(false)
   })
 
-  test('only strictly lower timeframes, strictly later, strictly further', () => {
+  test('the same timeframe or a lower one, strictly later, strictly further', () => {
     const parent = sig('4h', 10 * H, 'top', 1.1)
-    expect(canStep(parent, sig('4h', 20 * H, 'top', 1.2), 8)).toBe(false) // same timeframe
+    // The same timeframe, later and higher: the superseding step.
+    expect(canStep(parent, sig('4h', 20 * H, 'top', 1.2), 8)).toBe(true)
+    expect(canStep(parent, sig('4h', 20 * H, 'top', 1.05), 8)).toBe(false) // not further
+    expect(canStep(parent, sig('8h', 20 * H, 'top', 1.2), 8)).toBe(false) // a LONGER timeframe
     expect(canStep(parent, sig('1h', 10 * H, 'top', 1.2), 8)).toBe(false) // same instant
     expect(canStep(parent, sig('1h', 9 * H, 'top', 1.2), 8)).toBe(false) // earlier
     expect(canStep(parent, sig('1h', 11 * H, 'top', 1.1), 8)).toBe(false) // level, not higher
@@ -102,13 +105,20 @@ describe('buildGraphs', () => {
     expect(graphs.map((g) => g.nodes.length)).toEqual([1, 1])
   })
 
-  test('a further same-side root joins the graph as another root, and later nodes hang from it', () => {
+  test('a further same-side root supersedes the last one; one that falls short is another root', () => {
     const graphs = buildGraphs(
-      [sig('8h', 0, 'top', 1.1), sig('8h', 8 * H, 'top', 1.12), sig('1h', 9 * H, 'top', 1.13)],
+      [
+        sig('8h', 0, 'top', 1.1),
+        sig('8h', 8 * H, 'top', 1.12), // higher than the root before it: the same graph, stepped
+        sig('8h', 16 * H, 'top', 1.11), // not higher than 1.12: another root of the same graph
+        sig('1h', 17 * H, 'top', 1.13)
+      ],
       { root: '8h', maxStep: 8 }
     )
     expect(graphs).toHaveLength(1)
-    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '8h@1.12', '1h@1.13 <- 8h@1.12'])
+    // The 1h signal steps from the most recent 8h node it may step from, which is the second
+    // root rather than the higher one before it.
+    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '8h@1.12 <- 8h@1.1', '8h@1.11', '1h@1.13 <- 8h@1.11'])
   })
 
   test('each node hangs from the MOST RECENT node it may step from, so a path can branch', () => {
@@ -116,19 +126,68 @@ describe('buildGraphs', () => {
       [
         sig('8h', 0, 'top', 1.1),
         sig('1h', 2 * H, 'top', 1.15),
-        sig('1h', 3 * H, 'top', 1.12), // not above 1h@1.15, and 1h cannot step from 1h: from the root
-        sig('15m', 4 * H, 'top', 1.13), // above 1h@1.12, the most recent it may step from
-        sig('15m', 5 * H, 'top', 1.16) // above both 1h nodes: the more recent one wins
+        sig('2h', 3 * H, 'top', 1.12), // above the root: joins, though it is under the 1h node
+        sig('15m', 4 * H, 'top', 1.13), // above 2h@1.12, the most recent it may step from
+        sig('15m', 5 * H, 'top', 1.16) // above its own timeframe's last node: it supersedes it
       ],
       { root: '8h', maxStep: 8 }
     )
     expect(shape(graphs[0].nodes)).toEqual([
       '8h@1.1',
       '1h@1.15 <- 8h@1.1',
-      '1h@1.12 <- 8h@1.1',
-      '15m@1.13 <- 1h@1.12',
-      '15m@1.16 <- 1h@1.12'
+      '2h@1.12 <- 8h@1.1',
+      '15m@1.13 <- 2h@1.12',
+      '15m@1.16 <- 15m@1.13'
     ])
+  })
+
+  test('a timeframe that goes further supersedes its own last node, and the two are joined', () => {
+    const graphs = buildGraphs(
+      [
+        sig('8h', 0, 'top', 1.1),
+        sig('1h', 2 * H, 'top', 1.12), // the first 1h: steps from the root
+        sig('1h', 3 * H, 'top', 1.13), // higher than 1h@1.12: supersedes it
+        sig('1h', 4 * H, 'top', 1.11), // below 1h@1.13: back to the root
+        sig('1h', 5 * H, 'top', 1.14) // above the last 1h node again
+      ],
+      { root: '8h', maxStep: 8 }
+    )
+    expect(shape(graphs[0].nodes)).toEqual([
+      '8h@1.1',
+      '1h@1.12 <- 8h@1.1',
+      '1h@1.13 <- 1h@1.12',
+      '1h@1.11 <- 8h@1.1',
+      '1h@1.14 <- 1h@1.11'
+    ])
+  })
+
+  test('only the LAST node of a timeframe is superseded, never one already replaced', () => {
+    const graphs = buildGraphs(
+      [sig('8h', 0, 'bottom', 1.2), sig('1h', 1 * H, 'bottom', 1.18), sig('1h', 2 * H, 'bottom', 1.19), sig('1h', 3 * H, 'bottom', 1.17)],
+      { root: '8h', maxStep: 8 }
+    )
+    // 1h@1.19 did not better 1.18, so it stepped from the root; 1h@1.17 betters THAT one.
+    expect(shape(graphs[0].nodes)).toEqual([
+      '8h@1.2',
+      '1h@1.18 <- 8h@1.2',
+      '1h@1.19 <- 8h@1.2',
+      '1h@1.17 <- 1h@1.19'
+    ])
+  })
+
+  test('superseding is within one graph: a new graph starts from nothing', () => {
+    const graphs = buildGraphs(
+      [
+        sig('8h', 0, 'top', 1.2),
+        sig('1h', 1 * H, 'top', 1.25),
+        sig('8h', 2 * H, 'bottom', 1.1),
+        // In the new graph this 1h signal is the first of its timeframe, whatever the old
+        // graph reached.
+        sig('1h', 3 * H, 'bottom', 1.09)
+      ],
+      { root: '8h', maxStep: 8 }
+    )
+    expect(shape(graphs[1].nodes)).toEqual(['8h@1.1', '1h@1.09 <- 8h@1.1'])
   })
 
   test('nothing joins before the first root signal, and timeframes above the root take no part', () => {

@@ -21,6 +21,12 @@ import { knowableSignals } from './shift'
 //   * a top signal is joined to a later top signal on a LOWER timeframe that is HIGHER, a
 //     bottom signal to a later bottom one that is LOWER -- and the same again from there, so a
 //     path steps down the timeframes while the price keeps going the graph's way;
+//   * a signal SUPERSEDES its own timeframe's last node in the graph when it is later and
+//     further the graph's way -- higher for a top graph, lower for a bottom one -- and the two
+//     are joined by a line (user, 2026-09-23). So a timeframe's own nodes read as a staircase
+//     of its own, and the cross-timeframe step is what starts each one. A signal that does NOT
+//     supersede (it fell short of its timeframe's last node) still joins where it always did,
+//     from the most recent LONGER timeframe's node it may step from;
 //   * a step may skip a timeframe but not too many: "8h -> 1h -> 15m -> 5m is reasonable,
 //     8h -> 3m is not". That is `maxStep`, the most a step may shrink the timeframe by, as a
 //     ratio of nominal lengths -- 8 by default, which is exactly 8h -> 1h. A ratio rather than
@@ -92,11 +98,15 @@ export interface GraphOptions {
   taken?: ReadonlySet<GraphSignal>
 }
 
-/** Whether `child` may hang from `parent`: strictly lower timeframe, by no more than
- * `maxStep`, strictly later, and strictly further the graph's way. */
+/** Whether `child` may hang from `parent`: the same timeframe or a longer one by no more than
+ * `maxStep`, strictly later, and strictly further the graph's way.
+ *
+ * The same timeframe is the SUPERSEDING case -- a timeframe's next node, further along than
+ * its last -- and it is only ever offered the node it supersedes (`buildGraphs`); every other
+ * candidate is a longer timeframe, which is what makes a path step DOWN the timeframes. */
 export function canStep(parent: GraphSignal, child: GraphSignal, maxStep: number): boolean {
   if (child.side !== parent.side) return false
-  if (!(parent.durationMs > child.durationMs)) return false
+  if (!(parent.durationMs >= child.durationMs)) return false
   if (parent.durationMs > child.durationMs * maxStep) return false
   if (!(parent.knownAt < child.knownAt)) return false
   return child.side === 'top' ? child.price > parent.price : child.price < parent.price
@@ -133,21 +143,42 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
     if (graph.nodes.length === 0) graphs.push(graph)
     graph.nodes.push(node)
   }
+  /**
+   * Which node `signal` hangs from in `graph`, or -1 for none.
+   *
+   * Its own timeframe's last node first, when it supersedes it: that is the timeframe carrying
+   * on further, and the line between the two says so. Otherwise the most recent node of a
+   * LONGER timeframe it may step from, which is the cross-timeframe step. Only the LAST node
+   * of its own timeframe is offered -- an older one it also beats was already superseded, and
+   * hanging from that instead would draw a line across the one that replaced it.
+   */
+  const parentFor = (graph: Graph<S>, signal: S): number => {
+    let longer = -1
+    let sameSeen = false
+    for (let i = graph.nodes.length - 1; i >= 0; i--) {
+      const node = graph.nodes[i].signal
+      if (node.interval === signal.interval) {
+        // Only the last one is offered; an older one it also beats was itself superseded.
+        if (!sameSeen && canStep(node, signal, options.maxStep)) return i
+        sameSeen = true
+        continue
+      }
+      if (longer < 0 && node.durationMs > signal.durationMs && canStep(node, signal, options.maxStep)) longer = i
+    }
+    // Nothing of its own timeframe to carry on from: the cross-timeframe step, as ever.
+    return longer
+  }
   for (const signal of ordered) {
     if (signal.interval === options.root) {
       if (!current || current.side !== signal.side) current = { side: signal.side, nodes: [] }
-      if (!options.taken?.has(signal)) add(current, { signal, parent: -1 })
+      // A root signal that supersedes the last one is that graph's root timeframe carrying on,
+      // drawn as a step from it; one that does not is another root of the same graph.
+      if (!options.taken?.has(signal)) add(current, { signal, parent: parentFor(current, signal) })
       continue
     }
     if (!current || signal.side !== current.side) continue
-    // The most recent node it may step from. Nodes are appended in the walk's order, so
-    // scanning back finds the latest-known one first.
-    for (let i = current.nodes.length - 1; i >= 0; i--) {
-      if (canStep(current.nodes[i].signal, signal, options.maxStep)) {
-        add(current, { signal, parent: i })
-        break
-      }
-    }
+    const parent = parentFor(current, signal)
+    if (parent >= 0) add(current, { signal, parent })
   }
   return graphs
 }
