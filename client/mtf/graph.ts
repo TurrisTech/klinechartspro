@@ -98,18 +98,30 @@ export interface GraphOptions {
   taken?: ReadonlySet<GraphSignal>
 }
 
-/** Whether `child` may hang from `parent`: the same timeframe or a longer one by no more than
- * `maxStep`, strictly later, and strictly further the graph's way.
+/**
+ * Whether a line is allowed from `parent` to `child` -- the whole test, as the user stated it
+ * (2026-09-23), and nothing about WHICH parent is chosen (`buildGraphs` decides that):
  *
- * The same timeframe is the SUPERSEDING case -- a timeframe's next node, further along than
- * its last -- and it is only ever offered the node it supersedes (`buildGraphs`); every other
- * candidate is a longer timeframe, which is what makes a path step DOWN the timeframes. */
+ *   1. both signals are the same side;
+ *   2. the later signal is indeed later than the earlier one;
+ *   3. the later signal's casting candle closed the graph's way of the earlier one's -- the
+ *      higher of its open and close for a top graph, the lower for a bottom one;
+ *   4. the later signal is on the same timeframe or a lower one,
+ *
+ * plus the step limit: a lower timeframe may be at most `maxStep` times shorter, which is what
+ * keeps a graph from stepping 8h straight to 3m.
+ *
+ * Rule 4 admits the SAME timeframe because that is the superseding step -- a timeframe's next
+ * node, further along than its last. `buildGraphs` is what keeps that to the node it
+ * supersedes; every other candidate it offers is a higher timeframe.
+ */
 export function canStep(parent: GraphSignal, child: GraphSignal, maxStep: number): boolean {
-  if (child.side !== parent.side) return false
-  if (!(parent.durationMs >= child.durationMs)) return false
-  if (parent.durationMs > child.durationMs * maxStep) return false
-  if (!(parent.knownAt < child.knownAt)) return false
-  return child.side === 'top' ? child.price > parent.price : child.price < parent.price
+  if (child.side !== parent.side) return false // 1
+  if (child.knownAt <= parent.knownAt) return false // 2
+  const further = child.side === 'top' ? child.price > parent.price : child.price < parent.price
+  if (!further) return false // 3
+  if (child.durationMs > parent.durationMs) return false // 4
+  return parent.durationMs <= child.durationMs * maxStep // the step limit
 }
 
 /**
@@ -153,7 +165,7 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
    * hanging from that instead would draw a line across the one that replaced it.
    */
   const parentFor = (graph: Graph<S>, signal: S): number => {
-    let longer = -1
+    let stepDown = -1
     let sameSeen = false
     for (let i = graph.nodes.length - 1; i >= 0; i--) {
       const node = graph.nodes[i].signal
@@ -163,10 +175,13 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
         sameSeen = true
         continue
       }
-      if (longer < 0 && node.durationMs > signal.durationMs && canStep(node, signal, options.maxStep)) longer = i
+      // No timeframe test here: this node is on a DIFFERENT timeframe, every timeframe the
+      // overlay offers is a different length (`api.ts` MTF_INTERVALS, pinned by its own test),
+      // and rule 4 inside `canStep` already refuses a higher one.
+      if (stepDown < 0 && canStep(node, signal, options.maxStep)) stepDown = i
     }
     // Nothing of its own timeframe to carry on from: the cross-timeframe step, as ever.
-    return longer
+    return stepDown
   }
   for (const signal of ordered) {
     if (signal.interval === options.root) {
@@ -183,10 +198,14 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
   return graphs
 }
 
-/** How many of its own bars back the root is searched for the run in force at the chart's
- * left edge. On EURUSD 8h the rank-85 signal switched side 13 times in 558 bars on dev, so a
- * run is ~45 bars and this finds its start with room to spare; a run longer than this is cut
- * at it. Cheap at every root timeframe, the shortest of which is 1h. */
+/** HOW MUCH HISTORY IS FETCHED for a root, in bars of its own timeframe -- a bound on the
+ * read, not a rule of the graph (the rules are `canStep` and `buildGraphs`). Graphs are built
+ * from what this brings back: ~14 months on 1D, ~14 weeks on 8h, ~2.5 weeks on 1h.
+ *
+ * Its one visible consequence is at the left edge: a graph that began further back than this
+ * is cut here, so the oldest graph on the chart starts mid-way. 300 is generous against what
+ * that costs -- on EURUSD 8h the rank-85 signal switched side 13 times in 558 bars on dev, so
+ * a run is ~45 bars -- and the read is cheap at every root timeframe, the shortest being 1h. */
 export const ROOT_LOOKBACK_BARS = 300
 
 /** `ROOT_LOOKBACK_BARS` of `root`, nominally. */
@@ -223,26 +242,27 @@ export function buildRootGraphs<S extends GraphSignal>(
   for (const root of [...roots].sort((a, b) => resolutionDurationMs(b) - resolutionDurationMs(a))) {
     const rootSignals = signals.filter((s) => s.interval === root)
     const from = graphStart(rootSignals, loadedFrom, rootLookbackMs(root))
-    for (const graph of buildGraphs(signals, { root, maxStep, from, taken })) out.push({ ...graph, root })
+    const built = buildGraphs(signals, { root, maxStep, from, taken })
+    for (const graph of built) out.push({ ...graph, root })
     // Steps only: a root node is this root's own, and the roots still to come are all shorter,
     // so it can never be one of their signals anyway.
-    for (const graph of out) for (const node of graph.nodes) if (node.parent >= 0) taken.add(node.signal)
+    for (const graph of built) for (const node of graph.nodes) if (node.parent >= 0) taken.add(node.signal)
   }
   return out
 }
 
 /**
  * The instant graphs are built from, for a chart whose loaded bars begin at `loadedFrom`
- * (absolute): the first signal of the run of same-side root signals in force there, looked
- * for no further back than `lookbackMs`. `loadedFrom` itself when no root signal falls in
- * that span -- the first graph then starts at the first root signal on the chart.
+ * (absolute): the first signal of the run of same-side root signals in force there, within
+ * the `lookbackMs` of history fetched for that root. `loadedFrom` itself when no root signal
+ * falls in that span -- the first graph then starts at the first root signal on the chart.
  *
- * The bound is what makes it the same answer everywhere it is asked. The plugin sizes its
- * fetches from it and the template builds from it, over a root store that may also hold
- * windows from earlier pans with a gap in between; stopping at the look-back keeps the walk
- * inside the one span the fetch guarantees is contiguous. A run older than the look-back is
- * cut there, and the graph drawn at the loaded left edge is then the part of it that starts
- * inside the span.
+ * Reading no further back than the fetch is what makes this the same answer everywhere it is
+ * asked. The plugin sizes its fetches from it and the template builds from it, over a root
+ * store that may also hold windows from earlier pans with a gap in between; stopping at the
+ * fetched span keeps the walk inside the one stretch that is known to be contiguous. A run
+ * that began before it is cut at it, and the oldest graph on the chart is then the part of it
+ * that starts inside the span (`ROOT_LOOKBACK_BARS`).
  */
 export function graphStart(rootSignals: readonly GraphSignal[], loadedFrom: number, lookbackMs: number): number {
   const earliest = loadedFrom - lookbackMs

@@ -5,7 +5,9 @@ import { installWindow } from '../plugins/testing'
 // signal steps from which, and how a stored config carries the graph's settings.
 installWindow()
 const { buildGraphs, buildRootGraphs, canStep, graphStart, storeGraphSignals } = await import('./graph')
-const { MTF_DEFAULTS, fromStoredMtfConfig, graphRoots, toStoredMtfConfig } = await import('./config')
+const { MTF_DEFAULTS, fromStoredMtfConfig, graphLineStyle, graphRoots, toStoredMtfConfig } = await import('./config')
+const { MTF_INTERVALS } = await import('./api')
+const { resolutionDurationMs } = await import('../periods')
 const { GRID_ARRAY, RegistryStore } = await import('../tsregistry/store')
 
 import type { ArevPoint } from '../arev/api'
@@ -32,6 +34,42 @@ const shape = (nodes: { signal: GraphSignal; parent: number }[]) =>
     const parent = n.parent < 0 ? null : nodes[n.parent].signal
     return parent ? `${self} <- ${parent.interval}@${parent.price}` : self
   })
+
+describe('how a graph line is drawn', () => {
+  test('solid and full width into 3m and 5m, thinner and more broken the higher it reaches', () => {
+    const at = (interval: string) => graphLineStyle(interval, 1.5)
+    // The set width is what the lowest timeframes draw at, solid.
+    expect(at('3m')).toEqual({ width: 1.5, dash: [] })
+    expect(at('5m')).toEqual({ width: 1.5, dash: [] })
+    // Everything above is dashed, and the gap grows while the width shrinks.
+    const ladder = ['15m', '30m', '1h', '4h', '1D']
+    const widths = ladder.map((interval) => at(interval).width)
+    const gaps = ladder.map((interval) => at(interval).dash[1])
+    expect(widths).toEqual([...widths].sort((a, b) => b - a))
+    expect(gaps).toEqual([...gaps].sort((a, b) => a - b))
+    expect(widths[0]).toBeLessThan(1.5)
+    expect(at('1D').dash[0]).toBeLessThan(at('1D').dash[1])
+  })
+
+  test('a dash keeps its proportions at any width, and a line never thins away to nothing', () => {
+    expect(graphLineStyle('1D', 3).dash).toEqual(graphLineStyle('1D', 1.5).dash.map((d) => d * 2))
+    expect(graphLineStyle('1D', 0.5).width).toBeGreaterThanOrEqual(0.6)
+    // A timeframe the table does not know draws solid at the set width rather than vanishing.
+    expect(graphLineStyle('1W', 1.5)).toEqual({ width: 1.5, dash: [] })
+  })
+})
+
+describe('the timeframes the overlay offers', () => {
+  test('every one is a different length, which is what lets rule 4 stand alone', () => {
+    // `buildGraphs` picks a cross-timeframe parent with no timeframe test of its own: rule 4
+    // inside `canStep` refuses a HIGHER timeframe, and a different interval of the SAME length
+    // would slip through it as though it were the superseding step. None exists, and this is
+    // what says so.
+    const lengths = MTF_INTERVALS.map((interval) => resolutionDurationMs(interval))
+    expect(new Set(lengths).size).toBe(MTF_INTERVALS.length)
+    expect(lengths.every((ms) => Number.isFinite(ms) && ms > 0)).toBe(true)
+  })
+})
 
 describe('buildGraphs', () => {
   test('a cascade the user described is one path: 8h -> 1h -> 15m -> 5m, each higher', () => {
