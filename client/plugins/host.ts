@@ -73,6 +73,8 @@ export interface PluginHost {
   sync(panes: ChartProPane[]): void
   /** ChartProOptions.indicatorSettingsHandler. */
   handleSettings(request: SettingsRequest): boolean
+  /** ChartProOptions.indicatorSettingsOwned. */
+  ownsSettings(templateName: string): boolean
   /** ChartProOptions.indicatorParamsValidator, or null when no plugin validates. */
   readonly validateParams: ((request: ValidateRequest) => Promise<IndicatorParamsCheck>) | null
   /** Per-plugin, per-pane document state -- what the wall document persists. */
@@ -463,6 +465,9 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     handleSettings(request: SettingsRequest): boolean {
       const plugin = pluginFor(request.indicatorName)
       return plugin?.handleSettings ? plugin.handleSettings(request) : false
+    },
+    ownsSettings(templateName: string): boolean {
+      return pluginFor(templateName)?.ownsSettings?.(templateName) ?? false
     },
     paneState(): Record<string, Record<number, unknown>> {
       const out: Record<string, Record<number, unknown>> = {}

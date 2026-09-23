@@ -174,9 +174,17 @@
   "sessions_week": "Week start line: 0 hide, 1 show",
 
   "indicator_manager": "Indicator Manager",
-  "indicator_manager_hint": "Every indicator in use, on each pane of the wall",
+  "indicator_manager_hint": "Every indicator in use, on each pane of the wall. Expand a row to set its parameters pane by pane.",
   "indicator_manager_empty": "No pane carries an indicator yet. Add one from the Indicator picker.",
   "all_panes": "All",
   "pane": "Pane",
-  "indicator_manager_resize": "Drag to resize; double-click to fit the table"
+  "indicator_manager_resize": "Drag to resize; double-click to fit the table",
+  "indicator_open_settings": "Open settings",
+  "indicator_no_params": "This indicator has no parameters to set.",
+  "indicator_param_mixed": "mixed",
+  "indicator_param_below": "{name} must be at least {bound}",
+  "indicator_param_above": "{name} must be at most {bound}",
+  "indicator_param_fraction": "{name} must be a whole number",
+  "indicator_param_empty": "At least one line has to stay",
+  "indicator_param_refused": "Not available on this pane"
 }

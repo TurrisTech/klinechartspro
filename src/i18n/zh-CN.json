@@ -148,9 +148,17 @@
   "sessions_week": "周起始线: 0 隐藏, 1 显示",
 
   "indicator_manager": "指标管理",
-  "indicator_manager_hint": "所有在用指标，按窗格启用或停用",
+  "indicator_manager_hint": "所有在用指标，按窗格启用或停用；展开一行可逐个窗格设置参数",
   "indicator_manager_empty": "尚无窗格使用指标，请先在指标面板中添加。",
   "all_panes": "全部",
   "pane": "窗格",
-  "indicator_manager_resize": "拖动调整大小；双击恢复适应表格"
+  "indicator_manager_resize": "拖动调整大小；双击恢复适应表格",
+  "indicator_open_settings": "打开设置",
+  "indicator_no_params": "该指标没有可设置的参数。",
+  "indicator_param_mixed": "不一致",
+  "indicator_param_below": "{name} 不能小于 {bound}",
+  "indicator_param_above": "{name} 不能大于 {bound}",
+  "indicator_param_fraction": "{name} 必须是整数",
+  "indicator_param_empty": "至少要保留一条线",
+  "indicator_param_refused": "此窗格不可用"
 }

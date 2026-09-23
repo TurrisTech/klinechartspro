@@ -49,6 +49,11 @@ export interface PaneApi {
   // is persisted rather than living only inside klinecharts until the chart is disposed. The
   // settings dialog goes through this instead of calling chart.overrideIndicator itself.
   setIndicatorParams(chartPaneId: string, name: string, calcParams: unknown[]): void
+  // The chart pane an indicator on this wall pane sits in -- 'candle_pane' for a price-pane
+  // one -- or null when the pane does not hold it. What setIndicatorParams and the settings
+  // handler are keyed by, and only the pane knows it for a sub-pane indicator. Reactive: a
+  // caller reading it inside an effect or derivation re-runs when the indicator comes or goes.
+  indicatorPaneId(name: string, main: boolean): string | null
   createOverlay(name: string, drawing: { mode: OverlayMode; lock: boolean; visible: boolean }): void
   overrideOverlay(patch: Partial<OverlayCreate>): void
   removeDrawings(): void

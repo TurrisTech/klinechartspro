@@ -273,6 +273,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
       if (request.indicatorName !== overlay.templateName) return false
       return openPanel(request.paneId)
     },
+    ownsSettings: (templateName) => templateName === overlay.templateName,
     paneState: {
       hydrate(initial) {
         for (const [index, config] of Object.entries(initial)) {
