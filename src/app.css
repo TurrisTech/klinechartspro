@@ -1462,3 +1462,95 @@
 .kc-indicator-matrix .kc-checkbox {
 	vertical-align: middle;
 }
+
+/* A row's name is the button that expands it to its parameters. */
+.kc-matrix-expand {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	margin-left: -0.25rem;
+	padding: 0 0.25rem 0 0;
+	border: 0;
+	border-radius: var(--radius-sm);
+	background: none;
+	color: inherit;
+	font: inherit;
+	cursor: pointer;
+}
+
+.kc-matrix-expand svg {
+	width: 0.875rem;
+	height: 0.875rem;
+	flex-shrink: 0;
+	color: var(--muted-foreground);
+	transition: rotate 120ms ease;
+}
+
+.kc-matrix-expand[aria-expanded='true'] svg {
+	rotate: 90deg;
+}
+
+.kc-matrix-expand:focus-visible {
+	outline: 3px solid color-mix(in oklab, var(--ring) 50%, transparent);
+	outline-offset: 1px;
+}
+
+/* An expanded row's parameter lines, tinted so they read as belonging to the row above. Their
+   names wrap where a setting's label is a sentence ("Marker: 0 circle, 1 signal, 2 both"). */
+.kc-matrix-param th,
+.kc-matrix-param td {
+	padding-top: 0.25rem;
+	padding-bottom: 0.25rem;
+	background: color-mix(in oklab, var(--muted) 45%, var(--popover));
+}
+
+.kc-matrix-param .kc-matrix-cell[data-active] {
+	background: color-mix(in oklab, var(--primary) 10%, color-mix(in oklab, var(--muted) 45%, var(--popover)));
+}
+
+.kc-indicator-matrix .kc-matrix-param-name {
+	max-width: 14rem;
+	padding-left: 1.5rem;
+	white-space: normal;
+	font-weight: 400;
+	color: var(--muted-foreground);
+}
+
+.kc-matrix-input {
+	width: 4.5rem;
+	height: 1.75rem;
+	padding: 0 0.375rem;
+	text-align: right;
+	font-variant-numeric: tabular-nums;
+}
+
+.kc-matrix-input:disabled {
+	opacity: 0.5;
+}
+
+.kc-matrix-input[data-invalid] {
+	border-color: var(--kc-danger);
+}
+
+/* Waiting on the app's check of the value (IndicatorManager.svelte). */
+.kc-matrix-input[data-checking] {
+	opacity: 0.6;
+}
+
+.kc-matrix-gear {
+	width: 1.75rem;
+	height: 1.75rem;
+}
+
+/* A line spanning every column (the refusals, "no parameters"): the cell is not pinned, its
+   text is, as with the section headings. */
+.kc-indicator-matrix .kc-matrix-note {
+	text-align: left;
+}
+
+.kc-matrix-note > * {
+	position: sticky;
+	left: 1.5rem;
+	display: block;
+	max-width: 32rem;
+}

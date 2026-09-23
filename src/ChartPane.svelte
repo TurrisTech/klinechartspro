@@ -838,6 +838,13 @@
     onStateChange(pane.id)
   }
 
+  // See PaneApi.indicatorPaneId. A sub-pane indicator's chart pane is in the transient map,
+  // which is $state, so a caller deriving from this follows it.
+  function indicatorPaneId(name: string, main: boolean): string | null {
+    if (main) return pane.mainIndicators.includes(name) ? 'candle_pane' : null
+    return subIndicatorMap[name] ?? null
+  }
+
   function applyYAxisSettings(chartPaneId?: string) {
     if (!widget) return
     const chartPaneIds = chartPaneId
@@ -1170,6 +1177,7 @@
       setStyleValue,
       restoreStyles,
       setIndicatorParams,
+      indicatorPaneId,
       createOverlay,
       overrideOverlay,
       removeDrawings,

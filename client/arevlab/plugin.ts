@@ -202,6 +202,7 @@ export function createArevLabPlugin(): IndicatorPlugin {
       if (request.indicatorName !== LAB_TEMPLATE_NAME) return false
       return openPanel(request.paneId)
     },
+    ownsSettings: (templateName) => templateName === LAB_TEMPLATE_NAME,
     paneState: {
       hydrate(initial) {
         for (const [index, config] of Object.entries(initial)) {

@@ -80,7 +80,7 @@
   import IndicatorManager from './IndicatorManager.svelte'
   import LayoutPicker from './LayoutPicker.svelte'
   import type { IndicatorRow } from './state/indicatorMatrix'
-  import { Wall } from './state/wall.svelte'
+  import { type PaneState, Wall } from './state/wall.svelte'
   import { clone } from './utils/object'
   import { SyncBus } from './sync/bus'
   import { samePeriod, sameSymbol } from './sync/follow'
@@ -120,6 +120,7 @@
     indicatorGroups,
     indicatorParamsValidator,
     indicatorSettingsHandler,
+    indicatorSettingsOwned,
     datafeed,
     paneLayout,
     panes,
@@ -229,6 +230,42 @@
           if (seq === paramsCheckSeq) indicatorParamsChecking = false
         })
     }, INDICATOR_PARAMS_DEBOUNCE_MS)
+  }
+
+  // The gear on one indicator, pressed on its legend or in the indicator manager. An app may
+  // own this indicator's settings entirely -- see IndicatorSettingsHandler. It answers true once
+  // it has opened its own UI, and the numeric dialog below never opens for that indicator.
+  function openIndicatorSettings(payload: { paneId: string; chartPaneId: string; name: string; calcParams: unknown[] }): void {
+    if (
+      indicatorSettingsHandler?.({
+        indicatorName: payload.name,
+        paneId: payload.paneId,
+        chartPaneId: payload.chartPaneId,
+        calcParams: payload.calcParams
+      })
+    ) {
+      return
+    }
+    indicatorSettings = {
+      paneId: payload.paneId,
+      chartPaneId: payload.chartPaneId,
+      indicatorName: payload.name,
+      calcParams: payload.calcParams
+    }
+    indicatorSettingsOpen = true
+  }
+
+  // The indicator manager's way to the same gear, for an indicator whose app owns its settings.
+  function openManagedIndicatorSettings(pane: PaneState, row: IndicatorRow): void {
+    const chartPaneId = pane.api?.indicatorPaneId(row.name, row.main)
+    if (!pane.api || !chartPaneId) return
+    const indicator = pane.api.chart.getIndicators({ name: row.name, paneId: chartPaneId })[0]
+    openIndicatorSettings({
+      paneId: pane.id,
+      chartPaneId,
+      name: row.name,
+      calcParams: [...(indicator?.calcParams ?? [])]
+    })
   }
 
   $effect(() => {
@@ -1154,28 +1191,7 @@
             {bus}
             onActivate={(id) => wall.activate(id)}
             onStateChange={onPaneStateChange}
-            onIndicatorSettings={(payload) => {
-              // An app may own this indicator's settings entirely -- see
-              // IndicatorSettingsHandler. It answers true once it has opened its own UI,
-              // and the numeric dialog below never opens for that indicator.
-              if (
-                indicatorSettingsHandler?.({
-                  indicatorName: payload.name,
-                  paneId: payload.paneId,
-                  chartPaneId: payload.chartPaneId,
-                  calcParams: payload.calcParams
-                })
-              ) {
-                return
-              }
-              indicatorSettings = {
-                paneId: payload.paneId,
-                chartPaneId: payload.chartPaneId,
-                indicatorName: payload.name,
-                calcParams: payload.calcParams
-              }
-              indicatorSettingsOpen = true
-            }}
+            onIndicatorSettings={openIndicatorSettings}
           />
         {/each}
       </div>
@@ -1301,6 +1317,9 @@
       {locale}
       {portalProps}
       labelFor={indicatorRowLabel}
+      validate={indicatorParamsValidator}
+      settingsOwned={indicatorSettingsOwned}
+      openSettings={openManagedIndicatorSettings}
     />
 
     <Dialog.Root bind:open={timezoneDialogOpen}>

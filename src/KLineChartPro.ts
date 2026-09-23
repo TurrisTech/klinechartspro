@@ -78,6 +78,7 @@ export default class KLineChartPro implements ChartPro {
         // from "checked and fine", and only the first leaves the UI exactly as it was.
         indicatorParamsValidator: options.indicatorParamsValidator ?? null,
         indicatorSettingsHandler: options.indicatorSettingsHandler ?? null,
+        indicatorSettingsOwned: options.indicatorSettingsOwned ?? null,
         datafeed: options.datafeed,
         paneLayout,
         panes: options.panes ?? [],

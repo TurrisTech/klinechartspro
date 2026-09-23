@@ -99,6 +99,7 @@ export function createArev21DivergencePlugin(load: () => Promise<RegistryIndicat
       if (!isDivergenceIndicator(request.indicatorName)) return false
       return openPanel(request.paneId)
     },
+    ownsSettings: (templateName) => isDivergenceIndicator(templateName),
     paneState: {
       hydrate(initial) {
         for (const [index, config] of Object.entries(initial)) {

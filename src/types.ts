@@ -268,6 +268,10 @@ export interface ChartProOptions {
   /** Consulted before the built-in indicator settings dialog opens; see
    * IndicatorSettingsHandler. Omitted, every indicator uses the built-in dialog. */
   indicatorSettingsHandler?: IndicatorSettingsHandler | null
+  /** True for a template whose settings `indicatorSettingsHandler` opens its own UI for. The
+   * indicator manager asks it before offering a row's parameters inline, and offers that UI
+   * instead -- inline number fields would bypass it. Omitted, nothing is claimed. */
+  indicatorSettingsOwned?: ((indicatorName: string) => boolean) | null
   datafeed: Datafeed | DatafeedFactory
 
   /** Layout preset id (see src/config/layouts.ts). Defaults to '1', a single chart. */

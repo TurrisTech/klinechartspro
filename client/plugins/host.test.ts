@@ -362,6 +362,7 @@ describe('createPluginHost', () => {
       matches: (name) => name === 'CFG',
       bind: () => null,
       handleSettings: (request) => request.paneId === 'p1',
+      ownsSettings: (name) => name === 'CFG',
       validateParams: async (request) => ({ ok: request.calcParams[0] !== 0, reason: 'zero' }),
       paneState: {
         hydrate: (initial) => Object.assign(state, initial),
@@ -372,6 +373,9 @@ describe('createPluginHost', () => {
     hosts.push(host)
     expect(host.handleSettings({ indicatorName: 'CFG', paneId: 'p1', chartPaneId: 'candle_pane', calcParams: [] })).toBe(true)
     expect(host.handleSettings({ indicatorName: 'MA', paneId: 'p1', chartPaneId: 'candle_pane', calcParams: [] })).toBe(false)
+    // Asked without opening anything, by the indicator manager; no plugin claims MA.
+    expect(host.ownsSettings('CFG')).toBe(true)
+    expect(host.ownsSettings('MA')).toBe(false)
     expect(host.validateParams).not.toBeNull()
     const check = await host.validateParams?.({ indicatorName: 'CFG', calcParams: [0], symbol: {} as never, period: {} as never })
     expect(check).toEqual({ ok: false, reason: 'zero' })

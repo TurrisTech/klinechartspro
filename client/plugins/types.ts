@@ -269,6 +269,9 @@ export interface IndicatorPlugin {
   bind(ctx: BindContext): BindingSpec | null
   /** Claim the gear on one of this plugin's indicators (ChartProOptions.indicatorSettingsHandler). */
   handleSettings?(request: SettingsRequest): boolean
+  /** Whether `handleSettings` opens a UI for this template -- asked without opening it, by the
+   * indicator manager (ChartProOptions.indicatorSettingsOwned). */
+  ownsSettings?(templateName: string): boolean
   /** Answer the params dialog (ChartProOptions.indicatorParamsValidator). */
   validateParams?(request: ValidateRequest): Promise<IndicatorParamsCheck>
   /** Per-pane document state, keyed by pane index -- what the wall document persists. */
