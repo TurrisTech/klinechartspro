@@ -1,5 +1,5 @@
 import type { Chart, Indicator } from 'klinecharts'
-import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck } from '../../src'
+import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, IndicatorSettingsModel } from '../../src'
 import { knownThrough } from './horizon'
 import { dropStore, liveStores, storeFor, WindowStore } from './store'
 import type {
@@ -75,6 +75,8 @@ export interface PluginHost {
   handleSettings(request: SettingsRequest): boolean
   /** ChartProOptions.indicatorSettingsOwned. */
   ownsSettings(templateName: string): boolean
+  /** ChartProOptions.indicatorSettingsModel: the plugin's settings, addressed by wall pane. */
+  settingsModel(templateName: string): IndicatorSettingsModel | null
   /** ChartProOptions.indicatorParamsValidator, or null when no plugin validates. */
   readonly validateParams: ((request: ValidateRequest) => Promise<IndicatorParamsCheck>) | null
   /** Per-plugin, per-pane document state -- what the wall document persists. */
@@ -468,6 +470,24 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     },
     ownsSettings(templateName: string): boolean {
       return pluginFor(templateName)?.ownsSettings?.(templateName) ?? false
+    },
+    settingsModel(templateName: string): IndicatorSettingsModel | null {
+      const settings = pluginFor(templateName)?.settings?.(templateName)
+      if (!settings) return null
+      // A plugin keeps its configs by pane INDEX (what the wall document stores them under);
+      // the library addresses panes by id. Only a wired pane has an index, and only a wired
+      // pane can be holding the indicator.
+      return {
+        fields: settings.fields,
+        read: (paneId) => {
+          const entry = wired.get(paneId)
+          return entry ? settings.read(entry.paneIndex) : null
+        },
+        write: (paneId, key, value) => {
+          const entry = wired.get(paneId)
+          if (entry) settings.write(entry.paneIndex, paneId, key, value)
+        }
+      }
     },
     paneState(): Record<string, Record<number, unknown>> {
       const out: Record<string, Record<number, unknown>> = {}

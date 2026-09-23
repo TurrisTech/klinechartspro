@@ -121,6 +121,7 @@
     indicatorParamsValidator,
     indicatorSettingsHandler,
     indicatorSettingsOwned,
+    indicatorSettingsModel,
     datafeed,
     paneLayout,
     panes,
@@ -1319,6 +1320,7 @@
       labelFor={indicatorRowLabel}
       validate={indicatorParamsValidator}
       settingsOwned={indicatorSettingsOwned}
+      settingsModel={indicatorSettingsModel}
       openSettings={openManagedIndicatorSettings}
     />
 

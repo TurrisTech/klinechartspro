@@ -25,6 +25,7 @@ new KLineChartPro(
     indicatorParamsValidator?: IndicatorParamsValidator | null;
     indicatorSettingsHandler?: IndicatorSettingsHandler | null;
     indicatorSettingsOwned?: ((indicatorName: string) => boolean) | null;
+    indicatorSettingsModel?: ((indicatorName: string) => IndicatorSettingsModel | null) | null;
 
     // 多图布局（1-12 个子图），见下方"多图布局"一节。
     paneLayout?: string;
@@ -102,7 +103,27 @@ type IndicatorSettingsHandler = (request: {
 
   指标管理器中展开的参数行也会调用它：每提交一个输入项（回车、离开输入框或点击步进按钮）就以该子图的 `symbol` 与 `period` 调用一次，不去抖；`All` 列的输入项对每个持有该指标的子图各调用一次。此时 `calcParams` 为将要应用的完整参数（空输入项已替换为默认值），`ok: false` 时该子图不应用，并在该行下显示 `reason`；`ok: true` 时 `hint` 作为该输入项的提示文字（`title`）；Promise 被拒绝同样视同没有结果，照常应用
 + `indicatorSettingsHandler` 由应用接管指标的设置界面。默认 `null`：所有指标都使用内置设置对话框。用户在任一子图中点击指标提示栏上的设置按钮时、内置对话框打开之前同步调用。`paneId` 为多图布局中的子图（`'p1'`..`'pN'`），`chartPaneId` 为该子图内部的 klinecharts 面板（主图指标为 `'candle_pane'`），`calcParams` 为该指标当前参数的副本。应用已为该指标打开自己的界面时返回 `true`：内置对话框不会打开（因此也不会调用 `indicatorParamsValidator`），库也不再做任何处理——应用自己的界面所做的修改由应用负责应用与持久化。返回 `false` 则照常打开内置对话框。返回值会被立即按真假判断，因此必须返回布尔值而不是 Promise：Promise 会被视为 `true`
-+ `indicatorSettingsOwned` 告诉指标管理器哪些指标的设置界面由 `indicatorSettingsHandler` 打开。默认 `null`：没有。指标管理器展开一行时调用；返回 `true` 的指标不显示参数输入项——那样会绕过应用自己的界面——而是在每个持有它的子图下显示一个设置按钮，点击后先关闭指标管理器，再以该子图调用 `indicatorSettingsHandler`，与点击指标提示栏上的设置按钮相同。只应对 `indicatorSettingsHandler` 会返回 `true` 的模板返回 `true`，且本身不得打开任何界面
++ `indicatorSettingsOwned` 告诉指标管理器哪些指标的设置界面由 `indicatorSettingsHandler` 打开。默认 `null`：没有。指标管理器展开一行时调用；返回 `true` 的指标不显示参数输入项——那样会绕过应用自己的界面——而是在每个持有它的子图下显示一个设置按钮，点击后先关闭指标管理器，再以该子图调用 `indicatorSettingsHandler`，与点击指标提示栏上的设置按钮相同。只应对 `indicatorSettingsHandler` 会返回 `true` 的模板返回 `true`，且本身不得打开任何界面。`indicatorSettingsModel` 为该模板给出字段时，以字段为准，不显示设置按钮
++ `indicatorSettingsModel` 把应用自己的、按子图保存的指标设置（不是 `calcParams`——例如每个周期一种颜色和大小）交给指标管理器直接编辑。默认 `null`：没有。指标管理器展开一行时调用；返回 `IndicatorSettingsModel` 的指标，每个字段各占一行，每个持有该指标的子图下各有一个控件，`All` 列一次写入所有子图（各子图取值不同时显示“mixed”）：
+
+```typescript
+type IndicatorSettingField =
+  | { kind: 'group'; label: string; fields: IndicatorSettingField[]; when?: IndicatorSettingFieldCondition }
+  | { kind: 'number'; key: string; label: string; min: number; max: number; step: number; integer?: boolean; when?: IndicatorSettingFieldCondition }
+  | { kind: 'switch'; key: string; label: string; when?: IndicatorSettingFieldCondition }
+  | { kind: 'select'; key: string; label: string; options: { value: string; label: string }[]; when?: IndicatorSettingFieldCondition }
+  | { kind: 'color'; key: string; label: string; when?: IndicatorSettingFieldCondition }
+
+interface IndicatorSettingFieldCondition { key: string; is: unknown[] }
+
+interface IndicatorSettingsModel {
+  fields: IndicatorSettingField[];
+  read(paneId: string): object | null;
+  write(paneId: string, key: string, value: unknown): void;
+}
+```
+
+  `key` 是该设置对象中的点分路径（数字段索引数组）。`group` 在管理器中是可展开的小标题（超过三个分组时默认收起）；`when` 为真时该字段才适用于某个子图——不适用的子图下不显示控件。`read` 返回该子图的完整设置对象（该子图没有时返回 `null`），`write` 写入一个字段：数字已按 `min`/`max`/`integer` 收敛，开关、选项与颜色在改动时立即写入（颜色在拖动中持续写入）。应用负责应用、持久化与重绘，与它自己的设置面板完全相同；管理器每次写入后重新 `read`，不会主动感知应用在别处做的修改
 
 ## 多图布局
 1 到 12 个子图（"pane"）组成可配置的网格，共用一套工具栏，作用于当前**激活**的子图（带彩色边框），支持十字光标联动和点击跳转日期。完全向后兼容：不传入以下任何选项时，行为与单图表完全一致。

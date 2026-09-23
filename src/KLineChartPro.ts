@@ -79,6 +79,7 @@ export default class KLineChartPro implements ChartPro {
         indicatorParamsValidator: options.indicatorParamsValidator ?? null,
         indicatorSettingsHandler: options.indicatorSettingsHandler ?? null,
         indicatorSettingsOwned: options.indicatorSettingsOwned ?? null,
+        indicatorSettingsModel: options.indicatorSettingsModel ?? null,
         datafeed: options.datafeed,
         paneLayout,
         panes: options.panes ?? [],

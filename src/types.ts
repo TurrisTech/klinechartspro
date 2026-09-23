@@ -216,6 +216,53 @@ export type IndicatorSettingsHandler = (request: {
   calcParams: unknown[]
 }) => boolean
 
+/** Show a settings field only while another field of the same config is one of `is`. */
+export interface IndicatorSettingFieldCondition {
+  key: string
+  is: unknown[]
+}
+
+/** One field of an app-owned indicator's settings -- the vocabulary of the app's own settings
+ * panels (a dotted `key` path into that indicator's config, and a control kind), so the
+ * indicator manager can draw the same settings those panels do. A `group` titles the fields
+ * inside it and has no value of its own. */
+export type IndicatorSettingField =
+  | { kind: 'group'; label: string; fields: IndicatorSettingField[]; when?: IndicatorSettingFieldCondition }
+  | {
+      kind: 'select'
+      key: string
+      label: string
+      options: { value: string; label: string }[]
+      when?: IndicatorSettingFieldCondition
+    }
+  | {
+      kind: 'number'
+      key: string
+      label: string
+      min: number
+      max: number
+      step: number
+      /** The value is kept whole. */
+      integer?: boolean
+      when?: IndicatorSettingFieldCondition
+    }
+  | { kind: 'switch'; key: string; label: string; when?: IndicatorSettingFieldCondition }
+  | { kind: 'color'; key: string; label: string; when?: IndicatorSettingFieldCondition }
+
+/** An app-owned indicator's settings, per wall pane, for the indicator manager to edit inline.
+ *
+ * The settings a flat numeric `calcParams` array cannot hold -- a colour and a size per
+ * timeframe, say -- live in the app's own per-pane config. This is that config's shape and a
+ * way to read and write it one pane at a time; the app applies, persists and redraws a write,
+ * exactly as its own settings panel would. */
+export interface IndicatorSettingsModel {
+  fields: IndicatorSettingField[]
+  /** The pane's whole config, read by the fields' `key` paths; null when the pane has none. */
+  read(paneId: string): object | null
+  /** One field of one pane. A number arrives already clamped to the field's bounds. */
+  write(paneId: string, key: string, value: unknown): void
+}
+
 /** Where an app may mount its own chrome inside the chart shell.
  *
  * - `toolbar` — the top rail, immediately after the timeframe controls, so what an app adds
@@ -272,6 +319,11 @@ export interface ChartProOptions {
    * indicator manager asks it before offering a row's parameters inline, and offers that UI
    * instead -- inline number fields would bypass it. Omitted, nothing is claimed. */
   indicatorSettingsOwned?: ((indicatorName: string) => boolean) | null
+  /** An app-owned indicator's settings as fields the indicator manager edits inline, per
+   * pane; see IndicatorSettingsModel. Null for a template the app does not describe, which
+   * then gets the app's own UI (`indicatorSettingsOwned`) or its numeric params. Omitted, no
+   * template is described. */
+  indicatorSettingsModel?: ((indicatorName: string) => IndicatorSettingsModel | null) | null
   datafeed: Datafeed | DatafeedFactory
 
   /** Layout preset id (see src/config/layouts.ts). Defaults to '1', a single chart. */

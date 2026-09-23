@@ -1510,10 +1510,68 @@
 
 .kc-indicator-matrix .kc-matrix-param-name {
 	max-width: 14rem;
-	padding-left: 1.5rem;
+	/* An app-owned indicator's fields nest in groups (IndicatorManager.svelte sets the depth). */
+	padding-left: calc(1.5rem + var(--kc-depth, 0) * 0.875rem);
 	white-space: normal;
 	font-weight: 400;
 	color: var(--muted-foreground);
+}
+
+/* A group heading inside an expanded row: it opens and closes like the row does. */
+.kc-indicator-matrix .kc-matrix-group .kc-matrix-param-name {
+	font-weight: 500;
+	color: var(--foreground);
+}
+
+.kc-matrix-select {
+	height: 1.75rem;
+	max-width: 7.5rem;
+	padding: 0 0.375rem;
+	font-size: 0.8125rem;
+}
+
+/* A colour per pane, the swatch filling the box. Where the All column's panes differ there is no
+   one colour to show, so the swatch gives way to a hatch. */
+.kc-matrix-color {
+	width: 2.25rem;
+	height: 1.75rem;
+	padding: 2px;
+	border: 1px solid var(--input);
+	border-radius: var(--radius-md);
+	background: transparent;
+	cursor: pointer;
+	vertical-align: middle;
+}
+
+.kc-matrix-color:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+
+.kc-matrix-color::-webkit-color-swatch-wrapper {
+	padding: 0;
+}
+
+.kc-matrix-color::-webkit-color-swatch {
+	border: none;
+	border-radius: calc(var(--radius-md) - 2px);
+}
+
+.kc-matrix-color::-moz-color-swatch {
+	border: none;
+	border-radius: calc(var(--radius-md) - 2px);
+}
+
+.kc-matrix-color[data-mixed] {
+	background: repeating-linear-gradient(45deg, var(--muted-foreground) 0 2px, transparent 2px 6px);
+}
+
+.kc-matrix-color[data-mixed]::-webkit-color-swatch {
+	opacity: 0;
+}
+
+.kc-matrix-color[data-mixed]::-moz-color-swatch {
+	opacity: 0;
 }
 
 .kc-matrix-input {

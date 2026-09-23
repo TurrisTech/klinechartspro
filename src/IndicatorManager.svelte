@@ -14,15 +14,21 @@
     coverage,
     holds,
     type IndicatorRow,
+    lineApplies,
     type ParamInput,
     type ParamProblem,
     resolveParams,
     rowKey,
+    type SettingLine,
+    settingLines,
+    settleSetting,
     sharedParam,
+    sharedSetting,
     usedIndicators,
+    valueAt,
     withParam
   } from './state/indicatorMatrix'
-  import type { IndicatorParamsValidator } from './types'
+  import type { IndicatorParamsValidator, IndicatorSettingField, IndicatorSettingsModel } from './types'
   import { type Box, dragOffset, type Offset, resizeBox, type Size } from './utils/drag'
 
   // Every indicator in use on the wall against every visible pane: a cell is "this indicator on
@@ -43,6 +49,7 @@
     labelFor,
     validate,
     settingsOwned,
+    settingsModel,
     openSettings
   }: {
     open: boolean
@@ -55,6 +62,8 @@
     validate: IndicatorParamsValidator | null
     /** ChartProOptions.indicatorSettingsOwned: such a row offers the app's own settings UI. */
     settingsOwned: ((indicatorName: string) => boolean) | null
+    /** ChartProOptions.indicatorSettingsModel: such a row edits the app's per-pane config inline. */
+    settingsModel: ((indicatorName: string) => IndicatorSettingsModel | null) | null
     /** The gear for one indicator on one pane, as its legend would press it. */
     openSettings: (pane: PaneState, row: IndicatorRow) => void
   } = $props()
@@ -244,6 +253,71 @@
     return Object.entries(refusals).flatMap(([key, reasons]) => (key.startsWith(prefix) ? reasons : []))
   }
 
+  // -- An app's own settings (IndicatorSettingsModel) ---------------------------------------------
+  // The fields of the app's own settings panel, one line each, a heading per group. Values are
+  // written as the panel writes them -- a number settled to its bounds, a switch, a choice or a
+  // colour as soon as it changes -- so there is nothing to refuse and no message to show.
+
+  /** A pane's config for the row, or null where the pane does not hold it. Not reactive on the
+   * app's side: `revision` is what re-reads it after a write from here. */
+  function readConfig(pane: PaneState, row: IndicatorRow, model: IndicatorSettingsModel): object | null {
+    void revision
+    if (!pane.api?.indicatorPaneId(row.name, row.main)) return null
+    return model.read(pane.id)
+  }
+
+  // Groups opened or closed by hand, by `${rowKey}/${group id}`. Unset, a group is open unless
+  // the fields fall into more than three -- the MTF overlay's eleven (its graph, then a group
+  // per timeframe) would otherwise be some sixty lines in one row.
+  let groupOpen = $state.raw<Record<string, boolean>>({})
+  function isGroupOpen(row: IndicatorRow, id: string, fields: readonly IndicatorSettingField[]): boolean {
+    const set = groupOpen[`${rowKey(row)}/${id}`]
+    return set ?? fields.filter((field) => field.kind === 'group').length <= 3
+  }
+  function toggleGroup(row: IndicatorRow, id: string, fields: readonly IndicatorSettingField[]): void {
+    groupOpen = { ...groupOpen, [`${rowKey(row)}/${id}`]: !isGroupOpen(row, id, fields) }
+  }
+
+  /** Where one field is written to: its pane, or for the All column every pane it applies to. */
+  function settingTargets(line: SettingLine, configs: ReadonlyArray<object | null>, column: PaneState | 'all'): PaneState[] {
+    if (column !== 'all') return [column]
+    return panes.filter((_, index) => lineApplies(line, configs[index]))
+  }
+
+  function writeSetting(
+    model: IndicatorSettingsModel,
+    line: SettingLine,
+    configs: ReadonlyArray<object | null>,
+    column: PaneState | 'all',
+    value: unknown
+  ): void {
+    if (line.kind !== 'field') return
+    for (const pane of settingTargets(line, configs, column)) model.write(pane.id, line.field.key, value)
+    revision++
+  }
+
+  /** A number committed: settled to the field's bounds, written, and the input set to what the
+   * pane now draws with. An emptied input goes back to what it held. */
+  function commitSetting(
+    event: Event,
+    model: IndicatorSettingsModel,
+    line: SettingLine,
+    configs: ReadonlyArray<object | null>,
+    column: PaneState | 'all',
+    held: string
+  ): void {
+    if (line.kind !== 'field' || line.field.kind !== 'number') return
+    const input = event.currentTarget as HTMLInputElement
+    const typed = input.valueAsNumber
+    if (!Number.isFinite(typed)) {
+      input.value = held
+      return
+    }
+    const settled = settleSetting(line.field, typed)
+    writeSetting(model, line, configs, column, settled)
+    input.value = String(settled)
+  }
+
   // The app's own settings UI lives outside this dialog, which is modal and would keep it from
   // being used: close the dialog first, and open that UI on the next task, after the close has
   // restored focus to the manager's button -- otherwise the restore lands afterwards and takes
@@ -358,7 +432,10 @@
   {@const settings = indicatorSettingsFor(row.name)}
   {@const held = panes.map((pane) => liveParams(pane, row))}
   {@const columns = panes.length + 2}
-  {#if settingsOwned?.(row.name)}
+  {@const model = settingsModel?.(row.name) ?? null}
+  {#if model}
+    {@render modelSettings(row, model)}
+  {:else if settingsOwned?.(row.name)}
     <tr class="kc-matrix-param">
       <th scope="row" class="kc-matrix-name kc-matrix-param-name">{i18n('setting', locale)}</th>
       <td class="kc-matrix-all"></td>
@@ -440,6 +517,122 @@
           {/each}
         </td>
       </tr>
+    {/if}
+  {/if}
+{/snippet}
+
+<!-- The lines of an app-owned indicator's settings (IndicatorSettingsModel): group headings that
+     open and close, and a field per line with a control under each pane it applies to. -->
+{#snippet modelSettings(row: IndicatorRow, model: IndicatorSettingsModel)}
+  {@const configs = panes.map((pane) => readConfig(pane, row, model))}
+  {#each settingLines(model.fields) as line, index (index)}
+    {#if line.groups.every((id) => isGroupOpen(row, id, model.fields)) && configs.some((config) => lineApplies(line, config))}
+      {#if line.kind === 'group'}
+        {@const isOpen = isGroupOpen(row, line.id, model.fields)}
+        <tr class="kc-matrix-param kc-matrix-group">
+          <th scope="row" class="kc-matrix-name kc-matrix-param-name" style={`--kc-depth: ${line.depth}`}>
+            <button
+              type="button"
+              class="kc-matrix-expand"
+              aria-expanded={isOpen}
+              onclick={() => toggleGroup(row, line.id, model.fields)}
+            >
+              <ChevronRightIcon />
+              <span>{line.label}</span>
+            </button>
+          </th>
+          <td colspan={panes.length + 1}></td>
+        </tr>
+      {:else}
+        <tr class="kc-matrix-param">
+          <th scope="row" class="kc-matrix-name kc-matrix-param-name" style={`--kc-depth: ${line.depth}`} title={line.field.label}>
+            {line.field.label}
+          </th>
+          <td class="kc-matrix-all">
+            {@render settingControl(row, model, line, configs, 'all')}
+          </td>
+          {#each panes as pane, index (pane.id)}
+            <td class="kc-matrix-cell" data-active={pane.id === activeId || undefined}>
+              {#if lineApplies(line, configs[index])}
+                {@render settingControl(row, model, line, configs, pane)}
+              {/if}
+            </td>
+          {/each}
+        </tr>
+      {/if}
+    {/if}
+  {/each}
+{/snippet}
+
+<!-- One field's control, for one pane or for All -- where it shows what the panes it applies to
+     agree on, and marks where they differ. -->
+{#snippet settingControl(
+  row: IndicatorRow,
+  model: IndicatorSettingsModel,
+  line: SettingLine,
+  configs: ReadonlyArray<object | null>,
+  column: PaneState | 'all'
+)}
+  {#if line.kind === 'field'}
+    {@const field = line.field}
+    {@const shared =
+      column === 'all'
+        ? sharedSetting(configs.map((config) => (lineApplies(line, config) ? config : null)), field.key)
+        : { value: valueAt(configs[panes.indexOf(column)], field.key) }}
+    {@const mixed = shared === 'mixed'}
+    {@const value = shared && shared !== 'mixed' ? shared.value : undefined}
+    {@const where = column === 'all' ? i18n('all_panes', locale) : `${i18n('pane', locale)} ${panes.indexOf(column) + 1}`}
+    {@const label = `${labelFor(row)} ${field.label}: ${where}`}
+    {#if field.kind === 'number'}
+      <input
+        class="kc-input kc-matrix-input"
+        type="number"
+        min={field.min}
+        max={field.max}
+        step={field.step}
+        aria-label={label}
+        disabled={shared === null}
+        placeholder={mixed ? i18n('indicator_param_mixed', locale) : ''}
+        value={typeof value === 'number' ? String(value) : ''}
+        onchange={(event) => commitSetting(event, model, line, configs, column, typeof value === 'number' ? String(value) : '')}
+      />
+    {:else if field.kind === 'switch'}
+      <Checkbox.Root
+        class="kc-checkbox"
+        aria-label={label}
+        disabled={shared === null}
+        checked={value === true}
+        indeterminate={mixed}
+        onCheckedChange={(checked) => writeSetting(model, line, configs, column, checked === true)}
+      >
+        {#snippet children({ checked, indeterminate })}
+          {#if indeterminate}<MinusIcon />{:else if checked}<CheckIcon />{/if}
+        {/snippet}
+      </Checkbox.Root>
+    {:else if field.kind === 'select'}
+      <select
+        class="kc-select-trigger kc-matrix-select"
+        aria-label={label}
+        disabled={shared === null}
+        value={mixed ? '' : String(value ?? '')}
+        onchange={(event) => writeSetting(model, line, configs, column, event.currentTarget.value)}
+      >
+        {#if mixed}<option value="" disabled>{i18n('indicator_param_mixed', locale)}</option>{/if}
+        {#each field.options as option (option.value)}
+          <option value={option.value}>{option.label}</option>
+        {/each}
+      </select>
+    {:else if field.kind === 'color'}
+      <input
+        class="kc-matrix-color"
+        type="color"
+        aria-label={label}
+        disabled={shared === null}
+        title={mixed ? i18n('indicator_param_mixed', locale) : String(value ?? '')}
+        data-mixed={mixed || undefined}
+        value={typeof value === 'string' ? value : '#000000'}
+        oninput={(event) => writeSetting(model, line, configs, column, event.currentTarget.value)}
+      />
     {/if}
   {/if}
 {/snippet}

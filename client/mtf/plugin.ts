@@ -1,7 +1,18 @@
 import type { IndicatorGroup } from '../../src'
+import { setByPath } from '../chartlayers/settings'
 import { peekStore } from '../plugins/store'
 import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
-import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
+import type {
+  BindContext,
+  BindingSpec,
+  BindingState,
+  IndicatorPlugin,
+  PluginFacilities,
+  PluginSettings,
+  Range,
+  SettingsRequest,
+  SourceSpec
+} from '../plugins/types'
 import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
 import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphConfig, graphRoots, type MtfConfig } from './config'
 import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
@@ -191,6 +202,31 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
     return `${title} ${shown.join(' ')}${graphLabel(config, state.chartInterval)}`
   }
 
+  // Only an overlay that offers a graph shows the graph's settings.
+  const fields = overlay.graph ? [...MTF_GRAPH_FIELDS, ...MTF_FIELDS] : MTF_FIELDS
+
+  /** A pane's new config, from its panel or from the indicator manager: kept, persisted, and
+   * only that pane redrawn -- the settings belong to it, so another pane showing the same
+   * instrument keeps whatever it was set to. */
+  const applyConfig = (paneIndex: number, paneId: string, next: MtfConfig): void => {
+    const f = facilities
+    if (!f) return
+    configs[paneIndex] = next
+    configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
+    f.requestPersist()
+    f.requestReconcile(paneId)
+  }
+
+  const settings: PluginSettings = {
+    fields,
+    read: (paneIndex) => configFor(paneIndex),
+    write: (paneIndex, paneId, key, value) => {
+      const next = structuredClone(configFor(paneIndex))
+      setByPath(next, key, value)
+      applyConfig(paneIndex, paneId, next)
+    }
+  }
+
   const openPanel = (paneId: string): boolean => {
     const f = facilities
     const info = f?.paneInfo(paneId)
@@ -219,17 +255,10 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
       title: `${title} · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
       // No enable row: this overlay's on/off is the indicator being on the pane at all,
       // which the picker and the legend's own close icon already own.
-      fields: overlay.graph ? [...MTF_GRAPH_FIELDS, ...MTF_FIELDS] : MTF_FIELDS,
+      fields,
       config: configFor(paneIndex),
       defaults: MTF_DEFAULTS,
-      onChange: (next) => {
-        configs[paneIndex] = next
-        configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
-        f.requestPersist()
-        // Only this pane: the settings belong to it, so another pane showing the same
-        // instrument keeps whatever it was set to.
-        f.requestReconcile(paneId)
-      },
+      onChange: (next) => applyConfig(paneIndex, paneId, next),
       onClose: () => {
         panel = null
       }
@@ -274,6 +303,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
       return openPanel(request.paneId)
     },
     ownsSettings: (templateName) => templateName === overlay.templateName,
+    settings: (templateName) => (templateName === overlay.templateName ? settings : null),
     paneState: {
       hydrate(initial) {
         for (const [index, config] of Object.entries(initial)) {
