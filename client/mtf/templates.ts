@@ -1,7 +1,7 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import type { MtfInterval } from './api'
-import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, type MtfConfig, type MtfTimeframeStyle } from './config'
+import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, graphLineStyle, type MtfConfig, type MtfTimeframeStyle } from './config'
 import { publishDrawn, signalKey } from './drawn'
 import { buildRootGraphs, type GraphSide, type GraphSignal, storeGraphSignals } from './graph'
 import type { MtfOverlay } from './overlays'
@@ -87,6 +87,10 @@ interface GraphEdge {
    * is part of; the dots keep their own timeframe's colour, so each step still names its
    * timeframe. */
   root: MtfInterval
+  /** The timeframe the edge ARRIVES at -- its child's -- which is what its width and dash are
+   * taken from (config.ts `graphLineStyle`): solid and full width into 3m or 5m, thinner and
+   * more broken the higher the timeframe it reaches. */
+  interval: MtfInterval
 }
 
 export interface Value {
@@ -239,7 +243,7 @@ function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData,
       const fromIndex = parentIndex(parent.knownAt)
       if (fromIndex === null) return
       value.edges = value.edges ?? []
-      value.edges.push({ fromIndex, fromPrice: parent.price, toPrice: price, root })
+      value.edges.push({ fromIndex, fromPrice: parent.price, toPrice: price, root, interval })
     })
   }
   return inGraph
@@ -319,10 +323,6 @@ function drawGraphs(
   const width = graphConfig(config).lineWidth
   if (!(width > 0)) return
   ctx.save()
-  // Solid, said explicitly: the context arrives carrying whatever dash the last figure drawn
-  // on the pane set (the Levels lines are dotted), and `save` preserves it.
-  ctx.setLineDash([])
-  ctx.lineWidth = width
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
   for (const layer of [...GRAPH_ROOTS].reverse()) {
@@ -334,6 +334,12 @@ function drawGraphs(
       if (!edges) continue
       for (const edge of edges) {
         if (edge.root !== layer || edge.fromIndex > to) continue
+        // Per edge, from the timeframe it arrives at. The dash is set every time, never left
+        // to carry over -- from the edge before it, or from whatever the pane drew last (the
+        // Levels lines are dotted), which `save` would preserve.
+        const line = graphLineStyle(edge.interval, width)
+        ctx.lineWidth = line.width
+        ctx.setLineDash(line.dash)
         ctx.beginPath()
         ctx.moveTo(x(edge.fromIndex), y(edge.fromPrice))
         ctx.lineTo(x(i), y(edge.toPrice))
@@ -341,6 +347,9 @@ function drawGraphs(
       }
     }
   }
+  // The dots are drawn solid, whatever the last line set.
+  ctx.setLineDash([])
+  ctx.lineWidth = width
   for (let i = from; i <= Math.min(to, result.length - 1); i++) {
     const dots = result[i]?.dots
     if (!dots) continue

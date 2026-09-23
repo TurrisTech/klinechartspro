@@ -127,6 +127,45 @@ export const MTF_DEFAULTS: MtfConfig = {
   }
 }
 
+/** How a graph's line looks, by the timeframe it ARRIVES at (user, 2026-09-23): solid and at
+ * the set width when it reaches 3m or 5m, thinner and more broken the higher the timeframe it
+ * reaches. A line from 1D down to 4h is faint and dotted; the 15m and 5m links at the end of
+ * the same cascade are the solid ones. So the eye follows a graph down to where it ends.
+ *
+ * `scale` multiplies the "Line width" setting -- which is therefore the width of the SOLID
+ * lines, the most a line is ever drawn at -- and `dash` is in multiples of that same setting,
+ * so a pattern keeps its proportions at any width. Empty is solid.
+ *
+ * Read through `graphLineStyle`, which also holds the floor that keeps a 1D line visible when
+ * the width is turned right down. */
+const GRAPH_LINE: Record<MtfInterval, { scale: number; dash: readonly number[] }> = {
+  '3m': { scale: 1, dash: [] },
+  '5m': { scale: 1, dash: [] },
+  '15m': { scale: 0.95, dash: [4, 1] },
+  '20m': { scale: 0.92, dash: [3.5, 1.2] },
+  '30m': { scale: 0.88, dash: [3, 1.5] },
+  '1h': { scale: 0.82, dash: [2.5, 1.8] },
+  '2h': { scale: 0.78, dash: [2, 2] },
+  '4h': { scale: 0.72, dash: [1.6, 2.4] },
+  '8h': { scale: 0.64, dash: [1.2, 2.8] },
+  '1D': { scale: 0.55, dash: [0.8, 3.2] }
+}
+
+/** The thinnest a graph line is ever drawn, in pixels: below this a dotted line stops reading
+ * as a line at all on a dark chart. */
+const GRAPH_LINE_MIN_PX = 0.6
+
+/** The width and dash pattern for a graph line arriving at `interval`, from the pane's set
+ * width. An unknown timeframe draws solid at the set width rather than vanishing. */
+export function graphLineStyle(interval: string, width: number): { width: number; dash: number[] } {
+  const style = GRAPH_LINE[interval as MtfInterval]
+  if (!style) return { width, dash: [] }
+  return {
+    width: Math.max(GRAPH_LINE_MIN_PX, width * style.scale),
+    dash: style.dash.map((part) => part * width)
+  }
+}
+
 /** The graph settings, or the defaults for a config that has none. */
 export function graphConfig(config: MtfConfig | undefined): MtfGraphConfig {
   return config?.graph ?? MTF_DEFAULTS.graph
