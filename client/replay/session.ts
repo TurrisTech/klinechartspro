@@ -143,9 +143,18 @@ export interface ReplaySessionOptions {
   dataEnd: () => number
   save: (state: ReplayState) => Promise<void>
   onAdvanced: (result: AdvanceResult) => Promise<void> | void
+  /** Whether the wall DRAWS the signal a stop landed on (client/mtf/drawn.ts), asked once the
+   * panes have caught up to it. `false` makes `nextSignal` step over the stop and go on to the
+   * next one -- "the next signal would be a visible signal only" (user, 2026-09-21). `true`,
+   * `null` (nothing can say) and no callback at all all stop, because a signal that is merely
+   * unaccounted for must not be skipped silently. */
+  signalVisible?: (signal: SignalOccurrence) => Promise<boolean | null> | boolean | null
   /** Fed every base bar the walk consumes, and asked whether the walk is needed at all. */
   observer?: ReplayObserver
 }
+
+/** How many stops the chart does not draw `nextSignal` may step over before it stops anyway. */
+const MAX_SIGNAL_HOPS = 25
 
 export class ReplayTradingSession implements TradingSession, ReplayController {
   readonly mode = 'replay' as const
@@ -427,8 +436,28 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   /** An advance to the end of the data that stops at the first armed signal -- or, like any
    * advance, at the first bar an observer raises something on (a price watch firing). */
-  nextSignal(): Promise<AdvanceResult | null> {
-    return this.advanceBy({ toEnd: true, end: this.opts.dataEnd() })
+  /** Advance to the next armed stop the chart actually draws.
+   *
+   * A stop the pane does not draw is stepped over rather than shown: the signal book is the
+   * server's, and it knows nothing about which timeframes a pane has switched on or whether
+   * the graph filter is hiding the signals outside it. Each hop is an ordinary advance -- the
+   * account walks it, fills and watches land as they would have -- so stepping over a hidden
+   * signal costs exactly what pressing the button again would.
+   *
+   * Only a `signal` stop is judged. A fill, a watch, a cancel or the end of the data stops the
+   * walk whatever the chart is drawing. */
+  async nextSignal(): Promise<AdvanceResult | null> {
+    let last: AdvanceResult | null = null
+    for (let hop = 0; hop < MAX_SIGNAL_HOPS; hop++) {
+      const result = await this.advanceBy({ toEnd: true, end: this.opts.dataEnd() })
+      if (!result) return last
+      last = result
+      if (result.reason !== 'signal' || !result.signal) return result
+      if ((await this.opts.signalVisible?.(result.signal)) !== false) return result
+    }
+    // Bounded on purpose: a wall hiding almost everything would otherwise walk the whole data
+    // set on one click, with no way to tell it from a hang. It stops at the last hidden stop.
+    return last
   }
 
   /** Ask the running advance to stop at its next natural place: before the next base bar it

@@ -16,6 +16,7 @@ import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
+import { drawsSignal } from '../mtf/drawn'
 import { SignalBook } from './signals'
 import { HttpBarSource, HttpSignalSource } from './source'
 import { ReplayWatches } from './watches'
@@ -100,6 +101,15 @@ export function clearReplay(): void {
 const PROBE_WINDOW_MS = 10 * 86_400_000
 
 /** Probe which of the stored ladder the store holds for the instrument around `at`. */
+/** One repaint, so a template that recomputes on the chart's next frame has done so. Falls
+ * back to a timer where there is no animation frame (a headless test). */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    else setTimeout(resolve, 32)
+  })
+}
+
 async function storedIntervalsFor(symbol: string, at: number): Promise<string[]> {
   const out: string[] = []
   for (const code of STORED_LADDER) {
@@ -238,6 +248,18 @@ export async function mountBarReplay(
     observer: watches,
     barSource: new HttpBarSource(),
     dataEnd: () => latest,
+    // "The next signal would be a visible signal only" (user, 2026-09-21). The signal book is
+    // the SERVER's: it knows every published signal, not which of them this wall draws -- the
+    // timeframes a pane has switched on, and the graph filter that can hide the rest
+    // (client/mtf/drawn.ts). So a stop is judged by what the panes drew once they have caught
+    // up to it: the host's fetches first, then a frame for klinecharts to recompute the
+    // indicator off the new data. Anything nothing can answer for reads as visible, so an
+    // unknown never skips a stop the user armed.
+    signalVisible: async (signal) => {
+      await ctx.pluginHost.settled()
+      await nextFrame()
+      return drawsSignal(stored.symbol, signal.ref, signal.resolution, signal.date, signal.effective)
+    },
     save: async (state) => {
       try {
         const saved = await simApi.putState(answer.session.id, rev, state)

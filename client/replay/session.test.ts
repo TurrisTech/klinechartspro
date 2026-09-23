@@ -115,7 +115,17 @@ interface Made {
   advanced: Array<{ from: number; to: number; reason: string }>
 }
 
-function make(opts: { base?: string; cursor?: number; hits?: SignalHit[]; stored?: string[]; signals?: SignalSource; observer?: ReplayObserver } = {}): Made {
+function make(
+  opts: {
+    base?: string
+    cursor?: number
+    hits?: SignalHit[]
+    stored?: string[]
+    signals?: SignalSource
+    observer?: ReplayObserver
+    signalVisible?: (signal: { date: number }) => boolean | null
+  } = {}
+): Made {
   const start = ny('2024-03-04 09:00')
   const source = new SyntheticSource(start, 8 * 60)
   const saved: unknown[] = []
@@ -143,6 +153,7 @@ function make(opts: { base?: string; cursor?: number; hits?: SignalHit[]; stored
     onAdvanced: (r) => {
       advanced.push({ from: r.from, to: r.to, reason: r.reason })
     },
+    signalVisible: opts.signalVisible,
     observer: opts.observer
   })
   session.setIntervalsInUse(['1h'])
@@ -200,6 +211,58 @@ describe('ReplayTradingSession', () => {
     const n = await session.nextSignal()
     expect(n?.reason).toBe('end')
     expect(session.cursor).toBe(start + 8 * H)
+  })
+
+  test('next signal steps over the stops the chart does not draw, and stops at the first it does', async () => {
+    const start = ny('2024-03-04 09:00')
+    const asked: number[] = []
+    const { session, advanced } = make({
+      hits: [
+        { date: start, effective: start + 1 * H },
+        { date: start + 1 * H, effective: start + 2 * H },
+        { date: start + 2 * H, effective: start + 3 * H }
+      ],
+      // The first two are not drawn; the third is.
+      signalVisible: (signal) => {
+        asked.push(signal.date)
+        return signal.date === start + 2 * H
+      }
+    })
+    session.signals.arm('arev:arev21:long', '1h')
+    const r = await session.nextSignal()
+    expect(r?.reason).toBe('signal')
+    expect(session.cursor).toBe(start + 3 * H)
+    // Asked about each stop in turn, and never about anything else.
+    expect(asked).toEqual([start, start + 1 * H, start + 2 * H])
+    // Each hop is an ordinary advance, so the account walked all three.
+    expect(advanced.map((a) => a.reason)).toEqual(['signal', 'signal', 'signal'])
+  })
+
+  test('with every stop hidden it runs to the end rather than stopping at one', async () => {
+    const start = ny('2024-03-04 09:00')
+    const { session } = make({
+      hits: [
+        { date: start, effective: start + 1 * H },
+        { date: start + 1 * H, effective: start + 2 * H }
+      ],
+      signalVisible: () => false
+    })
+    session.signals.arm('arev:arev21:long', '1h')
+    const r = await session.nextSignal()
+    expect(r?.reason).toBe('end')
+    expect(session.cursor).toBe(start + 8 * H)
+  })
+
+  test('a stop nothing can answer for is kept: null does not skip', async () => {
+    const start = ny('2024-03-04 09:00')
+    const { session } = make({
+      hits: [{ date: start, effective: start + 1 * H }],
+      signalVisible: () => null
+    })
+    session.signals.arm('arev:arev21:long', '1h')
+    const r = await session.nextSignal()
+    expect(r?.reason).toBe('signal')
+    expect(session.cursor).toBe(start + 1 * H)
   })
 
   test('a limit inside a coarse candle makes the engine descend to the finer stored bars', async () => {
