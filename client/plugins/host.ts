@@ -34,6 +34,8 @@ import type {
 const POLL_MS = 500
 const RANGE_DEBOUNCE_MS = 250
 const MAX_PAGES_PER_GAP = 20
+/** How often `settled` looks again while some binding is still fetching. */
+const SETTLE_POLL_MS = 50
 
 interface Binding {
   plugin: IndicatorPlugin
@@ -78,6 +80,11 @@ export interface PluginHost {
   /** The read clock moved forward off `clock` (a replay step): forget the coverage that
    * `clock` made incomplete and re-cover every binding. */
   invalidateFrom(clock: number): void
+  /** Resolves once no binding has a fetch in flight, or when `timeoutMs` is up -- for a caller
+   * that must read what the panes drew AFTER a step, rather than what they drew before it
+   * (the replay's "next signal"). A timeout is not an error here: the caller reads whatever
+   * the panes have, and the read itself says how far they have got. */
+  settled(timeoutMs?: number): Promise<void>
   teardown(): void
 }
 
@@ -461,6 +468,15 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const out: Record<string, Record<number, unknown>> = {}
       for (const p of plugins) if (p.paneState) out[p.id] = p.paneState.snapshot()
       return out
+    },
+    async settled(timeoutMs = 3000): Promise<void> {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        let busy = false
+        for (const entry of wired.values()) for (const b of entry.bindings.values()) if (b.inFlight.size > 0) busy = true
+        if (!busy || Date.now() >= deadline) return
+        await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS))
+      }
     },
     invalidateFrom(clock: number): void {
       // The read clock moved (a replay step): everything the OLD clock made unknowable may

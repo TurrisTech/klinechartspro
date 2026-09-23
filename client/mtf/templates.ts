@@ -2,9 +2,10 @@ import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineDa
 import type { IndicatorGroup } from '../../src'
 import type { MtfInterval } from './api'
 import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, type MtfConfig, type MtfTimeframeStyle } from './config'
+import { publishDrawn, signalKey } from './drawn'
 import { buildRootGraphs, type GraphSide, type GraphSignal, storeGraphSignals } from './graph'
 import type { MtfOverlay } from './overlays'
-import { chartBarAt, chartOpens, shiftSignals, type ShiftedSignal } from './shift'
+import { chartBarAt, chartOpens, shiftSignals, toAbsolute, type ShiftedSignal } from './shift'
 import { resolutionDurationMs } from '../periods'
 import { peekStore } from '../plugins/store'
 import type { ArevPoint } from '../arev/api'
@@ -51,6 +52,9 @@ export interface ExtendData {
    * controller decides them (plugin.ts `graphRootsFor`): only on an overlay that offers a
    * graph, and only roots switched on and among the timeframes drawn. */
   graphRoots?: MtfInterval[]
+  /** `vendor:ticker` of the pane, for what the overlay publishes about what it drew
+   * (drawn.ts). Only the graph overlay publishes, so only it needs this. */
+  symbol?: string
 }
 
 /** One placed signal, plus which timeframe placed it — the template draws several at once
@@ -101,9 +105,16 @@ function laneHeight(style: MtfTimeframeStyle): number {
   return style.arrowSize * 1.4 + (style.textSize > 0 ? style.textSize + 2 : 0) + LANE_GAP
 }
 
-function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
+function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>, overlay: MtfOverlay): Value[] {
   const extend = indicator.extendData
   if (!extend) return dataList.map(() => ({}))
+  return computeValues(dataList, extend, overlay)
+}
+
+/** Everything `calc` decides, from the bars and the pane's settings: the markers, the graphs,
+ * the "hide signals outside the graph" filter, and what the pane then publishes about what it
+ * drew. Exported for its own test -- it reads the stores and nothing else. */
+export function computeValues(dataList: KLineData[], extend: ExtendData, overlay: MtfOverlay): Value[] {
   const intervals = enabledIntervals(extend.config)
   // Per bar, the marks from every enabled timeframe, each tagged with its lane. Built once
   // here rather than in `draw` because `draw` runs every frame and this walks every vote.
@@ -129,8 +140,47 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
     const marks = byBar.get(bar.timestamp)
     return marks ? { marks } : {}
   })
-  if (extend.graphRoots?.length) placeGraphs(values, dataList, extend, extend.graphRoots)
+  const inGraph = extend.graphRoots?.length ? placeGraphs(values, dataList, extend, extend.graphRoots) : null
+  // "Hide signals outside the graph": every arrow the graphs did not take comes off the pane.
+  // Only with a graph drawn -- with no root on there is nothing to judge by, and emptying the
+  // pane of its markers would read as a broken overlay rather than as a filter.
+  if (inGraph && graphConfig(extend.config).onlyGraph) {
+    for (const value of values) {
+      if (!value.marks) continue
+      const kept = value.marks.filter((mark) => inGraph.has(signalKey(mark.interval, mark.sourceDate)))
+      if (kept.length > 0) value.marks = kept
+      else value.marks = undefined
+    }
+  }
+  if (overlay.graph && overlay.signals) publish(overlay, extend, dataList, values, byBar)
   return values
+}
+
+/** What this pane draws, for the replay's "next signal" (drawn.ts). Published from `calc`, so
+ * it is the placement itself that is published rather than a second derivation of it. */
+function publish(
+  overlay: MtfOverlay,
+  extend: ExtendData,
+  dataList: KLineData[],
+  values: Value[],
+  byBar: Map<number, Marked[]>
+): void {
+  const signals = overlay.signals
+  if (!signals || !extend.symbol) return
+  const drawn = new Set<string>()
+  for (const value of values) for (const mark of value.marks ?? []) drawn.add(signalKey(mark.interval, mark.sourceDate))
+  const known = new Set<string>()
+  for (const marks of byBar.values()) for (const mark of marks) known.add(signalKey(mark.interval, mark.sourceDate))
+  const lastOpen = dataList.length > 0 ? toAbsolute(extend.chartInterval, dataList[dataList.length - 1].timestamp) : 0
+  publishDrawn(`${extend.symbol}|${extend.chartInterval}|${overlay.id}`, {
+    symbol: extend.symbol,
+    plugin: signals.plugin,
+    variant: signals.variant,
+    intervals: Object.keys(extend.seriesKeys) as MtfInterval[],
+    drawn,
+    known,
+    coversTo: lastOpen + resolutionDurationMs(extend.chartInterval)
+  })
 }
 
 /**
@@ -150,8 +200,9 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
  * loads the parent's bar. An edge's child is never newer than the loaded bars (that would be
  * lookahead, and `chartBarAt` refuses it), so nothing is extrapolated to the right.
  */
-function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, roots: MtfInterval[]): void {
-  if (dataList.length === 0) return
+function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, roots: MtfInterval[]): Set<string> {
+  const inGraph = new Set<string>()
+  if (dataList.length === 0) return inGraph
   const signals: GraphSignal[] = []
   for (const [interval, key] of Object.entries(extend.seriesKeys)) {
     const store = peekStore<RegistryStore<ArevPoint>>(key)
@@ -173,6 +224,7 @@ function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData,
     const root = graph.root as MtfInterval
     const at = graph.nodes.map((node) => chartBarAt(node.signal.knownAt, chartAbs, extend.chartInterval))
     graph.nodes.forEach((node, k) => {
+      inGraph.add(signalKey(node.signal.interval, node.signal.sourceDate))
       const index = at[k]
       if (index < 0) return
       const value = values[index]
@@ -190,6 +242,7 @@ function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData,
       value.edges.push({ fromIndex, fromPrice: parent.price, toPrice: price, root })
     })
   }
+  return inGraph
 }
 
 function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
@@ -340,7 +393,7 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
       maxValue: null,
       styles: null,
       shouldUpdate,
-      calc,
+      calc: (dataList, indicator) => calc(dataList, indicator, overlay),
       regenerateFigures: null,
       // Never reaches the screen: ChartPane.svelte's createIndicator wrapper replaces every
       // template's tooltip source with its own icons-only one. The `p` a reader wants is

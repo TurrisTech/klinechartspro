@@ -46,6 +46,10 @@ export interface MtfGraphConfig {
   roots: Record<GraphRoot, boolean>
   /** The most one step may shrink the timeframe by: 8 lets 8h reach 1h but not 30m. */
   maxStep: number
+  /** Draw ONLY the signals some graph holds, hiding every other arrow (user, 2026-09-21).
+   * Ignored while no root draws -- there is no graph to judge by, and a pane silently emptied
+   * of its markers reads as broken. */
+  onlyGraph: boolean
   /** The graph's line width, in pixels. */
   lineWidth: number
 }
@@ -115,7 +119,12 @@ export const MTF_DEFAULTS: MtfConfig = {
   ) as Record<MtfInterval, MtfTimeframeStyle>,
   // On from the highest timeframe, which is where the user's list starts. Only an overlay
   // that offers a graph (overlays.ts `graph`) reads this at all; the others carry it inertly.
-  graph: { roots: { '1D': true, '8h': false, '4h': false, '2h': false, '1h': false }, maxStep: 8, lineWidth: 1.5 }
+  graph: {
+    roots: { '1D': true, '8h': false, '4h': false, '2h': false, '1h': false },
+    maxStep: 8,
+    onlyGraph: false,
+    lineWidth: 1.5
+  }
 }
 
 /** The graph settings, or the defaults for a config that has none. */
@@ -157,6 +166,7 @@ export const MTF_GRAPH_FIELDS: SettingsField[] = [
       // A switch per root rather than one choice: several may be on at once.
       ...GRAPH_ROOTS.map((root): SettingsField => ({ kind: 'switch', key: `graph.roots.${root}`, label: `Start from ${root}` })),
       { kind: 'number', key: 'graph.maxStep', label: 'Largest step (×)', min: 2, max: 480, step: 1 },
+      { kind: 'switch', key: 'graph.onlyGraph', label: 'Hide signals outside the graph' },
       { kind: 'number', key: 'graph.lineWidth', label: 'Line width', min: 0.5, max: 6, step: 0.5 }
     ]
   }
@@ -193,6 +203,7 @@ export type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeSt
 interface StoredGraphConfig {
   roots?: Partial<Record<GraphRoot, boolean>>
   maxStep?: number
+  onlyGraph?: boolean
   lineWidth?: number
   from?: string
 }
@@ -238,6 +249,7 @@ export function toStoredMtfConfig(config: MtfConfig): StoredMtfConfig | undefine
   for (const key of GRAPH_KEYS) {
     if (graph[key] !== MTF_DEFAULTS.graph[key]) graphDiff[key] = graph[key]
   }
+  if ((graph.onlyGraph === true) !== MTF_DEFAULTS.graph.onlyGraph) graphDiff.onlyGraph = graph.onlyGraph === true
   if (Object.keys(graphDiff).length > 0) stored.graph = graphDiff
   return Object.keys(stored).length > 0 ? stored : undefined
 }
@@ -262,6 +274,10 @@ export function fromStoredMtfConfig(stored: unknown): MtfConfig | undefined {
       const value = g[key]
       if (!validGraphNumber(key, value)) continue
       config.graph[key] = value
+      touched = true
+    }
+    if (typeof g.onlyGraph === 'boolean') {
+      config.graph.onlyGraph = g.onlyGraph
       touched = true
     }
     const roots = g.roots

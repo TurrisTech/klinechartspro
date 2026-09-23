@@ -39,6 +39,12 @@ export interface MtfOverlay {
    * lets a graph of top signals climb over the candles and one of bottom signals fall under
    * them, rather than cross through. */
   graph?: boolean
+  /** The plugin and variant whose published signals these markers ARE, when an armed signal
+   * ref names the same series this overlay reads with the server's own default parameters --
+   * which `arev21_outlier_rank` at 200 bars and q 0.85 is. The overlay publishes what it draws
+   * under this (drawn.ts), so the replay can stop only at signals the chart shows. Left unset
+   * on an overlay drawing tuned parameters, whose markers are NOT what a bare ref resolves to. */
+  signals?: { plugin: string; variant: string }
   /** The series' identity for one source timeframe -- the key the registry sub-pane for the
    * same series uses. The overlay's store is this plus `|mtf` (plugin.ts says why it must not
    * be the sub-pane's own). */
@@ -107,6 +113,9 @@ export function outlierRankMtf(
     feature: 'arev21_outlier',
     placement,
     graph,
+    // The rank variant's server defaults are 200 bars at q 0.85, so only the 85 overlay draws
+    // what a bare `arev21_outlier:arev21_outlier_rank:*` ref resolves to.
+    signals: percent === 85 ? { plugin: OUTLIER_PLUGIN, variant: OUTLIER_RANK } : undefined,
     sourceKey: (vendor, ticker, interval) => `${registrySourceKey(OUTLIER_RANK, vendor, ticker, interval)}${tuned}`,
     fetchPoints: async (f, vendorSymbol, interval, from, to, limit) => {
       const page = await f.points<ArevPoint>({

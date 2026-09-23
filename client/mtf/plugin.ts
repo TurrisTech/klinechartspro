@@ -3,7 +3,7 @@ import { peekStore } from '../plugins/store'
 import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
 import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
-import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphRoots, type MtfConfig } from './config'
+import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphConfig, graphRoots, type MtfConfig } from './config'
 import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
@@ -165,7 +165,8 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
   const graphLabel = (config: MtfConfig, chartInterval: string): string => {
     if (!overlay.graph) return ''
     const drawn = graphRootsFor(config, chartInterval)
-    const parts = drawn.length > 0 ? [`graph from ${drawn.join(' ')}`] : []
+    const only = graphConfig(config).onlyGraph && drawn.length > 0 ? ', rest hidden' : ''
+    const parts = drawn.length > 0 ? [`graph from ${drawn.join(' ')}${only}`] : []
     // Named rather than silently skipped, like a timeframe the chart is too coarse for.
     for (const root of graphRoots(config)) {
       if (drawn.includes(root)) continue
@@ -260,7 +261,12 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
         // off again should not leave eight populated caches behind.
         sources: ordered.map((interval) => source(f, ctx, interval, roots)),
         label: (state) => label(config, state),
-        extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: roots })
+        extendData: () => ({
+          chartInterval: ctx.interval,
+          config,
+          graphRoots: roots,
+          symbol: `${ctx.vendor}:${ctx.ticker}`
+        })
       }
     },
     handleSettings(request: SettingsRequest): boolean {

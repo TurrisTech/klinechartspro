@@ -19,6 +19,8 @@ const sig = (interval: string, knownAt: number, side: GraphSide, price: number):
   interval,
   durationMs: DURATION[interval],
   knownAt,
+  // The bar it was cast on: one bar back, which is all these tests need of it.
+  sourceDate: knownAt - DURATION[interval],
   side,
   price
 })
@@ -239,15 +241,56 @@ describe('several roots at once', () => {
     expect(shape(graphs[1].nodes)).toEqual(['8h@1.09', '4h@1.095 <- 8h@1.09', '1h@1.1 <- 4h@1.095'])
   })
 
-  test('a signal can root one graph and step in another', () => {
+  test('a signal the longer graph already stepped to does not also root its own graph', () => {
     const graphs = buildRootGraphs(
       [sig('1D', 0, 'top', 1.1), sig('8h', 8 * H, 'top', 1.12), sig('1h', 9 * H, 'top', 1.13)],
       ['1D', '8h'],
       8,
       Number.NEGATIVE_INFINITY
     )
+    // One graph, not two saying the same thing: the 8h signal is the 1D graph's step.
+    expect(graphs.map((g) => g.root)).toEqual(['1D'])
     expect(shape(graphs[0].nodes)).toEqual(['1D@1.1', '8h@1.12 <- 1D@1.1', '1h@1.13 <- 8h@1.12'])
+  })
+
+  test('a signal the longer graph did NOT take still roots its own', () => {
+    // The 8h top is the other side from the 1D bottom graph, so nothing took it.
+    const graphs = buildRootGraphs(
+      [sig('1D', 0, 'bottom', 1.1), sig('8h', 8 * H, 'top', 1.12), sig('1h', 9 * H, 'top', 1.13)],
+      ['1D', '8h'],
+      8,
+      Number.NEGATIVE_INFINITY
+    )
+    expect(graphs.map((g) => g.root)).toEqual(['1D', '8h'])
     expect(shape(graphs[1].nodes)).toEqual(['8h@1.12', '1h@1.13 <- 8h@1.12'])
+  })
+
+  test('a taken root signal still ends the graph in force when it switches side', () => {
+    const graphs = buildRootGraphs(
+      [
+        // An 8h top graph, then a 1D bottom graph whose step is an 8h BOTTOM signal: that
+        // signal is taken, so it opens no 8h graph -- but the 8h top graph ends there all the
+        // same, and the next 8h bottom that nothing took opens one.
+        sig('8h', 0, 'top', 1.2),
+        sig('1h', 1 * H, 'top', 1.22),
+        sig('1D', 2 * H, 'bottom', 1.15),
+        sig('8h', 3 * H, 'bottom', 1.14),
+        sig('1h', 4 * H, 'top', 1.25),
+        sig('8h', 5 * H, 'bottom', 1.16),
+        sig('1h', 6 * H, 'bottom', 1.13)
+      ],
+      ['1D', '8h'],
+      8,
+      Number.NEGATIVE_INFINITY
+    )
+    expect(graphs.map((g) => `${g.root} ${g.side}`)).toEqual(['1D bottom', '8h top', '8h bottom'])
+    expect(shape(graphs[0].nodes)).toEqual(['1D@1.15', '8h@1.14 <- 1D@1.15', '1h@1.13 <- 8h@1.14'])
+    // The 8h top graph closed at the switch: the 1h top of 4H did not join it.
+    expect(shape(graphs[1].nodes)).toEqual(['8h@1.2', '1h@1.22 <- 8h@1.2'])
+    // The taken 8h bottom of 3H opened nothing; the untaken one of 5H did. The 1h bottom is a
+    // step in both the 1D graph and this one -- the rule stops a signal ROOTING twice, not
+    // stepping in two graphs.
+    expect(shape(graphs[2].nodes)).toEqual(['8h@1.16', '1h@1.13 <- 8h@1.16'])
   })
 
   test('the roots switched on, longest first', () => {
@@ -270,6 +313,18 @@ describe('graph settings in the stored config', () => {
     expect(stored).toEqual({ graph: { roots: { '8h': true }, maxStep: 4 } })
     const back = fromStoredMtfConfig(JSON.parse(JSON.stringify(stored)))
     expect(back?.graph).toEqual({ ...MTF_DEFAULTS.graph, roots: { ...MTF_DEFAULTS.graph.roots, '8h': true }, maxStep: 4 })
+  })
+
+  test('the hide-the-rest switch round-trips, and defaults to off', () => {
+    expect(MTF_DEFAULTS.graph.onlyGraph).toBe(false)
+    const config = structuredClone(MTF_DEFAULTS)
+    config.graph.onlyGraph = true
+    expect(toStoredMtfConfig(config)).toEqual({ graph: { onlyGraph: true } })
+    expect(fromStoredMtfConfig({ graph: { onlyGraph: true } })?.graph.onlyGraph).toBe(true)
+    // A bad value falls back to the default; a document holding nothing else usable reads as
+    // no config at all, which is what `undefined` says.
+    expect(fromStoredMtfConfig({ graph: { onlyGraph: 'yes' }, '4h': { enabled: false } })?.graph.onlyGraph).toBe(false)
+    expect(fromStoredMtfConfig({ graph: { onlyGraph: 'yes' } })).toBeUndefined()
   })
 
   test('the single root client-a2c8f6c saved reads as that one root on, and nothing else', () => {

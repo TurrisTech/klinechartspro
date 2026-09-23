@@ -56,6 +56,8 @@ export interface GraphSignal {
   durationMs: number
   /** The instant the signal became knowable, absolute. */
   knownAt: number
+  /** The wire date of the bar it was cast on -- what the server's signal wire calls it. */
+  sourceDate: number
   side: GraphSide
   /** The top of the body of the candle it was cast on for a top signal, the bottom of that
    * body for a bottom one. */
@@ -81,6 +83,13 @@ export interface GraphOptions {
   maxStep: number
   /** Signals knowable before this instant take no part (`graphStart`). */
   from?: number
+  /** Root-timeframe signals that may NOT start a graph here, because they already step in a
+   * longer root's graph (user, 2026-09-21: "if a node is already part of a higher timeframe
+   * graph, don't let it be its own root"). They still END the graph in force when they switch
+   * side -- the switch happened, whoever else drew the signal -- they just do not open one, so
+   * the run they would have started begins at its first signal that is not already spoken for.
+   * `buildRootGraphs` fills this in; a lone root has nothing to put in it. */
+  taken?: ReadonlySet<GraphSignal>
 }
 
 /** Whether `child` may hang from `parent`: strictly lower timeframe, by no more than
@@ -117,13 +126,17 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
     })
   const graphs: Graph<S>[] = []
   let current: Graph<S> | null = null
+  // A graph reaches the answer only once it has a node: a run whose every root signal is
+  // already a step in a longer root's graph opens nothing, and nothing can join it either --
+  // a lower-timeframe signal needs a node to step from.
+  const add = (graph: Graph<S>, node: GraphNode<S>): void => {
+    if (graph.nodes.length === 0) graphs.push(graph)
+    graph.nodes.push(node)
+  }
   for (const signal of ordered) {
     if (signal.interval === options.root) {
-      if (!current || current.side !== signal.side) {
-        current = { side: signal.side, nodes: [] }
-        graphs.push(current)
-      }
-      current.nodes.push({ signal, parent: -1 })
+      if (!current || current.side !== signal.side) current = { side: signal.side, nodes: [] }
+      if (!options.taken?.has(signal)) add(current, { signal, parent: -1 })
       continue
     }
     if (!current || signal.side !== current.side) continue
@@ -131,7 +144,7 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
     // scanning back finds the latest-known one first.
     for (let i = current.nodes.length - 1; i >= 0; i--) {
       if (canStep(current.nodes[i].signal, signal, options.maxStep)) {
-        current.nodes.push({ signal, parent: i })
+        add(current, { signal, parent: i })
         break
       }
     }
@@ -157,10 +170,16 @@ export interface RootedGraph<S extends GraphSignal = GraphSignal> extends Graph<
 
 /**
  * Every root's graphs, each root built on its own: its own signals start and reset its
- * graphs, from its own `graphStart`, over the same pool of signals. A signal can therefore sit
- * in several graphs at once -- an 8h signal is a root of the 8h graphs and, when it steps the
- * right way, a node of the 1D graph in force -- and graphs of different roots overlap in time
- * and may run opposite ways. Longest root first.
+ * graphs, from its own `graphStart`, over the same pool of signals. Graphs of different roots
+ * overlap in time and may run opposite ways. Longest root first, which is also what lets a
+ * root see what the longer ones have already taken.
+ *
+ * A signal that STEPS in a longer root's graph does not also start one of its own (user,
+ * 2026-09-21): an 8h signal the 1D graph has already stepped to is that graph's continuation,
+ * and rooting an 8h graph at it drew a second graph over the same signal saying the same
+ * thing. It still closes the 8h graph in force if it switches side -- see `GraphOptions.taken`.
+ * An 8h signal the 1D graph did not take -- the other side, or not far enough -- roots the 8h
+ * graphs as before.
  */
 export function buildRootGraphs<S extends GraphSignal>(
   signals: readonly S[],
@@ -169,10 +188,14 @@ export function buildRootGraphs<S extends GraphSignal>(
   loadedFrom: number
 ): RootedGraph<S>[] {
   const out: RootedGraph<S>[] = []
+  const taken = new Set<GraphSignal>()
   for (const root of [...roots].sort((a, b) => resolutionDurationMs(b) - resolutionDurationMs(a))) {
     const rootSignals = signals.filter((s) => s.interval === root)
     const from = graphStart(rootSignals, loadedFrom, rootLookbackMs(root))
-    for (const graph of buildGraphs(signals, { root, maxStep, from })) out.push({ ...graph, root })
+    for (const graph of buildGraphs(signals, { root, maxStep, from, taken })) out.push({ ...graph, root })
+    // Steps only: a root node is this root's own, and the roots still to come are all shorter,
+    // so it can never be one of their signals anyway.
+    for (const graph of out) for (const node of graph.nodes) if (node.parent >= 0) taken.add(node.signal)
   }
   return out
 }
@@ -220,6 +243,7 @@ export function storeGraphSignals(interval: string, store: GraphSourceStore): Gr
       interval,
       durationMs,
       knownAt: signal.knownAt,
+      sourceDate: signal.sourceDate,
       side: signal.up ? 'top' : 'bottom',
       price: signal.up ? body.top : body.bottom
     })
