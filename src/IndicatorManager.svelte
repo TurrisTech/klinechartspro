@@ -266,13 +266,16 @@
     return model.read(pane.id)
   }
 
-  // Groups opened or closed by hand, by `${rowKey}/${group id}`. Unset, a group is open unless
-  // the fields fall into more than three -- the MTF overlay's eleven (its graph, then a group
-  // per timeframe) would otherwise be some sixty lines in one row.
+  // Groups opened or closed by hand, by `${rowKey}/${group id}`. Unset, a top-level group is
+  // open unless the fields fall into more than three -- the MTF overlay's eleven (its graph, then
+  // a group per timeframe) would otherwise be some sixty lines in one row -- and a nested group
+  // is open: it is reached by opening the one around it (the AREV lab's "arev21 settings" inside
+  // "arev21"), and closed it would put every lever two clicks deep.
   let groupOpen = $state.raw<Record<string, boolean>>({})
   function isGroupOpen(row: IndicatorRow, id: string, fields: readonly IndicatorSettingField[]): boolean {
     const set = groupOpen[`${rowKey(row)}/${id}`]
-    return set ?? fields.filter((field) => field.kind === 'group').length <= 3
+    if (set !== undefined) return set
+    return id.includes('.') || fields.filter((field) => field.kind === 'group').length <= 3
   }
   function toggleGroup(row: IndicatorRow, id: string, fields: readonly IndicatorSettingField[]): void {
     groupOpen = { ...groupOpen, [`${rowKey(row)}/${id}`]: !isGroupOpen(row, id, fields) }

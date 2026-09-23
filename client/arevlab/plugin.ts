@@ -1,7 +1,18 @@
 import type { IndicatorGroup } from '../../src'
 import { AREV_GENERATIONS, type ArevGeneration } from '../arev/api'
 import { fetchBars } from '../history'
-import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SettingsRequest, SourceSpec } from '../plugins/types'
+import { setByPath } from '../chartlayers/settings'
+import type {
+  BindContext,
+  BindingSpec,
+  BindingState,
+  IndicatorPlugin,
+  PluginFacilities,
+  PluginSettings,
+  Range,
+  SettingsRequest,
+  SourceSpec
+} from '../plugins/types'
 import { loadRegistry, type RegistryIndicator } from '../tsregistry/api'
 import { storedSource } from '../tsregistry/plugin'
 import { LAB_DEFAULTS, LAB_FIELDS, enabledGenerations, normaliseLabConfig, type LabConfig, type LabGeneration } from './config'
@@ -118,6 +129,29 @@ export function createArevLabPlugin(): IndicatorPlugin {
     return `AREV lab ${names}`
   }
 
+  /** A pane's new config, from its panel or from the indicator manager: every lever made legal
+   * before it reaches a binding -- the panel's number inputs commit every keystroke, and a
+   * window of 0 or a quantile of 7 is a rule that cannot be computed -- then kept, persisted
+   * and that pane alone redrawn. */
+  const applyConfig = (paneIndex: number, paneId: string, next: LabConfig): void => {
+    const f = facilities
+    if (!f) return
+    configs[paneIndex] = normaliseLabConfig(next)
+    configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
+    f.requestPersist()
+    f.requestReconcile(paneId)
+  }
+
+  const settings: PluginSettings = {
+    fields: LAB_FIELDS,
+    read: (paneIndex) => configFor(paneIndex),
+    write: (paneIndex, paneId, key, value) => {
+      const next = structuredClone(configFor(paneIndex))
+      setByPath(next, key, value)
+      applyConfig(paneIndex, paneId, next)
+    }
+  }
+
   const openPanel = (paneId: string): boolean => {
     const f = facilities
     const info = f?.paneInfo(paneId)
@@ -141,14 +175,7 @@ export function createArevLabPlugin(): IndicatorPlugin {
       fields: LAB_FIELDS,
       config: configFor(paneIndex),
       defaults: LAB_DEFAULTS,
-      onChange: (next) => {
-        // Clamped before it reaches a binding: the number inputs commit every keystroke, and
-        // a window of 0 or a quantile of 7 is a rule that cannot be computed.
-        configs[paneIndex] = normaliseLabConfig(next)
-        configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
-        f.requestPersist()
-        f.requestReconcile(paneId)
-      },
+      onChange: (next) => applyConfig(paneIndex, paneId, next),
       onClose: () => {
         panel = null
       }
@@ -203,6 +230,7 @@ export function createArevLabPlugin(): IndicatorPlugin {
       return openPanel(request.paneId)
     },
     ownsSettings: (templateName) => templateName === LAB_TEMPLATE_NAME,
+    settings: (templateName) => (templateName === LAB_TEMPLATE_NAME ? settings : null),
     paneState: {
       hydrate(initial) {
         for (const [index, config] of Object.entries(initial)) {

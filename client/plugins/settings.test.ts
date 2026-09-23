@@ -4,8 +4,8 @@ import type { PluginFacilities } from './types'
 
 installWindow()
 
-// The indicator manager edits the AREV21 MTF overlay's and the AREV21 divergence's settings
-// inline (IndicatorPlugin.settings). What it writes has to land exactly where the plugin's own
+// The indicator manager edits the AREV21 MTF overlay's, the AREV21 divergence's and the AREV
+// lab's settings inline (IndicatorPlugin.settings). What it writes has to land exactly where the plugin's own
 // panel writes: the same per-pane config, persisted, and only that pane redrawn.
 
 const { createMtfPlugin } = await import('../mtf/plugin')
@@ -14,6 +14,11 @@ const { MTF_DEFAULTS } = await import('../mtf/config')
 const { createArev21DivergencePlugin } = await import('../arev21div/plugin')
 const { PRICE_TEMPLATE, SUB_TEMPLATE } = await import('../arev21div/templates')
 const { DIV_DEFAULTS } = await import('../arev21div/config')
+const { createArevLabPlugin } = await import('../arevlab/plugin')
+const { LAB_DEFAULTS, LAB_FIELDS } = await import('../arevlab/config')
+const { LAB_TEMPLATE_NAME } = await import('../arevlab/templates')
+const { lineApplies, settingLines } = await import('../../src/state/indicatorMatrix')
+import type { LabConfig } from '../arevlab/config'
 import type { RegistryIndicator } from '../tsregistry/api'
 
 function recorder() {
@@ -88,5 +93,48 @@ describe('the AREV21 divergence', () => {
     expect(sub?.read(1)).toEqual(DIV_DEFAULTS)
     expect(calls.reconcile).toEqual(['p1', 'p1'])
     expect(plugin.settings?.('AREV:arev21')).toBeNull()
+  })
+})
+
+describe('the AREV lab', () => {
+  test('a write lands in that pane, made legal by the lab\'s own normaliser', async () => {
+    const { calls, facilities } = recorder()
+    const plugin = createArevLabPlugin()
+    // Offline: the registry read fails and the lab registers nothing, but the settings are the
+    // plugin's own and do not depend on what the server serves.
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('{}', { status: 503 })) as unknown as typeof fetch
+    try {
+      await plugin.register(facilities)
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    const settings = plugin.settings?.(LAB_TEMPLATE_NAME)
+    expect(settings?.fields).toBe(LAB_FIELDS)
+    settings?.write(0, 'p1', 'generations.arev21.signals', 'rank')
+    settings?.write(0, 'p1', 'generations.arev21.rank.q', 7)
+    const config = settings?.read(0) as LabConfig
+    expect(config.generations.arev21.signals).toBe('rank')
+    expect(config.generations.arev21.rank.q).toBe(1)
+    expect(settings?.read(1)).toEqual(LAB_DEFAULTS)
+    expect(calls.reconcile).toEqual(['p1', 'p1'])
+    expect(plugin.settings?.('MA')).toBeNull()
+  })
+
+  test("the manager offers each pane only its own rule's levers, and only for a generation it shows", () => {
+    const lines = settingLines(LAB_FIELDS)
+    const field = (key: string) => {
+      const line = lines.find((l) => l.kind === 'field' && l.field.key === key)
+      if (!line) throw new Error(`no line for ${key}`)
+      return line
+    }
+    const onRank = structuredClone(LAB_DEFAULTS)
+    onRank.generations.arev21.signals = 'rank'
+    expect(lineApplies(field('generations.arev21.rank.bars'), onRank)).toBe(true)
+    expect(lineApplies(field('generations.arev21.rank.bars'), LAB_DEFAULTS)).toBe(false)
+    expect(lineApplies(field('generations.arev21.fixed.confidence'), LAB_DEFAULTS)).toBe(true)
+    // arev19 is off by default: its Show is offered, its settings are not.
+    expect(lineApplies(field('generations.arev19.enabled'), LAB_DEFAULTS)).toBe(true)
+    expect(lineApplies(field('generations.arev19.color'), LAB_DEFAULTS)).toBe(false)
   })
 })
