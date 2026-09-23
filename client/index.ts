@@ -360,6 +360,8 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     // Which of those own their settings UI, so the indicator manager offers that UI rather
     // than number fields for their rows.
     indicatorSettingsOwned: pluginHost.ownsSettings,
+    // And the settings those plugins can hand the indicator manager as fields to edit inline.
+    indicatorSettingsModel: pluginHost.settingsModel,
     // A factory: WdashboardDatafeed keys its `listeners`/`latest` watermark maps by
     // `vendor symbol interval`, so each pane needs its own instance -- two panes on the same
     // symbol+interval sharing one would clobber each other's stream subscription.

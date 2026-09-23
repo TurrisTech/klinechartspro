@@ -2,7 +2,7 @@ import type { TileHint } from '../indicatortiles/index'
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, Period, SymbolInfo } from '../../src'
 import type { Feature } from '../capabilities'
-import type { SettingsPanelHandle, SettingsPanelOptions } from '../chartlayers/settings'
+import type { SettingsField, SettingsPanelHandle, SettingsPanelOptions } from '../chartlayers/settings'
 import type { stream } from '../stream'
 
 // The client half of the indicator plugin model.
@@ -255,6 +255,17 @@ export interface PointsRequest {
   arrays?: readonly string[]
 }
 
+/** A plugin's per-pane config as fields, read and written one pane at a time (see
+ * IndicatorPlugin.settings). */
+export interface PluginSettings {
+  fields: SettingsField[]
+  /** The pane's whole config. */
+  read(paneIndex: number): object
+  /** One field of one pane, applied as an edit in the plugin's own panel is: kept, persisted,
+   * and that pane redrawn. */
+  write(paneIndex: number, paneId: string, key: string, value: unknown): void
+}
+
 export interface IndicatorPlugin {
   id: string
   /** The capability that gates it; `null` for a plugin that is always on. */
@@ -272,6 +283,10 @@ export interface IndicatorPlugin {
   /** Whether `handleSettings` opens a UI for this template -- asked without opening it, by the
    * indicator manager (ChartProOptions.indicatorSettingsOwned). */
   ownsSettings?(templateName: string): boolean
+  /** This template's settings for the indicator manager to edit inline, or null where it has
+   * none to offer (ChartProOptions.indicatorSettingsModel): the fields its own panel draws, over
+   * the same per-pane config. */
+  settings?(templateName: string): PluginSettings | null
   /** Answer the params dialog (ChartProOptions.indicatorParamsValidator). */
   validateParams?(request: ValidateRequest): Promise<IndicatorParamsCheck>
   /** Per-pane document state, keyed by pane index -- what the wall document persists. */

@@ -1,3 +1,5 @@
+import type { IndicatorSettingField, IndicatorSettingFieldCondition } from '../../src'
+
 // A declarative settings field schema and a plain-DOM renderer for it — deliberately the
 // same shape as the library's own src/config/settings.ts (dotted `key` path + a component
 // kind), so a layer's settings read like the chart's own settings dialog, but built without
@@ -11,34 +13,13 @@
  * re-renders the panel, so a dependent field appears or disappears as its condition flips. A
  * `number` edit does not re-render (it would steal the input's focus mid-keystroke), which is
  * why a condition should name a switch or a select. */
-export interface SettingsFieldCondition {
-  key: string
-  is: unknown[]
-}
+export type SettingsFieldCondition = IndicatorSettingFieldCondition
 
-export type SettingsField =
-  | { kind: 'group'; label: string; fields: SettingsField[]; when?: SettingsFieldCondition }
-  | {
-      kind: 'select'
-      key: string
-      label: string
-      options: { value: string; label: string }[]
-      when?: SettingsFieldCondition
-    }
-  | {
-      kind: 'number'
-      key: string
-      label: string
-      min: number
-      max: number
-      step: number
-      /** The consumer keeps this lever whole (the lab's `coerce` rounds it), so the box has to
-       * settle on a whole number too -- see `settleNumber`. */
-      integer?: boolean
-      when?: SettingsFieldCondition
-    }
-  | { kind: 'switch'; key: string; label: string; when?: SettingsFieldCondition }
-  | { kind: 'color'; key: string; label: string; when?: SettingsFieldCondition }
+/** The library's own type, not a copy of it: the indicator manager draws a plugin's fields
+ * inline (IndicatorSettingsModel), so a field a panel can show is one the manager can too. A
+ * `number` field's `integer` means the consumer keeps that lever whole (the lab's `coerce`
+ * rounds it), so the box settles on a whole number too -- see `settleNumber`. */
+export type SettingsField = IndicatorSettingField
 
 // Both assume `source`/`target` are a complete, already-valid config (every intermediate
 // container the path walks through already exists) — every caller here builds a field's
@@ -52,7 +33,7 @@ function getByPath(source: object, path: string): unknown {
   }, source)
 }
 
-function setByPath(target: object, path: string, value: unknown): void {
+export function setByPath(target: object, path: string, value: unknown): void {
   const keys = path.split('.')
   let current = target as Record<string, unknown>
   for (const key of keys.slice(0, -1)) {

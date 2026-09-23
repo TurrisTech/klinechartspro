@@ -12,6 +12,8 @@
  * limitations under the License.
  */
 
+import type { IndicatorSettingField, IndicatorSettingFieldCondition } from '../types'
+
 // The indicator manager's model: which indicators are in use anywhere on the wall, one row
 // each, against every visible pane as a column. Kept out of the component so the row rules
 // are testable without mounting a chart.
@@ -150,4 +152,68 @@ export function sharedParam(held: ReadonlyArray<readonly unknown[] | null>, inde
     else if (shared !== input) return 'mixed'
   }
   return shared ?? ''
+}
+
+// -- An app's own settings ---------------------------------------------------------------------
+// An indicator whose settings live in the app's per-pane config rather than in calcParams
+// (IndicatorSettingsModel) expands to that config's fields instead: one line per field, a
+// heading per group, the pane's value under each pane's column.
+
+/** A config's value at a field's dotted key; a numeric segment indexes an array. */
+export function valueAt(config: object | null, key: string): unknown {
+  return key.split('.').reduce<unknown>((acc, part) => {
+    if (acc === null || typeof acc !== 'object') return undefined
+    return (acc as Record<string, unknown>)[part]
+  }, config)
+}
+
+/** What a typed number becomes: clamped to the field's bounds, and whole where it must be. The
+ * app's own panel settles a number the same way, so both write what the indicator draws. */
+export function settleSetting(field: { min: number; max: number; integer?: boolean }, value: number): number {
+  const clamped = Math.min(field.max, Math.max(field.min, value))
+  return field.integer ? Math.round(clamped) : clamped
+}
+
+type ValueField = Exclude<IndicatorSettingField, { kind: 'group' }>
+
+/** One line of an expanded row. `groups` are the ids of the groups it sits in, outermost first,
+ * so a line shows only while each of them is open; `when` gathers its own condition and every
+ * enclosing group's, since a field applies to a pane only where all of them hold. */
+export type SettingLine =
+  | { kind: 'group'; id: string; label: string; depth: number; groups: string[]; when: IndicatorSettingFieldCondition[] }
+  | { kind: 'field'; field: ValueField; depth: number; groups: string[]; when: IndicatorSettingFieldCondition[] }
+
+/** The field tree flattened into table lines, in order. A group's id is its index path ("2",
+ * "2.0"), stable for as long as the app's field list is. */
+export function settingLines(
+  fields: readonly IndicatorSettingField[],
+  groups: readonly string[] = [],
+  when: readonly IndicatorSettingFieldCondition[] = []
+): SettingLine[] {
+  return fields.flatMap((field, index): SettingLine[] => {
+    const conditions = field.when ? [...when, field.when] : [...when]
+    if (field.kind !== 'group') return [{ kind: 'field', field, depth: groups.length, groups: [...groups], when: conditions }]
+    const id = [...groups.slice(-1), String(index)].join('.')
+    const heading: SettingLine = { kind: 'group', id, label: field.label, depth: groups.length, groups: [...groups], when: conditions }
+    return [heading, ...settingLines(field.fields, [...groups, id], conditions)]
+  })
+}
+
+/** Whether a line applies to a pane's config: it has one, and every condition on the line holds. */
+export function lineApplies(line: { when: readonly IndicatorSettingFieldCondition[] }, config: object | null): boolean {
+  return config !== null && line.when.every((condition) => condition.is.includes(valueAt(config, condition.key)))
+}
+
+/** The All column's value for one field: what every pane holding the row agrees on, 'mixed'
+ * where they differ, null where no pane holds it. `configs` is each pane's, null for a pane
+ * without the row. */
+export function sharedSetting(configs: ReadonlyArray<object | null>, key: string): { value: unknown } | 'mixed' | null {
+  let shared: { value: unknown } | null = null
+  for (const config of configs) {
+    if (!config) continue
+    const value = valueAt(config, key)
+    if (!shared) shared = { value }
+    else if (shared.value !== value) return 'mixed'
+  }
+  return shared
 }

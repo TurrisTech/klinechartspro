@@ -1,6 +1,19 @@
 import { describe, expect, test } from 'bun:test'
 import builtin from '../config/indicators'
-import { coverage, holds, resolveParams, sharedParam, usedIndicators, withParam } from './indicatorMatrix'
+import type { IndicatorSettingField } from '../types'
+import {
+  coverage,
+  holds,
+  lineApplies,
+  resolveParams,
+  settingLines,
+  settleSetting,
+  sharedParam,
+  sharedSetting,
+  usedIndicators,
+  valueAt,
+  withParam
+} from './indicatorMatrix'
 
 const pane = (main: string[], sub: string[]) => ({ mainIndicators: main, subIndicatorNames: sub })
 
@@ -114,5 +127,89 @@ describe('sharedParam', () => {
 
   test('a slot set on one pane and unset on another is mixed', () => {
     expect(sharedParam([[5, 10, 30, 60, 120], [5, 10, 30, 60]], 4)).toBe('mixed')
+  })
+})
+
+// The shape of the AREV21 divergence's and the MTF overlay's settings (client/arev21div,
+// client/mtf): groups of fields over a nested per-pane config.
+const FIELDS: IndicatorSettingField[] = [
+  {
+    kind: 'group',
+    label: 'Swings',
+    fields: [
+      { kind: 'number', key: 'rule.left', label: 'Left', min: 2, max: 100, step: 1, integer: true },
+      { kind: 'switch', key: 'rule.hidden', label: 'Hidden too' }
+    ]
+  },
+  {
+    kind: 'group',
+    label: 'Lines',
+    fields: [
+      { kind: 'select', key: 'line.style', label: 'Style', options: [{ value: 'dotted', label: 'Dotted' }] },
+      { kind: 'color', key: 'line.bullColor', label: 'Bullish', when: { key: 'rule.hidden', is: [true] } },
+      { kind: 'group', label: 'More', fields: [{ kind: 'number', key: 'line.width', label: 'Width', min: 1, max: 10, step: 0.5 }] }
+    ]
+  }
+]
+
+describe('settingLines', () => {
+  test('groups become headings before their fields, with index-path ids and their enclosing groups', () => {
+    const lines = settingLines(FIELDS)
+    expect(lines.map((line) => (line.kind === 'group' ? `# ${line.id} ${line.label}` : `${line.field.key} in [${line.groups}]`))).toEqual([
+      '# 0 Swings',
+      'rule.left in [0]',
+      'rule.hidden in [0]',
+      '# 1 Lines',
+      'line.style in [1]',
+      'line.bullColor in [1]',
+      '# 1.2 More',
+      'line.width in [1,1.2]'
+    ])
+    expect(lines.map((line) => line.depth)).toEqual([0, 1, 1, 0, 1, 1, 1, 2])
+  })
+
+  test("a field carries its own condition and every enclosing group's", () => {
+    const nested = settingLines([
+      { kind: 'group', label: 'G', when: { key: 'a', is: [1] }, fields: [{ kind: 'switch', key: 'b', label: 'B', when: { key: 'c', is: [2] } }] }
+    ])
+    expect(nested[1].when).toEqual([
+      { key: 'a', is: [1] },
+      { key: 'c', is: [2] }
+    ])
+  })
+})
+
+describe('lineApplies', () => {
+  const [, , , , , bull] = settingLines(FIELDS)
+  test('holds where every condition does, and never for a pane without a config', () => {
+    expect(lineApplies(bull, { rule: { hidden: true } })).toBe(true)
+    expect(lineApplies(bull, { rule: { hidden: false } })).toBe(false)
+    expect(lineApplies(bull, null)).toBe(false)
+    expect(lineApplies({ when: [] }, {})).toBe(true)
+  })
+})
+
+describe('valueAt', () => {
+  test('walks a dotted path, indexing arrays by a numeric segment', () => {
+    expect(valueAt({ a: { b: [5, 7] } }, 'a.b.1')).toBe(7)
+    expect(valueAt({ a: 1 }, 'a.b')).toBeUndefined()
+    expect(valueAt(null, 'a')).toBeUndefined()
+  })
+})
+
+describe('settleSetting', () => {
+  test('clamps to the bounds and rounds a whole-number field', () => {
+    expect(settleSetting({ min: 2, max: 100, integer: true }, 250)).toBe(100)
+    expect(settleSetting({ min: 2, max: 100, integer: true }, 7.6)).toBe(8)
+    expect(settleSetting({ min: 1, max: 10 }, 2.25)).toBe(2.25)
+    expect(settleSetting({ min: 1, max: 10 }, 0)).toBe(1)
+  })
+})
+
+describe('sharedSetting', () => {
+  test('the value every holding pane agrees on, mixed where they differ, null where none holds', () => {
+    expect(sharedSetting([{ line: { width: 3 } }, null, { line: { width: 3 } }], 'line.width')).toEqual({ value: 3 })
+    expect(sharedSetting([{ line: { width: 3 } }, { line: { width: 2 } }], 'line.width')).toBe('mixed')
+    expect(sharedSetting([null, null], 'line.width')).toBeNull()
   })
 })

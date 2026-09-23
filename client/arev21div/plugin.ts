@@ -1,5 +1,14 @@
 import type { IndicatorGroup } from '../../src'
-import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SettingsRequest } from '../plugins/types'
+import { setByPath } from '../chartlayers/settings'
+import type {
+  BindContext,
+  BindingSpec,
+  BindingState,
+  IndicatorPlugin,
+  PluginFacilities,
+  PluginSettings,
+  SettingsRequest
+} from '../plugins/types'
 import { loadRegistry, type RegistryIndicator } from '../tsregistry/api'
 import { storedSource } from '../tsregistry/plugin'
 import { DIV_DEFAULTS, DIV_FIELDS, normaliseDivConfig, type DivConfig } from './config'
@@ -37,6 +46,30 @@ export function createArev21DivergencePlugin(load: () => Promise<RegistryIndicat
     return 'AREV21 DIVERGENCE'
   }
 
+  /** A pane's new config, from its panel or from the indicator manager. Clamped before it
+   * reaches a binding -- the panel's number inputs commit every keystroke -- then kept,
+   * persisted and that pane redrawn. */
+  const applyConfig = (paneIndex: number, paneId: string, next: DivConfig): void => {
+    const f = facilities
+    if (!f) return
+    configs[paneIndex] = normaliseDivConfig(next)
+    configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
+    f.requestPersist()
+    f.requestReconcile(paneId)
+  }
+
+  // One config per pane for both templates, so the prediction-pane row and the price-pane row
+  // in the indicator manager edit the same settings.
+  const settings: PluginSettings = {
+    fields: DIV_FIELDS,
+    read: (paneIndex) => configFor(paneIndex),
+    write: (paneIndex, paneId, key, value) => {
+      const next = structuredClone(configFor(paneIndex))
+      setByPath(next, key, value)
+      applyConfig(paneIndex, paneId, next)
+    }
+  }
+
   const openPanel = (paneId: string): boolean => {
     const f = facilities
     const info = f?.paneInfo(paneId)
@@ -60,13 +93,7 @@ export function createArev21DivergencePlugin(load: () => Promise<RegistryIndicat
       fields: DIV_FIELDS,
       config: configFor(paneIndex),
       defaults: DIV_DEFAULTS,
-      onChange: (next) => {
-        // Clamped before it reaches a binding: the number inputs commit every keystroke.
-        configs[paneIndex] = normaliseDivConfig(next)
-        configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
-        f.requestPersist()
-        f.requestReconcile(paneId)
-      },
+      onChange: (next) => applyConfig(paneIndex, paneId, next),
       onClose: () => {
         panel = null
       }
@@ -100,6 +127,7 @@ export function createArev21DivergencePlugin(load: () => Promise<RegistryIndicat
       return openPanel(request.paneId)
     },
     ownsSettings: (templateName) => isDivergenceIndicator(templateName),
+    settings: (templateName) => (isDivergenceIndicator(templateName) ? settings : null),
     paneState: {
       hydrate(initial) {
         for (const [index, config] of Object.entries(initial)) {

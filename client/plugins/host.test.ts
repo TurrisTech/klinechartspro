@@ -382,4 +382,37 @@ describe('createPluginHost', () => {
     expect(await host.validateParams?.({ indicatorName: 'MA', calcParams: [0], symbol: {} as never, period: {} as never })).toEqual({ ok: true })
     expect(host.paneState()).toEqual({ cfg: { 0: { a: 1 } } })
   })
+
+  test("a plugin's settings reach the indicator manager addressed by wall pane, not pane index", async () => {
+    const configs: Record<number, { size: number }> = { 0: { size: 1 }, 1: { size: 2 } }
+    const writes: unknown[][] = []
+    const plugin: IndicatorPlugin = {
+      id: 'cfg',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'CFG',
+      bind: () => null,
+      settings: (name) =>
+        name === 'CFG'
+          ? {
+              fields: [{ kind: 'number', key: 'size', label: 'Size', min: 1, max: 9, step: 1 }],
+              read: (paneIndex) => configs[paneIndex],
+              write: (paneIndex, paneId, key, value) => writes.push([paneIndex, paneId, key, value])
+            }
+          : null
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    // The wall's second pane first: its id and its index disagree, which is the whole mapping.
+    host.sync([fakePane('p2', fakeChart().chart), fakePane('p1', fakeChart().chart)])
+    const model = host.settingsModel('CFG')
+    expect(model?.fields.map((field) => field.kind)).toEqual(['number'])
+    expect(model?.read('p2')).toEqual({ size: 1 })
+    expect(model?.read('p1')).toEqual({ size: 2 })
+    expect(model?.read('p9')).toBeNull()
+    model?.write('p1', 'size', 4)
+    model?.write('p9', 'size', 5)
+    expect(writes).toEqual([[1, 'p1', 'size', 4]])
+    expect(host.settingsModel('MA')).toBeNull()
+  })
 })
