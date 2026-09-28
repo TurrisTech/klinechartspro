@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { Candle } from './calendar'
-import { heathLevels, isLive, LOOKBACK, originOf, runStart, zoneOf, type HeathLevelSettings } from './heathlevels'
+import { atr, heathLevels, isLive, LOOKBACK, originOf, runStart, zoneOf, type HeathLevelSettings } from './heathlevels'
 import { emptyText, levelLabel, settingsOf, DEFAULT_PARAMS } from './heathtemplate'
 
 const bar = (open: number, high: number, low: number, close: number): Candle => ({
@@ -15,8 +15,18 @@ const bar = (open: number, high: number, low: number, close: number): Candle => 
 const dated = (bars: Candle[]): Candle[] => bars.map((b, i) => ({ ...b, timestamp: i * 3_600_000 }))
 
 // `maxRun: 1` keeps every case below on the single last opposite-colour candle, which is what
-// the erasure and freshness rules are about; the run is its own describe at the bottom.
-const SETTINGS: HeathLevelSettings = { left: 2, right: 2, sides: 0, freshOnly: false, stopLine: false, maxRun: 1 }
+// the erasure and freshness rules are about; the run is its own describe at the bottom. The
+// `minWidth` here is far larger than any fixture's ATR, so the zone is never "wide enough" and
+// the cap alone decides the run -- which is what those cases are about.
+const SETTINGS: HeathLevelSettings = {
+  left: 2,
+  right: 2,
+  sides: 0,
+  freshOnly: false,
+  stopLine: false,
+  maxRun: 1,
+  minWidth: 99
+}
 
 // A rally whose last candle closes up, then a sell-off: index 3 is the swing top and its own
 // candle is the last up-close one, so the supply line is that candle's open.
@@ -342,10 +352,11 @@ describe('the chart half', () => {
       stopLine: false,
       fill: 12,
       calendar: true,
-      maxRun: 3
+      maxRun: 3,
+      minWidth: 0.5
     })
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
-    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99])).toEqual({
+    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99, 900])).toEqual({
       left: 1,
       right: 200,
       sides: 2,
@@ -353,12 +364,14 @@ describe('the chart half', () => {
       stopLine: true,
       fill: 100,
       calendar: false,
-      maxRun: 10
+      maxRun: 10,
+      minWidth: 5
     })
     // Layouts saved before the shading and calendar parameters existed read their defaults.
     expect(settingsOf([5, 5, 0, 0, 0]).fill).toBe(12)
     expect(settingsOf([5, 5, 0, 0, 0, 12]).calendar).toBe(true)
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1]).maxRun).toBe(3)
+    expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3]).minWidth).toBe(0.5)
   })
 
   test('a level says whether price has been back to it', () => {
@@ -409,7 +422,7 @@ describe('one or more candles', () => {
   test('a candle that closed the other way ends the run, whatever the cap allows', () => {
     // Bar 0 closes down, so nothing beyond it joins however high the cap goes.
     expect(heathLevels(RUN, { ...SETTINGS, maxRun: 10 })[0].originIndex).toBe(1)
-    expect(runStart(RUN, 3, 10)).toBe(1)
+    expect(runStart(RUN, 3, 10, 999)).toBe(1)
   })
 
   test('the turn is unchanged by the run -- only where the level is drawn from', () => {
@@ -448,6 +461,69 @@ describe('one or more candles', () => {
       expect(prefix.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])).toEqual(
         visible.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])
       )
+    }
+  })
+})
+
+describe('the zone widens only while it is too small', () => {
+  // Three up-close candles, each body 0.2 tall, stepping up. The run walks back from index 2.
+  const steps = dated([
+    bar(10, 10.25, 9.95, 10.2),
+    bar(10.2, 10.45, 10.15, 10.4),
+    bar(10.4, 10.65, 10.35, 10.6)
+  ])
+
+  test('a candle wide enough on its own is the whole zone', () => {
+    // Its body is 0.2, more than the 0.15 asked for. (The thresholds here stay off the exact
+    // body heights: 10.6 - 10.4 is 0.19999999999999929 in floating point, and a comparison
+    // sitting on the boundary would turn on that.)
+    expect(runStart(steps, 2, 5, 0.15)).toBe(2)
+    expect(runStart(steps, 2, 5, 0)).toBe(2)
+  })
+
+  test('a small one pulls in the candle before it, and stops as soon as it is enough', () => {
+    // Needs 0.3: index 2 alone gives 0.2, and 1-2 gives 0.4, so it stops at two candles even
+    // though a third is available and the cap allows it.
+    expect(runStart(steps, 2, 5, 0.3)).toBe(1)
+    // Needs 0.5: two candles give 0.4, three give 0.6.
+    expect(runStart(steps, 2, 5, 0.5)).toBe(0)
+  })
+
+  test('the cap and the colour still bound it, and a zone that stays small is still a zone', () => {
+    expect(runStart(steps, 2, 2, 999)).toBe(1) // the cap stops it one short
+    const broken = dated([bar(10.4, 10.5, 10.1, 10.15), steps[1], steps[2]]) // index 0 closes down
+    expect(runStart(broken, 2, 5, 999)).toBe(1) // the colour stops it
+    expect(runStart(steps, 2, 5, 999)).toBe(0) // nothing left to add, and it returns anyway
+  })
+
+  test('the threshold is ATR-relative, so the same setting means the same thing anywhere', () => {
+    // RUN's zone at index 3 is 11.3-12.4 (1.1 tall) against an ATR around 1.0, so a 0.5x
+    // threshold is already met by the one candle and a 3x one reaches for the whole run.
+    expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 0.5 })[0].originIndex).toBe(3)
+    expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 3 })[0].originIndex).toBe(1)
+    // 0 is "always the single last candle", whatever the cap allows.
+    expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 0 })[0].originIndex).toBe(3)
+  })
+})
+
+describe('ATR', () => {
+  const bars = dated([
+    bar(10, 11, 9, 10.5),
+    bar(10.5, 12, 10, 11.5),
+    bar(11.5, 11.8, 10.2, 10.4)
+  ])
+
+  test('the first bar is its own range, and later ones take the gap into account', () => {
+    const values = atr(bars, 14)
+    expect(values[0]).toBe(2) // 11 - 9
+    expect(values[1]).toBe((2 + 2) / 2) // max(2, |12-10.5|, |10-10.5|) = 2
+    expect(values[2]).toBeCloseTo((2 + 2 + 1.6) / 3, 10)
+  })
+
+  test('is causal -- a prefix gives the same values as the whole series', () => {
+    const full = atr(bars, 2)
+    for (let n = 1; n <= bars.length; n++) {
+      expect(atr(bars.slice(0, n), 2)).toEqual(full.slice(0, n))
     }
   })
 })

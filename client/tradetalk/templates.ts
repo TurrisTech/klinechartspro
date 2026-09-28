@@ -35,7 +35,15 @@ export const DEFAULT_PARAMS = [2, 1, 1, 5, 0, 1, 1]
 
 /** The supply and demand the entry rule trades from when its switch is on: the Heath levels
  * indicator's own defaults, so what it trades is what that indicator draws. */
-const ENTRY_HEATH: HeathLevelSettings = { left: 5, right: 5, sides: 0, freshOnly: false, stopLine: false, maxRun: 3 }
+const ENTRY_HEATH: HeathLevelSettings = {
+  left: 5,
+  right: 5,
+  sides: 0,
+  freshOnly: false,
+  stopLine: false,
+  maxRun: 3,
+  minWidth: 0.5
+}
 
 const MIN_UNITS: readonly Unit[] = ['D', 'W', 'M']
 
