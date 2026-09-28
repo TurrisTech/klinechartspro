@@ -92,28 +92,37 @@ Only where the level is *drawn from* changes with the run — the turn, and ther
 becomes knowable, is the same candle. The life starts after the run's **last** candle, so the
 candles that built a zone can never be what erases it.
 
-A level's life, all of it forward-looking: **armed** once price has closed clear of the area
-(without which the sell-off that created a supply would instantly "test" it, the area being
-that candle's own body), **tested** the first time a later bar's range reaches back
-*into* it, and **erased** the first time **one candle passes entirely through it** (user,
-2026-09-21).
+**A candle is not a level until price trades away from it** (§3.3), and he means the whole
+candle:
 
-**Erased two ways**, and the difference between them is wicks versus bodies:
+> *"price was bullish once it put in this candle and traded away from this area. That made it a
+> demand zone"* … *"the selling resumed and took out both green candles' lows and **closed
+> below them**"* — #73
+
+So a supply is **established** by a close below the run's lowest **low**, a demand by a close
+above its highest **high** — `departure`, the run's furthest wick on the side price has to
+leave towards, with the stop beyond the other. Until that close there is no zone: nothing is
+drawn, and `TT:entries` cannot trade it. The one thing that ends a level before then is a
+**close beyond the stop** (`failed`): price went the other way instead of leaving.
+
+A level's life after that, all of it forward-looking: **tested** the first time a later bar's
+range reaches back *into* it, and **erased** two ways —
 
 | | |
 |---|---|
-| **through** | one candle's *whole range*, wicks included, covers the area. A wick that reaches only **part way** in leaves it live (and marks it tested). |
-| **crossed** | a later candle's **body crosses the far edge** — the top of a supply, the bottom of a demand. A **wick** across that edge does not count; that is the distinction the rule turns on. |
+| **closed** | a **close through the line** he draws: above a supply's open, below a demand's. A **wick** through it is not a break — the same rule as his support and resistance (§4.1, "only a body close counts"). |
+| **through** | one candle's *whole range*, wicks included, covers the area (user, 2026-09-21). A wick that reaches only **part way** in leaves it live, and marks it tested. |
 
-**The crossing is judged once the level has established itself** — once price has closed clear
-of the area. Without that guard the move that *creates* a level destroys it: measured over 20
-days of dev EURUSD 1h, an ungated crossing rule killed **17 of 30 levels within two bars of
-their own candle**, a median life of 2 bars against 16. The guard leaves no hole, because a
-**close** past the far edge ends a level even before it is established — that says the same
-thing a crossing says, so a level price never left cannot outlive being traded through.
+Both are judged only once the level is established, which is what stops the move that *creates*
+a level from destroying it — the area is the origin run's own bodies, so the bars around the
+turn are still standing in it.
 
-Measured over the same window: 42 levels, 13 erased `through`, **23 erased `crossed`**, 6 still
-live.
+Measured on 30 days of dev EURUSD 1h (2026-09-28), against the looser readings this replaced:
+63 levels found either way, of which **17 never become zones at all** (price closed through the
+stop before it ever left) and 46 are established; 35 of those are erased by a close through the
+line and 3 by a candle covering the area, and the median life is **13 bars against the old
+rule's 10** — the strict reading starts the clock later and then ends it sooner. On 400 days of
+1D: 30 of 36 established, 3 still live at the right edge where the loose rule left 7.
 
 Drawn: the body shaded from its origin candle, with the line (the open) solid along one edge
 and the close faint along the other; the stop is its own dotted line beyond the wick, drawn
@@ -140,13 +149,12 @@ calcParams are part of a binding's identity, so flipping the switch rebinds. The
 the calendar half is waiting for (`Heath levels · calendar levels loading`, `… no schedule for
 calendar levels`) and says nothing extra when it is off.
 
-**Where the chart is more lenient than he is.** The study's §3.8 maps every rule to its source,
-re-read from all 227 captioned videos on 2026-09-21. Two readings here are deliberately the looser
-of his: a level counts once price **closes clear of the body**, where his worked examples wait for a
-close beyond the origin candle's **low** (supply) or **high** (demand) (#73, #64, #158); and it is
-scrapped by a body crossing the **far** edge (#145), where on hourly charts drawn from the single
-line he scraps it on a close through **the open** itself (#93, #94). Either is a one-line change if
-the stricter reading is wanted.
+**Both readings were looser than his until 2026-09-28.** The study's §3.8 maps every rule to its
+source, re-read from all 227 captioned videos on 2026-09-21. A level used to count once price
+closed clear of the **body**, where his worked examples wait for a close beyond the whole origin
+candle (#73, #64, #158); and it used to be scrapped by a body crossing the **far** edge, his zone
+reading (#145), where on hourly charts drawn from the single line he scraps it on a close through
+**the line** itself (#93, #94). The user asked for his readings, and the table above is now them.
 
 **It feeds the entries too** (2026-09-28). `TT:entries` parameter 7 (`supply and demand`, 0/1,
 default **on**) computes these same zones — the shipped defaults of this indicator, so what it

@@ -90,11 +90,13 @@ describe('the life of a level', () => {
     const bars = dated([
       ...RALLY,
       bar(10.9, 11.5, 10.8, 11.4),
-      bar(11.4, 12.4, 11.3, 12.3) // reaches back up past the 12.3 edge, not through the area
+      bar(11.4, 12.4, 11.3, 12.2) // reaches back up into the area, closing under the line
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.testedIndex).toBe(8)
-    expect(heathLevels(bars, { ...SETTINGS, freshOnly: true })).toHaveLength(0)
+    expect(level.brokenIndex).toBeNull()
+    // Supply only: these bars also put in a swing bottom, whose demand is still fresh.
+    expect(heathLevels(bars, { ...SETTINGS, freshOnly: true, sides: 1 })).toHaveLength(0)
   })
 
   test('one candle passing entirely through the area erases it', () => {
@@ -102,8 +104,8 @@ describe('the life of a level', () => {
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
-      bar(11.9, 13.1, 11.8, 12.6),
-      bar(12.6, 13, 12.5, 12.9)
+      bar(11.9, 13.1, 11.8, 12), // covers 12.3-12.9 with its range, but closes under the line
+      bar(12, 12.3, 11.9, 12.1)
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.brokenIndex).toBe(8)
@@ -128,9 +130,9 @@ describe('the life of a level', () => {
     expect(isLive(level, 9)).toBe(true)
   })
 
-  test('a candle that gaps clean over the area ends it by the body rule, not the through rule', () => {
-    // Its LOW never reached 12.3, so nothing passed through the area -- but its body sits
-    // above it, and a body beyond the level is the end of the level.
+  test('a candle that gaps clean over the area ends it on the close, not the through rule', () => {
+    // Its LOW never reached 12.3, so nothing passed through the area -- but it closed well
+    // above the line, and a close through the line is the end of the level.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
@@ -138,7 +140,7 @@ describe('the life of a level', () => {
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.brokenIndex).toBe(8)
-    expect(level.brokenBy).toBe('crossed')
+    expect(level.brokenBy).toBe('closed')
   })
 
   test('the area is the origin candle\'s BODY, and the stop is outside it', () => {
@@ -147,25 +149,29 @@ describe('the life of a level', () => {
     expect(zoneOf(supply)).toEqual({ low: 12.3, high: 12.9 })
     expect(supply.stop).toBe(13)
     expect(supply.stop).toBeGreaterThan(zoneOf(supply).high)
+    // And the other wick, 12.2, is what a close has to clear for it to become a zone at all.
+    expect(supply.departure).toBe(12.2)
+    expect(supply.departure).toBeLessThanOrEqual(zoneOf(supply).low)
     // Demand mirrors it: the body, with the stop below.
     expect(zoneOf({ low: 10.2, high: 11.1 })).toEqual({ low: 10.2, high: 11.1 })
   })
 
-  test('a BODY across the top of a supply ends it, even reaching only part way over', () => {
-    // Body 12.5-12.95: its low is still inside the 12.3-12.9 area, but it crossed the top.
+  test('a CLOSE through the line ends it, without ever reaching the far edge', () => {
+    // Closes at 12.35, barely through the 12.3 line and nowhere near the 12.9 top of the area.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
-      bar(12.5, 13.05, 12.4, 12.95)
+      bar(12, 12.5, 11.9, 12.35)
     ])
     const [level] = heathLevels(bars, SETTINGS)
+    expect(level.testedIndex).toBe(8)
     expect(level.brokenIndex).toBe(8)
-    expect(level.brokenBy).toBe('crossed')
+    expect(level.brokenBy).toBe('closed')
   })
 
-  test('the move that CREATES a level cannot destroy it on its way out', () => {
-    // The candle after the origin opens above the area's top (12.9) and sells off. Its body
-    // crosses the edge, but the level is not established yet, and it did not CLOSE past it.
+  test('an OPEN beyond the area is not a break -- the departure is read off the close', () => {
+    // The candle after the origin OPENS above the area's top (12.9) and sells off, closing
+    // under the origin candle's low. That close is the departure, not a break.
     const bars = dated([
       RALLY[0], RALLY[1], RALLY[2], RALLY[3],
       bar(12.95, 12.98, 12, 12.1),
@@ -173,41 +179,66 @@ describe('the life of a level', () => {
       RALLY[6]
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level?.brokenIndex ?? null).toBeNull()
+    expect(level.armedIndex).toBe(4)
+    expect(level.brokenIndex).toBeNull()
   })
 
-  test('but a CLOSE past the far edge ends it even before it is established', () => {
-    // Never departs: the bar after the origin CLOSES above the area's top (12.9), while its
-    // high stays under the swing high so the top is still a top.
+  test('the departure is a close beyond the WHOLE candle, not clear of its body', () => {
+    // The bar after the origin closes at 12.25: below the 12.3 body but still inside the
+    // candle, whose low is 12.2. The chart used to call that established; he does not.
     const bars = dated([
       RALLY[0], RALLY[1], RALLY[2], RALLY[3],
-      bar(12.85, 12.99, 12.8, 12.95),
-      RALLY[5],
+      bar(12.85, 12.9, 12.24, 12.25),
+      bar(12.25, 12.3, 12.21, 12.22),
       RALLY[6]
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level.brokenIndex).toBe(4)
-    expect(level.brokenBy).toBe('crossed')
+    expect(level.armedIndex).toBe(6) // RALLY[6] closes at 10.9, clear of the 12.2 low
+    expect(isLive(level, 5)).toBe(false)
+    expect(isLive(level, 6)).toBe(true)
   })
 
-  test('a WICK across the edge is not a body, and leaves it live', () => {
-    // High 13.05 pokes above the area but the body, 12.5-12.7, is still inside it.
+  test('a close beyond the STOP means the candles never become a zone', () => {
+    // The turn (index 3) closes DOWN, so the supply is the candle before it -- O 11.2 H 12.5
+    // L 11 C 12.3, stop 12.5. Index 4 closes at 12.6, through where the stop goes, before
+    // price ever left: there was no departure and there is no level.
+    const bars = dated([
+      bar(10, 11, 9.5, 10.5),
+      bar(10.5, 11.5, 10.2, 11.2),
+      bar(11.2, 12.5, 11, 12.3),
+      bar(12.9, 13, 12.2, 12.4),
+      bar(12.4, 12.7, 12.3, 12.6),
+      bar(12.6, 12.65, 11.5, 11.6),
+      bar(11.6, 11.7, 11, 11.1)
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level).toMatchObject({ side: 'supply', originIndex: 2, price: 11.2, stop: 12.5 })
+    expect(level.armedIndex).toBeNull()
+    expect(level.brokenIndex).toBe(4)
+    expect(level.brokenBy).toBe('failed')
+    // Never established, so never on the chart -- not even before the bar that ended it.
+    expect(isLive(level, 3)).toBe(false)
+  })
+
+  test('a WICK through the line is not a break, and leaves it live', () => {
+    // High 12.5 pokes through the 12.3 line, and the close, 12.2, is back under it.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
-      bar(12.5, 13.05, 12.4, 12.7)
+      bar(12, 12.5, 11.9, 12.2)
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.brokenIndex).toBeNull()
     expect(level.testedIndex).toBe(8)
   })
 
-  test('the sell-off away from a supply leaves it live -- only the top edge matters', () => {
+  test('the sell-off away from a supply establishes it rather than ending it', () => {
     const [level] = heathLevels(RALLY, SETTINGS)
+    expect(level.armedIndex).toBe(4)
     expect(level.brokenIndex).toBeNull()
   })
 
-  test('a body below a demand ends it, mirrored', () => {
+  test('a close below a demand\'s line ends it, mirrored', () => {
     const bars = dated([
       bar(13, 13.2, 12.5, 12.6),
       bar(12.6, 12.8, 11.8, 11.9),
@@ -216,12 +247,14 @@ describe('the life of a level', () => {
       bar(10.2, 11.3, 10.1, 11.2),
       bar(11.2, 12, 11.1, 11.9),
       bar(11.9, 12.5, 11.8, 12.4),
-      bar(10.4, 10.5, 9.5, 10.1) // body 10.1-10.4 crosses the area's bottom edge, 10.2
+      bar(10.4, 10.5, 9.5, 10.1) // closes at 10.1, through the 11.1 line
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.side).toBe('demand')
+    expect(level.departure).toBe(11.2) // the rally has to close above the candle's HIGH
+    expect(level.armedIndex).toBe(5)
     expect(level.brokenIndex).toBe(7)
-    expect(level.brokenBy).toBe('crossed')
+    expect(level.brokenBy).toBe('closed')
   })
 
   test('a candle covering the body but not the wick still erases it', () => {
@@ -230,16 +263,18 @@ describe('the life of a level', () => {
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
-      bar(11.9, 12.95, 11.8, 12.6)
+      bar(11.9, 12.95, 11.8, 12)
     ])
     const [level] = heathLevels(bars, SETTINGS)
     expect(level.brokenIndex).toBe(8)
+    expect(level.brokenBy).toBe('through')
   })
 
-  test('a level is not on the chart before its own candle', () => {
+  test('a level is not on the chart until price has traded away from it', () => {
     const [level] = heathLevels(RALLY, SETTINGS)
-    expect(isLive(level, level.originIndex - 1)).toBe(false)
-    expect(isLive(level, level.originIndex)).toBe(true)
+    expect(level.armedIndex).toBe(4)
+    expect(isLive(level, 3)).toBe(false)
+    expect(isLive(level, 4)).toBe(true)
   })
 })
 
@@ -384,11 +419,24 @@ describe('one or more candles', () => {
   })
 
   test('the candles that built the level cannot be what erases it', () => {
-    // The run's own bodies fill the zone, and the sell-off out of it starts inside: neither is
-    // a test or a crossing, because the life only begins after the last candle of the run.
+    // The run's own bodies fill the zone and the sell-off out of it starts inside, but the
+    // life only begins after the run's last candle -- so neither is a test or a break.
     const [level] = heathLevels(RUN, { ...SETTINGS, maxRun: 3 })
     expect(level.testedIndex).toBeNull()
     expect(level.brokenIndex).toBeNull()
+    // And the departure is the whole run's low, 9.7, which this sell-off never closes under:
+    // price never left, so it is not a zone yet either.
+    expect(level.departure).toBe(9.7)
+    expect(level.armedIndex).toBeNull()
+  })
+
+  test('a run departs when a close clears the WHOLE run, not just the last candle', () => {
+    const bars = dated([...RUN, bar(10.5, 10.6, 9.6, 9.65)])
+    const [three] = heathLevels(bars, { ...SETTINGS, maxRun: 3 })
+    expect(three.armedIndex).toBe(7) // 9.65 is under the run's 9.7 low
+    // Read as one candle the same bars depart four bars earlier, off that candle's own 11.2.
+    const [one] = heathLevels(bars, { ...SETTINGS, maxRun: 1 })
+    expect(one.armedIndex).toBe(5)
   })
 
   test('every prefix agrees about the runs it can already see', () => {

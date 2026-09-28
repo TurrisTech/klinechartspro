@@ -320,12 +320,16 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
   )
   const half = tick > 0 ? tick / 2 : 0
 
-  // The supply and demand lines live at a bar when their swing is confirmed and nothing has
-  // erased them yet. They are merged into that bar's map and deduplicated with it, so a zone
+  // The supply and demand lines live at a bar once BOTH facts are known -- the swing is
+  // confirmed and price has traded away from the candles (`armedIndex`) -- and until something
+  // erases them. A zone price never left is not a zone, so it never reaches the rule at all. They are merged into that bar's map and deduplicated with it, so a zone
   // sitting on a calendar level is one line, not two. The merged array is cached per (calendar
   // map, active set) so bars that share a map still share one array -- what `draw` groups runs
   // by -- and the whole thing collapses to the calendar map when no zones are passed.
-  const heathByConfirm = [...(input.heath ?? [])].sort((a, b) => a.confirmIndex - b.confirmIndex)
+  const heathByConfirm = (input.heath ?? [])
+    .filter((level) => level.armedIndex !== null)
+    .map((level) => ({ level, from: Math.max(level.confirmIndex, level.armedIndex ?? 0) }))
+    .sort((a, b) => a.from - b.from)
   let heathNext = 0
   let active: HeathLevel[] = []
   let activeVersion = 0
@@ -334,8 +338,8 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
   const levelsFor = (i: number, calendar: Level[]): Level[] => {
     if (heathByConfirm.length === 0) return calendar
     let changed = false
-    while (heathNext < heathByConfirm.length && heathByConfirm[heathNext].confirmIndex <= i) {
-      active.push(heathByConfirm[heathNext++])
+    while (heathNext < heathByConfirm.length && heathByConfirm[heathNext].from <= i) {
+      active.push(heathByConfirm[heathNext++].level)
       changed = true
     }
     if (active.some((level) => level.brokenIndex !== null && level.brokenIndex <= i)) {
