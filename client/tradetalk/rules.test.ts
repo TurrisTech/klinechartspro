@@ -430,9 +430,11 @@ const heath = (
   low: side === 'supply' ? price : price - 1,
   high: side === 'supply' ? price + 1 : price,
   stop: side === 'supply' ? price + 1.5 : price - 1.5,
+  departure: side === 'supply' ? price - 2 : price + 2,
+  armedIndex: confirmIndex,
   testedIndex: null,
   brokenIndex,
-  brokenBy: brokenIndex === null ? null : 'crossed'
+  brokenBy: brokenIndex === null ? null : 'closed'
 })
 
 describe('trading from supply and demand', () => {
@@ -485,5 +487,31 @@ describe('trading from supply and demand', () => {
     // One price is still one line: the zone replaces the daily, the weekly replaces the zone.
     expect(dedupeLevels([level(90, 'D', 'low', 'prev day low'), zone], TICK).map((l) => l.label)).toEqual(['demand'])
     expect(dedupeLevels([zone, level(90, 'W', 'low', 'last week low')], TICK).map((l) => l.label)).toEqual(['last week low'])
+  })
+})
+
+describe('a zone reaches the rule only once it is established', () => {
+  const bars = STOP_RUN
+  const levelsAt = (heath: HeathLevel[], i: number) =>
+    computeTradeTalk({
+      bars,
+      sessions: mergeSessions(BASE, sessionsFromBars(bars, CLOCK)),
+      clock: CLOCK,
+      barMs: HOUR,
+      tick: TICK,
+      settings: SETTINGS,
+      heath
+    }).values[i].levels?.filter((level) => level.source === 'heath').length ?? 0
+
+  test('a zone price never traded away from is not on the map at all', () => {
+    const never = { ...heath('demand', 93.4, 1), armedIndex: null }
+    expect(levelsAt([never], 1)).toBe(0)
+    expect(levelsAt([never], 4)).toBe(0)
+  })
+
+  test('and one confirmed before it departs waits for the departure', () => {
+    const late = { ...heath('demand', 93.4, 1), armedIndex: 3 }
+    expect(levelsAt([late], 2)).toBe(0)
+    expect(levelsAt([late], 3)).toBe(1)
   })
 })

@@ -24,14 +24,15 @@ import {
 // line. That half needs daily bars, which is the only reason this template is bound by the
 // plugin host at all: switched off, its binding reads nothing.
 //
-// A level is an AREA, shaded: the origin candle's BODY, its open (the line the method draws)
-// one edge and its close the other. The stop sits beyond the wick, outside the area, and is
-// drawn as its own dotted line. The area starts at the candle it belongs to. Until the swing that defines it is
-// confirmed -- `right` bars later -- the line is DASHED: that is the stretch where it exists in
-// hindsight only, and dashing it is the difference between showing the method and flattering
-// it. Solid from the confirming bar, dimmed once price has been back into the area ("a fresh,
-// untested level is worth far more"), and gone at the first candle that passes entirely
-// through it.
+// A level is an AREA, shaded: the origin run's BODIES, the earliest open (the line the method
+// draws) one edge and the last close the other. The stop sits beyond the wick, outside the
+// area, and is drawn as its own dotted line. The area starts at the candles it belongs to, but
+// it is only drawn at all once price has TRADED AWAY from them -- a candle price never left is
+// not a zone. Until both facts are known -- the swing confirmed `right` bars later, and the
+// departure -- the line is DASHED: that is the stretch where it exists in hindsight only, and
+// dashing it is the difference between showing the method and flattering it. Solid after,
+// dimmed once price has been back into the area ("a fresh, untested level is worth far more"),
+// and gone at the first candle to close through the line or cover the whole area.
 
 export const TEMPLATE_NAME = 'TT:heathlevels'
 
@@ -157,6 +158,9 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
         let drawn = 0
         const labels: Array<{ y: number; text: string; color: string; alpha: number }> = []
         for (const level of levels) {
+          // A candle price never traded away from is not a zone, so there is nothing to draw
+          // yet -- it appears, back to its own candles, on the bar that establishes it.
+          if (level.armedIndex === null) continue
           const lastIndex = level.brokenIndex === null ? data.length - 1 : level.brokenIndex
           if (lastIndex < from || level.originIndex > to) continue
           drawn++
@@ -168,7 +172,10 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           const yNear = yAxis.convertToPixel(level.side === 'supply' ? level.low : level.high)
           const yStop = yAxis.convertToPixel(level.stop)
           const xStart = xAxis.convertToPixel(level.originIndex) - pitch / 2
-          const xConfirm = xAxis.convertToPixel(Math.min(level.confirmIndex, lastIndex))
+          // Hindsight ends where BOTH facts are known: the swing is confirmed and price has
+          // traded away. Until then the line is dashed.
+          const knownIndex = Math.min(Math.max(level.confirmIndex, level.armedIndex), lastIndex)
+          const xConfirm = xAxis.convertToPixel(knownIndex)
           const xEnd = xAxis.convertToPixel(lastIndex) + pitch / 2
 
           // The area itself: the origin candle's BODY. A tested area is shaded at half
@@ -182,7 +189,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           ctx.strokeStyle = color
           ctx.globalAlpha = alpha
           // Hindsight half: the swing that defines this line had not happened yet.
-          if (level.confirmIndex > level.originIndex && xConfirm > xStart) {
+          if (knownIndex > level.originIndex && xConfirm > xStart) {
             ctx.setLineDash([2, 3])
             lineTo(ctx, xStart, xConfirm, y)
           }
@@ -250,7 +257,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       name: TEMPLATE_NAME,
       label: 'Heath levels (supply & demand)',
       description:
-        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand), and the run of same-colour candles before it — as a line at the earliest open, with their BODIES shaded as the area and the stop beyond its wick. Dashed until the swing that defines it is confirmed, dimmed once price has been back into it, and erased when one candle passes entirely through it or a body crosses its far edge. Optionally with the objective calendar levels underneath — the yearly, quarterly, monthly, weekly and daily opens and the previous period’s high, low and midpoint. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity, calendar levels on/off.'
+        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand), and the run of same-colour candles before it — as a line at the earliest open, with their BODIES shaded as the area and the stop beyond its wick. Drawn only once price has TRADED AWAY from those candles — a close beyond the run’s far wick, which is what makes them a zone — dashed back over the stretch that existed in hindsight only, dimmed once price has been back into it, and erased by a close through the line or by one candle covering the whole area. Optionally with the objective calendar levels underneath — the yearly, quarterly, monthly, weekly and daily opens and the previous period’s high, low and midpoint. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity, calendar levels on/off, candles in one zone.'
     }
   ]
 }

@@ -14,19 +14,36 @@ import type { Candle } from './calendar'
 //
 // The area is the origin candle's BODY -- open to close, not open to wick (user, 2026-09-21).
 // The line he draws is its open edge; the stop still sits beyond the wick, outside the area
-// entirely. A level is ERASED two ways, both the user's (2026-09-21):
+// entirely.
 //
+// A candle only becomes a level once price TRADES AWAY from it, and he means the whole candle:
+//
+//   "price was bullish once it put in this candle and traded away from this area. That made it
+//    a demand zone" (#73) ... "the selling resumed and took out both green candles' lows and
+//    closed below them" (#73, mirrored for a 2024 weekly demand in the same video)
+//
+// So a supply is ESTABLISHED by a close below the run's lowest LOW, a demand by a close above
+// its highest HIGH -- `departure` below, the run's furthest wick on the side price has to
+// leave towards, with the stop beyond the other. Until then there is no zone: nothing is drawn
+// and nothing can be traded from it. The chart read this loosely until 2026-09-28, arming on a
+// close clear of the BODY, which counted zones he would not have drawn yet (user: implement
+// his reading).
+//
+// A level is then ERASED two ways:
+//
+//   * a CLOSE THROUGH THE LINE he draws -- above a supply's open, below a demand's. A WICK
+//     through it is not a break; that is the distinction the whole method turns on, and it is
+//     the same rule as his support and resistance (§4.1, "only a body close counts"). This too
+//     was loose until 2026-09-28: the chart erased on a body crossing the FAR edge, his zone
+//     reading (#145), where on hourly charts drawn from the single line he scraps the level on
+//     a close through the line itself (#93, #94).
 //   * a candle passes entirely THROUGH the area -- its whole range, wicks included, covering
-//     the band. A wick that reaches only part way in leaves the level live.
-//   * a later candle's BODY CROSSES its far edge -- the top of a supply, the bottom of a
-//     demand (user, 2026-09-21). A WICK across that edge does not count: that is the
-//     distinction the rule turns on. The crossing is judged once the level has established
-//     itself -- price having closed clear of the area -- because otherwise the move that
-//     CREATES the level destroys it: measured on 20 days of dev EURUSD 1h, an ungated
-//     crossing rule killed 17 of 30 levels within two bars of their own candle, a median life
-//     of 2 bars against 16. A close past the far edge before the level ever established
-//     itself says the same thing as a crossing and ends it there and then, so a level price
-//     never left cannot outlive being traded through.
+//     the band (user, 2026-09-21). A wick that reaches only part way in leaves the level live.
+//
+// Both are judged only once the level is established, which is what stops the move that CREATES
+// a level from destroying it -- the area is the origin run's own bodies, so the bars around the
+// turn are still standing in it. Before that only one thing ends it: a close beyond the STOP,
+// price having gone the other way instead of leaving, so there is no zone to wait for.
 //
 // Two things in that definition have to be made mechanical, and both are parameters rather
 // than opinions buried in code:
@@ -68,13 +85,20 @@ export interface HeathLevel {
   high: number
   /** Where the stop goes: the run's furthest wick. Outside the zone, not an edge of it. */
   stop: number
+  /** The run's furthest wick on the other side -- its lowest low for a supply, its highest high
+   * for a demand. A CLOSE beyond it is what makes the candles a zone. */
+  departure: number
+  /** First bar that closed beyond `departure`, which is where the level starts existing. Null
+   * while price has not traded away from it, and then there is no zone yet. */
+  armedIndex: number | null
   /** First bar, after price left the area, whose range reached back into it. Null while fresh. */
   testedIndex: number | null
   /** First bar to erase the level. Null while it stands. */
   brokenIndex: number | null
-  /** How it was erased: a candle passing entirely `through` the area, or a body `crossing`
-   * its far edge. Null while it stands. */
-  brokenBy: 'through' | 'crossed' | null
+  /** How it was erased: a `closed` through the line he draws, a candle passing entirely
+   * `through` the area, or `failed` -- price closed beyond the stop before ever leaving, so
+   * the candles never became a zone. Null while it stands. */
+  brokenBy: 'through' | 'closed' | 'failed' | null
 }
 
 /** The shaded area: the bodies of the run, open to close. Always has height -- every candle in
@@ -122,15 +146,12 @@ export function runStart(bars: readonly Candle[], end: number, maxRun: number): 
 /**
  * Every supply and demand line the method would have on this chart, in the order they formed.
  *
- * A level's life, after the origin candle: it is **armed** once price has closed clear of the
- * area, **tested** the first time a later bar's range reaches back INTO it, and **erased**
- * either by a candle passing entirely through it or by a body crossing its far edge. Arming
- * is what stops the move that created the level from counting against it -- the area is the
- * origin candle's own body, so the bars around the turn are still standing in it: a return
- * would read as a test, and a body poking over the edge on the way out would read as a
- * crossing. Before a level is armed only a CLOSE past its far edge ends it, which is the same
- * statement the crossing rule makes and leaves no way for a level to outlive being traded
- * through.
+ * A level's life, after the origin run: it is **established** the first time a candle closes
+ * beyond `departure` -- the run's furthest wick on the side price has to leave towards -- and
+ * is not a zone at all before then; **tested** the first time a later bar's range reaches back
+ * INTO it; and **erased** by a close through the line or by a candle covering the whole area.
+ * The one thing that can end it before it is established is a close beyond the stop: price
+ * went the other way instead of leaving, so the candles never became a zone.
  *
  * Nothing here reads a bar later than the one being judged.
  */
@@ -161,6 +182,8 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
         low: Math.min(...bodies),
         high: Math.max(...bodies),
         stop: side === 'supply' ? Math.max(...run.map((bar) => bar.high)) : Math.min(...run.map((bar) => bar.low)),
+        departure: side === 'supply' ? Math.min(...run.map((bar) => bar.low)) : Math.max(...run.map((bar) => bar.high)),
+        armedIndex: null,
         testedIndex: null,
         brokenIndex: null,
         brokenBy: null
@@ -170,32 +193,29 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
 
   for (const level of levels) {
     const zone = zoneOf(level)
-    let armed = false
     for (let i = level.originEnd + 1; i < n; i++) {
       const bar = bars[i]
-      const bodyLow = Math.min(bar.open, bar.close)
-      const bodyHigh = Math.max(bar.open, bar.close)
-      if (!armed) {
-        // Not established yet: only a CLOSE past the far edge ends it here, so the move that
-        // created the level cannot destroy it on its way out.
-        if (level.side === 'supply' ? bar.close > zone.high : bar.close < zone.low) {
+      if (level.armedIndex === null) {
+        // Price closed beyond where the stop goes: it went the other way instead of trading
+        // away, and these candles are never going to be a zone.
+        if (level.side === 'supply' ? bar.close > level.stop : bar.close < level.stop) {
           level.brokenIndex = i
-          level.brokenBy = 'crossed'
+          level.brokenBy = 'failed'
           break
         }
-        armed = level.side === 'supply' ? bar.close < zone.low : bar.close > zone.high
+        // "took out both green candles' lows and closed below them" -- the whole run, wicks
+        // included. That close is what makes it a level.
+        if (level.side === 'supply' ? bar.close < level.departure : bar.close > level.departure) level.armedIndex = i
         continue
-      }
-      // A body across the far edge -- the top of a supply, the bottom of a demand. Bodies
-      // only: a wick across that edge is exactly what this rule does not count.
-      if (level.side === 'supply' ? bodyHigh > zone.high : bodyLow < zone.low) {
-        if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
-        level.brokenIndex = i
-        level.brokenBy = 'crossed'
-        break
       }
       // Reached back into the area at all.
       if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
+      // A CLOSE through the line he draws. A wick through it is not a break.
+      if (level.side === 'supply' ? bar.close > level.price : bar.close < level.price) {
+        level.brokenIndex = i
+        level.brokenBy = 'closed'
+        break
+      }
       // Passed entirely through it: the whole area is inside this candle's range, wicks and
       // all. A wick that covers only part of the area leaves the level live.
       if (bar.low <= zone.low && bar.high >= zone.high) {
@@ -209,8 +229,10 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
   return settings.freshOnly ? levels.filter((level) => level.testedIndex === null) : levels
 }
 
-/** Whether a level is still on the chart at `index`: drawn from its origin candle, and gone
- * once something closed through the stop. */
+/** Whether a level is a zone at `index`: it exists once price has traded away from the run
+ * that made it, and is gone once a close went back through the line. A level price never left
+ * is not a level, so one that has not been established by `index` is not live there. */
 export function isLive(level: HeathLevel, index: number): boolean {
-  return index >= level.originIndex && (level.brokenIndex === null || index < level.brokenIndex)
+  if (level.armedIndex === null || index < level.armedIndex) return false
+  return level.brokenIndex === null || index < level.brokenIndex
 }
