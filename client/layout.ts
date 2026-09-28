@@ -460,6 +460,41 @@ export function toPersistedLayout(
   }
 }
 
+// JSON with every object's keys sorted, so two layouts that say the same thing compare equal
+// however they were assembled -- a plugin's settings diff is built in edit order, and a
+// document read back from the server has been through Postgres JSONB, which reorders keys.
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        )
+      : item
+  )
+}
+
+/** The whole layout as a comparable string: equal exactly when the two would be stored alike. */
+export function layoutSignature(layout: PersistedLayout): string {
+  return canonicalJson(layout)
+}
+
+/** What a layout SETS, as a comparable string -- everything except where its panes were
+ * looking. A pan, a zoom, a hand-scaled price axis and which pane was clicked last all change
+ * the document, but none of them is a change a user would call unsaved work, so they are left
+ * out here and only here: they are still saved with the rest. The price axis TYPE and its
+ * reversal ride inside the view, yet are picked in the pane's settings dialog, so they count. */
+export function layoutSettingsSignature(layout: PersistedLayout): string {
+  const { active: _active, ...rest } = layout
+  return canonicalJson({
+    ...rest,
+    panes: layout.panes.map(({ vw, ...pane }) => {
+      const type = vw?.y?.t && vw.y.t !== 'normal' ? vw.y.t : undefined
+      const reversed = vw?.y?.r === true
+      return type || reversed ? { ...pane, axis: { t: type, r: reversed } } : pane
+    })
+  })
+}
+
 /** A one-line description of a stored layout, for the workspace switcher's rows. */
 export function describeLayout(layout: PersistedLayout): string {
   const count = layout.panes.length

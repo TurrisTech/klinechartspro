@@ -415,6 +415,85 @@ body {
   gap: 0.375rem;
 }
 
+/* The name and, when the workspace has changes nobody has saved, a mark beside it. */
+.wd-ws-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.wd-ws-title .wd-ws-name {
+  min-width: 0;
+}
+
+.wd-ws-unsaved {
+  flex: none;
+  border-radius: var(--radius-sm);
+  padding: 0 0.3rem;
+  font-size: 0.625rem;
+  line-height: 1rem;
+  color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+}
+
+/* --- Save / Revert -------------------------------------------------------------------- */
+
+/* client/workspaces/save.ts, right after the switcher. Hidden on the `?symbol=` scratch wall,
+   which belongs to no workspace and saves nothing. */
+.wd-ws-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.wd-ws-save.is-hidden {
+  display: none;
+}
+
+/* Unsaved SETTINGS: the one state that is worth catching the eye, since it is the one that
+   is lost if the page closes. A draft that only moved the panes stays a plain button. */
+.wd-ws-save-button.is-dirty {
+  border: 1px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+}
+
+.wd-ws-save-button.is-dirty::after {
+  content: '';
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: var(--primary);
+}
+
+/* "Saved" is drawn over a button the save has just disabled; the library dims a disabled
+   kc-button to half, which would make the confirmation the faintest thing in the rail. */
+.wd-ws-save-button.is-saved:disabled {
+  opacity: 1;
+  color: var(--primary);
+}
+
+/* A phone's rail cannot spare the words: icons only, the names stay in title/aria-label. */
+.klinecharts-pro-shell[data-size='phone'] .wd-ws-save-label {
+  display: none;
+}
+
+.kc-popover.wd-ws-revert-panel {
+  width: 18rem;
+}
+
+.wd-ws-revert-text {
+  margin: 0 0 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.wd-ws-revert-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.375rem;
+}
+
 /* Shown while a workspace's wall is being built (client/index.ts remount()) and, with a retry
    control, if that build fails -- the switcher is attached to the chart, so a failed mount
    would otherwise leave the page with no way back to another workspace. */

@@ -36,6 +36,7 @@ import { mountPaperTrading, type PaperTradingController } from './trading'
 import { mountPriceWatches, type PriceWatchesController } from './watch'
 import { createRemoteNotifications } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
+import { createWorkspaceSaveControls, type WorkspaceSaveControls } from './workspaces/save'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
 
 import './style.css'
@@ -128,6 +129,28 @@ async function runWall(container: HTMLElement): Promise<void> {
     }
   })
 
+  // Save and Revert. Revert has the store drop the draft, then rebuilds the wall -- from
+  // `store.working()`, which is by then what is saved.
+  const saveControls = createWorkspaceSaveControls({
+    store,
+    transient: () => scratch,
+    onRevert: () => void remount()
+  })
+  // The switcher's rows carry each workspace's unsaved mark and describe its wall as it now
+  // stands, so it follows every draft the store records.
+  store.onChange(() => switcher.refresh())
+
+  // Saving is explicit, so closing or reloading the page is the one way to lose changes
+  // without having chosen to. The browser's own prompt: it is the only thing that can hold a
+  // closing tab, and its wording is the browser's. Any workspace counts, not just the one on
+  // screen -- a draft survives a switch.
+  window.addEventListener('beforeunload', (event) => {
+    if (!store.hasUnsavedChanges()) return
+    event.preventDefault()
+    // Older Chrome and Safari prompt only when this is set as well.
+    event.returnValue = ''
+  })
+
   let mounted: MountedWall | null = null
   let remounting = false
   let queued = false
@@ -168,7 +191,10 @@ async function runWall(container: HTMLElement): Promise<void> {
           mounted = await mountWall(container, {
             store,
             switcher,
-            layout: scratch ? defaultLayout(linked as string) : store.active().layout,
+            saveControls,
+            // The draft when there is one: a rebuild (entering or leaving replay) or a switch
+            // back to a workspace left with unsaved changes must not drop them.
+            layout: scratch ? defaultLayout(linked as string) : store.working(),
             persist: !scratch,
             rebuild: () => void remount()
           })
@@ -182,6 +208,7 @@ async function runWall(container: HTMLElement): Promise<void> {
           })
         }
         switcher.refresh()
+        saveControls.refresh()
       } while (queued)
     } finally {
       remounting = false
@@ -231,6 +258,7 @@ function showFailure(container: HTMLElement, name: string, retry: () => void): v
 interface WallOptions {
   store: WorkspaceStore
   switcher: ReturnType<typeof createWorkspaceSwitcher>
+  saveControls: WorkspaceSaveControls
   layout: PersistedLayout
   /** False for the `?symbol=` scratch wall, which deliberately saves nothing. */
   persist: boolean
@@ -239,7 +267,10 @@ interface WallOptions {
 }
 
 async function mountWall(container: HTMLElement, options: WallOptions): Promise<MountedWall> {
-  const { store, switcher, persist: persistEnabled } = options
+  const { store, switcher, saveControls, persist: persistEnabled } = options
+  // Decided before anything awaits: whether this wall is being built from what is SAVED (and
+  // so what it reports once built can stand as the saved copy) or from an unsaved draft.
+  const adoptAsSaved = persistEnabled && !store.hasDraft()
 
   // A wall is EITHER live or a replay. The replay intent (session + cursor) is page-level
   // state (client/replay/persist.ts) read before anything is built, because the datafeed,
@@ -311,26 +342,30 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // Assigned after the chart exists (it needs the pane handles and reads this owner's
   // watches asynchronously); onPanesChange guards on it for the frames before that.
   let watches: PriceWatchesController | null = null
-  const persist = (): void => {
+  // The live wall, as a document; null before the chart has panes to report.
+  const currentLayout = (): PersistedLayout | null => {
     const cp = chartPro
-    if (!cp || !persistEnabled) return
+    if (!cp) return null
     const panes = cp.getPaneSnapshots()
-    if (panes.length === 0) return
+    if (panes.length === 0) return null
     const activeIndex = Math.max(0, panes.findIndex((pane) => pane.id === cp.getActivePaneId()))
-    store.saveActiveLayout(
-      toPersistedLayout(
-        cp.getPaneLayout(),
-        panes,
-        activeIndex,
-        latestSync,
-        // The plugins' per-pane document state (the AREV21 overlay's and the AREV lab's
-        // settings), supplied here rather than read off the snapshots.
-        pluginHost.paneState() as PanePluginState
-      )
+    return toPersistedLayout(
+      cp.getPaneLayout(),
+      panes,
+      activeIndex,
+      latestSync,
+      // The plugins' per-pane document state (the AREV21 overlay's and the AREV lab's
+      // settings), supplied here rather than read off the snapshots.
+      pluginHost.paneState() as PanePluginState
     )
-    // The switcher's row for the active workspace shows its pane count and instrument, so it
-    // has to follow the wall it is describing.
-    switcher.refresh()
+  }
+  // Every change STAGES the wall as the active workspace's draft; nothing reaches storage
+  // until Save (client/workspaces/save.ts). The store notifies the switcher and the Save and
+  // Revert controls when that changes whether there is anything unsaved.
+  const persist = (): void => {
+    if (!persistEnabled) return
+    const layout = currentLayout()
+    if (layout) store.stageActiveLayout(layout)
   }
   let latestSync = { ...hydrated.sync }
 
@@ -406,6 +441,15 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     }
   })
 
+  // What the wall reports straight after construction -- the panes exist synchronously, before
+  // any of the callbacks above has fired -- is what the saved layout looks like once
+  // hydrated, and so what an unchanged wall is compared with from here on
+  // (WorkspaceStore.adoptMountedLayout).
+  if (adoptAsSaved) {
+    const mountedLayout = currentLayout()
+    if (mountedLayout) store.adoptMountedLayout(mountedLayout)
+  }
+
   // The paper-trading account: the panel dock below the chart and the per-pane overlays.
   // Gated on the server's `sim` capability (returns null otherwise); its rail button is added
   // in mountChartExtras beside the stream status.
@@ -469,6 +513,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     chartPro,
     [levelsController, levels2Controller],
     switcher,
+    saveControls,
     paper,
     {
       inReplay: replayBoot !== null,
@@ -520,6 +565,7 @@ function mountChartExtras(
   chartPro: KLineChartPro,
   layerControllers: ReturnType<typeof createLayerController>[],
   switcher: ReturnType<typeof createWorkspaceSwitcher>,
+  saveControls: WorkspaceSaveControls,
   paper: PaperTradingController | null,
   replay: { inReplay: boolean; rebuild: () => void }
 ): () => void {
@@ -615,13 +661,17 @@ function mountChartExtras(
   // First in the toolbar slot: which wall you are on is the outermost thing about it, and it
   // reads left-to-right with the symbol and timeframe controls the library owns.
   const detachSwitcher = attachToSlot(chartPro, 'toolbar', switcher.element)
+  // Save and Revert right after it: they act on the workspace the switcher names.
+  const detachSaveControls = attachToSlot(chartPro, 'toolbar', saveControls.element)
   const detachFooter = attachToSlot(chartPro, 'rail-footer', footer)
   for (const controller of layerControllers) controller.attach(chartPro)
 
   return () => {
     switcher.close()
+    saveControls.close()
     unsubscribeStatus()
     detachSwitcher()
+    detachSaveControls()
     detachFooter()
   }
 }
