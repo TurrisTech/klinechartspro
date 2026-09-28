@@ -130,7 +130,7 @@ only when the parameter asks for it. The line is **dashed until the swing is con
 stretch exists in hindsight only, and dashing it is the difference between showing the method
 and flattering it). Everything dims once tested. Live levels are named at the right edge —
 `supply`, `demand · tested`. Params: `[left, right, sides, fresh only, stop edge, shading %,
-calendar, candles in one zone]`, default `[5, 5, 0, 0, 0, 12, 1, 3]`; each parameter after the
+calendar, candles in one zone, smallest zone %]`, default `[5, 5, 0, 0, 0, 12, 1, 3, 50]`; each parameter after the
 fifth was **appended**, so a layout saved before one existed reads its default rather than zero.
 
 **The calendar levels, optionally underneath** (2026-09-21). A seventh parameter,

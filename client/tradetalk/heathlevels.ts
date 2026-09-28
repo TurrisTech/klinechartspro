@@ -59,10 +59,20 @@ import type { Candle } from './calendar'
 //
 // "ONE OR MORE candles" -- his own words (#73, the same video as the single-line quote): the
 // pause before a turn "can be one or more green close candles", and the Bitcoin supply he works
-// through there is two of them, "the november 9th and 10th candles", read as one zone. So the origin is a RUN of same-colour candles ending at that last one, and the zone is
-// the union of their bodies, with the line at the earliest open and the stop beyond the run's
-// furthest wick. The run is capped (`maxRun`): a rally into a top can be eight up-close candles
-// in a row, and a zone the height of the whole rally is not a level.
+// through there is two of them, "the november 9th and 10th candles", read as one zone. So the
+// origin is a RUN of same-colour candles ending at that last one, and the zone is the union of
+// their bodies, with the line at the earliest open and the stop beyond the run's furthest wick.
+//
+// WHAT DECIDES THE RUN'S LENGTH IS WIDTH (user, 2026-09-28): if the last candle is wide enough
+// on its own, that is the zone; if it is small, the one before it joins, and so on until the
+// zone is wide enough. His archive has NO size rule -- nowhere does he make a zone depend on
+// how large a candle is (study §3.3) -- so this is the user's, like the body-extent rule.
+//
+// "Wide enough" is `minWidth` x ATR(14) at the run's last candle. ATR because a pip threshold
+// would need a different number for every instrument and timeframe, and because it is the
+// measure the rest of this chart already uses (levels2, brk01). Two limits stop it running
+// away: the colour must hold (his rule), and `maxRun` caps the count -- a rally into a top can
+// be eight up-close candles, and a zone the height of the whole rally is not a level.
 
 /** How far back from a turn the origin candle may be. A turn whose last opposite-colour candle
  * is further away than this is not one candle's worth of supply or demand. */
@@ -110,6 +120,9 @@ export function zoneOf(level: Pick<HeathLevel, 'low' | 'high'>): { low: number; 
 export interface HeathLevelSettings {
   left: number
   right: number
+  /** How wide a zone has to be before the candle before it stops joining, as a multiple of
+   * ATR(14). 0 always takes the single last opposite-colour candle. */
+  minWidth: number
   /** 0 both, 1 supply only, 2 demand only. */
   sides: 0 | 1 | 2
   /** Draw only levels price has not been back to. */
@@ -134,12 +147,48 @@ export function originOf(bars: readonly Candle[], turn: number, side: 'supply' |
   return -1
 }
 
-/** The run of same-colour candles ending at `end`, at most `maxRun` long -- "one or more green
- * close candles". Returns the first index of the run. */
-export function runStart(bars: readonly Candle[], end: number, maxRun: number): number {
+/** ATR(14), causal: `atr[i]` reads no bar later than `i`, so a prefix gives the same values as
+ * the whole series. Wilder's smoothing once there are `period` true ranges, and the running mean
+ * of what exists before that, so the early bars answer something rather than nothing. */
+export function atr(bars: readonly Candle[], period = 14): number[] {
+  const out = new Array<number>(bars.length).fill(0)
+  if (bars.length === 0) return out
+  let sum = 0
+  for (let i = 0; i < bars.length; i++) {
+    const bar = bars[i]
+    const range =
+      i === 0
+        ? bar.high - bar.low
+        : Math.max(bar.high - bar.low, Math.abs(bar.high - bars[i - 1].close), Math.abs(bar.low - bars[i - 1].close))
+    if (i < period) {
+      sum += range
+      out[i] = sum / (i + 1)
+    } else {
+      out[i] = (out[i - 1] * (period - 1) + range) / period
+    }
+  }
+  return out
+}
+
+/** The run of same-colour candles ending at `end`: "one or more green close candles", as many as
+ * it takes for the zone to reach `minHeight` and no more. Bounded by the colour, by `maxRun` and
+ * by the start of the series -- a zone still too small when one of those stops it is still a
+ * zone. Returns the first index of the run. */
+export function runStart(bars: readonly Candle[], end: number, maxRun: number, minHeight = 0): number {
   const wanted = direction(bars[end])
   let start = end
-  while (start > 0 && end - start + 1 < Math.max(1, maxRun) && direction(bars[start - 1]) === wanted) start--
+  let low = Math.min(bars[end].open, bars[end].close)
+  let high = Math.max(bars[end].open, bars[end].close)
+  while (
+    high - low < minHeight &&
+    start > 0 &&
+    end - start + 1 < Math.max(1, maxRun) &&
+    direction(bars[start - 1]) === wanted
+  ) {
+    start--
+    low = Math.min(low, bars[start].open, bars[start].close)
+    high = Math.max(high, bars[start].open, bars[start].close)
+  }
   return start
 }
 
@@ -161,6 +210,7 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
   const { left, right } = settings
   const tops = settings.sides === 2 ? null : swingMask(bars.map((bar) => bar.high), left, right)
   const bottoms = settings.sides === 1 ? null : swingMask(bars.map((bar) => -bar.low), left, right)
+  const ranges = settings.minWidth > 0 ? atr(bars) : null
 
   const levels: HeathLevel[] = []
   for (let turn = 0; turn < n; turn++) {
@@ -169,7 +219,7 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
       if (!mask?.[turn]) continue
       const originEnd = originOf(bars, turn, side)
       if (originEnd < 0) continue
-      const originIndex = runStart(bars, originEnd, settings.maxRun)
+      const originIndex = runStart(bars, originEnd, settings.maxRun, (ranges?.[originEnd] ?? 0) * settings.minWidth)
       const run = bars.slice(originIndex, originEnd + 1)
       const bodies = run.flatMap((bar) => [bar.open, bar.close])
       levels.push({
