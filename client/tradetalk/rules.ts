@@ -1,4 +1,5 @@
 import { wallClock } from '../../src/indicators/sessions'
+import type { HeathLevel } from './heathlevels'
 import {
   ema,
   findPeriod,
@@ -70,6 +71,10 @@ export interface Settings {
 
 export interface TradeTalkInput {
   bars: readonly Candle[]
+  /** Supply and demand zones to trade from as well as the calendar levels -- each one a line
+   * from the bar its swing was confirmed on until the bar that erased it, so nothing here is
+   * known before it was knowable. Omitted: the calendar map alone. */
+  heath?: readonly HeathLevel[]
   /** Completed trading sessions, ascending, one per day (calendar.ts). */
   sessions: readonly SessionBar[]
   clock: SessionClock
@@ -156,6 +161,27 @@ export interface SignalResult {
 
 const KIND_RANK: Record<Level['kind'], number> = { open: 3, high: 2, low: 2, mid: 1 }
 
+/** How much a level outranks another when both are swept, or when two share a price. Calendar
+ * levels rank by their unit; a Heath level sits above the daily and below the weekly -- local
+ * structure, but structure the method names first. */
+export function levelRank(level: Level): number {
+  return level.source === 'heath' ? 1.5 : unitRank(level.unit)
+}
+
+/** One live supply or demand zone, as a line the entry rule can trade from: its open, which is
+ * the edge price meets on the way back. */
+export function heathAsLevel(level: HeathLevel): Level {
+  return {
+    unit: 'D',
+    kind: 'open',
+    price: level.price,
+    label: level.side,
+    current: false,
+    source: 'heath',
+    side: level.side
+  }
+}
+
 /** Which of the levels a candle swept is the one the trade is named for: the coarsest unit,
  * then the more significant kind, then the one nearest the close. */
 export function pickLevel(candidates: readonly Level[], close: number): Level | null {
@@ -165,7 +191,7 @@ export function pickLevel(candidates: readonly Level[], close: number): Level | 
       best = level
       continue
     }
-    const byUnit = unitRank(level.unit) - unitRank(best.unit)
+    const byUnit = levelRank(level) - levelRank(best)
     const byKind = KIND_RANK[level.kind] - KIND_RANK[best.kind]
     const byDistance = Math.abs(best.price - close) - Math.abs(level.price - close)
     if (byUnit > 0 || (byUnit === 0 && (byKind > 0 || (byKind === 0 && byDistance > 0)))) best = level
@@ -185,8 +211,8 @@ export function dedupeLevels(levels: readonly Level[], tick: number): Level[] {
     const held = byPrice.get(key)
     if (
       held === undefined ||
-      unitRank(level.unit) > unitRank(held.unit) ||
-      (unitRank(level.unit) === unitRank(held.unit) && KIND_RANK[level.kind] > KIND_RANK[held.kind])
+      levelRank(level) > levelRank(held) ||
+      (levelRank(level) === levelRank(held) && KIND_RANK[level.kind] > KIND_RANK[held.kind])
     ) {
       byPrice.set(key, level)
     }
@@ -294,6 +320,43 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
   )
   const half = tick > 0 ? tick / 2 : 0
 
+  // The supply and demand lines live at a bar when their swing is confirmed and nothing has
+  // erased them yet. They are merged into that bar's map and deduplicated with it, so a zone
+  // sitting on a calendar level is one line, not two. The merged array is cached per (calendar
+  // map, active set) so bars that share a map still share one array -- what `draw` groups runs
+  // by -- and the whole thing collapses to the calendar map when no zones are passed.
+  const heathByConfirm = [...(input.heath ?? [])].sort((a, b) => a.confirmIndex - b.confirmIndex)
+  let heathNext = 0
+  let active: HeathLevel[] = []
+  let activeVersion = 0
+  const calendarId = new Map<readonly Level[], number>()
+  const merged = new Map<string, Level[]>()
+  const levelsFor = (i: number, calendar: Level[]): Level[] => {
+    if (heathByConfirm.length === 0) return calendar
+    let changed = false
+    while (heathNext < heathByConfirm.length && heathByConfirm[heathNext].confirmIndex <= i) {
+      active.push(heathByConfirm[heathNext++])
+      changed = true
+    }
+    if (active.some((level) => level.brokenIndex !== null && level.brokenIndex <= i)) {
+      active = active.filter((level) => level.brokenIndex === null || level.brokenIndex > i)
+      changed = true
+    }
+    if (changed) activeVersion++
+    if (active.length === 0) return calendar
+    let id = calendarId.get(calendar)
+    if (id === undefined) {
+      id = calendarId.size
+      calendarId.set(calendar, id)
+    }
+    const key = `${id}|${activeVersion}`
+    const held = merged.get(key)
+    if (held) return held
+    const built = dedupeLevels([...calendar, ...active.map(heathAsLevel)], tick)
+    merged.set(key, built)
+    return built
+  }
+
   // The last session that had CLOSED before a bar's own session -- what the bias is read
   // off. Walks forward with the bars; both are ascending.
   let priorSession = -1
@@ -332,7 +395,7 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
     dayHigh = Math.max(dayHigh, bar.high)
     dayLow = Math.min(dayLow, bar.low)
 
-    const levels = map.levels[i]
+    const levels = levelsFor(i, map.levels[i])
     values[i].levels = levels
 
     // 1. An open position: does this bar end it? A bar that reaches both is read as the

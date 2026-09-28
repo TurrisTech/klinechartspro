@@ -35,10 +35,10 @@ import {
 
 export const TEMPLATE_NAME = 'TT:heathlevels'
 
-/** [left, right, sides, fresh only, stop line, fill, calendar]. `fill` and `calendar` were
- * appended rather than replacing anything, so a layout saved before either existed reads its
- * default. */
-export const DEFAULT_PARAMS = [5, 5, 0, 0, 0, 12, 1]
+/** [left, right, sides, fresh only, stop line, fill, calendar, max run]. Everything after
+ * `stop line` was appended rather than replacing anything, so a layout saved before a
+ * parameter existed reads its default. */
+export const DEFAULT_PARAMS = [5, 5, 0, 0, 0, 12, 1, 3]
 
 function numberAt(calcParams: unknown[] | undefined, at: number, fallback: number): number {
   const raw = calcParams?.[at]
@@ -62,7 +62,8 @@ export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
     freshOnly: Math.round(numberAt(calcParams, 3, DEFAULT_PARAMS[3])) !== 0,
     stopLine: Math.round(numberAt(calcParams, 4, DEFAULT_PARAMS[4])) !== 0,
     fill: Math.min(100, Math.max(0, numberAt(calcParams, 5, DEFAULT_PARAMS[5]))),
-    calendar: Math.round(numberAt(calcParams, 6, DEFAULT_PARAMS[6])) !== 0
+    calendar: Math.round(numberAt(calcParams, 6, DEFAULT_PARAMS[6])) !== 0,
+    maxRun: Math.min(10, Math.max(1, Math.round(numberAt(calcParams, 7, DEFAULT_PARAMS[7]))))
   }
 }
 
@@ -162,7 +163,9 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           const color = level.side === 'supply' ? downColor : upColor
           const alpha = level.testedIndex === null ? FRESH_ALPHA : TESTED_ALPHA
           const y = yAxis.convertToPixel(level.price)
-          const yClose = yAxis.convertToPixel(level.close)
+          // The zone is the run's bodies; with a run of one it is that candle's open to close.
+          const yFar = yAxis.convertToPixel(level.side === 'supply' ? level.high : level.low)
+          const yNear = yAxis.convertToPixel(level.side === 'supply' ? level.low : level.high)
           const yStop = yAxis.convertToPixel(level.stop)
           const xStart = xAxis.convertToPixel(level.originIndex) - pitch / 2
           const xConfirm = xAxis.convertToPixel(Math.min(level.confirmIndex, lastIndex))
@@ -173,7 +176,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           if (settings.fill > 0) {
             ctx.globalAlpha = (settings.fill / 100) * (level.testedIndex === null ? 1 : 0.5)
             ctx.fillStyle = color
-            ctx.fillRect(xStart, Math.min(y, yClose), Math.max(1, xEnd - xStart), Math.max(1, Math.abs(yClose - y)))
+            ctx.fillRect(xStart, Math.min(yNear, yFar), Math.max(1, xEnd - xStart), Math.max(1, Math.abs(yFar - yNear)))
           }
 
           ctx.strokeStyle = color
@@ -186,9 +189,9 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           ctx.setLineDash([])
           if (xEnd > xConfirm) lineTo(ctx, xConfirm, xEnd, y)
 
-          // The body's other edge, so the shaded band reads as a band even at low opacity.
+          // The zone's other edge, so the shaded band reads as a band even at low opacity.
           ctx.globalAlpha = alpha * 0.45
-          lineTo(ctx, xStart, xEnd, yClose)
+          lineTo(ctx, xStart, xEnd, yFar)
 
           // The stop sits beyond the wick, OUTSIDE the area: its own dotted line, drawn only
           // when asked for, since it is a third price on a chart the method keeps neat.
@@ -237,7 +240,8 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       { paramNameKey: 'Fresh (untested) only (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[3] },
       { paramNameKey: 'Draw the stop line, beyond the wick (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[4] },
       { paramNameKey: 'Shading opacity %', precision: 0, min: 0, max: 100, default: DEFAULT_PARAMS[5] },
-      { paramNameKey: 'Draw the calendar levels (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[6] }
+      { paramNameKey: 'Draw the calendar levels (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[6] },
+      { paramNameKey: 'Candles in one zone (max)', precision: 0, min: 1, max: 10, default: DEFAULT_PARAMS[7] }
     ])
     registered = true
   }
@@ -246,7 +250,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       name: TEMPLATE_NAME,
       label: 'Heath levels (supply & demand)',
       description:
-        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand) — as a line, with that candle’s BODY shaded as the area and the stop beyond its wick. Dashed until the swing that defines it is confirmed, dimmed once price has been back into it, and erased when one candle passes entirely through it or a body crosses its far edge. Optionally with the objective calendar levels underneath — the yearly, quarterly, monthly, weekly and daily opens and the previous period’s high, low and midpoint. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity, calendar levels on/off.'
+        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand), and the run of same-colour candles before it — as a line at the earliest open, with their BODIES shaded as the area and the stop beyond its wick. Dashed until the swing that defines it is confirmed, dimmed once price has been back into it, and erased when one candle passes entirely through it or a body crosses its far edge. Optionally with the objective calendar levels underneath — the yearly, quarterly, monthly, weekly and daily opens and the previous period’s high, low and midpoint. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity, calendar levels on/off.'
     }
   ]
 }

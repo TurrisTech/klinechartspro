@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { Candle } from './calendar'
-import { heathLevels, isLive, LOOKBACK, originOf, zoneOf, type HeathLevelSettings } from './heathlevels'
+import { heathLevels, isLive, LOOKBACK, originOf, runStart, zoneOf, type HeathLevelSettings } from './heathlevels'
 import { emptyText, levelLabel, settingsOf, DEFAULT_PARAMS } from './heathtemplate'
 
 const bar = (open: number, high: number, low: number, close: number): Candle => ({
@@ -14,7 +14,9 @@ const bar = (open: number, high: number, low: number, close: number): Candle => 
 
 const dated = (bars: Candle[]): Candle[] => bars.map((b, i) => ({ ...b, timestamp: i * 3_600_000 }))
 
-const SETTINGS: HeathLevelSettings = { left: 2, right: 2, sides: 0, freshOnly: false, stopLine: false }
+// `maxRun: 1` keeps every case below on the single last opposite-colour candle, which is what
+// the erasure and freshness rules are about; the run is its own describe at the bottom.
+const SETTINGS: HeathLevelSettings = { left: 2, right: 2, sides: 0, freshOnly: false, stopLine: false, maxRun: 1 }
 
 // A rally whose last candle closes up, then a sell-off: index 3 is the swing top and its own
 // candle is the last up-close one, so the supply line is that candle's open.
@@ -33,7 +35,7 @@ describe('supply', () => {
 
   test('is the OPEN of the last up-close candle before the sell-off', () => {
     expect(levels).toHaveLength(1)
-    expect(levels[0]).toMatchObject({ side: 'supply', originIndex: 3, turnIndex: 3, price: 12.3, close: 12.9 })
+    expect(levels[0]).toMatchObject({ side: 'supply', originIndex: 3, turnIndex: 3, price: 12.3, low: 12.3, high: 12.9 })
   })
 
   test('carries the stop at that candle\'s wick high', () => {
@@ -74,7 +76,7 @@ describe('demand', () => {
 
   test('is the OPEN of the last down-close candle before the rally, stop at its wick low', () => {
     expect(levels).toHaveLength(1)
-    expect(levels[0]).toMatchObject({ side: 'demand', originIndex: 3, price: 11.1, close: 10.2, stop: 10 })
+    expect(levels[0]).toMatchObject({ side: 'demand', originIndex: 3, price: 11.1, low: 10.2, high: 11.1, stop: 10 })
   })
 
   test('only one side is computed when the parameter asks for one', () => {
@@ -146,7 +148,7 @@ describe('the life of a level', () => {
     expect(supply.stop).toBe(13)
     expect(supply.stop).toBeGreaterThan(zoneOf(supply).high)
     // Demand mirrors it: the body, with the stop below.
-    expect(zoneOf({ price: 11.1, close: 10.2 })).toEqual({ low: 10.2, high: 11.1 })
+    expect(zoneOf({ low: 10.2, high: 11.1 })).toEqual({ low: 10.2, high: 11.1 })
   })
 
   test('a BODY across the top of a supply ends it, even reaching only part way over', () => {
@@ -304,21 +306,24 @@ describe('the chart half', () => {
       freshOnly: false,
       stopLine: false,
       fill: 12,
-      calendar: true
+      calendar: true,
+      maxRun: 3
     })
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
-    expect(settingsOf([0, 999, 7, 1, 1, 200, 0])).toEqual({
+    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99])).toEqual({
       left: 1,
       right: 200,
       sides: 2,
       freshOnly: true,
       stopLine: true,
       fill: 100,
-      calendar: false
+      calendar: false,
+      maxRun: 10
     })
     // Layouts saved before the shading and calendar parameters existed read their defaults.
     expect(settingsOf([5, 5, 0, 0, 0]).fill).toBe(12)
     expect(settingsOf([5, 5, 0, 0, 0, 12]).calendar).toBe(true)
+    expect(settingsOf([5, 5, 0, 0, 0, 12, 1]).maxRun).toBe(3)
   })
 
   test('a level says whether price has been back to it', () => {
@@ -333,5 +338,68 @@ describe('the chart half', () => {
     expect(emptyText(8, settings)).toContain('needs more than 10 bars')
     expect(emptyText(500, settings)).toContain('no turn in view')
     expect(emptyText(500, { ...settings, freshOnly: true })).toContain('none untested')
+  })
+})
+
+// "One or more candles": bars 1-3 all close up into the swing top at 3, and bar 0 closes down,
+// so the run is 1-3 and its length is whatever `maxRun` allows.
+const RUN = dated([
+  bar(10, 10.5, 9.4, 9.8),
+  bar(9.8, 10.3, 9.7, 10.2),
+  bar(10.2, 11.5, 10.1, 11.3),
+  bar(11.3, 12.6, 11.2, 12.4),
+  bar(12.4, 12.5, 11.5, 11.6),
+  bar(11.6, 11.7, 10.8, 10.9),
+  bar(10.9, 11, 10.4, 10.5)
+])
+
+describe('one or more candles', () => {
+  test('the zone is the union of the run\'s bodies, the line its earliest open', () => {
+    const [one] = heathLevels(RUN, { ...SETTINGS, maxRun: 1 })
+    expect(one).toMatchObject({ originIndex: 3, originEnd: 3, price: 11.3, low: 11.3, high: 12.4 })
+
+    const [two] = heathLevels(RUN, { ...SETTINGS, maxRun: 2 })
+    expect(two).toMatchObject({ originIndex: 2, originEnd: 3, price: 10.2, low: 10.2, high: 12.4 })
+
+    const [three] = heathLevels(RUN, { ...SETTINGS, maxRun: 3 })
+    expect(three).toMatchObject({ originIndex: 1, originEnd: 3, price: 9.8, low: 9.8, high: 12.4 })
+  })
+
+  test('the stop is the furthest wick of the whole run, still outside the zone', () => {
+    const [level] = heathLevels(RUN, { ...SETTINGS, maxRun: 3 })
+    expect(level.stop).toBe(12.6)
+    expect(level.stop).toBeGreaterThan(level.high)
+  })
+
+  test('a candle that closed the other way ends the run, whatever the cap allows', () => {
+    // Bar 0 closes down, so nothing beyond it joins however high the cap goes.
+    expect(heathLevels(RUN, { ...SETTINGS, maxRun: 10 })[0].originIndex).toBe(1)
+    expect(runStart(RUN, 3, 10)).toBe(1)
+  })
+
+  test('the turn is unchanged by the run -- only where the level is drawn from', () => {
+    for (const maxRun of [1, 2, 3, 10]) {
+      expect(heathLevels(RUN, { ...SETTINGS, maxRun })[0]).toMatchObject({ turnIndex: 3, confirmIndex: 5 })
+    }
+  })
+
+  test('the candles that built the level cannot be what erases it', () => {
+    // The run's own bodies fill the zone, and the sell-off out of it starts inside: neither is
+    // a test or a crossing, because the life only begins after the last candle of the run.
+    const [level] = heathLevels(RUN, { ...SETTINGS, maxRun: 3 })
+    expect(level.testedIndex).toBeNull()
+    expect(level.brokenIndex).toBeNull()
+  })
+
+  test('every prefix agrees about the runs it can already see', () => {
+    const settings = { ...SETTINGS, maxRun: 3 }
+    const full = heathLevels(RUN, settings)
+    for (let n = 1; n <= RUN.length; n++) {
+      const prefix = heathLevels(RUN.slice(0, n), settings)
+      const visible = full.filter((level) => level.confirmIndex <= n - 1)
+      expect(prefix.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])).toEqual(
+        visible.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])
+      )
+    }
   })
 })

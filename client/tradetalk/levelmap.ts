@@ -1,8 +1,8 @@
 import type { Chart, KLineData } from 'klinecharts'
 import { peekStore, type WindowStore } from '../plugins/store'
 import type { DailyPoint } from './api'
-import { mergeSessions, sessionDay, sessionsFromBars, unitRank, type Level, type SessionBar, type SessionClock, type Unit } from './calendar'
-import { levelMap } from './rules'
+import { mergeSessions, sessionDay, sessionsFromBars, type Level, type SessionBar, type SessionClock, type Unit } from './calendar'
+import { levelMap, levelRank } from './rules'
 
 // The calendar level map as a CHART reads and draws it -- the half both TradeTalk indicators
 // share. TradeTalk entries trades from it; Heath levels can lay it under its supply and demand
@@ -131,13 +131,14 @@ export function drawLevelLines(
   chart: Chart
 ): void {
   const pitch = chart.getBarSpace().bar
+  const tone = levelTone(chart)
   ctx.lineWidth = 1
   let runFrom = from
   let runLevels = result[from]?.levels
   for (let i = from + 1; i <= to + 1; i++) {
     const levels = i <= to ? result[i]?.levels : undefined
     if (levels === runLevels) continue
-    if (runLevels) drawLevelRun(ctx, runLevels, runFrom, i - 1, xAxis, yAxis, bounding, pitch)
+    if (runLevels) drawLevelRun(ctx, runLevels, runFrom, i - 1, xAxis, yAxis, bounding, pitch, tone)
     runFrom = i
     runLevels = levels
   }
@@ -155,18 +156,37 @@ export function drawLevelLabels(
   yAxis: Axis,
   bounding: { width: number; height: number },
   background: string | null,
-  taken: number[] = []
+  taken: number[] = [],
+  chart?: Chart
 ): void {
   const latest = result[to]?.levels
   if (!latest) return
+  const tone = chart ? levelTone(chart) : null
   ctx.textAlign = 'right'
-  for (const level of [...latest].sort((a, b) => unitRank(b.unit) - unitRank(a.unit))) {
+  for (const level of [...latest].sort((a, b) => levelRank(b) - levelRank(a))) {
     const y = yAxis.convertToPixel(level.price)
     if (y < 8 || y > bounding.height - 16) continue
     if (taken.some((at) => Math.abs(at - y) < LABEL_GAP)) continue
     taken.push(y)
-    chipText(ctx, level.label, bounding.width - 6, y - 6, UNIT_COLOR[level.unit], background)
+    chipText(ctx, level.label, bounding.width - 6, y - 6, colorOf(level, tone), background)
   }
+}
+
+/** Supply and demand take the candles' own colours, so a line the method would trade reads as
+ * the side it argues; a calendar level takes its unit's. */
+export interface LevelTone {
+  supply: string
+  demand: string
+}
+
+function levelTone(chart: Chart): LevelTone {
+  const { upColor, downColor } = chart.getStyles().candle.bar
+  return { supply: downColor, demand: upColor }
+}
+
+function colorOf(level: Level, tone: LevelTone | null): string {
+  if (level.source === 'heath' && tone) return level.side === 'supply' ? tone.supply : tone.demand
+  return UNIT_COLOR[level.unit]
 }
 
 function drawLevelRun(
@@ -177,15 +197,16 @@ function drawLevelRun(
   xAxis: Axis,
   yAxis: Axis,
   bounding: { width: number; height: number },
-  pitch: number
+  pitch: number,
+  tone: LevelTone | null
 ): void {
   const x0 = xAxis.convertToPixel(fromIndex) - pitch / 2
   const x1 = xAxis.convertToPixel(toIndex) + pitch / 2
   for (const level of levels) {
     const y = yAxis.convertToPixel(level.price)
     if (y < -20 || y > bounding.height + 20) continue
-    ctx.globalAlpha = UNIT_ALPHA[level.unit]
-    ctx.strokeStyle = UNIT_COLOR[level.unit]
+    ctx.globalAlpha = level.source === 'heath' ? 0.75 : UNIT_ALPHA[level.unit]
+    ctx.strokeStyle = colorOf(level, tone)
     ctx.setLineDash(level.kind === 'mid' ? [2, 3] : level.kind === 'open' ? [] : [6, 3])
     lineTo(ctx, x0, x1, y)
   }

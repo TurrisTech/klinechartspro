@@ -39,6 +39,13 @@ import type { Candle } from './calendar'
 // "the last opposite-colour candle" -- searched backwards from the turn, the turn's own candle
 // included (a rally's final candle is usually the up-close one), and bounded: if nothing of
 // that colour is within `LOOKBACK` bars there is no level rather than an arbitrary one.
+//
+// "ONE OR MORE candles" -- his own words (#73, the same video as the single-line quote): the
+// pause before a turn "can be one or more green close candles", and the Bitcoin supply he works
+// through there is two of them, "the november 9th and 10th candles", read as one zone. So the origin is a RUN of same-colour candles ending at that last one, and the zone is
+// the union of their bodies, with the line at the earliest open and the stop beyond the run's
+// furthest wick. The run is capped (`maxRun`): a rally into a top can be eight up-close candles
+// in a row, and a zone the height of the whole rally is not a level.
 
 /** How far back from a turn the origin candle may be. A turn whose last opposite-colour candle
  * is further away than this is not one candle's worth of supply or demand. */
@@ -46,17 +53,20 @@ export const LOOKBACK = 20
 
 export interface HeathLevel {
   side: 'supply' | 'demand'
-  /** The candle whose OPEN is the level. */
+  /** First candle of the run the zone is made of -- the one whose OPEN is the line. */
   originIndex: number
+  /** Last candle of the run: the last opposite-colour candle before the turn. */
+  originEnd: number
   /** The swing the level was drawn from. */
   turnIndex: number
   /** When the swing became knowable -- `right` bars after the turn. */
   confirmIndex: number
-  /** The line: that candle's open, and one edge of the body. */
+  /** The line he draws: the earliest open of the run. */
   price: number
-  /** The body's other edge: that candle's close. */
-  close: number
-  /** Where the stop goes: that candle's wick extreme. Outside the area, not an edge of it. */
+  /** The zone: the union of the run's bodies. */
+  low: number
+  high: number
+  /** Where the stop goes: the run's furthest wick. Outside the zone, not an edge of it. */
   stop: number
   /** First bar, after price left the area, whose range reached back into it. Null while fresh. */
   testedIndex: number | null
@@ -67,10 +77,10 @@ export interface HeathLevel {
   brokenBy: 'through' | 'crossed' | null
 }
 
-/** The shaded area: the origin candle's BODY, open to close. Always has height -- the origin
- * is chosen for closing the other way, so its open and close are never equal. */
-export function zoneOf(level: Pick<HeathLevel, 'price' | 'close'>): { low: number; high: number } {
-  return { low: Math.min(level.price, level.close), high: Math.max(level.price, level.close) }
+/** The shaded area: the bodies of the run, open to close. Always has height -- every candle in
+ * the run is chosen for closing one way, so no body is empty. */
+export function zoneOf(level: Pick<HeathLevel, 'low' | 'high'>): { low: number; high: number } {
+  return { low: level.low, high: level.high }
 }
 
 export interface HeathLevelSettings {
@@ -80,18 +90,33 @@ export interface HeathLevelSettings {
   sides: 0 | 1 | 2
   /** Draw only levels price has not been back to. */
   freshOnly: boolean
-  /** Draw the origin candle's wick extreme, where the stop goes. */
+  /** Draw the run's furthest wick, where the stop goes. */
   stopLine: boolean
+  /** Most candles one zone may be made of. 1 is the single last opposite-colour candle. */
+  maxRun: number
+}
+
+/** Which way a candle closed: 1 up, -1 down, 0 neither. */
+function direction(bar: Candle): number {
+  return bar.close > bar.open ? 1 : bar.close < bar.open ? -1 : 0
 }
 
 /** The last candle at or before `turn` that closed the other way, or -1. */
 export function originOf(bars: readonly Candle[], turn: number, side: 'supply' | 'demand'): number {
   const wanted = side === 'supply' ? 1 : -1
   for (let i = turn; i >= 0 && i > turn - LOOKBACK; i--) {
-    const direction = bars[i].close > bars[i].open ? 1 : bars[i].close < bars[i].open ? -1 : 0
-    if (direction === wanted) return i
+    if (direction(bars[i]) === wanted) return i
   }
   return -1
+}
+
+/** The run of same-colour candles ending at `end`, at most `maxRun` long -- "one or more green
+ * close candles". Returns the first index of the run. */
+export function runStart(bars: readonly Candle[], end: number, maxRun: number): number {
+  const wanted = direction(bars[end])
+  let start = end
+  while (start > 0 && end - start + 1 < Math.max(1, maxRun) && direction(bars[start - 1]) === wanted) start--
+  return start
 }
 
 /**
@@ -121,17 +146,21 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
     for (const side of ['supply', 'demand'] as const) {
       const mask = side === 'supply' ? tops : bottoms
       if (!mask?.[turn]) continue
-      const originIndex = originOf(bars, turn, side)
-      if (originIndex < 0) continue
-      const origin = bars[originIndex]
+      const originEnd = originOf(bars, turn, side)
+      if (originEnd < 0) continue
+      const originIndex = runStart(bars, originEnd, settings.maxRun)
+      const run = bars.slice(originIndex, originEnd + 1)
+      const bodies = run.flatMap((bar) => [bar.open, bar.close])
       levels.push({
         side,
         originIndex,
+        originEnd,
         turnIndex: turn,
         confirmIndex: turn + right,
-        price: origin.open,
-        close: origin.close,
-        stop: side === 'supply' ? origin.high : origin.low,
+        price: bars[originIndex].open,
+        low: Math.min(...bodies),
+        high: Math.max(...bodies),
+        stop: side === 'supply' ? Math.max(...run.map((bar) => bar.high)) : Math.min(...run.map((bar) => bar.low)),
         testedIndex: null,
         brokenIndex: null,
         brokenBy: null
@@ -142,7 +171,7 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
   for (const level of levels) {
     const zone = zoneOf(level)
     let armed = false
-    for (let i = level.originIndex + 1; i < n; i++) {
+    for (let i = level.originEnd + 1; i < n; i++) {
       const bar = bars[i]
       const bodyLow = Math.min(bar.open, bar.close)
       const bodyHigh = Math.max(bar.open, bar.close)

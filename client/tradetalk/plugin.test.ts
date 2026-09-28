@@ -49,13 +49,15 @@ describe('the daily window', () => {
 
 describe('the parameters', () => {
   test('the defaults are his own numbers: 2:1, the daily EMA, London through the New York morning', () => {
-    expect(settingsOf(DEFAULT_PARAMS)).toEqual({ rr: 2, bias: 1, window: 1, expiry: 5, minUnit: 'D', lines: true })
+    expect(settingsOf(DEFAULT_PARAMS)).toEqual({ rr: 2, bias: 1, window: 1, expiry: 5, minUnit: 'D', lines: true, heath: true })
   })
 
   test('anything unreadable or out of range settles on something drawable', () => {
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
     expect(settingsOf([-1, 9, 9, 0, 9, 2])).toMatchObject({ rr: 0, bias: 2, window: 2, expiry: 1, minUnit: 'M', lines: true })
-    expect(settingsOf([3, 0, 0, 10, 1, 0])).toEqual({ rr: 3, bias: 0, window: 0, expiry: 10, minUnit: 'W', lines: false })
+    // The supply-and-demand switch was appended, so a layout saved before it reads its default.
+    expect(settingsOf([2, 1, 1, 5, 0, 1]).heath).toBe(true)
+    expect(settingsOf([3, 0, 0, 10, 1, 0, 0])).toEqual({ rr: 3, bias: 0, window: 0, expiry: 10, minUnit: 'W', lines: false, heath: false })
   })
 })
 
