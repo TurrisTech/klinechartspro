@@ -2,6 +2,8 @@ import { hasFeature } from '../capabilities'
 import {
   defaultLayout,
   isPersistedLayout,
+  layoutSettingsSignature,
+  layoutSignature,
   type PersistedLayout
 } from '../layout'
 import { loadPreferences, removePreference, savePreference } from '../preferences'
@@ -28,6 +30,15 @@ import { loadPreferences, removePreference, savePreference } from '../preference
 // it lives in localStorage, so opening the dashboard on a second screen doesn't yank the
 // first one to a different wall. The index's `lastActive` is only the seed a device with no
 // choice of its own starts from.
+//
+// SAVING A WALL IS EXPLICIT. Every change to the wall on screen -- an indicator, a parameter,
+// a pane's symbol, a sync switch, a pan -- is STAGED here as an in-memory draft of the active
+// workspace, and reaches storage only when the user presses Save (client/workspaces/save.ts).
+// Revert drops the draft and the caller rebuilds the wall from what is saved. Drafts are kept
+// per workspace, so switching away from a wall with unsaved changes and back finds them where
+// they were; they last as long as the page, which is why client/index.ts holds a closing page
+// that still has any. Managing the SET -- new, duplicate, rename, delete -- is not a change to
+// a wall and is still written at once; a duplicate copies what is saved, never a draft.
 
 const INDEX_KEY = 'workspaces'
 const DOC_PREFIX = 'workspace.'
@@ -209,10 +220,13 @@ export class WorkspaceStore {
   private readonly remote: Backend | null
   private readonly workspaces: Workspace[]
   private activeId: string
-  // Per workspace id, the serialized document last written -- `active` moves on every pane
-  // click, and without this a click-around session would generate a PUT (or a localStorage
-  // write) per click regardless of the debounce underneath.
+  // Per workspace id, the serialized document last written, so a write that would store the
+  // same bytes again is skipped rather than sent.
   private readonly lastWritten = new Map<string, string>()
+  // Per workspace id, the wall as it stands wherever it differs from what is saved. Never
+  // written anywhere -- see this module's header.
+  private readonly drafts = new Map<string, PersistedLayout>()
+  private readonly listeners = new Set<() => void>()
 
   constructor(remote: Backend | null, workspaces: Workspace[], activeId: string) {
     this.remote = remote
@@ -263,15 +277,93 @@ export class WorkspaceStore {
     localBackend.write(INDEX_KEY, index)
   }
 
-  /** The live wall, saved into the active workspace. Called from every ChartPro change
-   * callback, so it must stay cheap when nothing actually changed. */
-  saveActiveLayout(layout: PersistedLayout): void {
+  /** Called whenever a draft appears, changes or goes, and after a save: the Save/Revert
+   * controls and the switcher's unsaved marks follow it. Returns the unsubscriber. */
+  onChange(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener()
+  }
+
+  /** What a wall for this workspace is built from: its unsaved draft, else what is saved. */
+  working(id: string = this.getActiveId()): PersistedLayout {
+    return this.drafts.get(id) ?? (this.get(id) ?? this.active()).layout
+  }
+
+  /** The live wall, staged as the active workspace's draft -- nothing is written. Called from
+   * every ChartPro change callback, so it must stay cheap when nothing actually changed. A wall
+   * brought back to exactly what is saved stops being a draft. */
+  stageActiveLayout(layout: PersistedLayout): void {
     const workspace = this.active()
-    const serialized = JSON.stringify(layout)
-    if (JSON.stringify(workspace.layout) === serialized) return
+    const signature = layoutSignature(layout)
+    const current = this.drafts.get(workspace.id) ?? workspace.layout
+    if (layoutSignature(current) === signature) return
+    if (layoutSignature(workspace.layout) === signature) this.drafts.delete(workspace.id)
+    else this.drafts.set(workspace.id, layout)
+    this.notify()
+  }
+
+  /** The chart's own report of a wall just built from the SAVED layout, adopted as the saved
+   * copy -- in memory only. Hydrating a stored document normalises it (a sync switch it
+   * predates reads as off, a retired indicator is dropped, a plugin's settings are re-derived
+   * against today's defaults, a preset's missing panes are cloned), so the first thing a
+   * freshly opened wall reports can differ from the stored bytes although nobody touched it.
+   * Compared with the stored bytes it would open as unsaved; compared with this, it opens
+   * clean, and a change undone by hand is clean again. Never called for a wall built from a
+   * draft: that one is not what is saved. */
+  adoptMountedLayout(layout: PersistedLayout): void {
+    const workspace = this.active()
     workspace.layout = layout
+    const draft = this.drafts.get(workspace.id)
+    if (draft && layoutSignature(draft) === layoutSignature(layout)) this.drafts.delete(workspace.id)
+    this.notify()
+  }
+
+  /** True while the workspace's wall differs from what is saved in any way, a pan included --
+   * there is something for Save to write. */
+  hasDraft(id: string = this.getActiveId()): boolean {
+    return this.drafts.has(id)
+  }
+
+  /** True while the workspace's wall differs from what is saved in something it SETS, rather
+   * than only in where its panes are looking (client/layout.ts layoutSettingsSignature). This
+   * is what the toolbar and the switcher call unsaved, and what holds a closing page. */
+  isDirty(id: string = this.getActiveId()): boolean {
+    const draft = this.drafts.get(id)
+    const workspace = this.get(id)
+    if (!draft || !workspace) return false
+    return layoutSettingsSignature(draft) !== layoutSettingsSignature(workspace.layout)
+  }
+
+  /** Whether ANY workspace has unsaved changes -- a draft survives a switch, so the one on
+   * screen is not the only one that can. */
+  hasUnsavedChanges(): boolean {
+    return this.workspaces.some((workspace) => this.isDirty(workspace.id))
+  }
+
+  /** Save: the active workspace's draft becomes what is stored. Returns false when there was
+   * no draft, and so nothing to write. */
+  saveActive(): boolean {
+    const workspace = this.active()
+    const draft = this.drafts.get(workspace.id)
+    if (!draft) return false
+    this.drafts.delete(workspace.id)
+    workspace.layout = draft
     workspace.updatedAt = Date.now()
     this.writeDoc(workspace)
+    this.notify()
+    return true
+  }
+
+  /** Revert: forgets the active workspace's draft. The caller rebuilds the wall from
+   * `working()`, which is now what is saved. */
+  revertActive(): void {
+    if (this.drafts.delete(this.getActiveId())) this.notify()
   }
 
   /** Per-device, never part of the shared document -- see this module's header. */
@@ -347,6 +439,7 @@ export class WorkspaceStore {
     if (index < 0) return this.activeId
     this.workspaces.splice(index, 1)
     this.lastWritten.delete(id)
+    this.drafts.delete(id)
     const key = `${DOC_PREFIX}${id}`
     this.remote?.remove(key)
     localBackend.remove(key)
@@ -360,6 +453,7 @@ export class WorkspaceStore {
       }
     }
     this.writeIndex()
+    this.notify()
     return this.activeId
   }
 }

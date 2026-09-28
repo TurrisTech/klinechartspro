@@ -11,7 +11,8 @@ import { MAX_WORKSPACES, type Workspace, type WorkspaceStore } from './store'
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
-function icon(paths: string[], filled = false): SVGSVGElement {
+/** A 14px stroked icon from path data; shared with the Save/Revert controls (./save.ts). */
+export function icon(paths: string[], filled = false): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg')
   svg.setAttribute('viewBox', '0 0 24 24')
   svg.setAttribute('width', '14')
@@ -201,11 +202,26 @@ export function createWorkspaceSwitcher(options: WorkspaceSwitcherOptions): Work
     name.textContent = workspace.name
     const meta = document.createElement('span')
     meta.className = 'wd-ws-meta kc-truncate'
+    // The wall as it stands, draft included, so the active row follows the chart it describes;
+    // `updatedAt` moves only on a save, so the age is how long ago it was SAVED.
     const when = ago(workspace.updatedAt)
     meta.textContent = when
-      ? `${describeLayout(workspace.layout)} · ${when}`
-      : describeLayout(workspace.layout)
-    text.append(name, meta)
+      ? `${describeLayout(store.working(workspace.id))} · ${when}`
+      : describeLayout(store.working(workspace.id))
+    // A draft outlives a switch (store.ts), so any row, not only the active one, can carry
+    // changes that have not been saved. Beside the name rather than in the meta line, which
+    // truncates from the end -- where this would be the first thing cut.
+    const title = document.createElement('span')
+    title.className = 'wd-ws-title'
+    title.appendChild(name)
+    if (store.isDirty(workspace.id)) {
+      const unsaved = document.createElement('span')
+      unsaved.className = 'wd-ws-unsaved'
+      unsaved.textContent = 'unsaved'
+      unsaved.title = 'Changed since it was last saved'
+      title.appendChild(unsaved)
+    }
+    text.append(title, meta)
     pick.append(mark, text)
     pick.addEventListener('click', () => switchTo(workspace.id))
 
