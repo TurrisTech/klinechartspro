@@ -21,6 +21,11 @@ import { knowableSignals } from './shift'
 //   * a top signal is joined to a later top signal on a LOWER timeframe that is HIGHER, a
 //     bottom signal to a later bottom one that is LOWER -- and the same again from there, so a
 //     path steps down the timeframes while the price keeps going the graph's way;
+//   * a graph only ever goes FURTHER: once it has taken a top signal at some price, no later
+//     top signal below that joins it, and the same downwards for a bottom graph (user,
+//     2026-09-23). Every node is therefore a new extreme for the whole graph, whatever its
+//     timeframe, and the picture is one staircase rather than a fan of retries. A signal that
+//     falls short of the graph's reach joins nothing and is simply not drawn;
 //   * a signal SUPERSEDES its own timeframe's last node in the graph when it is later and
 //     further the graph's way -- higher for a top graph, lower for a bottom one -- and the two
 //     are joined by a line (user, 2026-09-23). So a timeframe's own nodes read as a staircase
@@ -148,12 +153,20 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
     })
   const graphs: Graph<S>[] = []
   let current: Graph<S> | null = null
+  /** How far the current graph has got, over every timeframe in it: the highest price a top
+   * graph has taken, the lowest a bottom one has. Emptied with the graph. */
+  let reach: number | null = null
+  /** Whether `signal` goes further than the graph already has. The FIRST node sets the reach,
+   * so nothing is refused for want of one. */
+  const beyondReach = (signal: S, side: GraphSide): boolean =>
+    reach === null || (side === 'top' ? signal.price > reach : signal.price < reach)
   // A graph reaches the answer only once it has a node: a run whose every root signal is
   // already a step in a longer root's graph opens nothing, and nothing can join it either --
   // a lower-timeframe signal needs a node to step from.
   const add = (graph: Graph<S>, node: GraphNode<S>): void => {
     if (graph.nodes.length === 0) graphs.push(graph)
     graph.nodes.push(node)
+    reach = node.signal.price
   }
   /**
    * Which node `signal` hangs from in `graph`, or -1 for none.
@@ -185,13 +198,20 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
   }
   for (const signal of ordered) {
     if (signal.interval === options.root) {
-      if (!current || current.side !== signal.side) current = { side: signal.side, nodes: [] }
+      if (!current || current.side !== signal.side) {
+        current = { side: signal.side, nodes: [] }
+        reach = null
+      }
       // A root signal that supersedes the last one is that graph's root timeframe carrying on,
-      // drawn as a step from it; one that does not is another root of the same graph.
-      if (!options.taken?.has(signal)) add(current, { signal, parent: parentFor(current, signal) })
+      // drawn as a step from it; one that does not is another root of the same graph. Either
+      // way it has to go further than the graph already has.
+      if (!options.taken?.has(signal) && beyondReach(signal, current.side)) {
+        add(current, { signal, parent: parentFor(current, signal) })
+      }
       continue
     }
     if (!current || signal.side !== current.side) continue
+    if (!beyondReach(signal, current.side)) continue
     const parent = parentFor(current, signal)
     if (parent >= 0) add(current, { signal, parent })
   }
