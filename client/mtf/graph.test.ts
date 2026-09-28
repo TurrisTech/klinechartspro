@@ -143,20 +143,18 @@ describe('buildGraphs', () => {
     expect(graphs.map((g) => g.nodes.length)).toEqual([1, 1])
   })
 
-  test('a further same-side root supersedes the last one; one that falls short is another root', () => {
+  test('a further same-side root supersedes the last one; one that falls short joins nothing', () => {
     const graphs = buildGraphs(
       [
         sig('8h', 0, 'top', 1.1),
         sig('8h', 8 * H, 'top', 1.12), // higher than the root before it: the same graph, stepped
-        sig('8h', 16 * H, 'top', 1.11), // not higher than 1.12: another root of the same graph
+        sig('8h', 16 * H, 'top', 1.11), // short of the graph's reach: not drawn at all
         sig('1h', 17 * H, 'top', 1.13)
       ],
       { root: '8h', maxStep: 8 }
     )
     expect(graphs).toHaveLength(1)
-    // The 1h signal steps from the most recent 8h node it may step from, which is the second
-    // root rather than the higher one before it.
-    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '8h@1.12 <- 8h@1.1', '8h@1.11', '1h@1.13 <- 8h@1.11'])
+    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '8h@1.12 <- 8h@1.1', '1h@1.13 <- 8h@1.12'])
   })
 
   test('each node hangs from the MOST RECENT node it may step from, so a path can branch', () => {
@@ -164,19 +162,13 @@ describe('buildGraphs', () => {
       [
         sig('8h', 0, 'top', 1.1),
         sig('1h', 2 * H, 'top', 1.15),
-        sig('2h', 3 * H, 'top', 1.12), // above the root: joins, though it is under the 1h node
-        sig('15m', 4 * H, 'top', 1.13), // above 2h@1.12, the most recent it may step from
-        sig('15m', 5 * H, 'top', 1.16) // above its own timeframe's last node: it supersedes it
+        sig('2h', 3 * H, 'top', 1.12), // under the graph's reach of 1.15: not drawn
+        sig('15m', 4 * H, 'top', 1.13), // likewise
+        sig('15m', 5 * H, 'top', 1.16) // past the reach: it joins, from the most recent node
       ],
       { root: '8h', maxStep: 8 }
     )
-    expect(shape(graphs[0].nodes)).toEqual([
-      '8h@1.1',
-      '1h@1.15 <- 8h@1.1',
-      '2h@1.12 <- 8h@1.1',
-      '15m@1.13 <- 2h@1.12',
-      '15m@1.16 <- 15m@1.13'
-    ])
+    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '1h@1.15 <- 8h@1.1', '15m@1.16 <- 1h@1.15'])
   })
 
   test('a timeframe that goes further supersedes its own last node, and the two are joined', () => {
@@ -185,32 +177,43 @@ describe('buildGraphs', () => {
         sig('8h', 0, 'top', 1.1),
         sig('1h', 2 * H, 'top', 1.12), // the first 1h: steps from the root
         sig('1h', 3 * H, 'top', 1.13), // higher than 1h@1.12: supersedes it
-        sig('1h', 4 * H, 'top', 1.11), // below 1h@1.13: back to the root
-        sig('1h', 5 * H, 'top', 1.14) // above the last 1h node again
+        sig('1h', 4 * H, 'top', 1.11), // short of the graph's reach: not drawn
+        sig('1h', 5 * H, 'top', 1.14) // further again: supersedes the last 1h node drawn
       ],
       { root: '8h', maxStep: 8 }
     )
-    expect(shape(graphs[0].nodes)).toEqual([
-      '8h@1.1',
-      '1h@1.12 <- 8h@1.1',
-      '1h@1.13 <- 1h@1.12',
-      '1h@1.11 <- 8h@1.1',
-      '1h@1.14 <- 1h@1.11'
-    ])
+    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '1h@1.12 <- 8h@1.1', '1h@1.13 <- 1h@1.12', '1h@1.14 <- 1h@1.13'])
   })
 
-  test('only the LAST node of a timeframe is superseded, never one already replaced', () => {
+  test('a bottom graph only ever goes lower, and what it skipped is not drawn', () => {
     const graphs = buildGraphs(
       [sig('8h', 0, 'bottom', 1.2), sig('1h', 1 * H, 'bottom', 1.18), sig('1h', 2 * H, 'bottom', 1.19), sig('1h', 3 * H, 'bottom', 1.17)],
       { root: '8h', maxStep: 8 }
     )
-    // 1h@1.19 did not better 1.18, so it stepped from the root; 1h@1.17 betters THAT one.
-    expect(shape(graphs[0].nodes)).toEqual([
-      '8h@1.2',
-      '1h@1.18 <- 8h@1.2',
-      '1h@1.19 <- 8h@1.2',
-      '1h@1.17 <- 1h@1.19'
-    ])
+    // 1h@1.19 is above the graph's reach of 1.18, so it joins nothing; 1h@1.17 goes lower and
+    // supersedes the last 1h node that WAS drawn.
+    expect(shape(graphs[0].nodes)).toEqual(['8h@1.2', '1h@1.18 <- 8h@1.2', '1h@1.17 <- 1h@1.18'])
+  })
+
+  test('the reach is the whole graph, not one timeframe', () => {
+    const graphs = buildGraphs(
+      [
+        sig('8h', 0, 'top', 1.1),
+        sig('1h', 1 * H, 'top', 1.2), // the graph reaches 1.2
+        sig('4h', 2 * H, 'top', 1.15), // its own timeframe has no node yet, but the GRAPH is past it
+        sig('15m', 3 * H, 'top', 1.19) // likewise
+      ],
+      { root: '8h', maxStep: 8 }
+    )
+    expect(shape(graphs[0].nodes)).toEqual(['8h@1.1', '1h@1.2 <- 8h@1.1'])
+  })
+
+  test('the reach is the graph own: the next graph starts from nothing', () => {
+    const graphs = buildGraphs(
+      [sig('8h', 0, 'top', 1.3), sig('8h', 8 * H, 'bottom', 1.1), sig('1h', 9 * H, 'bottom', 1.09)],
+      { root: '8h', maxStep: 8 }
+    )
+    expect(shape(graphs[1].nodes)).toEqual(['8h@1.1', '1h@1.09 <- 8h@1.1'])
   })
 
   test('superseding is within one graph: a new graph starts from nothing', () => {
