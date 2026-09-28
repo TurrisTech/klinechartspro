@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
 import { mergeSessions, sessionsFromBars, type Candle, type Level, type SessionBar, type SessionClock } from './calendar'
+import type { HeathLevel } from './heathlevels'
 import {
   computeTradeTalk,
   dedupeLevels,
+  heathAsLevel,
   levelMap,
   inTradingWindow,
   nextTarget,
@@ -408,5 +410,80 @@ describe('with no daily bars at all', () => {
     })
     expect(empty.trades).toHaveLength(0)
     expect(empty.values.every((value) => value.levels === undefined)).toBe(true)
+  })
+})
+
+// A supply or demand zone reaches the entry rule as one line at its open, so the method trades
+// its own levels as well as the calendar's (heathlevels.ts draws the zones themselves).
+const heath = (
+  side: 'supply' | 'demand',
+  price: number,
+  confirmIndex: number,
+  brokenIndex: number | null = null
+): HeathLevel => ({
+  side,
+  originIndex: 0,
+  originEnd: 0,
+  turnIndex: 0,
+  confirmIndex,
+  price,
+  low: side === 'supply' ? price : price - 1,
+  high: side === 'supply' ? price + 1 : price,
+  stop: side === 'supply' ? price + 1.5 : price - 1.5,
+  testedIndex: null,
+  brokenIndex,
+  brokenBy: brokenIndex === null ? null : 'crossed'
+})
+
+describe('trading from supply and demand', () => {
+  test('a zone is on the map from the bar its swing was confirmed, and gone when it is erased', () => {
+    const { values } = computeTradeTalk({
+      bars: STOP_RUN,
+      sessions: mergeSessions(BASE, sessionsFromBars(STOP_RUN, CLOCK)),
+      clock: CLOCK,
+      barMs: HOUR,
+      tick: TICK,
+      settings: SETTINGS,
+      heath: [heath('demand', 93.4, 1, 4)]
+    })
+    const has = (i: number) => values[i].levels?.some((level) => level.source === 'heath') ?? false
+    expect(has(0)).toBe(false)
+    expect(has(1)).toBe(true)
+    expect(has(3)).toBe(true)
+    expect(has(4)).toBe(false)
+    // Its own line, labelled by the side, at the zone's open.
+    expect(values[1].levels?.find((level) => level.source === 'heath')).toMatchObject({
+      price: 93.4,
+      label: 'demand',
+      side: 'demand'
+    })
+  })
+
+  test('the rule enters from a zone exactly as it does from a calendar level', () => {
+    // Bar 1 wicks through a demand line at 96.9 and closes back above it; bar 2 takes bar 1's
+    // high, which is the entry, and bar 3 reaches the day open above. Nothing above is swept on
+    // the way, so this is a one-sided stop run whose level happens to be a zone.
+    const bars = [bar(5, 0, 98.9, 98.95, 97.4, 97.6), bar(5, 1, 97.4, 97.6, 96.8, 97.3), bar(5, 2, 97.3, 98.2, 97.2, 98.1), bar(5, 3, 98.1, 99.2, 98, 99.1)]
+    const { trades } = computeTradeTalk({
+      bars,
+      sessions: mergeSessions(BASE, sessionsFromBars(bars, CLOCK)),
+      clock: CLOCK,
+      barMs: HOUR,
+      tick: TICK,
+      settings: { ...SETTINGS, rr: 1 },
+      heath: [heath('demand', 96.9, 0)]
+    })
+    expect(trades).toHaveLength(1)
+    expect(trades[0]).toMatchObject({ side: 'long', signalIndex: 1, entryIndex: 2, entry: 97.6, stop: 96.8, outcome: 'target' })
+    expect(trades[0].level).toMatchObject({ label: 'demand', source: 'heath' })
+  })
+
+  test('a zone outranks a daily line and loses to a weekly one', () => {
+    const zone = { ...heathAsLevel(heath('demand', 90, 0)) }
+    expect(pickLevel([level(90, 'D', 'low', 'prev day low'), zone], 92)?.label).toBe('demand')
+    expect(pickLevel([level(90, 'W', 'low', 'last week low'), zone], 92)?.label).toBe('last week low')
+    // One price is still one line: the zone replaces the daily, the weekly replaces the zone.
+    expect(dedupeLevels([level(90, 'D', 'low', 'prev day low'), zone], TICK).map((l) => l.label)).toEqual(['demand'])
+    expect(dedupeLevels([zone, level(90, 'W', 'low', 'last week low')], TICK).map((l) => l.label)).toEqual(['last week low'])
   })
 })

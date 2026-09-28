@@ -144,6 +144,11 @@ export interface Level {
   /** True while this is the open of the period in progress -- the line that is not yet
    * usable on the bar that opened it (rules.ts). */
   current: boolean
+  /** Where the line came from. Absent for a calendar level; `heath` for a supply or demand
+   * zone's line, which TradeTalk entries can trade from as well (heathlevels.ts). */
+  source?: 'heath'
+  /** Which way a `heath` line argues. Absent for a calendar level. */
+  side?: 'supply' | 'demand'
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']

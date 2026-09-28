@@ -72,17 +72,25 @@ half of the method that is about one candle rather than one calendar period:
 |---|---|
 | **supply** (above price) | the **open** of the last **up-close** candle before a sell-off |
 | **demand** (below price) | the **open** of the last **down-close** candle before a rally |
-| stop | above the wick **high** (supply) or below the wick **low** (demand) of that same candle |
-| the **area** | that candle's **body** — open to close, not open to wick (user, 2026-09-21) — which is what the chart shades; the stop sits beyond the wick, outside it |
+| **one or more candles** | the pause before a turn "can be **one or more** green close candles", and the worked Bitcoin supply in the same video is two of them — "the november 9th and 10th candles… causing two up-close candles" — read as one zone (#73). So the origin is a **run** of same-colour candles ending at that last one. |
+| the **area** | the **bodies** of that run — open to close, not open to wick (user, 2026-09-21) — which is what the chart shades; the line is the run's **earliest** open |
+| stop | beyond the run's furthest wick: above its **high** (supply), below its **low** (demand). Outside the area, never an edge of it. |
 | worth | "a **fresh, untested** level is worth far more than one price has already visited" |
 
-Two words in that definition have to be made mechanical, and both are parameters rather than
-opinions buried in the code. **"Before a turn"** is a swing top or bottom, found with the same
+Three things in that definition have to be made mechanical, and all three are parameters rather
+than opinions buried in the code. **"Before a turn"** is a swing top or bottom, found with the same
 rule the chart's own Tops and Bottoms indicator uses (`swingMask`, `left`/`right`) — so a level
 is knowable only `right` bars after the candle that made it. **"The last opposite-colour
 candle"** is searched backwards from the turn, the turn's own candle included (a rally's final
 candle usually *is* the up-close one), and bounded by `LOOKBACK`: with nothing of that colour
-within 20 bars there is no level, rather than an arbitrary one.
+within 20 bars there is no level, rather than an arbitrary one. **"One or more candles"** is the
+run, walked back from that candle while the colour holds and capped by `maxRun` (default **3**):
+a rally into a top can be eight up-close candles in a row, and a zone the height of a whole rally
+is not a level. At `maxRun` 1 the zone is the single candle the chart drew before 2026-09-28.
+
+Only where the level is *drawn from* changes with the run — the turn, and therefore when the level
+becomes knowable, is the same candle. The life starts after the run's **last** candle, so the
+candles that built a zone can never be what erases it.
 
 A level's life, all of it forward-looking: **armed** once price has closed clear of the area
 (without which the sell-off that created a supply would instantly "test" it, the area being
@@ -112,9 +120,9 @@ and the close faint along the other; the stop is its own dotted line beyond the 
 only when the parameter asks for it. The line is **dashed until the swing is confirmed** (that
 stretch exists in hindsight only, and dashing it is the difference between showing the method
 and flattering it). Everything dims once tested. Live levels are named at the right edge —
-`supply`, `demand · tested`. Params: `[left, right, sides, fresh only, stop edge, shading %]`,
-default `[5, 5, 0, 0, 0, 12]`; the shading parameter was **appended**, so a layout saved before
-it existed reads the default rather than zero.
+`supply`, `demand · tested`. Params: `[left, right, sides, fresh only, stop edge, shading %,
+calendar, candles in one zone]`, default `[5, 5, 0, 0, 0, 12, 1, 3]`; each parameter after the
+fifth was **appended**, so a layout saved before one existed reads its default rather than zero.
 
 **The calendar levels, optionally underneath** (2026-09-21). A seventh parameter,
 `calendar` (0/1, default on), lays the objective calendar map of TradeTalk entries under the
@@ -140,9 +148,20 @@ scrapped by a body crossing the **far** edge (#145), where on hourly charts draw
 line he scraps it on a close through **the open** itself (#93, #94). Either is a one-line change if
 the stricter reading is wanted.
 
-**It does not feed the entries.** `TT:entries` trades the calendar map only. The method's own
-setups do reach for these (§8 setup 1 pulls back "into a level"), so wiring them in is a real
-option — but it changes which trades appear, so it is a decision rather than a detail.
+**It feeds the entries too** (2026-09-28). `TT:entries` parameter 7 (`supply and demand`, 0/1,
+default **on**) computes these same zones — the shipped defaults of this indicator, so what it
+trades is what the other indicator draws — and hands the entry rule one line per live zone, at the
+zone's open, labelled `supply` or `demand`. From there nothing about the rule changes: a candle
+sweeps the line, closes back through it, and the break of that candle is the entry. His own setups
+read this way (§8 setup 1 pulls back "into a level"), and a zone is **live on the map from the bar
+its swing was confirmed until the bar that erased it** — the same forward-only life the other
+indicator draws.
+
+Where a zone's line and a calendar level share a price they are **one line**, and a zone outranks
+the daily map but loses to the weekly and coarser: a level's rank is what names a trade, and "week
+open" says more than "demand" does. Zone-sourced lines are drawn and labelled in the **candles' own
+colours** — supply in the down colour, demand in the up — so the map says which lines are his
+structure and which are the calendar's.
 
 Not implemented from §4 of the study: the close-based support and resistance of **§4.1** (the highest
 bullish close / the lowest bearish close), and the intra-trend counter-trend levels of **§4.2**.
@@ -175,7 +194,8 @@ identically, in a run over the bars up to its own entry. A rule that peeked woul
 
 ## Parameters
 
-`[min R:R, bias, hours, order life, smallest level, level map]`, default `[2, 1, 1, 5, 0, 1]`.
+`[min R:R, bias, hours, order life, smallest level, level map, supply and demand]`, default
+`[2, 1, 1, 5, 0, 1, 1]`.
 
 | # | parameter | default | values |
 |---|---|---|---|
@@ -185,6 +205,7 @@ identically, in a run over the bars up to its own entry. A rule that peeked woul
 | 4 | entry order lives for | 5 bars | he states no expiry; this is the one invented number, and it is a parameter |
 | 5 | smallest level | 0 daily | 1 weekly, 2 monthly — coarser maps, fewer entries |
 | 6 | draw the level map | 1 | 0 draws only the entries |
+| 7 | trade supply and demand too | 1 | 0 the calendar map only. Appended, so an older layout reads it as on. |
 
 **An empty pane is a result.** The corner line says how many sweeps each filter refused — "skipped
 63 short of the reward, 53 against the bias, 2 outside the hours" — so a chart with no entries on

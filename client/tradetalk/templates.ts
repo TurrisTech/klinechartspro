@@ -1,6 +1,7 @@
 import { registerIndicator, type Chart, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import type { Unit } from './calendar'
+import { heathLevels, type HeathLevelSettings } from './heathlevels'
 import {
   chartSessions,
   chipText,
@@ -28,8 +29,13 @@ import { computeTradeTalk, type BarValue, type Settings, type Skips, type Trade 
 
 export const TEMPLATE_NAME = 'TT:entries'
 
-/** [min R:R, bias, hours, order life, smallest unit, level lines]. */
-export const DEFAULT_PARAMS = [2, 1, 1, 5, 0, 1]
+/** [min R:R, bias, hours, order life, smallest unit, level lines, supply and demand].
+ * The last was appended, so a layout saved before it existed reads its default. */
+export const DEFAULT_PARAMS = [2, 1, 1, 5, 0, 1, 1]
+
+/** The supply and demand the entry rule trades from when its switch is on: the Heath levels
+ * indicator's own defaults, so what it trades is what that indicator draws. */
+const ENTRY_HEATH: HeathLevelSettings = { left: 5, right: 5, sides: 0, freshOnly: false, stopLine: false, maxRun: 3 }
 
 const MIN_UNITS: readonly Unit[] = ['D', 'W', 'M']
 
@@ -41,6 +47,8 @@ function numberAt(calcParams: unknown[] | undefined, at: number, fallback: numbe
 
 export interface ChartSettings extends Settings {
   lines: boolean
+  /** Trade from supply and demand zones as well as the calendar levels. */
+  heath: boolean
 }
 
 export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
@@ -53,7 +61,8 @@ export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
     window: window as Settings['window'],
     expiry: Math.min(200, Math.max(1, Math.round(numberAt(calcParams, 3, DEFAULT_PARAMS[3])))),
     minUnit,
-    lines: Math.round(numberAt(calcParams, 5, DEFAULT_PARAMS[5])) !== 0
+    lines: Math.round(numberAt(calcParams, 5, DEFAULT_PARAMS[5])) !== 0,
+    heath: Math.round(numberAt(calcParams, 6, DEFAULT_PARAMS[6])) !== 0
   }
 }
 
@@ -80,6 +89,7 @@ function calc(dataList: KLineData[], indicator: { extendData?: ExtendData; calcP
   const sessions = chartSessions(dataList, { ...extend, clock: extend.clock })
   const { values, trades, units, skips } = computeTradeTalk({
     bars: dataList,
+    heath: settings.heath ? heathLevels(dataList, ENTRY_HEATH) : undefined,
     sessions,
     clock: extend.clock,
     barMs: extend.barMs,
@@ -229,7 +239,8 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
       { paramNameKey: 'Hours: 0 any, 1 03:00-11:00 NY, 2 07:00-11:00 NY', precision: 0, min: 0, max: 2, default: DEFAULT_PARAMS[2] },
       { paramNameKey: 'Entry order lives for (bars)', precision: 0, min: 1, max: 200, default: DEFAULT_PARAMS[3] },
       { paramNameKey: 'Smallest level: 0 daily, 1 weekly, 2 monthly', precision: 0, min: 0, max: 2, default: DEFAULT_PARAMS[4] },
-      { paramNameKey: 'Draw the level map (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[5] }
+      { paramNameKey: 'Draw the level map (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[5] },
+      { paramNameKey: 'Trade supply and demand too (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[6] }
     ])
     registered = true
   }
@@ -242,7 +253,7 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
           name: TEMPLATE_NAME,
           label: 'TradeTalk entries',
           description:
-            'Where the TradeTalk (Heath) method would enter: a candle sweeps an objective level — a yearly/quarterly/monthly/weekly/daily open, or the previous period’s high, low or midpoint — and closes back through it; the entry is a stop order at that candle’s extreme, the stop at its other extreme, the target the next opposing level, and anything under the minimum reward:risk is not a trade. Params: min R:R, bias filter, trading hours, order life, smallest level, level map on/off.'
+            'Where the TradeTalk (Heath) method would enter: a candle sweeps a level — a yearly/quarterly/monthly/weekly/daily open, the previous period’s high, low or midpoint, or a supply or demand zone’s line — and closes back through it; the entry is a stop order at that candle’s extreme, the stop at its other extreme, the target the next opposing level, and anything under the minimum reward:risk is not a trade. Params: min R:R, bias filter, trading hours, order life, smallest level, level map on/off, supply and demand on/off.'
         }
       ]
     }
