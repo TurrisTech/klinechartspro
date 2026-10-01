@@ -4,7 +4,7 @@ import { installWindow } from '../plugins/testing'
 // The signal graph's rules (graph.ts): where a graph starts and resets, which lower-timeframe
 // signal steps from which, and how a stored config carries the graph's settings.
 installWindow()
-const { buildGraphs, buildRootGraphs, canStep, graphStart, storeGraphSignals } = await import('./graph')
+const { buildGraphs, buildRootGraphs, canStep, graphStart, isEntry, storeGraphSignals } = await import('./graph')
 const { MTF_DEFAULTS, fromStoredMtfConfig, graphLineStyle, graphRoots, toStoredMtfConfig } = await import('./config')
 const { MTF_INTERVALS } = await import('./api')
 const { resolutionDurationMs } = await import('../periods')
@@ -248,6 +248,33 @@ describe('buildGraphs', () => {
     })
     expect(graphs.map((g) => g.side)).toEqual(['bottom'])
     expect(graphs[0].nodes).toHaveLength(2)
+  })
+})
+
+describe('entries', () => {
+  test('every step on 5m or shorter is an entry, however far down the graph it is', () => {
+    const graphs = buildGraphs(
+      [
+        sig('8h', 8 * H, 'top', 1.1),
+        sig('1h', 10 * H, 'top', 1.102),
+        sig('15m', 14 * H, 'top', 1.103),
+        sig('5m', 15 * H, 'top', 1.104), // the first entry: the path reaches 5m
+        sig('5m', 16 * H, 'top', 1.105), // supersedes it: an entry too
+        sig('3m', 17 * H, 'top', 1.106), // steps from the 5m: an entry too
+        sig('5m', 18 * H, 'top', 1.1055) // short of the graph's reach: not in the graph at all
+      ],
+      { root: '8h', maxStep: 8 }
+    )
+    expect(graphs).toHaveLength(1)
+    const entries = graphs[0].nodes.filter(isEntry).map((n) => `${n.signal.interval}@${n.signal.price}`)
+    expect(entries).toEqual(['5m@1.104', '5m@1.105', '3m@1.106'])
+  })
+
+  test('a root is never an entry, and nothing above 5m is', () => {
+    expect(isEntry({ signal: sig('5m', 0, 'top', 1), parent: -1 })).toBe(false)
+    expect(isEntry({ signal: sig('15m', 0, 'top', 1), parent: 0 })).toBe(false)
+    expect(isEntry({ signal: sig('5m', 0, 'top', 1), parent: 0 })).toBe(true)
+    expect(isEntry({ signal: sig('3m', 0, 'top', 1), parent: 0 })).toBe(true)
   })
 })
 

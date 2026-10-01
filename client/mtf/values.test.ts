@@ -138,3 +138,47 @@ describe('one calc, from the stores to the markers', () => {
     expect(drawsSignal(SYM, ref, '1h', 99 * H, 5 * H)).toBeNull()
   })
 })
+
+describe('entries: a graph that reaches 5m draws a star there', () => {
+  const M = 60_000
+  const ESYM = 'oanda:ZZZENTRY'
+  const key = (interval: string) => `arev21_outlier_rank|${ESYM}|${interval}|{"bars":200,"q":0.85,"samples_only":0}|mtf`
+  const keys = { '1h': key('1h'), '15m': key('15m'), '5m': key('5m') }
+
+  afterAll(async () => {
+    const { dropStore } = await import('../plugins/store')
+    for (const k of Object.values(keys)) dropStore(k)
+    resetDrawn()
+  })
+
+  /** `n` bars of `step` from 0, each body flat at 1.09 except the ones `tops` raises. */
+  const grid = (step: number, n: number, tops: Record<number, number>) =>
+    Array.from({ length: n }, (_, i) => ({ date: i * step, open: 1.09, close: tops[i] ?? 1.09 }))
+
+  test('a 1h root -> 15m -> 5m -> 5m path: both 5m steps are stars, nothing above them is', () => {
+    // 1h root top at 0 (body top 1.10), known at 1h; a 15m top at 1.11 known at 105m; a 5m top
+    // at 1.12 known at 130m, and a second at 1.13 known at 155m that supersedes it.
+    store(keys['1h'], grid(H, 4, { 0: 1.1 }), [[0, 'long']])
+    store(keys['15m'], grid(15 * M, 16, { 6: 1.11 }), [[6 * 15 * M, 'long']])
+    store(keys['5m'], grid(5 * M, 48, { 25: 1.12, 30: 1.13 }), [
+      [25 * 5 * M, 'long'],
+      [30 * 5 * M, 'long']
+    ])
+    const c = structuredClone(MTF_DEFAULTS)
+    for (const interval of ['1h', '15m', '5m'] as const) c.timeframes[interval].enabled = true
+    c.graph.roots = { '1D': false, '8h': false, '4h': false, '2h': false, '1h': true }
+    const bars = Array.from(
+      { length: 48 },
+      (_, i) => ({ timestamp: i * 5 * M, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 1 }) as KLineData
+    )
+    const values = computeValues(
+      bars,
+      { seriesKeys: keys, rev: 1, chartInterval: '5m', config: c, graphRoots: ['1h'], symbol: ESYM },
+      AREV21_OUTLIER_RANK_85_MTF
+    )
+    const dots = values.flatMap((v, i) =>
+      (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}${d.entry ? ' entry' : ''}`)
+    )
+    expect(dots).toEqual(['1h@bar12 root', '15m@bar21', '5m@bar26 entry', '5m@bar31 entry'])
+  })
+})

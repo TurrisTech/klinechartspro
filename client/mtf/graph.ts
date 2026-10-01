@@ -218,6 +218,24 @@ export function buildGraphs<S extends GraphSignal>(signals: Iterable<S>, options
   return graphs
 }
 
+/** The longest timeframe an entry may be cast on (`isEntry`). */
+export const ENTRY_MAX_INTERVAL = '5m'
+
+/**
+ * Whether a graph node is an ENTRY (user, 2026-10-01): a signal on 5m or shorter that is
+ * connected to a root -- drawn as a star.
+ *
+ * "Connected to a root" is being a STEP in a graph at all: `buildGraphs` adds no node without
+ * a parent except a root, so every step hangs, through its parents, from one. A root itself is
+ * never an entry (and cannot be one anyway: every root timeframe is 1h or longer). Nor is it
+ * only the first such node a path reaches -- "a star can be placed on a 5m or smaller signal
+ * further down the graph", so a 5m signal that supersedes an entry, or a 3m one stepped to
+ * from it, is an entry too.
+ */
+export function isEntry(node: GraphNode): boolean {
+  return node.parent >= 0 && node.signal.durationMs <= resolutionDurationMs(ENTRY_MAX_INTERVAL)
+}
+
 /** HOW MUCH HISTORY IS FETCHED for a root, in bars of its own timeframe -- a bound on the
  * read, not a rule of the graph (the rules are `canStep` and `buildGraphs`). Graphs are built
  * from what this brings back: ~14 months on 1D, ~14 weeks on 8h, ~2.5 weeks on 1h.
