@@ -15,6 +15,7 @@ const { defaultLayout, isPersistedLayout, overlayPaneState, toPersistedLayout } 
 const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
 const { MTF_DEFAULTS, fromStoredMtfConfig } = await import('./mtf/config')
 const { DIV_DEFAULTS, fromStoredDivConfig } = await import('./arev21div/config')
+const { VP_DEFAULTS, fromStoredVpConfig } = await import('./volprofile/config')
 
 afterAll(() => {
   if (!hadWindow) delete (globalThis as Record<string, unknown>).window
@@ -110,6 +111,20 @@ describe('a round trip through the document', () => {
     expect('dv' in written.panes[1]).toBe(false)
     expect(isPersistedLayout(written)).toBe(true)
     expect(fromStoredDivConfig(JSON.parse(JSON.stringify(written.panes[0].dv)))).toEqual(div)
+  })
+
+  test("the volume profile's settings ride in `vp`, only what differs from the defaults", () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const vp = structuredClone(VP_DEFAULTS)
+    vp.mode = 'session'
+    vp.draw.showPoc = false
+    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, {
+      volprofile: { 0: vp, 1: structuredClone(VP_DEFAULTS) }
+    })
+    expect(written.panes[0].vp).toEqual({ mode: 'session', 'draw.showPoc': false })
+    expect('vp' in written.panes[1]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+    expect(fromStoredVpConfig(JSON.parse(JSON.stringify(written.panes[0].vp)))).toEqual(vp)
   })
 
   test("the outlier MTF overlays' settings ride in `mx`, by plugin id, apart from AREV21 MTF's", () => {

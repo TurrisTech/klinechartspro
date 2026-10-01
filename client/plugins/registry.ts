@@ -8,6 +8,7 @@ import { createMtfPlugin } from '../mtf/plugin'
 import { MTF_OVERLAYS } from '../mtf/overlays'
 import { createRegistryPlugin } from '../tsregistry/plugin'
 import { createTradeTalkPlugin } from '../tradetalk/plugin'
+import { createVolumeProfilePlugin } from '../volprofile/plugin'
 import type { IndicatorPlugin } from './types'
 
 // The built-in indicator plugins, in the order their picker groups appear. Built per mount
@@ -22,8 +23,9 @@ import type { IndicatorPlugin } from './types'
 // scalar-per-bar series at all; the AREV lab, which reads several registry rows into one
 // pane and computes its own signal rules over them; the arev21 divergence, which compares
 // arev21's p with the pane's own price swings and draws in both panes; bid/ask, which is not
-// an indicator the server computes but the quote half of the bars themselves; and TradeTalk,
-// which is a trading method computed here from daily bars and the bars the pane already holds.
+// an indicator the server computes but the quote half of the bars themselves; TradeTalk,
+// which is a trading method computed here from daily bars and the bars the pane already holds;
+// and the volume profile, computed here from bars of a lower timeframe than the pane's.
 
 export function builtinPlugins(): IndicatorPlugin[] {
   return [
@@ -36,6 +38,7 @@ export function builtinPlugins(): IndicatorPlugin[] {
     createBooksPlugin(),
     createBooksPlugin(DEV_BOOKS),
     createBidAskPlugin(),
-    createTradeTalkPlugin()
+    createTradeTalkPlugin(),
+    createVolumeProfilePlugin()
   ]
 }

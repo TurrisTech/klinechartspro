@@ -319,6 +319,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       arev21div: Object.fromEntries(
         hydrated.panes.flatMap((pane, index) => (pane.divConfig ? [[index, pane.divConfig]] : []))
       ),
+      // The volume profile's, likewise.
+      volprofile: Object.fromEntries(
+        hydrated.panes.flatMap((pane, index) => (pane.vpConfig ? [[index, pane.vpConfig]] : []))
+      ),
       // The other MTF overlays' (the arev21_outlier rank ones), each under its plugin id.
       ...overlayPaneState(hydrated.panes)
     }

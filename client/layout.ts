@@ -11,6 +11,7 @@ import { availablePeriods, defaultPeriod } from './periods'
 import { fromStoredDivConfig, toStoredDivConfig, type DivConfig, type StoredDivConfig } from './arev21div/config'
 import { fromStoredLabConfig, toStoredLabConfig, type LabConfig, type StoredLabConfig } from './arevlab/config'
 import { fromStoredMtfConfig, toStoredMtfConfig, type MtfConfig, type StoredMtfConfig } from './mtf/config'
+import { fromStoredVpConfig, toStoredVpConfig, type StoredVpConfig, type VpConfig } from './volprofile/config'
 import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 
 // The SHAPE of one wall document -- per pane its symbol/period/indicators, those indicators'
@@ -56,6 +57,10 @@ interface PersistedPane {
   // one config for both of its templates -- stored the same way: the differences from the
   // defaults, flat by path, omitted for a pane never configured.
   dv?: StoredDivConfig
+  // The volume profile's settings for THIS pane -- what it profiles, how finely and how it is
+  // drawn -- stored the same way: the differences from the defaults, flat by path, omitted for
+  // a pane never configured.
+  vp?: StoredVpConfig
 }
 
 // One pane's view -- the library's PaneViewState, minus what is not worth storing. Kept
@@ -102,6 +107,8 @@ export interface HydratedPane {
   labConfig?: LabConfig
   /** Undefined for a pane never configured; the AREV21 divergence uses its defaults there. */
   divConfig?: DivConfig
+  /** Undefined for a pane never configured; the volume profile uses its defaults there. */
+  vpConfig?: VpConfig
   view: PaneViewState | null
 }
 
@@ -292,6 +299,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     const mtfConfig = fromStoredMtfConfig(pane.mtf)
     const labConfig = fromStoredLabConfig(pane.al)
     const divConfig = fromStoredDivConfig(pane.dv)
+    const vpConfig = fromStoredVpConfig(pane.vp)
     const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
     return {
       symbol: symbols[index],
@@ -305,6 +313,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
       ...(mtfConfig ? { mtfConfig } : {}),
       ...(labConfig ? { labConfig } : {}),
       ...(divConfig ? { divConfig } : {}),
+      ...(vpConfig ? { vpConfig } : {}),
       ...(mtfOverlayConfigs ? { mtfOverlayConfigs } : {}),
       view: hydrateView(pane)
     }
@@ -392,6 +401,8 @@ export interface PanePluginState {
   arevlab?: Record<number, LabConfig>
   /** The AREV21 divergence's. */
   arev21div?: Record<number, DivConfig>
+  /** The volume profile's. */
+  volprofile?: Record<number, VpConfig>
   /** Every other MTF overlay's, under its plugin id -- which is always `mtf_<name>`
    * (client/mtf/overlays.ts), so a new overlay persists without a change here. */
   [overlayId: `${typeof MTF_OVERLAY_PREFIX}${string}`]: Record<number, MtfConfig> | undefined
@@ -453,8 +464,9 @@ export function toPersistedLayout(
       const mtf = pluginState.mtf?.[index] ? toStoredMtfConfig(pluginState.mtf[index]) : undefined
       const al = pluginState.arevlab?.[index] ? toStoredLabConfig(pluginState.arevlab[index]) : undefined
       const dv = pluginState.arev21div?.[index] ? toStoredDivConfig(pluginState.arev21div[index]) : undefined
+      const vp = pluginState.volprofile?.[index] ? toStoredVpConfig(pluginState.volprofile[index]) : undefined
       const mx = storedOverlayConfigs(pluginState, index)
-      return { ...persisted, ...(mtf ? { mtf } : {}), ...(al ? { al } : {}), ...(dv ? { dv } : {}), ...(mx ? { mx } : {}) }
+      return { ...persisted, ...(mtf ? { mtf } : {}), ...(al ? { al } : {}), ...(dv ? { dv } : {}), ...(vp ? { vp } : {}), ...(mx ? { mx } : {}) }
     }),
     sync
   }
