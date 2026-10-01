@@ -1,6 +1,7 @@
 import type { IndicatorGroup } from '../../src'
 import { setByPath } from '../chartlayers/settings'
 import { peekStore } from '../plugins/store'
+import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire, subscribeLive } from '../tsregistry/plugin'
 import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
 import type {
   BindContext,
@@ -33,8 +34,15 @@ import { registerMtfIndicators } from './templates'
 // config revision, which is part of the binding signature, so the host rebinds: sources
 // newly switched on are fetched, and the template repaints off the config in extendData.
 //
-// Like AREV there is nothing to subscribe: the rows are written by hand-run research
-// scripts, not a live feed.
+// LIVE, one subscription per source timeframe: the research feed writes arev21 as each bar
+// closes and the server relays it (`plugins.live`), and a relayed point makes that timeframe
+// re-read its tail -- votes AND grid, since one fetch fills both. A pushed point is never
+// filed as a vote, even where it is one (AREV21 MTF's own wire): it carries no grid bar, and
+// the outlier overlays' votes are computed per read and are not the pushed row at all. Until
+// 2026-10-01 nothing was subscribed (the comment here still said the rows were written by
+// hand-run scripts): the store filed its whole padded window, a week past the newest bar, as
+// fetched, so a vote written after the chart loaded never arrived until a reload, while the
+// sub-pane on the same series showed it (user, 2026-10-01).
 
 // A fetch is widened past the chart's own span at both ends, and neither end is optional.
 // FORWARD, because the newest vote in the window can only be placed once its successor bar
@@ -62,7 +70,22 @@ const GRID_CHUNK_BARS = 4000
  * below the legend the gear sits in. */
 const LEGEND_ROW_HEIGHT = 24
 
-export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlugin {
+/** The wire that tells one of an overlay's source timeframes it has a new bar: its
+ * `liveEntry`'s, ALWAYS as a cue to re-read (`direct: false`), never as a value to file -- the
+ * store holds the bar grid beside the votes, and a pushed point brings no grid bar. Null where
+ * nothing pushes (no `plugins.live`, or a server whose arev wire is not live), which leaves
+ * the overlay as it was: new votes on a reload or a range change. */
+export async function mtfLiveWire(
+  f: Pick<PluginFacilities, 'hasFeature'>,
+  overlay: MtfOverlay,
+  load: LiveLoaders = LIVE_LOADERS
+): Promise<LiveWire | null> {
+  const entry = (await load.registry()).find((e) => e.name === overlay.liveEntry)
+  const found = entry ? await liveWire(f, entry, load) : null
+  return found && { ...found, direct: false }
+}
+
+export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoaders = LIVE_LOADERS): IndicatorPlugin {
   const title = overlay.title
   let facilities: PluginFacilities | null = null
   /** Every pane's settings by pane index -- the accumulated set: seeded from the document
@@ -167,7 +190,11 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF): IndicatorPlug
           nextFrom: capped ?? (to < range.to ? to : null),
           arrays: { [GRID_ARRAY]: grid }
         }
-      }
+      },
+      // At the SOURCE interval: that is the series whose new bar matters, whatever the chart's.
+      subscribe: subscribeLive(f, { vendor: ctx.vendor, ticker: ctx.ticker, interval }, `${title} ${interval}`, () =>
+        mtfLiveWire(f, overlay, load)
+      )
     }
   }
 

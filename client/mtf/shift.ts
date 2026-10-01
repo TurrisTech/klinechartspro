@@ -113,15 +113,31 @@ export interface ShiftInput {
 }
 
 /**
- * Every labelled vote in `points` whose source bar has CLOSED on `grid`, with the instant it
- * did -- the successor bar's open, in absolute time. A vote whose bar has no successor in the
- * grid is dropped: the bar has not closed yet, so the vote is not knowable and drawing it (or
- * building on it) would be lookahead. Unordered, as `points` was.
+ * Every labelled vote in `points`, with the instant it became knowable: its source bar's
+ * close, read as the successor bar's open on `grid`, in absolute time. Unordered, as `points`
+ * was.
+ *
+ * A vote whose bar has no successor in the grid is the NEWEST vote at the live edge, and it is
+ * kept, at its bar's own close: `open + one nominal source bar`. It cannot be dropped as "not
+ * closed yet", because a vote only exists once its bar has closed -- the research feed writes
+ * arev21 off closed bars, and every values route is clamped to closed bars under a replay
+ * clock (`services/asof.py`). And its successor is never in the grid there, because the grid
+ * is `/getbars`, which serves closed bars only: the successor is the bar still forming. Waiting
+ * for it to close held every new vote back one more of its own bars -- a day on 1D -- which a
+ * live overlay cannot afford (user, 2026-10-01: a 2h signal the sub-pane showed at 03:00 had
+ * no MTF marker).
+ *
+ * `open + nominal length` is the close for every source this overlay reads: they are 1D or
+ * intraday, a fixed number of milliseconds long, and on the FX and crypto grids no US DST
+ * transition falls inside one (it is the server's own `get_interval_end`). Where the close is
+ * NOT the successor's open -- into a weekend -- `chartBarAt` takes the first chart bar to open
+ * after it, which is where the successor's open would have put it.
  */
 export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoint>, grid: number[]): ShiftedSignal[] {
   const out: ShiftedSignal[] = []
   if (grid.length === 0) return out
   const gridAbs = grid.map((ms) => toAbsolute(sourceInterval, ms))
+  const durationMs = resolutionDurationMs(sourceInterval)
   for (const point of points) {
     const label = arevSignal(point)
     if (!label) continue
@@ -129,8 +145,8 @@ export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoi
     // The successor bar: the first grid open strictly after the one the vote was cast on.
     // Strictly, so a vote is never placed back on its own bar.
     const next = upperBound(gridAbs, castAbs)
-    if (next >= gridAbs.length) continue // not closed yet, or the grid stops here
-    out.push({ sourceDate: point.date, knownAt: gridAbs[next], p: point.p, up: label === 'long' })
+    const knownAt = next < gridAbs.length ? gridAbs[next] : castAbs + durationMs
+    out.push({ sourceDate: point.date, knownAt, p: point.p, up: label === 'long' })
   }
   return out
 }
@@ -161,23 +177,27 @@ export function chartOpens(chartInterval: string, chartBars: KLineData[]): numbe
  * 17:00 with no US DST transition inside it, and an intraday one is its own unit. A vote
  * falling inside the still-forming last bar is kept, which is the point of bounding rather
  * than dropping the last bar outright.
+ *
+ * The same bound applies to EVERY bar, not only the last: a bar that had already closed by
+ * `knownAt` was not in force then, and the signal belongs on the next bar to open. That is
+ * the case whenever `knownAt` falls in a gap between chart bars -- a source bar's close into
+ * the weekend (`knowableSignals`), or a chart bar missing from the data -- where taking the
+ * bar before the gap would draw a vote on a candle that had finished before it was cast.
  */
 export function chartBarAt(knownAt: number, chartAbs: number[], chartInterval: string): number {
   const at = upperBound(chartAbs, knownAt) - 1
   if (at < 0) return -1
-  if (at === chartAbs.length - 1 && knownAt >= chartAbs[at] + resolutionDurationMs(chartInterval)) return -1
-  return at
+  if (knownAt < chartAbs[at] + resolutionDurationMs(chartInterval)) return at
+  return at + 1 < chartAbs.length ? at + 1 : -1
 }
 
 /**
  * Place each source-timeframe signal on the chart bar that was open when it became
  * knowable, keyed by that bar's own timestamp.
  *
- * A signal is dropped rather than approximated in four cases, all of which are the
+ * A signal is dropped rather than approximated in three cases, all of which are the
  * honest answer:
  *
- *   * its source bar has no successor in the grid — the bar has not closed yet, so the
- *     vote is not knowable and drawing it would be lookahead (`knowableSignals`);
  *   * it became knowable before the first chart bar loaded — its marker is off screen to
  *     the left, not on the leftmost bar;
  *   * it became knowable after the last chart bar had closed — the bar it belongs on is
