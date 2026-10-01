@@ -27,6 +27,10 @@ export interface MtfOverlay {
   description: string
   /** The server capability this overlay's votes need. */
   feature: Feature
+  /** The registry entry whose live wire says a source timeframe has a new bar -- the entry
+   * itself where its own plugin pushes, else the first dependency that does (`liveWire`).
+   * Either way a pushed point is only a cue to re-read that timeframe's tail (plugin.ts). */
+  liveEntry: string
   /** Where a mark sits relative to its bar. `'direction'` (the default) puts a long below the
    * low and a short above the high, the arrow pointing into the candle. `'zone'` puts it on
    * the side of the zone `p` entered: a top-zone (long) signal above the high and a
@@ -72,6 +76,7 @@ export const AREV21_MTF: MtfOverlay = {
     'arev21 signals from several timeframes at once, each drawn one bar of its own timeframe forward. Timeframes, colours and sizes are on the gear.',
   // Reads the same `/arev/values` the AREV panes do, which is why it gates on 'arev'.
   feature: 'arev',
+  liveEntry: MTF_GENERATION,
   sourceKey: (vendor, ticker, interval) => registrySourceKey(MTF_GENERATION, vendor, ticker, interval),
   fetchPoints: async (_f, vendorSymbol, interval, from, to, limit) => ({
     points: await fetchMtfPoints(vendorSymbol, interval, from, to, limit),
@@ -111,6 +116,8 @@ export function outlierRankMtf(
     groupLabel: `AREV21 outlier rank ${percent} multi-timeframe · price pane`,
     description: `arev21's p entering the top or bottom ${100 - percent}% of its last 200 bars, from several timeframes at once, each drawn one bar of its own timeframe forward. Timeframes, colours and sizes are on the gear.`,
     feature: 'arev21_outlier',
+    // Computed per read from arev21's rows, so it learns of a new bar from arev21's wire.
+    liveEntry: OUTLIER_RANK,
     placement,
     graph,
     // The rank variant's server defaults are 200 bars at q 0.85, so only the 85 overlay draws

@@ -1,7 +1,7 @@
 import type { IndicatorGroup } from '../../src'
 import { apiUrl, getReadClock } from '../config'
 import { resolveSeries, type IndicatorPoint, type SeriesDoc } from '../indicators/api'
-import { fetchEnvelope, loadPluginCatalogue, toPage } from '../plugins/api'
+import { fetchEnvelope, loadPluginCatalogue, type PluginCatalogue, toPage } from '../plugins/api'
 import type {
   BindContext,
   BindingSpec,
@@ -116,6 +116,15 @@ export interface LiveWire {
   direct: boolean
 }
 
+/** Where `liveWire` reads the plugin catalogue and the registry from -- both cached for the
+ * page; a test passes its own. */
+export interface LiveLoaders {
+  catalogue: () => Promise<PluginCatalogue>
+  registry: () => Promise<RegistryIndicator[]>
+}
+
+export const LIVE_LOADERS: LiveLoaders = { catalogue: loadPluginCatalogue, registry: loadRegistry }
+
 /** How a stored entry learns of a new bar, or null when it cannot.
  *
  * `direct`: the entry's own wire pushes its points (arev21 through `arev`), and a pushed
@@ -127,7 +136,7 @@ export interface LiveWire {
 export async function liveWire(
   f: Pick<PluginFacilities, 'hasFeature'>,
   entry: RegistryIndicator,
-  load = { catalogue: loadPluginCatalogue, registry: loadRegistry }
+  load: LiveLoaders = LIVE_LOADERS
 ): Promise<LiveWire | null> {
   if (!f.hasFeature('plugins.live')) return null
   const catalogue = await load.catalogue()
@@ -149,6 +158,18 @@ export function storedSubscribe(
   entry: RegistryIndicator,
   ctx: BindContext,
   resolve: () => Promise<LiveWire | null> = () => liveWire(f, entry)
+) {
+  return subscribeLive(f, ctx, entry.name, resolve)
+}
+
+/** `storedSubscribe` for a source that is not one registry entry at the chart's interval --
+ * the MTF overlay's, which reads one at each of several SOURCE intervals: `ctx.interval` is
+ * the interval subscribed, and `name` only labels a failure. */
+export function subscribeLive(
+  f: PluginFacilities,
+  ctx: Pick<BindContext, 'vendor' | 'ticker' | 'interval'>,
+  name: string,
+  resolve: () => Promise<LiveWire | null>
 ) {
   return (store: SourceStore<RegistryPoint>, notify: SourceNotify): (() => void) => {
     const s = store as RegistryStore
@@ -183,7 +204,7 @@ export function storedSubscribe(
         f.stream.subscribePlugin(found.wire.plugin, variant, ctx.vendor, ctx.ticker, ctx.interval, listener)
         unsubscribe = () => f.stream.unsubscribePlugin(found.wire.plugin, variant, ctx.vendor, ctx.ticker, ctx.interval, listener)
       })
-      .catch((err) => console.warn(`[registry] no live points for ${entry.name}`, err))
+      .catch((err) => console.warn(`[registry] no live points for ${name}`, err))
     return () => {
       disposed = true
       unsubscribe?.()

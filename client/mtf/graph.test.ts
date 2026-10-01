@@ -328,7 +328,9 @@ describe('storeGraphSignals', () => {
     ])
   })
 
-  test('a signal whose bar has not closed is not knowable, and is left out', () => {
+  test('the newest signal, whose successor is still forming and so not in the grid, is knowable at its own close', () => {
+    // The grid is `/getbars`, closed bars only: at the live edge the bar after the newest vote
+    // is the forming one. The vote exists, so its bar closed -- at open + 4h.
     const store = new RegistryStore<ArevPoint>('k', (p) => p as ArevPoint)
     store.ingest([point(0, 'long'), point(4 * H, 'long')], { from: 0, to: 8 * H }, {
       [GRID_ARRAY]: [
@@ -336,7 +338,7 @@ describe('storeGraphSignals', () => {
         { date: 4 * H, open: 1.1, close: 1.2 }
       ]
     })
-    expect(storeGraphSignals('4h', store).map((s) => s.knownAt)).toEqual([4 * H])
+    expect(storeGraphSignals('4h', store).map((s) => s.knownAt)).toEqual([4 * H, 8 * H])
   })
 
   test('a signal whose candle body is not held is left out, and a price-less re-fetch keeps a known body', () => {

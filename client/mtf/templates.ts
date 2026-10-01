@@ -61,7 +61,8 @@ export interface ExtendData {
  * now, so a marker has to carry its own provenance. */
 interface Marked extends ShiftedSignal {
   interval: MtfInterval
-  /** Position in the enabled set: the drawing lane, so timeframes never overlap. */
+  /** Position in the enabled set: the order a bar's marks stack in, outward from the candle,
+   * so the shorter timeframe is always the nearer one. Not a fixed distance (`draw`). */
   lane: number
 }
 
@@ -101,10 +102,10 @@ export interface Value {
   edges?: GraphEdge[]
 }
 
-/** Clearance between the candle's own high/low and the first lane. */
+/** Clearance between the candle's own high/low and the nearest mark. */
 const LANE_INSET = 6
-/** Vertical room one timeframe's markers occupy. Sized from the widest arrow and text the
- * settings allow, so a lane cannot collide with the next however the sizes are turned up. */
+/** Space between one mark's room and the next one out on the same bar. A mark's room is
+ * sized from its own arrow and text, so two cannot collide however the sizes are turned up. */
 const LANE_GAP = 4
 
 function laneHeight(style: MtfTimeframeStyle): number {
@@ -456,27 +457,25 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
             (price) => yAxis.convertToPixel(price)
           )
         }
-        const intervals = enabledIntervals(config)
         const zoneAbove = overlay.placement === 'zone'
-        // Lane offsets accumulate the heights of the lanes BELOW each one, so a timeframe
-        // with big arrows and a label pushes the ones outside it out rather than being
-        // drawn over by them.
-        const offsets: number[] = []
-        let running = LANE_INSET
-        for (const interval of intervals) {
-          offsets.push(running)
-          const style = config.timeframes[interval]
-          if (style) running += laneHeight(style)
-        }
         for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
           const marks = indicator.result[i]?.marks
           if (!marks) continue
           const bar = data[i]
           const x = xAxis.convertToPixel(i)
+          // Stacked per bar and per side, shortest timeframe nearest the candle: each mark sits
+          // outside the ones this bar actually has. Not a fixed lane per enabled timeframe --
+          // that reserved room for every timeframe switched on, including the ones finer than
+          // the chart that never draw on it, so a lone 2h mark on a 1h chart hung 30-140 px
+          // under the low and fell off the bottom of the auto-sized axis (user, 2026-10-01).
+          // The price axis is sized from the candles alone (no figures -- see the header), so
+          // the nearer a mark sits the likelier it is on screen. `computeValues` files a bar's
+          // marks in lane order already, so walking them in order is the stacking order.
+          let belowOffset = LANE_INSET
+          let aboveOffset = LANE_INSET
           for (const mark of marks) {
             const style = config.timeframes[mark.interval]
             if (!style?.enabled) continue
-            const offset = offsets[mark.lane] ?? LANE_INSET
             const size = style.arrowSize
             const text = `${mark.interval} ${mark.p.toFixed(2)}`
             // `'zone'` placement puts a long above the high and a short below the low; the
@@ -485,19 +484,21 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
             const armLength = size * 1.4
             if (!above) {
               // Below the low: an up arrow's tip touches the lane, a down arrow's base does.
-              const nearY = yAxis.convertToPixel(bar.low) + offset
+              const nearY = yAxis.convertToPixel(bar.low) + belowOffset
               const tipY = mark.up ? nearY : nearY + armLength
               arrow(ctx, x, tipY, size, style.color, mark.up)
               if (style.textSize > 0) {
                 label(ctx, x, nearY + armLength + 2, text, style.color, style.textSize, false)
               }
+              belowOffset += laneHeight(style)
             } else {
-              const nearY = yAxis.convertToPixel(bar.high) - offset
+              const nearY = yAxis.convertToPixel(bar.high) - aboveOffset
               const tipY = mark.up ? nearY - armLength : nearY
               arrow(ctx, x, tipY, size, style.color, mark.up)
               if (style.textSize > 0) {
                 label(ctx, x, nearY - armLength - 2, text, style.color, style.textSize, true)
               }
+              aboveOffset += laneHeight(style)
             }
           }
         }
