@@ -337,7 +337,8 @@ function drawGraphs(
   x: (index: number) => number,
   y: (price: number) => number
 ): void {
-  const width = graphConfig(config).lineWidth
+  const graph = graphConfig(config)
+  const width = graph.lineWidth
   if (!(width > 0)) return
   ctx.save()
   ctx.lineJoin = 'round'
@@ -377,11 +378,18 @@ function drawGraphs(
       const cy = y(dot.price)
       ctx.beginPath()
       if (dot.entry) {
-        // A star where a path reaches 5m or below: the entry the graph exists to find. Twice
-        // the step dot's size and then some, so it reads apart from a dot at a glance.
-        star(ctx, cx, cy, 2 * width + 4)
-        ctx.fillStyle = color
+        // A star where a path reaches 5m or below: the entry the graph exists to find. Several
+        // times the step dot's size (user, 2026-10-01: "twice as big" as the first cut, which
+        // was 2 * width + 4), outlined so a dark 5m or 3m fill still reads on a dark chart.
+        star(ctx, cx, cy, 4 * width + 8)
+        ctx.fillStyle = graph.starTimeframeColour === false ? (graph.starColor ?? color) : color
         ctx.fill()
+        ctx.save()
+        // Mitred, so the points stay points; the lines above are drawn with round joins.
+        ctx.lineJoin = 'miter'
+        ctx.strokeStyle = graph.starOutline ?? MTF_DEFAULTS.graph.starOutline
+        ctx.stroke()
+        ctx.restore()
       } else if (dot.root) {
         // A ring, so where a graph starts reads apart from the steps it takes.
         ctx.arc(cx, cy, width + 3, 0, Math.PI * 2)
