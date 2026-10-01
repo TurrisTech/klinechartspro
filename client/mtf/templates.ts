@@ -3,7 +3,7 @@ import type { IndicatorGroup } from '../../src'
 import type { MtfInterval } from './api'
 import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, graphLineStyle, type MtfConfig, type MtfTimeframeStyle } from './config'
 import { publishDrawn, signalKey } from './drawn'
-import { buildRootGraphs, type GraphSide, type GraphSignal, storeGraphSignals } from './graph'
+import { buildRootGraphs, type GraphSide, type GraphSignal, isEntry, storeGraphSignals } from './graph'
 import type { MtfOverlay } from './overlays'
 import { chartBarAt, chartOpens, shiftSignals, toAbsolute, type ShiftedSignal } from './shift'
 import { resolutionDurationMs } from '../periods'
@@ -73,6 +73,8 @@ interface GraphDot {
   side: GraphSide
   /** Where some graph starts: drawn as a ring. */
   root: boolean
+  /** A step on 5m or shorter (graph.ts `isEntry`): drawn as a star. */
+  entry: boolean
 }
 
 /** One graph edge, filed on its CHILD's bar -- the later end. */
@@ -236,8 +238,11 @@ function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData,
       const price = node.signal.price
       value.dots = value.dots ?? []
       const same = value.dots.find((d) => d.interval === interval && d.price === price && d.side === graph.side)
-      if (same) same.root ||= node.parent < 0
-      else value.dots.push({ interval, price, side: graph.side, root: node.parent < 0 })
+      const entry = isEntry(node)
+      if (same) {
+        same.root ||= node.parent < 0
+        same.entry ||= entry
+      } else value.dots.push({ interval, price, side: graph.side, root: node.parent < 0, entry })
       if (node.parent < 0) return
       const parent = graph.nodes[node.parent].signal
       const fromIndex = parentIndex(parent.knownAt)
@@ -304,6 +309,18 @@ function label(
   ctx.restore()
 }
 
+/** A five-pointed star centred on (`cx`, `cy`), point up, as a path for the caller to fill. */
+function star(ctx: CanvasRenderingContext2D, cx: number, cy: number, outer: number): void {
+  const inner = outer * 0.45
+  for (let k = 0; k < 10; k++) {
+    const r = k % 2 === 0 ? outer : inner
+    const a = -Math.PI / 2 + (k * Math.PI) / 5
+    if (k === 0) ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a))
+    else ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a))
+  }
+  ctx.closePath()
+}
+
 /** The signal graphs: every edge whose span reaches the visible range, then every node in
  * it. Edges are filed on their later end, so one reaching in from the right has its child
  * off screen -- hence the walk runs to the end of the data, not to the visible range's.
@@ -359,7 +376,13 @@ function drawGraphs(
       const cx = x(i)
       const cy = y(dot.price)
       ctx.beginPath()
-      if (dot.root) {
+      if (dot.entry) {
+        // A star where a path reaches 5m or below: the entry the graph exists to find. Twice
+        // the step dot's size and then some, so it reads apart from a dot at a glance.
+        star(ctx, cx, cy, 2 * width + 4)
+        ctx.fillStyle = color
+        ctx.fill()
+      } else if (dot.root) {
         // A ring, so where a graph starts reads apart from the steps it takes.
         ctx.arc(cx, cy, width + 3, 0, Math.PI * 2)
         ctx.strokeStyle = color
