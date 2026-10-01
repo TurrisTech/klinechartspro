@@ -454,6 +454,42 @@ describe('graph settings in the stored config', () => {
     expect(fromStoredMtfConfig({ graph: { onlyGraph: 'yes' } })).toBeUndefined()
   })
 
+  test('the entry star: timeframe colour and a white outline by default, both settable', () => {
+    expect(MTF_DEFAULTS.graph.starTimeframeColour).toBe(true)
+    expect(MTF_DEFAULTS.graph.starOutline).toBe('#FFFFFF')
+    const config = structuredClone(MTF_DEFAULTS)
+    config.graph.starTimeframeColour = false
+    config.graph.starColor = '#ff0000'
+    config.graph.starOutline = '#000000'
+    const stored = toStoredMtfConfig(config)
+    expect(stored).toEqual({ graph: { starTimeframeColour: false, starColor: '#ff0000', starOutline: '#000000' } })
+    expect(fromStoredMtfConfig(JSON.parse(JSON.stringify(stored)))?.graph).toEqual(config.graph)
+  })
+
+  test('the colour input writes lower case, and white in lower case is still the default', () => {
+    const config = structuredClone(MTF_DEFAULTS)
+    config.graph.starOutline = '#ffffff'
+    expect(toStoredMtfConfig(config)).toBeUndefined()
+  })
+
+  test('a colour that is not #rrggbb falls back to the default rather than reaching the canvas', () => {
+    const back = fromStoredMtfConfig({
+      graph: { starColor: 'gold', starOutline: '#fff', starTimeframeColour: 'no' },
+      '1h': { enabled: false }
+    })
+    expect(back?.graph.starColor).toBe(MTF_DEFAULTS.graph.starColor)
+    expect(back?.graph.starOutline).toBe(MTF_DEFAULTS.graph.starOutline)
+    expect(back?.graph.starTimeframeColour).toBe(true)
+  })
+
+  test('a config from before the star settings stores and reads as the defaults', () => {
+    const config = structuredClone(MTF_DEFAULTS) as { graph: Partial<typeof MTF_DEFAULTS.graph> }
+    delete config.graph.starTimeframeColour
+    delete config.graph.starColor
+    delete config.graph.starOutline
+    expect(toStoredMtfConfig(config as typeof MTF_DEFAULTS)).toBeUndefined()
+  })
+
   test('the single root client-a2c8f6c saved reads as that one root on, and nothing else', () => {
     expect(graphRoots(fromStoredMtfConfig({ graph: { from: '8h' } }))).toEqual(['8h'])
     expect(graphRoots(fromStoredMtfConfig({ graph: { from: 'off' } }))).toEqual([])

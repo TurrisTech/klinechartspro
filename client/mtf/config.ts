@@ -52,6 +52,14 @@ export interface MtfGraphConfig {
   onlyGraph: boolean
   /** The graph's line width, in pixels. */
   lineWidth: number
+  /** Fill an entry's star (graph.ts `isEntry`) with its timeframe's colour, as every other
+   * graph node is. Off, it takes `starColor`. */
+  starTimeframeColour: boolean
+  /** An entry star's fill while `starTimeframeColour` is off. */
+  starColor: string
+  /** An entry star's outline (user, 2026-10-01: "outlined in white for visibility" -- a 5m or
+   * 3m fill is a dark indigo or purple, which a dark chart all but swallows). */
+  starOutline: string
 }
 
 export interface MtfConfig {
@@ -123,7 +131,12 @@ export const MTF_DEFAULTS: MtfConfig = {
     roots: { '1D': true, '8h': false, '4h': false, '2h': false, '1h': false },
     maxStep: 8,
     onlyGraph: false,
-    lineWidth: 1.5
+    lineWidth: 1.5,
+    starTimeframeColour: true,
+    // Gold, the colour a star is read in, for whoever turns the timeframe colour off. It sits
+    // near 4h's amber, but only 5m and 3m nodes are ever stars, and the shape says which it is.
+    starColor: '#FFD600',
+    starOutline: '#FFFFFF'
   }
 }
 
@@ -206,7 +219,16 @@ export const MTF_GRAPH_FIELDS: SettingsField[] = [
       ...GRAPH_ROOTS.map((root): SettingsField => ({ kind: 'switch', key: `graph.roots.${root}`, label: `Start from ${root}` })),
       { kind: 'number', key: 'graph.maxStep', label: 'Largest step (×)', min: 2, max: 480, step: 1 },
       { kind: 'switch', key: 'graph.onlyGraph', label: 'Hide signals outside the graph' },
-      { kind: 'number', key: 'graph.lineWidth', label: 'Line width', min: 0.5, max: 6, step: 0.5 }
+      { kind: 'number', key: 'graph.lineWidth', label: 'Line width', min: 0.5, max: 6, step: 0.5 },
+      // An entry is a step on 5m or below (graph.ts `isEntry`), drawn as a star.
+      { kind: 'switch', key: 'graph.starTimeframeColour', label: 'Entry star in timeframe colour' },
+      {
+        kind: 'color',
+        key: 'graph.starColor',
+        label: 'Entry star colour',
+        when: { key: 'graph.starTimeframeColour', is: [false] }
+      },
+      { kind: 'color', key: 'graph.starOutline', label: 'Entry star outline' }
     ]
   }
 ]
@@ -244,6 +266,9 @@ interface StoredGraphConfig {
   maxStep?: number
   onlyGraph?: boolean
   lineWidth?: number
+  starTimeframeColour?: boolean
+  starColor?: string
+  starOutline?: string
   from?: string
 }
 
@@ -256,6 +281,14 @@ function validStyleValue(key: (typeof STYLE_KEYS)[number], value: unknown): bool
 }
 
 const GRAPH_KEYS = ['maxStep', 'lineWidth'] as const
+/** The graph's colours. Checked as `#rrggbb`, the only form the panel's colour input writes:
+ * anything else would reach `fillStyle`, which ignores a value it cannot parse and silently
+ * keeps whatever colour the canvas last drew in. */
+const GRAPH_COLOUR_KEYS = ['starColor', 'starOutline'] as const
+
+function validColour(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+}
 
 function validGraphNumber(key: (typeof GRAPH_KEYS)[number], value: unknown): value is number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return false
@@ -289,6 +322,13 @@ export function toStoredMtfConfig(config: MtfConfig): StoredMtfConfig | undefine
     if (graph[key] !== MTF_DEFAULTS.graph[key]) graphDiff[key] = graph[key]
   }
   if ((graph.onlyGraph === true) !== MTF_DEFAULTS.graph.onlyGraph) graphDiff.onlyGraph = graph.onlyGraph === true
+  // A config from before the star settings has none of them, which is the defaults.
+  const ownColour = graph.starTimeframeColour ?? MTF_DEFAULTS.graph.starTimeframeColour
+  if (ownColour !== MTF_DEFAULTS.graph.starTimeframeColour) graphDiff.starTimeframeColour = ownColour
+  for (const key of GRAPH_COLOUR_KEYS) {
+    const value = graph[key] ?? MTF_DEFAULTS.graph[key]
+    if (value.toLowerCase() !== MTF_DEFAULTS.graph[key].toLowerCase()) graphDiff[key] = value
+  }
   if (Object.keys(graphDiff).length > 0) stored.graph = graphDiff
   return Object.keys(stored).length > 0 ? stored : undefined
 }
@@ -317,6 +357,16 @@ export function fromStoredMtfConfig(stored: unknown): MtfConfig | undefined {
     }
     if (typeof g.onlyGraph === 'boolean') {
       config.graph.onlyGraph = g.onlyGraph
+      touched = true
+    }
+    if (typeof g.starTimeframeColour === 'boolean') {
+      config.graph.starTimeframeColour = g.starTimeframeColour
+      touched = true
+    }
+    for (const key of GRAPH_COLOUR_KEYS) {
+      const value = g[key]
+      if (!validColour(value)) continue
+      config.graph[key] = value
       touched = true
     }
     const roots = g.roots
