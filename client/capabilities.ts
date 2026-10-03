@@ -6,6 +6,10 @@ import { apiGet } from './config'
 export type Feature =
   // `baseIntervals` on /capabilities: the stored intervals per vendor.
   | 'baseIntervals'
+  // `scopedIntervals` on /capabilities: interval codes offered only for the instruments that
+  // hold a series at them (5s). Absent, the server scopes nothing -- and a seconds code from
+  // such a server is offered nowhere (client/periods.ts `offeredIntervalCodes`).
+  | 'scopedIntervals'
   | 'getbars.columns'
   | 'getbars.batch'
   | 'getbars.limit'
@@ -122,6 +126,10 @@ export interface Capabilities {
    * server that does not advertise `baseIntervals`; read through `baseIntervalsFor`, which
    * falls back to the shape every vendor had before the field existed. */
   baseIntervals?: Record<string, string[]>
+  /** Interval code -> the `vendor:SYMBOL` instruments it is offered for. A code named here is
+   * offered ONLY for those (an empty list: for none); a code not named, for every instrument.
+   * Read through `offeredIntervalCodes`. */
+  scopedIntervals?: Record<string, string[]>
 }
 
 /** The stored (tiled) intervals for one vendor, from the server.

@@ -12,6 +12,15 @@ import { barsFromTiles } from './tiles'
 // own: ~22 days of lookback at 1m, decades at 1D. A fixed wall-clock cap cannot do both.
 const MAX_WIDENING_ATTEMPTS = 6
 
+// ...but no reach may stop short of a week. A gap that is a market closing is at most a
+// weekend -- 48h for FX -- and 64x a 500-bar window is only ~44h at 5s, so without this floor
+// a 5s chart reported "no more history" at the first weekend it met, in both directions.
+// At 1m and above the 64x reach is already past it and nothing changes.
+const MIN_WIDENING_REACH_MS = 7 * 86_400_000
+
+// The ceiling the floor cannot push past, whatever the window: a reach of 2^24 windows.
+const MAX_WIDENING_ATTEMPTS_HARD = 24
+
 /**
  * One window of bars: tiles for the closed part, the API for whatever is left.
  *
@@ -44,10 +53,8 @@ export async function fetchBars(
   // Market-closed labels are dropped HERE, at the one seam both halves of the window pass
   // through, and always BEFORE `limit`'s tail: trimming first would hand back fewer than
   // `limit` bars from an already-trimmed array.
-  const keep = (bars: KLineData[]): KLineData[] => {
-    const open = dropMarketClosedBars(bars, resolution, hours)
-    return limit === null ? open : open.slice(-limit)
-  }
+  const keep = (bars: KLineData[]): KLineData[] =>
+    dropMarketClosedBars(bars, resolution, hours, limit === null ? undefined : limit)
   if (tiled !== null && tiled.coveredTo > to) {
     // `limit` means "the last n bars", which the server would have applied for us.
     return keep(tiled.bars)
@@ -107,7 +114,8 @@ export async function fetchBarsWidened(
     const windowFrom = direction === 'older' ? toMs - widened : fromMs
     const windowTo = direction === 'newer' ? fromMs + widened : toMs
     const bars = await fetchBars(vendorSymbol, resolution, windowFrom, windowTo, limit)
-    if (bars.length > 0 || attempt >= MAX_WIDENING_ATTEMPTS) return bars
+    if (bars.length > 0 || attempt >= MAX_WIDENING_ATTEMPTS_HARD) return bars
+    if (attempt >= MAX_WIDENING_ATTEMPTS && widened >= MIN_WIDENING_REACH_MS) return bars
     widened *= 2
   }
 }

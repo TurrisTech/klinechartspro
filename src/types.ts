@@ -34,6 +34,11 @@ export interface SymbolInfo {
   // client ports wmarkettypes' `day_geometry`). Absent when the instrument has no schedule,
   // and then nothing that needs the grid -- the SESSIONS week-start line -- is drawn.
   dayGeometry?: DayGeometry
+  // The texts of the periods this instrument can be shown at, when that is narrower than the
+  // chart's own list -- a 5s series exists for some instruments and not others. Absent:
+  // every period the chart offers. The picker lists only these, and a pane moved onto an
+  // instrument that lacks its period falls back to the shortest offered one at least as long.
+  periods?: string[]
 }
 
 // wmarkettypes' `DayGeometry`: a session day as two hour offsets from the midnight that

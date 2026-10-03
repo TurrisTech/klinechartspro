@@ -84,6 +84,7 @@
   import { clone } from './utils/object'
   import { SyncBus } from './sync/bus'
   import { samePeriod, sameSymbol } from './sync/follow'
+  import { offeredPeriods, periodFor } from './utils/period'
   import SyncToggle from './SyncToggle.svelte'
 
   type ChartProps = Required<Omit<ChartProOptions, 'container'>>
@@ -483,20 +484,55 @@
     return 'grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr);'
   })
 
-  function toChartProPane(pane: (typeof wall.panes)[number]): ChartProPane {
+  type WallPane = (typeof wall.panes)[number]
+
+  // Every write of a pane's symbol or period goes through these two, so a pane is never left
+  // asking an instrument for a period it cannot be shown at (`SymbolInfo.periods`: 5s exists
+  // for some instruments only). A symbol that lacks the pane's period moves the pane to the
+  // shortest offered period at least as long; a period the symbol lacks is replaced the same
+  // way. Both writes land in one synchronous turn, so the pane loads once, on the final pair.
+  function assignSymbol(pane: WallPane, value: SymbolInfo) {
+    pane.symbol = value
+    onSymbolChange(pane.id, value)
+    const period = periodFor(pane.period, periods, value)
+    if (period !== pane.period) {
+      pane.period = period
+      onPeriodChange(pane.id, period)
+    }
+  }
+
+  function assignPeriod(pane: WallPane, value: Period) {
+    const period = periodFor(value, periods, pane.symbol)
+    pane.period = period
+    onPeriodChange(pane.id, period)
+  }
+
+  // The same rule as a standing invariant, for state that arrived some other way -- a pane
+  // seeded or restored before its instrument said which periods it has. Each pane's own
+  // symbol and period are tracked, and the write is a fixed point: periodFor of an offered
+  // period is that period.
+  $effect(() => {
+    for (const pane of wall.panes) {
+      const symbol = pane.symbol
+      const current = pane.period
+      if (!symbol || !current) continue
+      const period = periodFor(current, periods, symbol)
+      if (period === current) continue
+      untrack(() => {
+        pane.period = period
+        onPeriodChange(pane.id, period)
+      })
+    }
+  })
+
+  function toChartProPane(pane: WallPane): ChartProPane {
     return {
       id: pane.id,
       getChart: () => pane.api?.chart as Chart,
       getSymbol: () => pane.symbol,
-      setSymbol: (value: SymbolInfo) => {
-        pane.symbol = value
-        onSymbolChange(pane.id, value)
-      },
+      setSymbol: (value: SymbolInfo) => assignSymbol(pane, value),
       getPeriod: () => pane.period,
-      setPeriod: (value: Period) => {
-        pane.period = value
-        onPeriodChange(pane.id, value)
-      },
+      setPeriod: (value: Period) => assignPeriod(pane, value),
       getDatafeed: () => pane.datafeed,
       isActive: () => pane.id === wall.activeId
     }
@@ -519,24 +555,28 @@
   // the ACTIVE PANE's current period appended as a transient chip when it isn't starred -- so
   // the rail always shows what's playing on the active chart even if the user never starred it.
   const railPeriods = $derived.by(() => {
-    const list = periods.filter((item) => starred.has(item.text))
+    const list = offeredPeriods(periods, wall.active.symbol).filter((item) => starred.has(item.text))
     if (!starred.has(wall.active.period.text)) list.push(wall.active.period)
     return list
   })
 
-  // The dropdown's three sections. Days/weeks/months/years share one "Days & above" group --
+  // The dropdown's sections. Days/weeks/months/years share one "Days & above" group --
   // the 16-interval server contract KLineChart Pro clients are built against
   // (client/periods.ts) has too few long periods to need day/week/month split further.
+  // Seconds get their own, which is empty (and so hidden) wherever the server offers none.
   const timeframeGroups = $derived.by(() => {
+    const seconds: Period[] = []
     const minutes: Period[] = []
     const hours: Period[] = []
     const daysAndAbove: Period[] = []
-    for (const item of periods) {
-      if (item.timespan === 'minute') minutes.push(item)
+    for (const item of offeredPeriods(periods, wall.active.symbol)) {
+      if (item.timespan === 'second') seconds.push(item)
+      else if (item.timespan === 'minute') minutes.push(item)
       else if (item.timespan === 'hour') hours.push(item)
       else daysAndAbove.push(item)
     }
     return [
+      { key: 'seconds', labelKey: 'seconds', items: seconds },
       { key: 'minutes', labelKey: 'minutes', items: minutes },
       { key: 'hours', labelKey: 'hours', items: hours },
       { key: 'days', labelKey: 'days', items: daysAndAbove }
@@ -611,13 +651,11 @@
   export function setTimezone(value: string) { timezone = value }
   export function getTimezone() { return timezone }
   export function setSymbol(value: SymbolInfo) {
-    wall.active.symbol = value
-    onSymbolChange(wall.active.id, value)
+    assignSymbol(wall.active, value)
   }
   export function getSymbol() { return wall.active.symbol }
   export function setPeriod(value: Period) {
-    wall.active.period = value
-    onPeriodChange(wall.active.id, value)
+    assignPeriod(wall.active, value)
   }
   export function getPeriod() { return wall.active.period }
   export function getSlot(name: ChartProSlot) {
@@ -783,8 +821,7 @@
     untrack(() => {
       for (const pane of panes) {
         if (pane.id === wall.activeId || sameSymbol(pane.symbol, symbol)) continue
-        pane.symbol = symbol
-        onSymbolChange(pane.id, symbol)
+        assignSymbol(pane, symbol)
       }
     })
   })
@@ -797,8 +834,7 @@
     untrack(() => {
       for (const pane of panes) {
         if (pane.id === wall.activeId || samePeriod(pane.period, period)) continue
-        pane.period = period
-        onPeriodChange(pane.id, period)
+        assignPeriod(pane, period)
       }
     })
   })
@@ -854,10 +890,7 @@
             <ToggleGroup.Item
               class={`kc-toggle-item${starred.has(item.text) ? '' : ' is-transient'}`}
               value={item.text}
-              onclick={() => {
-                wall.active.period = item
-                onPeriodChange(wall.active.id, item)
-              }}
+              onclick={() => assignPeriod(wall.active, item)}
             >
               {item.text}
             </ToggleGroup.Item>
@@ -896,10 +929,7 @@
                     >
                       <StarIcon class={`kc-star-icon${starred.has(item.text) ? ' is-filled' : ''}`} />
                     </button>
-                    <Popover.Close class="kc-timeframe-item" onclick={() => {
-                      wall.active.period = item
-                      onPeriodChange(wall.active.id, item)
-                    }}>
+                    <Popover.Close class="kc-timeframe-item" onclick={() => assignPeriod(wall.active, item)}>
                       {item.text}
                     </Popover.Close>
                   </div>
@@ -1227,8 +1257,7 @@
               <Command.GroupItems>
                 {#each symbolResults as item (`${item.exchange ?? ''}:${item.ticker}`)}
                   <Command.Item class="kc-command-item" value={`${item.exchange ?? ''}:${item.ticker}`} onclick={() => {
-                    wall.active.symbol = item
-                    onSymbolChange(wall.active.id, item)
+                    assignSymbol(wall.active, item)
                     symbolDialogOpen = false
                   }}>
                     <Avatar.Root class="kc-avatar">

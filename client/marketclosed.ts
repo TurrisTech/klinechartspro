@@ -72,20 +72,32 @@ export function isLegalCandleOpen(
  * FAILS OPEN. An instrument with no schedule -- `/instrument` unreachable, an unknown symbol,
  * a schedule with no sessions -- is not filtered at all. Dropping bars on a guess about the
  * week is far worse than drawing a few the indicators cannot annotate, and it is the same
- * choice `tiles/derive.ts` makes when a manifest carries no geometry. */
+ * choice `tiles/derive.ts` makes when a manifest carries no geometry.
+ *
+ * `last`, when given, keeps only the newest `last` legal bars -- and finds them walking back
+ * from the end, so a widened window does not pay to test every row it will discard. At 5s a
+ * week of tile rows is ~70k bars and each test is a timezone conversion: ~220 ms on the main
+ * thread to keep 500 of them. */
 export function dropMarketClosedBars(
   bars: KLineData[],
   resolution: string,
-  hours: MarketHours | null | undefined
+  hours: MarketHours | null | undefined,
+  last?: number
 ): KLineData[] {
   const day = dayGeometryOf(hours)
-  if (day === null || !hours) return bars
+  if (day === null || !hours) return last === undefined ? bars : bars.slice(-last)
   const tz = hours.timezone
   const shift = scheduleWireShift(resolution, day)
   // Inlined rather than calling `isLegalCandleOpen` per bar so the wire shift -- which parses
   // the interval code -- is computed once for the window rather than once per row.
-  return bars.filter((bar) => {
+  const legal = (bar: KLineData): boolean => {
     const at = bar.timestamp - shift
     return scheduleIsMarketOpen(at, tz, day) && scheduleIntervalStart(resolution, at, tz, day) === at
-  })
+  }
+  if (last === undefined) return bars.filter(legal)
+  const kept: KLineData[] = []
+  for (let index = bars.length - 1; index >= 0 && kept.length < last; index--) {
+    if (legal(bars[index])) kept.push(bars[index])
+  }
+  return kept.reverse()
 }

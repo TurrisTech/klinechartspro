@@ -1,4 +1,5 @@
 import type { SymbolInfo } from '../src'
+import { offeredIntervalCodes } from './periods'
 import { apiGet } from './config'
 import { dayGeometryOf } from './daygeometry'
 import { instrumentConfig } from './instrumentconfig'
@@ -104,7 +105,11 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
     // daily-and-coarser session dates are read on it -- the FX +7h/-New-York rules do
     // not apply to a market whose days run midnight to midnight.
     timezone: config?.marketHours?.timezone,
-    dayGeometry: dayGeometryOf(config?.marketHours) ?? undefined
+    dayGeometry: dayGeometryOf(config?.marketHours) ?? undefined,
+    // The periods this instrument can be charted at. Capabilities are loaded before any
+    // symbol is resolved (index.ts boot), and an instrument the server does not name for a
+    // scoped code -- 5s anywhere but the fed FX pairs -- is simply not offered it.
+    periods: offeredIntervalCodes(vendor, symbol)
   }
 }
 
