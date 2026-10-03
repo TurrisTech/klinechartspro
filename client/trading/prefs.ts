@@ -41,6 +41,10 @@ export interface TradePrefs {
   /** The on-chart order card rolled up on every pane; null until chosen, when a phone-sized pane
    * starts rolled up and a larger one open. */
   cardCollapsed: boolean | null
+  /** Place, close and cancel on the first press. Off (the default), each of them takes a second,
+   * confirming press within three seconds -- in the trade box, on the pane and in the popup alike.
+   * A change to a working stop, target or price is confirmed either way (user, 2026-09-15). */
+  oneClick: boolean
 }
 
 export const DEFAULT_PREFS: TradePrefs = {
@@ -53,7 +57,8 @@ export const DEFAULT_PREFS: TradePrefs = {
   riskPercent: 1,
   protectMode: 'pips',
   rewardRatio: 2,
-  cardCollapsed: null
+  cardCollapsed: null,
+  oneClick: false
 }
 
 const STORAGE_KEY = 'wd-trade-prefs'
@@ -83,7 +88,8 @@ export function parsePrefs(raw: unknown): TradePrefs {
         ? p.protectMode
         : DEFAULT_PREFS.protectMode,
     rewardRatio: positive(p.rewardRatio, 100) ? p.rewardRatio : DEFAULT_PREFS.rewardRatio,
-    cardCollapsed: typeof p.cardCollapsed === 'boolean' ? p.cardCollapsed : null
+    cardCollapsed: typeof p.cardCollapsed === 'boolean' ? p.cardCollapsed : null,
+    oneClick: p.oneClick === true
   }
 }
 

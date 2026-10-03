@@ -11,8 +11,8 @@ import {
   moveText
 } from './format'
 import type { InstrumentInfo } from './instrument'
-import { type Outcome, orderFigures, outcome, type PricingContext, pricingContext, tradeFigures } from './metrics'
-import { amountText } from './ordercard'
+import { amountText, type LevelBasis, levelReadout } from './levels'
+import { orderFigures, outcome, type PricingContext, pricingContext, sizeFigures, tradeFigures } from './metrics'
 
 // What the position popup (inspector.ts) says about one trade or order. PURE: the rows are
 // worked out from a snapshot here and only drawn there, so the figures are tested on their own
@@ -24,7 +24,7 @@ import { amountText } from './ordercard'
 // currency, with the account-currency figure beside them only where it converts exactly -- the
 // same rule as the order card.
 
-export type StatTone = 'up' | 'down' | ''
+export type StatTone = 'up' | 'down' | 'warn' | ''
 
 export interface StatRow {
   label: string
@@ -61,22 +61,31 @@ function ticker(key: string): string {
   return key.includes(':') ? key.split(':', 2)[1] : key
 }
 
-function level(price: number | null, o: Outcome | null, ctx: PricingContext): string {
+/** A stop or target as every surface states it: the price, then what the readout beside a level
+ * field says about it (levels.ts). */
+function level(price: number | null, basis: LevelBasis): string {
   if (price === null) return 'none'
-  const bits = [formatPrice(price, ctx.info.precision)]
-  if (o) {
-    bits.push(moveText(o), amountText(o.amount, o.amountAccount, ctx))
-    if (o.ofBalance !== null) bits.push(formatPercent(o.ofBalance))
-  }
-  return bits.join(' · ')
+  return [formatPrice(price, basis.ctx.info.precision), ...levelReadout(price, 'price', basis).map((p) => p.text)].join(' · ')
 }
 
-function sizeRows(units: number, figures: ReturnType<typeof tradeFigures> | ReturnType<typeof orderFigures>, ctx: PricingContext): StatRow[] {
+/** What a size amounts to -- units and lots, value, margin, pip value -- as the same rows on every
+ * surface: the trade box's summary, the order card's details and this popup. Margin above the
+ * equity is flagged: the paper engine does not enforce margin, a live account would refuse it. */
+export function sizeRows(units: number, ctx: PricingContext): StatRow[] {
+  const figures = sizeFigures(units, ctx)
   const rows: StatRow[] = [{ label: 'Size', value: `${formatUnits(units)} units${figures.lots !== null ? ` · ${formatLots(figures.lots)}` : ''}` }]
   if (figures.notionalAccount !== null) rows.push({ label: 'Value', value: formatMoney(figures.notionalAccount, ctx.account.currency, false) })
-  if (figures.margin !== null) rows.push({ label: 'Margin', value: formatMoney(figures.margin, ctx.account.currency, false) })
+  if (figures.margin !== null) {
+    const over = figures.margin > ctx.account.equity
+    rows.push({ label: 'Margin', value: `${formatMoney(figures.margin, ctx.account.currency, false)}${over ? ' · above equity' : ''}`, tone: over ? 'warn' : '' })
+  }
   if (figures.pipValue !== null) rows.push({ label: 'Pip value', value: amountText(figures.pipValue, figures.pipValueAccount, ctx, false) })
   return rows
+}
+
+/** The note the order was placed with, when it has one. */
+function noteRows(label: string | null): StatRow[] {
+  return label ? [{ label: 'Note', value: label }] : []
 }
 
 export function positionStats(item: Inspected, snapshot: SimSnapshot, info: InstrumentInfo): PositionStats {
@@ -87,15 +96,17 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
   if (item.kind === 'order') {
     const { order } = item
     const f = orderFigures(order, ctx)
+    const orderBasis: LevelBasis = { side: order.side, entry: order.price, units: order.units, ctx }
     const rows: StatRow[] = [
       { label: 'Price', value: formatPrice(order.price, info.precision) },
       { label: 'Market', value: `${formatPrice(f.fill, info.precision)}${f.distance ? ` · ${moveText(f.distance, false)} away` : ''}` },
-      { label: 'Stop loss', value: level(order.stopLoss, f.stop, ctx), tone: tone(f.stop?.amount) },
-      { label: 'Take profit', value: level(order.takeProfit, f.target, ctx), tone: tone(f.target?.amount) }
+      { label: 'Stop loss', value: level(order.stopLoss, orderBasis), tone: tone(f.stop?.amount) },
+      { label: 'Take profit', value: level(order.takeProfit, orderBasis), tone: tone(f.target?.amount) }
     ]
     if (f.rewardToRisk !== null) rows.push({ label: 'R:R', value: f.rewardToRisk.toFixed(2) })
-    rows.push(...sizeRows(order.units, f, ctx))
+    rows.push(...sizeRows(order.units, ctx))
     rows.push({ label: 'Placed', value: `${formatInstant(order.createdAt)}${now !== null ? ` · ${formatDuration(now - order.createdAt)} ago` : ''}` })
+    rows.push(...noteRows(order.label))
     return {
       kind: 'order',
       title: `${order.side === 'buy' ? 'Buy' : 'Sell'} ${order.type} ${formatUnitsShort(order.units)} ${ticker(key)}`,
@@ -118,7 +129,8 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
       { label: 'Size', value: `${formatUnits(trade.units)} units` },
       { label: 'Opened', value: formatInstant(trade.openedAt) },
       { label: 'Closed', value: formatInstant(trade.closedAt) },
-      { label: 'Held', value: formatDuration(trade.closedAt - trade.openedAt) }
+      { label: 'Held', value: formatDuration(trade.closedAt - trade.openedAt) },
+      ...noteRows(trade.label)
     ]
     return {
       kind: 'closed',
@@ -130,6 +142,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
   }
 
   const f = tradeFigures(trade, ctx)
+  const tradeBasis: LevelBasis = { side: trade.side, entry: trade.entryPrice, units: trade.units, ctx }
   const rows: StatRow[] = [
     { label: 'Entry', value: formatPrice(trade.entryPrice, info.precision) },
     { label: 'Mark', value: `${formatPrice(f.mark, info.precision)} (${trade.side === 'buy' ? 'bid' : 'ask'})` },
@@ -143,12 +156,13 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     rows.push({ label: 'Now', value: `${(f.pnl.amount / -f.stop.amount).toFixed(2)}R`, tone: tone(f.pnl.amount) })
   }
   rows.push(
-    { label: 'Stop loss', value: level(trade.stopLoss, f.stop, ctx), tone: tone(f.stop?.amount) },
-    { label: 'Take profit', value: level(trade.takeProfit, f.target, ctx), tone: tone(f.target?.amount) }
+    { label: 'Stop loss', value: level(trade.stopLoss, tradeBasis), tone: tone(f.stop?.amount) },
+    { label: 'Take profit', value: level(trade.takeProfit, tradeBasis), tone: tone(f.target?.amount) }
   )
   if (f.rewardToRisk !== null) rows.push({ label: 'R:R', value: f.rewardToRisk.toFixed(2) })
-  rows.push(...sizeRows(trade.units, f, ctx))
+  rows.push(...sizeRows(trade.units, ctx))
   rows.push({ label: 'Opened', value: `${formatInstant(trade.openedAt)}${now !== null ? ` · ${formatDuration(now - trade.openedAt)}` : ''}` })
+  rows.push(...noteRows(trade.label))
   return {
     kind: 'trade',
     title,

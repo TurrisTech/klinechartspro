@@ -34,21 +34,28 @@ mode only for its title.
 - `session.ts` — the `TradingSession` interface and `PaperTradingSession` (load, poll, act).
 - `panel.ts` — the account window's contents: account strip (balance / equity / unrealized /
   open + New order + flatten-all) and the positions / orders / history tabs. A click on a row
-  selects that position on every pane and opens its popup. Plain DOM,
-  `kc-*`/`wd-trade-*`. It owns no chrome — the title bar, close and drag are the window's —
+  selects that position on every pane and opens its popup. Plain DOM, `wd-trade-*` with the
+  kit's buttons and confirm bar. It owns no chrome — the title bar, close and drag are the window's —
   but it does own its shape: below 620px (a window floated small) the three grid areas stop
   sharing rows and stack into one column (`is-narrow`, from its OWN width, not the page's).
 - `overlays.ts` — `TradingOverlays`, everything the session puts on the candle panes (below).
 - `lines.ts` — the two registered klinecharts templates (`wdTradeLine`, `wdTradeBracket`) and the
   pure "which lines does this snapshot draw" (`linesFor`, `workingFor`).
 - `onchart.ts` — the HTML layer per pane: a label on every line, dragging, and the actions.
-- `ordercard.ts` — the collapsible order card in that layer.
-- `ticket.ts` — the order ticket (below), built once and updated in place. It lives in the
-  **trade box**, a window of its own.
+- `ordercard.ts` — the collapsible order card in that layer, built from the kit.
+- `ticket.ts` — the order ticket (below), built from the kit, once, and updated in place. It lives
+  in the **trade box**, a window of its own.
+- `kit.ts` — **the trading kit**: the controls every surface is built from (below) — `LevelField`
+  (a stop, target or price: label, presets, `[− | 20.0 | pips ▾ | +]`, readout), `NumberField`,
+  `FigureList`, `ConfirmBar`, `TradeActions`, `Arming` (two presses) and `armKey`.
+- `levels.ts` — PURE (tested): how a level is stated in pips / price / % of balance and read back,
+  stepped, and read out; the resting-price rules and default; fractional close; the reverse order.
+- `manage.ts` — what each `TradeActions` button may do now, partial close and the two-step reverse,
+  shared by the card and the popup.
 - `inspector.ts` + `stats.ts` — the **position popup** (below): the window, and the PURE rows it
   shows (tested).
 - `prefs.ts` — the choices kept per browser (ticket size/stop modes, risk %, R, whether the order
-  card is rolled up), and the channel that keeps every pane, the ticket and other tabs in step.
+  card is rolled up, one-click trading), and the channel that keeps every pane, the ticket and other tabs in step.
 - `metrics.ts` — PURE forex figures, risk sizing, the engine's refusal rules, label placement.
 - `amend.ts` — PURE: a waiting stop/target/price change in words, and why the engine would refuse
   it; shared by the chart and the tables.
@@ -68,6 +75,42 @@ mode only for its title.
   rail's footer (`client/index.ts` `mountChartExtras`) calls `toggle`, "Trade" below it
   `toggleTicket`; "Replay" is `client/replay`, whose controls carry their own Account and Trade
   toggles.
+
+## One kit, four surfaces (2026-10-03)
+
+The trade box, the order card, the position popup and the account window used to be four
+hand-built UIs that disagreed (user, 2026-10-03: "inconsistent between the trade dialog and the
+in-pane working orders box ... redesign for consistency and ease of use ... full featured"). The
+ticket called it "Stop loss" in a tall field in pips, the card "Stop" with a bare price and `none`;
+the ticket had 1R/2R/3R and no Risk %, the card Risk % and one NR; the ticket placed in one press
+and the card in two, the card cancelled in one, the account window closed and flattened in one.
+They are now built from ONE kit (`kit.ts`, styles `wd-tk-*` under a `.wd-tk` root), so:
+
+- **A level is one control wherever it is edited**: `Stop loss` / `Take profit` / `Price`, the
+  number with −/+ (and ↑/↓, Shift for ten) and its unit — pips, price or % of balance, ONE shared
+  preference, so switching it in either place switches both — then a readout of everything the
+  field does not state: price, distance, amount, share of the balance (`levels.ts`; the popup's
+  stop/target line is the same readout). Presets are the same in both: **Risk N%** on the stop,
+  **1R 2R 3R** on the target (lit when the target is at that multiple), × to remove.
+  - In the trade box a field writes the ticket (the draft) as you type.
+  - On the card a field PROPOSES the change on Enter, on leaving it, on a step or a preset — the
+    same waiting change a drag makes, confirmed in the bar at the top of the card (and on the
+    label, and in the popup and the account window when they show that position). Escape withdraws
+    it. A pending order's price is a field too.
+- **Figures are the same rows** (`stats.ts` `sizeRows`): Size · Value · Margin (flagged above the
+  equity) · Pip value, then R:R, Opened/Placed and the order's Note.
+- **An open trade's actions are one row** (`TradeActions`, `manage.ts`) on the card and in the
+  popup: **Breakeven** (proposed) · **Reverse** · **Close ¼ ½ ¾ All**. Reverse sends the opposite
+  market order FIRST, with the stop and target carried across at the same distances (each dropped
+  if the engine would refuse it there), and only then closes the trade — a refused order leaves the
+  trade as it was. Manage and close sit on lines of their own so a button relabelled "Confirm"
+  never wraps the row out from under the pointer (it did, in the popup, and moved the window).
+- **One confirmation rule**: placing, closing (any part), reversing and cancelling take a second
+  press within three seconds — on the trade box, the card, the labels, the popup and the account
+  tables — unless **one-click trading** (a checkbox under the trade box's button, `prefs.oneClick`)
+  is on. Flatten, Flatten all and Cancel orders always take two. Changes to a working stop, target
+  or price are always confirmed, one-click or not (user, 2026-09-15). The armed state is one key
+  space (`armKey`), so a label's × and the card's All arm the same thing.
 
 ## The trade box (2026-09-19)
 
@@ -117,35 +160,39 @@ window is open** — an order placed from the ticket appears on the chart at onc
   so none overlap, with a leader back to the line; a line off the pane pins its label to that
   edge (▲/▼). Hover or selection shows `SL`/`TP` buttons where one is missing.
 - **The order card**, lower left: one row per trade and order, the selected (or only) one
-  expanded with stop and target (price, pips, amount, % of balance, R:R), size in units and lots,
-  pip value, margin and time; actions Breakeven, Close ½, Close, Cancel order, add/remove
-  stop/target, and Flatten for the instrument. **Risk N%** puts the stop where it loses that share
-  of the balance at the position's size, and **NR** puts the target at N times the stop's distance
-  -- N being the ticket's risk % and last-used R. Rolled up, the header still shows the counts and
+  expanded with the kit's level fields (a pending order's price, then stop and target), the figure
+  rows, and its actions — the trade row of `TradeActions`, or Cancel order — with Cancel orders and
+  Flatten for the instrument in the footer. **Risk N%** puts the stop where it loses that share of
+  the balance at the position's size, and **1R/2R/3R** put the target at that multiple of the stop's
+  distance (the last one used is remembered). Rolled up, the header still shows the counts and
   the open P&L. **Rolled up on one pane is rolled up on every pane**, and in other tabs (`prefs.ts`,
   via the `storage` event); until chosen, a phone-sized pane starts rolled up.
 
-**The draft — the order being written, on the chart.** While the account window is open, the
-ticket's order is drawn on its instrument's panes and listed first on the card, and it is edited
-from either place: dragging its entry, stop or target writes the new price into the ticket's
-fields as it moves (stated however the ticket states them — pips follow their entry, a risk-sized
-order re-sizes), dragging a market draft's entry makes it a limit or a stop by which side of the
-market it is dropped on, the card's `+ Add` / `Risk N%` / `NR` apply to it, and **Place** (two
-presses) sends it. The ticket stays the one place the order lives (`OrderTicket implements
+**The draft — the order being written, on the chart.** While the trade box is open, the
+ticket's order is drawn on its instrument's panes and, once it has a level of its own, listed first
+on the card as a summary (its stop and target read out, size, margin, the reason it cannot be sent)
+with **Place** (two presses, or one with one-click) and Discard. The trade box is its editor — the
+card no longer carries a second one beside it (2026-10-03). Dragging its entry, stop or target
+writes the new price into the ticket's fields as it moves (stated however the ticket states them —
+pips follow their entry, a risk-sized order re-sizes), dragging a market draft's entry makes it a
+limit or a stop by which side of the market it is dropped on, and its labels' `SL`/`TP` add one. The ticket stays the one place the order lives (`OrderTicket implements
 DraftController`, `lines.ts`), so the chart and the fields cannot disagree.
 
 Because it sits among orders that are real, it is kept unmistakably apart:
 
 - it is drawn only **once it has a level of its own** (a limit/stop price, a stop or a target) —
   a bare market draft would be a line on top of the price, beside every open entry, so until
-  then it is a row on the card and nothing on the chart;
+  then it is only the trade box's button, on the chart and on the card alike. Switching the ticket
+  to Limit or Stop gives it one at once: a valid price ten pips clear of the market
+  (`defaultRestingPrice`; it used to be drawn at the market, "0.0p away");
 - **outlined** labels that say "Draft", in **their own column** left of
   the working orders' labels (a draft stop next to a real stop reads side by side, never
   interleaved);
 - while it is being composed, **what is already working recedes**: dimmed lines, labels dimmed
   until hovered, no selected band, card rows faded and shut;
-- **×** on its entry label (or Discard on the card) clears it, and the pane is as it was; closing
-  the account window hides it; a placed order returns the ticket to a clean market order;
+- **×** on its entry label (or Discard on the card, or Reset in the trade box) clears it, and the
+  pane is as it was; closing the trade box hides it; a placed order returns the ticket to a clean
+  market order;
 - Escape mid-drag puts the level back where the drag began.
 
 **Dragging** a stop, a target or a pending order's price — by the label or by the line — shows
@@ -154,8 +201,8 @@ label border, the reason as its title). Canvas rebuilds are held for the gesture
 landing mid-drag cannot pull the line out from under the pointer.
 
 **Every interactive change to a working stop, target or pending price is confirmed before it is
-sent** (user, 2026-09-15). Dropping a drag, or pressing `+ Add`, `Risk N%`, `NR`, Breakeven or ×
-on a stop/target, only PROPOSES the change (`Amendment`, held by `TradingOverlays` so every pane
+sent** (user, 2026-09-15). Dropping a drag, committing or stepping a card field, or pressing a
+label's `SL`/`TP`, `Risk N%`, `1R/2R/3R`, Breakeven or × on a stop/target, only PROPOSES the change (`Amendment`, held by `TradingOverlays` so every pane
 shows the same one): the chart draws it as if confirmed (`applyAmendment`), that line's label pulses
 and turns into **Confirm / ×** (a removal reads "remove?"), and the card opens with the same
 question in words — "Move the long 10K's stop loss 1.15228 → 1.15300? If hit: −7.8p · −7.80 USD".
@@ -178,8 +225,8 @@ when the focus leaves — so a two-second poll no longer takes an edit away mid-
 and adds the account-currency figure only where one exact conversion exists (the account is the
 quote, or the base at the mid) — a cross gets none rather than an invented rate.
 
-**Close and flatten take two presses** (the button relabels for three seconds, and stays where the
-first press found it). Selecting is a click on a row, a label or a line; a newly placed order or a
+**Close, cancel, reverse and flatten take two presses** (the button relabels for three seconds,
+and stays where the first press found it) — the rule in "One kit, four surfaces" above. Selecting is a click on a row, a label or a line; a newly placed order or a
 fresh fill is selected automatically, and a fill, a stop or target hit and a close are announced
 in the card's header for a few seconds.
 
@@ -187,7 +234,9 @@ in the card's header for a few seconds.
 `touchstart`, `pointerdown`, `click`, `wheel` and `contextmenu` from reaching the chart (a pan, a
 wall seek, the watch menu) but lets `mouseup` and a button-down `mousemove` through (a pan ending
 over the card). And `src/app.css`'s `.klinecharts-pro * { border-color }` loads after
-`client/style.css` at equal specificity: a rule here that colours a border is scoped `.wd-oc …`.
+`client/style.css` at equal specificity: a rule here that colours a border is scoped `.wd-oc …` or
+`.wd-tk …`. The card's fields stop their keystrokes (but Escape) at the field, since klinecharts
+handles keys on the same container.
 
 ## Gating
 
@@ -196,22 +245,32 @@ The whole feature is gated on the server's `sim` capability: `mountPaperTrading`
 
 ## The order ticket
 
-- **Size by** one of six (a picker, `prefs.ts` `SizeMode`): **Units**; **Lots** (100K units,
-  forex only); **Risk % of balance** or **Risk amount** (account currency) — the units that lose
-  that much if the stop is hit (`unitsForRisk` / `unitsForRiskAmount`), floored to the
-  instrument's unit precision so the loss never exceeds it; **Position value** in the account
-  currency (`unitsForNotional`, at the mid); **Margin % of balance** (`unitsForMarginPercent`,
-  needs `/instrument`'s `marginRate`). Everything ends as units. Switching carries the order's
-  current size across (1% risk at a 20-pip stop becomes that many lots, that value, that margin),
-  and each mode's number is remembered.
-- **SL / TP as** Pips, Price, or **% bal** — the balance lost at the stop or made at the target at
-  the planned size (`levelForBalancePercent`, rounded toward the entry). % bal is disabled while
-  sizing by risk (% or amount), which already fixes the loss. Switching how a level is stated converts what was
-  typed.
-- **Target at 1R / 2R / 3R** once there is a stop.
-- A **summary** of the order as it would be sent: units, lots, value, margin (flagged when it is more
-  than the equity — the paper engine does not enforce margin, a live account would), risk and
-  reward with their share of the balance, R:R — or the reason it cannot be sent yet.
+Top to bottom (2026-10-03): the instrument and what is already open on it (`Long 10K · −1.90 USD ·
+1 order`); **SELL at the bid / BUY at the ask** with the spread between — a press picks the side,
+sends nothing; Market / Limit / Stop; the price (limit/stop: pre-filled valid, with its distance from
+where it would fill and the engine's refusal under it); size; stop loss; take profit; the figure
+rows; a **note** sent with the order (`label`, shown on the card, in the popup and as the table
+row's tooltip); the button (`Buy 10K EURUSD at market`, `… limit @ 1.12433`; Enter in any field
+presses it); one-click trading and Reset. A problem is shown under the field it belongs to, and
+Enter with one takes the focus there.
+
+- **Size** — the number with its way of sizing as the unit (`prefs.ts` `SizeMode`): **units**;
+  **lots** (100K units, forex only); **% risk** or **USD risk** (account currency) — the units that
+  lose that much if the stop is hit (`unitsForRisk` / `unitsForRiskAmount`), floored to the
+  instrument's unit precision so the loss never exceeds it; **USD value** (`unitsForNotional`, at
+  the mid); **% margin** (`unitsForMarginPercent`, needs `/instrument`'s `marginRate`). Everything
+  ends as units. Switching carries the order's current size across (1% risk at a 20-pip stop becomes
+  that many lots, that value, that margin), and each mode's number is remembered. −/+ step on a grid
+  (1,000 units, 0.01 lots, 0.25%, …).
+- **Stop loss / take profit** in **pips**, **price** or **% bal** — the balance lost at the stop or
+  made at the target at the planned size (`levelForBalancePercent`, rounded toward the entry). % bal
+  is refused while sizing by risk (% or amount), which already fixes the loss. Switching how a level
+  is stated converts what was typed. An empty field's + starts ten pips out.
+- **Risk N%** puts the stop where the planned size loses N% of the balance; **1R / 2R / 3R** put the
+  target at that multiple of the stop's distance.
+- **Figures** of the order as it would be sent: size and lots, value, margin (flagged above the
+  equity — the paper engine does not enforce margin, a live account would), pip value, R:R. Risk and
+  reward with their share of the balance are each level's readout.
 
 Everything percent-of-balance needs a conversion to the account currency: 1:1 when the account is
 the quote, the mid when it is the base, or a pair the session holds a quote for (GBPUSD for EURGBP).

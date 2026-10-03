@@ -17,6 +17,12 @@ describe('parsePrefs', () => {
     expect(parsePrefs({ cardCollapsed: false }).cardCollapsed).toBe(false)
   })
 
+  test('one-click is off unless it was turned on, and nothing but true turns it on', () => {
+    expect(parsePrefs(null).oneClick).toBe(false)
+    expect(parsePrefs({ oneClick: true }).oneClick).toBe(true)
+    expect(parsePrefs({ oneClick: 'yes' }).oneClick).toBe(false)
+  })
+
   test('every size mode survives, an unknown one does not, and each amount falls back alone', () => {
     for (const mode of SIZE_MODES) expect(parsePrefs({ sizeMode: mode }).sizeMode).toBe(mode)
     expect(parsePrefs({ sizeMode: 'percent' }).sizeMode).toBe('units')
