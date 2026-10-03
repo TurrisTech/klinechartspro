@@ -1,17 +1,35 @@
 import type { SymbolInfo } from '../../src'
 import { OhlcvApiError } from '../config'
 import type { SimOrderType, SimSide } from './api'
-import { formatLots, formatMoney, formatPercent, formatPrice, formatUnits, sideLabel, symbolKey, toPips } from './format'
+import { formatMoney, formatPrice, formatUnits, formatUnitsShort, symbolKey, toPips } from './format'
 import type { InstrumentInfo } from './instrument'
-import type { DraftController, DraftOrder } from './lines'
+import { Arming, allow, armKey, FigureList, h, kbtn, LevelField, NumberField } from './kit'
+import {
+  defaultRestingPrice,
+  type LevelBasis,
+  type LevelRole,
+  levelModeRefusal,
+  levelReadout,
+  levelRefusal,
+  levelText,
+  parseLevel,
+  priceStep,
+  type ReadoutPart,
+  restingDistance,
+  restingRefusal,
+  stepLevelText,
+  usableMode
+} from './levels'
+import { type DraftController, type DraftOrder, workingFor } from './lines'
 import {
   fillingPrice,
   levelForBalancePercent,
   outcome,
   type PricingContext,
+  positionSummary,
   pricingContext,
-  protectionValid,
   quoteToAccountRate,
+  rewardToRisk,
   roundTo,
   sizeFigures,
   targetForReward,
@@ -31,32 +49,39 @@ import {
   tradePrefs
 } from './prefs'
 import type { TradingSession } from './session'
+import { sizeRows, type StatRow } from './stats'
 
-// The order ticket. Side, type, size, price, stop and target -- and what they add up to before
-// anything is sent.
+// The order ticket: the TRADE BOX's contents. Side, type, size, price, stop and target -- and what
+// they add up to before anything is sent.
 //
-// SIZE is given one of six ways (`SizeMode`): units; standard lots (forex); RISK % or a RISK
-// AMOUNT -- the units that lose that share of the balance, or that much money, if the stop is
-// hit, floored so the loss never exceeds it; the position's VALUE in the account currency; or the
-// MARGIN it ties up as a share of the balance. Every way ends as units, which is what is sent, and
-// switching carries the size across rather than reinterpreting the number. A stop and a target are
-// stated in PIPS (forex), as a PRICE, or as a PERCENT of the balance lost or made -- the last needs
-// a size, so it is not offered while the size itself comes from the stop. 1R/2R/3R put the target at that multiple of
-// the stop's distance. Switching how a level is stated converts what was typed rather than
-// reinterpreting the digits.
+// It is built from the same kit (kit.ts) as the order card on the pane, so a stop loss here is the
+// same field, with the same unit, steps, presets and readout, as the stop loss of a working order
+// there (user, 2026-10-03). Top to bottom:
 //
-// The summary line under the fields is the order as it would be sent: units and lots, margin,
-// the loss at the stop and the gain at the target (with their share of the balance), and R:R --
-// or the reason it cannot be sent yet.
+// - the instrument, and what is already open on it;
+// - SELL at the bid / BUY at the ask, with the spread between: picks the side, sends nothing;
+// - Market / Limit / Stop. A limit or stop starts at a valid price ten pips clear of the market
+//   (`defaultRestingPrice`), so it is drawn on the chart at once, where it can be dragged;
+// - the PRICE (limit/stop), how far it is from where it would fill, and why the engine would
+//   refuse it;
+// - the SIZE, given one of six ways (`SizeMode`, the unit after the number): units; standard lots
+//   (forex); RISK % or a RISK AMOUNT -- the units that lose that share of the balance, or that
+//   much money, if the stop is hit, floored so the loss never exceeds it; the position's VALUE in
+//   the account currency; or the MARGIN it ties up as a share of the balance. Every way ends as
+//   units, and switching carries the size across rather than reinterpreting the number;
+// - STOP LOSS and TAKE PROFIT in pips, price or % of balance (levels.ts), with Risk N% and
+//   1R/2R/3R presets; % of balance is not offered while the size itself comes from the stop;
+// - the figures of the order as it would be sent (the same rows the card and popup show), a note
+//   sent with it, the reason it cannot be sent yet, and the button.
 //
-// It lives in the TRADE BOX (dock.ts): a floating, non-modal window of its own, one per wall, that
-// follows the active pane's instrument -- apart from the account window, so an order can be written
-// with the chart in full view and the account closed.
+// PLACING takes two presses -- the button turns into "Confirm" for three seconds -- unless
+// one-click trading is on; the same rule as Place, Close and Cancel on the pane and in the popup.
+// Enter in any field presses it.
 //
 // ON THE CHART the order being written is a DRAFT (`draft()`), which the trading layer draws on
-// the instrument's panes while the trade box is open. Dragging its lines calls `setLevel`,
-// which writes the new price back into these fields in whatever way they are stated -- so the
-// ticket stays the one place the order lives, and the chart and the fields cannot disagree.
+// the instrument's panes while the trade box is open. Dragging its lines calls `setLevel`, which
+// writes the new price back into these fields in whatever way they are stated -- so the ticket
+// stays the one place the order lives, and the chart and the fields cannot disagree.
 //
 // BUILT ONCE and updated in place. It re-renders on every session notification, which is every
 // two seconds while anything is working; a ticket rebuilt each time took the focus (and a
@@ -68,17 +93,18 @@ export interface TicketContext {
 }
 
 const REWARD_RATIOS = [1, 2, 3]
-
 const LOT = 100_000
+const NOTE_MAX = 64
 
-/** Each way of sizing: its name in the picker, the field's label, and the preference it reads. */
-const SIZE_SPECS: Record<SizeMode, { option: string; label: (currency: string) => string; pref: keyof TradePrefs; max?: number }> = {
-  units: { option: 'Units', label: () => 'Units', pref: 'units' },
-  lots: { option: 'Lots', label: () => 'Lots (100K units)', pref: 'lots' },
-  risk: { option: 'Risk % of balance', label: () => 'Risk (% of balance)', pref: 'riskPercent', max: 100 },
-  riskAmount: { option: 'Risk amount', label: (c) => `Risk (${c})`, pref: 'riskAmount' },
-  notional: { option: 'Position value', label: (c) => `Value (${c})`, pref: 'notional' },
-  margin: { option: 'Margin % of balance', label: () => 'Margin (% of balance)', pref: 'marginPercent', max: 100 }
+/** Each way of sizing: the unit after the number, the preference it reads, its cap, and a step
+ * (the big step is ten of them). */
+const SIZE_SPECS: Record<SizeMode, { unit: (currency: string) => string; pref: keyof TradePrefs; max?: number; step: (info: InstrumentInfo) => number; digits: number }> = {
+  units: { unit: () => 'units', pref: 'units', step: (i) => (i.assetClass === 'forex' ? 1000 : 10 ** -i.unitsPrecision), digits: 5 },
+  lots: { unit: () => 'lots', pref: 'lots', step: () => 0.01, digits: 2 },
+  risk: { unit: () => '% risk', pref: 'riskPercent', max: 100, step: () => 0.25, digits: 2 },
+  riskAmount: { unit: (c) => `${c} risk`, pref: 'riskAmount', step: () => 10, digits: 2 },
+  notional: { unit: (c) => `${c} value`, pref: 'notional', step: () => 1000, digits: 2 },
+  margin: { unit: () => '% margin', pref: 'marginPercent', max: 100, step: () => 0.5, digits: 2 }
 }
 
 /** A number for a field: no float noise, at most `digits` decimals. */
@@ -86,69 +112,78 @@ function tidy(value: number, digits = 2): string {
   return String(Number(value.toFixed(digits)))
 }
 
+type Slot = 'general' | 'price' | 'size' | 'stop' | 'target'
+
 interface Plan {
   units: number | null
   entry: number | null
   price: number | undefined
   stop: number | undefined
   target: number | undefined
-  /** Why it cannot be sent as it stands; null when it can. */
+  /** Why it cannot be sent, by the field that is wrong. */
+  problems: Partial<Record<Slot, string>>
+  /** The first of them; null when it can be sent. */
   problem: string | null
   ctx: PricingContext
 }
 
-interface Field {
-  element: HTMLElement
-  label: HTMLElement
-  input: HTMLInputElement
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  node.className = className
-  if (text !== undefined) node.textContent = text
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = el('button', className, text)
-  b.type = 'button'
-  b.addEventListener('click', onClick)
-  return b
-}
-
-function field(label: string, onInput: (value: string) => void, cls = ''): Field {
-  const element = el('label', `wd-trade-field ${cls}`)
-  const labelNode = el('span', 'wd-trade-field-label', label)
-  const input = el('input', 'kc-input wd-trade-input')
-  input.type = 'text'
-  input.inputMode = 'decimal'
-  input.autocomplete = 'off'
-  input.addEventListener('input', () => onInput(input.value))
-  element.append(labelNode, input)
-  return { element, label: labelNode, input }
-}
-
-/** A segmented control whose active option is re-read on every refresh. */
+/** A segmented choice whose active option is re-read on every refresh. */
 class Segmented<T extends string> {
   readonly element: HTMLElement
   private readonly buttons = new Map<T, HTMLButtonElement>()
 
-  constructor(options: Array<[T, string]>, onPick: (value: T) => void, classes: Partial<Record<T, string>> = {}) {
-    this.element = el('div', 'wd-trade-segmented')
+  constructor(options: Array<[T, string]>, onPick: (value: T) => void) {
+    this.element = h('div', 'wd-tk-seg')
+    this.element.setAttribute('role', 'radiogroup')
     for (const [value, text] of options) {
-      const b = button(`wd-trade-seg ${classes[value] ?? ''}`, text, () => onPick(value))
+      const b = kbtn(text, () => onPick(value))
+      b.setAttribute('role', 'radio')
       this.buttons.set(value, b)
       this.element.appendChild(b)
     }
   }
 
-  set(active: T, disabled: Partial<Record<T, string>> = {}): void {
+  set(active: T): void {
     for (const [value, b] of this.buttons) {
       b.classList.toggle('is-active', value === active)
-      const reason = disabled[value]
-      b.disabled = reason !== undefined
-      b.title = reason ?? ''
+      b.setAttribute('aria-checked', String(value === active))
+    }
+  }
+}
+
+/** SELL at the bid and BUY at the ask, the spread between them. A press picks the side. */
+class SidePicker {
+  readonly element: HTMLElement
+  private readonly sell: { button: HTMLButtonElement; price: HTMLElement }
+  private readonly buy: { button: HTMLButtonElement; price: HTMLElement }
+  private readonly spread: HTMLElement
+
+  constructor(onPick: (side: SimSide) => void) {
+    this.element = h('div', 'wd-tk-sides')
+    this.element.setAttribute('role', 'radiogroup')
+    const make = (side: SimSide) => {
+      const button = kbtn('', () => onPick(side), [side])
+      button.classList.add('wd-tk-side')
+      button.setAttribute('role', 'radio')
+      const price = h('span', 'wd-tk-side-price')
+      button.append(h('span', 'wd-tk-side-name', side === 'buy' ? 'Buy' : 'Sell'), price)
+      return { button, price }
+    }
+    this.sell = make('sell')
+    this.buy = make('buy')
+    this.spread = h('span', 'wd-tk-spread')
+    this.element.append(this.sell.button, this.spread, this.buy.button)
+  }
+
+  set(side: SimSide, bid: string, ask: string, spread: string): void {
+    this.sell.price.textContent = bid
+    this.buy.price.textContent = ask
+    this.spread.textContent = spread
+    this.spread.title = 'Spread'
+    for (const [s, part] of [['sell', this.sell], ['buy', this.buy]] as const) {
+      part.button.classList.toggle('is-active', s === side)
+      part.button.setAttribute('aria-checked', String(s === side))
+      part.button.title = `${s === 'buy' ? 'Buy at the ask' : 'Sell at the bid'}: picks the side, sends nothing`
     }
   }
 }
@@ -160,26 +195,29 @@ export class OrderTicket implements DraftController {
   private price = ''
   private stopLoss = ''
   private takeProfit = ''
+  private note = ''
   private error = ''
   private symbol: SymbolInfo
   private key: string
+  private readonly arming: Arming
 
   private readonly symbolNode: HTMLElement
-  private readonly quoteNode: HTMLElement
-  private readonly sideControl: Segmented<SimSide>
+  private readonly positionNode: HTMLElement
+  private readonly sides: SidePicker
   private readonly typeControl: Segmented<SimOrderType>
-  private readonly sizeSelect: HTMLSelectElement
-  private readonly sizeField: Field
-  private readonly priceField: Field
-  private readonly stopField: Field
-  private readonly targetField: Field
-  private readonly ratioRow: HTMLElement
-  private readonly ratioButtons: HTMLButtonElement[] = []
-  private readonly modeRow: HTMLElement
-  private readonly modeControl: Segmented<ProtectMode>
-  private readonly summary: HTMLElement
-  private readonly errorNode: HTMLElement
+  private readonly priceField: LevelField
+  private readonly sizeBlock: HTMLElement
+  private readonly sizeField: NumberField
+  private readonly sizeReadout: HTMLElement
+  private readonly sizeProblem: HTMLElement
+  private readonly stopField: LevelField
+  private readonly targetField: LevelField
+  private readonly figures: FigureList
+  private readonly noteInput: HTMLInputElement
+  private readonly problemNode: HTMLElement
   private readonly submitButton: HTMLButtonElement
+  private readonly oneClick: HTMLInputElement
+  private readonly resetButton: HTMLButtonElement
   private readonly unsubscribe: () => void
   private readonly unsubscribeSession: () => void
   private draftListener: (() => void) | null = null
@@ -190,87 +228,128 @@ export class OrderTicket implements DraftController {
   ) {
     this.symbol = ctx.activeSymbol()
     this.key = symbolKey(this.symbol)
-    this.element = el('div', 'wd-trade-ticket')
+    this.arming = new Arming(() => this.refresh())
+    this.element = h('div', 'wd-tk wd-trade-ticket')
 
-    const head = el('div', 'wd-trade-ticket-head')
-    this.symbolNode = el('span', 'wd-trade-ticket-symbol')
-    this.quoteNode = el('span', 'wd-trade-ticket-quote')
-    head.append(this.symbolNode, this.quoteNode)
+    const head = h('div', 'wd-tk-head')
+    this.symbolNode = h('span', 'wd-tk-symbol')
+    this.positionNode = h('span', 'wd-tk-position')
+    head.append(this.symbolNode, this.positionNode)
 
-    const controls = el('div', 'wd-trade-ticket-row')
-    this.sideControl = new Segmented<SimSide>(
-      [
-        ['buy', 'Buy'],
-        ['sell', 'Sell']
-      ],
-      (v) => this.change(() => (this.side = v)),
-      { buy: 'wd-trade-buy', sell: 'wd-trade-sell' }
-    )
+    this.sides = new SidePicker((side) => this.change(() => this.setSide(side)))
     this.typeControl = new Segmented<SimOrderType>(
       [
         ['market', 'Market'],
         ['limit', 'Limit'],
         ['stop', 'Stop']
       ],
-      (v) => this.change(() => (this.type = v))
+      (type) => this.change(() => this.setType(type))
     )
-    controls.append(this.sideControl.element, this.typeControl.element)
 
-    // Size: six ways of saying it, one number field that follows the choice.
-    const sizeRow = el('div', 'wd-trade-ticket-mode')
-    this.sizeSelect = el('select', 'kc-input wd-trade-size-select')
-    for (const mode of SIZE_MODES) {
-      const option = el('option', '', SIZE_SPECS[mode].option)
-      option.value = mode
-      this.sizeSelect.appendChild(option)
-    }
-    this.sizeSelect.addEventListener('change', () => this.setSizeMode(this.sizeSelect.value as SizeMode))
-    sizeRow.append(el('span', 'wd-trade-field-label', 'Size by'), this.sizeSelect)
+    const press = () => this.press()
+    this.priceField = new LevelField({
+      role: 'entry',
+      label: 'Price',
+      withUnits: false,
+      onInput: (text) => this.change(() => (this.price = text)),
+      onStep: (direction, big) => this.stepPrice(direction, big),
+      onEnter: press
+    })
 
-    const fields = el('div', 'wd-trade-ticket-fields')
-    this.sizeField = field('Units', (v) => {
-      const spec = SIZE_SPECS[this.sizeMode()]
-      const n = Number(v)
-      this.error = ''
-      if (n > 0 && n <= (spec.max ?? Number.POSITIVE_INFINITY)) setTradePrefs({ [spec.pref]: n })
-      else this.refresh()
-    }, 'wd-trade-units')
-    this.priceField = field('Price', (v) => this.change(() => (this.price = v)))
-    this.stopField = field('Stop loss', (v) => this.change(() => (this.stopLoss = v)))
-    this.targetField = field('Take profit', (v) => this.change(() => (this.takeProfit = v)))
-    fields.append(this.sizeField.element, this.priceField.element, this.stopField.element, this.targetField.element)
+    // Size: the same layout as a level -- a label, the number with its unit, and a readout.
+    this.sizeBlock = h('div', 'wd-tk-level')
+    this.sizeBlock.dataset.role = 'size'
+    const sizeHead = h('div', 'wd-tk-level-head')
+    sizeHead.append(h('span', 'wd-tk-level-label', 'Size'))
+    this.sizeField = new NumberField({
+      label: 'Size',
+      onInput: (text) => this.typeSize(text),
+      onStep: (direction, big) => this.stepSize(direction, big),
+      units: SIZE_MODES.map((mode) => [mode, SIZE_SPECS[mode].unit('USD')]),
+      onUnit: (mode) => this.setSizeMode(mode as SizeMode),
+      onEnter: press
+    })
+    this.sizeReadout = h('span', 'wd-tk-readout')
+    const sizeBody = h('div', 'wd-tk-level-body')
+    sizeBody.append(this.sizeField.element, this.sizeReadout)
+    this.sizeProblem = h('div', 'wd-tk-problem')
+    this.sizeBlock.append(sizeHead, sizeBody, this.sizeProblem)
 
-    this.ratioRow = el('div', 'wd-trade-ticket-mode wd-trade-ratios')
-    this.ratioRow.appendChild(el('span', 'wd-trade-field-label', 'Target at'))
-    for (const ratio of REWARD_RATIOS) {
-      const b = button('wd-trade-seg wd-trade-ratio', `${ratio}R`, () => this.targetAtRatio(ratio))
-      b.title = `Take profit at ${ratio}× the stop's distance`
-      this.ratioButtons.push(b)
-      this.ratioRow.appendChild(b)
-    }
+    this.stopField = this.levelField('stop', 'Stop loss', press)
+    this.targetField = this.levelField('target', 'Take profit', press)
 
-    this.modeRow = el('div', 'wd-trade-ticket-mode')
-    this.modeControl = new Segmented<ProtectMode>(
-      [
-        ['pips', 'Pips'],
-        ['price', 'Price'],
-        ['percent', '% bal']
-      ],
-      (v) => this.setProtectMode(v)
+    this.figures = new FigureList()
+
+    const noteRow = h('label', 'wd-tk-note')
+    this.noteInput = h('input', 'wd-tk-note-input')
+    this.noteInput.type = 'text'
+    this.noteInput.maxLength = NOTE_MAX
+    this.noteInput.placeholder = 'Note (optional, sent with the order)'
+    this.noteInput.setAttribute('aria-label', 'Note')
+    this.noteInput.addEventListener('input', () => (this.note = this.noteInput.value))
+    this.noteInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        press()
+      }
+    })
+    noteRow.append(this.noteInput)
+
+    this.problemNode = h('div', 'wd-tk-problem is-block')
+    this.problemNode.setAttribute('aria-live', 'polite')
+    this.submitButton = kbtn('', press, ['primary'])
+    this.submitButton.classList.add('wd-tk-submit')
+
+    const foot = h('div', 'wd-tk-row wd-tk-foot')
+    const oneClickLabel = h('label', 'wd-tk-check')
+    this.oneClick = h('input')
+    this.oneClick.type = 'checkbox'
+    this.oneClick.addEventListener('change', () => setTradePrefs({ oneClick: this.oneClick.checked }))
+    oneClickLabel.append(this.oneClick, 'One-click trading')
+    oneClickLabel.title = 'Place, close and cancel on the first press, here, on the chart and in the position popup'
+    this.resetButton = kbtn('Reset', () => this.reset(), ['quiet'], 'Back to a market order with no price, stop, target or note')
+    foot.append(oneClickLabel, this.resetButton)
+
+    this.element.append(
+      head,
+      this.sides.element,
+      this.typeControl.element,
+      this.priceField.element,
+      this.sizeBlock,
+      this.stopField.element,
+      this.targetField.element,
+      this.figures.element,
+      noteRow,
+      this.problemNode,
+      this.submitButton,
+      foot
     )
-    this.modeRow.append(el('span', 'wd-trade-field-label', 'SL / TP as'), this.modeControl.element)
-
-    this.summary = el('div', 'wd-trade-ticket-summary')
-    this.summary.setAttribute('aria-live', 'polite')
-    this.errorNode = el('div', 'kc-field-error wd-trade-ticket-error')
-    this.submitButton = button('kc-button kc-button-primary wd-trade-submit', '', () => void this.submit().catch(() => {}))
-
-    this.element.append(head, controls, sizeRow, fields, this.ratioRow, this.modeRow, this.summary, this.errorNode, this.submitButton)
+    this.element.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this.arming.disarm()
+    })
     // Another tab, or the card, changed a shared number: show it unless it is being typed here.
     this.unsubscribe = subscribeTradePrefs(() => this.refresh())
     // New quotes and a new balance re-price the order; nothing being typed is touched.
     this.unsubscribeSession = session.subscribe(() => this.refresh())
     this.refresh()
+  }
+
+  private levelField(role: LevelRole, label: string, press: () => void): LevelField {
+    return new LevelField({
+      role,
+      label,
+      withUnits: true,
+      onInput: (text) => this.change(() => this.setText(role, text)),
+      onStep: (direction, big) => {
+        const plan = this.plan()
+        const text = stepLevelText(this.textOf(role), this.protectMode(), role, direction, big, this.basis(plan))
+        this.writeLevel(role, text)
+      },
+      onUnit: (mode) => this.setProtectMode(mode),
+      onPreset: (i) => (role === 'stop' ? this.riskStop() : this.targetAtRatio(REWARD_RATIOS[i])),
+      onClear: () => this.clearLevel(role),
+      onEnter: press
+    })
   }
 
   // -- the draft ------------------------------------------------------------------------------------
@@ -308,16 +387,9 @@ export class OrderTicket implements DraftController {
       const below = rounded < fill
       this.type = rounded === fill ? 'market' : this.side === 'buy' ? (below ? 'limit' : 'stop') : below ? 'stop' : 'limit'
       this.price = this.type === 'market' ? '' : formatPrice(rounded, info.precision)
-      this.priceField.input.value = this.price
+      this.priceField.write(this.price)
     } else {
-      const text = this.express(price, this.protectMode(), this.plan())
-      if (role === 'stop') {
-        this.stopLoss = text
-        this.stopField.input.value = text
-      } else {
-        this.takeProfit = text
-        this.targetField.input.value = text
-      }
+      this.writeLevel(role, levelText(price, this.protectMode(), this.basis(this.plan())), false)
     }
     this.error = ''
     this.refresh()
@@ -327,13 +399,9 @@ export class OrderTicket implements DraftController {
     if (role === 'entry') {
       this.type = 'market'
       this.price = ''
-      this.priceField.input.value = ''
-    } else if (role === 'stop') {
-      this.stopLoss = ''
-      this.stopField.input.value = ''
+      this.priceField.write('')
     } else {
-      this.takeProfit = ''
-      this.targetField.input.value = ''
+      this.writeLevel(role, '', false)
     }
     this.error = ''
     this.refresh()
@@ -344,8 +412,12 @@ export class OrderTicket implements DraftController {
   }
 
   syncInstrument(): void {
+    const key = symbolKey(this.ctx.activeSymbol())
+    const moved = key !== this.key
     this.symbol = this.ctx.activeSymbol()
-    this.key = symbolKey(this.symbol)
+    this.key = key
+    // A price for another instrument means nothing here.
+    if (moved && this.type !== 'market') this.prefillPrice()
     void this.session.watch(this.key).catch(() => {})
     this.refresh()
   }
@@ -362,6 +434,102 @@ export class OrderTicket implements DraftController {
 
   private change(apply: () => void): void {
     apply()
+    this.error = ''
+    this.arming.disarm()
+    this.refresh()
+  }
+
+  // -- fields ---------------------------------------------------------------------------------------
+
+  private textOf(role: LevelRole): string {
+    return role === 'stop' ? this.stopLoss : this.takeProfit
+  }
+
+  private setText(role: LevelRole, text: string): void {
+    if (role === 'stop') this.stopLoss = text
+    else this.takeProfit = text
+  }
+
+  /** A level's text written by a step, a preset, a drag or a unit change -- into the field even
+   * while it has the focus. */
+  private writeLevel(role: LevelRole, text: string, refresh = true): void {
+    this.setText(role, text)
+    ;(role === 'stop' ? this.stopField : this.targetField).write(text)
+    this.error = ''
+    this.arming.disarm()
+    if (refresh) this.refresh()
+  }
+
+  private setSide(side: SimSide): void {
+    this.side = side
+    // A resting price valid for the other side is usually on the wrong side of this one.
+    if (this.type !== 'market' && this.restingProblem() !== null) this.prefillPrice()
+  }
+
+  private setType(type: SimOrderType): void {
+    this.type = type
+    if (type === 'market') return
+    if (this.price.trim() === '' || this.restingProblem() !== null) this.prefillPrice()
+  }
+
+  private restingProblem(): string | null {
+    const price = Number(this.price)
+    if (this.price.trim() === '' || !(price > 0)) return 'no price'
+    return restingRefusal(this.side, this.type, price, this.session.snapshot.quotes[this.key], this.info().precision)
+  }
+
+  /** A valid starting price for the limit or stop being written, so it shows on the chart. */
+  private prefillPrice(): void {
+    const price = defaultRestingPrice(this.side, this.type, this.session.snapshot.quotes[this.key], this.info())
+    this.price = price === null ? '' : formatPrice(price, this.info().precision)
+    this.priceField.write(this.price)
+  }
+
+  private stepPrice(direction: 1 | -1, big: boolean): void {
+    const info = this.info()
+    const current = Number(this.price)
+    if (this.price.trim() === '' || !(current > 0)) {
+      this.prefillPrice()
+    } else {
+      const next = roundTo(current + direction * priceStep(info) * (big ? 10 : 1), info.precision)
+      if (next > 0) this.price = formatPrice(next, info.precision)
+      this.priceField.write(this.price)
+    }
+    this.change(() => {})
+  }
+
+  private typeSize(text: string): void {
+    const spec = SIZE_SPECS[this.sizeMode()]
+    const n = Number(text)
+    this.error = ''
+    this.arming.disarm()
+    if (n > 0 && n <= (spec.max ?? Number.POSITIVE_INFINITY)) setTradePrefs({ [spec.pref]: n })
+    else this.refresh()
+  }
+
+  private stepSize(direction: 1 | -1, big: boolean): void {
+    const mode = this.sizeMode()
+    const spec = SIZE_SPECS[mode]
+    const step = spec.step(this.info()) * (big ? 10 : 1)
+    const current = Number(tradePrefs()[spec.pref])
+    // Snap to the step's grid, so 10,250 steps to 11,000 and back to 10,000 rather than drifting.
+    const snapped = direction > 0 ? Math.floor(current / step + 1e-9) * step + step : Math.ceil(current / step - 1e-9) * step - step
+    const next = Number(snapped.toFixed(spec.digits))
+    if (!(next > 0) || next > (spec.max ?? Number.POSITIVE_INFINITY)) return
+    this.sizeField.write(tidy(next, spec.digits))
+    this.error = ''
+    this.arming.disarm()
+    setTradePrefs({ [spec.pref]: next })
+  }
+
+  private reset(): void {
+    this.type = 'market'
+    this.price = ''
+    this.note = ''
+    this.noteInput.value = ''
+    this.priceField.write('')
+    this.writeLevel('stop', '', false)
+    this.writeLevel('target', '', false)
     this.error = ''
     this.refresh()
   }
@@ -395,12 +563,14 @@ export class OrderTicket implements DraftController {
     return null
   }
 
-  /** The stored mode, or the nearest one this instrument and size mode allow. */
+  private pricing(): PricingContext {
+    const s = this.session.snapshot
+    return pricingContext(this.key, this.info(), s.account, s.quotes[this.key], s.quotes)
+  }
+
+  /** The stored unit for stops and targets, or the nearest one this instrument and size allow. */
   private protectMode(): ProtectMode {
-    const { protectMode } = tradePrefs()
-    if (protectMode === 'percent' && sizedByStop(this.sizeMode())) return this.info().pipSize !== null ? 'pips' : 'price'
-    if (protectMode === 'pips' && this.info().pipSize === null) return 'price'
-    return protectMode
+    return usableMode(tradePrefs().protectMode, this.pricing(), sizedByStop(this.sizeMode()))
   }
 
   private setProtectMode(next: ProtectMode): void {
@@ -410,11 +580,14 @@ export class OrderTicket implements DraftController {
     const to = this.protectMode()
     if (from === to) return
     // Carry what was typed across: the same price, stated the new way.
-    if (plan.stop !== undefined) this.stopLoss = this.express(plan.stop, to, plan)
-    if (plan.target !== undefined) this.takeProfit = this.express(plan.target, to, plan)
-    this.stopField.input.value = this.stopLoss
-    this.targetField.input.value = this.takeProfit
+    this.restate(plan, to)
     this.refresh()
+  }
+
+  private restate(plan: Plan, to: ProtectMode): void {
+    const basis = this.basis(plan)
+    if (plan.stop !== undefined) this.writeLevel('stop', levelText(plan.stop, to, basis), false)
+    if (plan.target !== undefined) this.writeLevel('target', levelText(plan.target, to, basis), false)
   }
 
   private setSizeMode(next: SizeMode): void {
@@ -427,14 +600,11 @@ export class OrderTicket implements DraftController {
     const carried = plan.units !== null && plan.units > 0 && plan.entry !== null ? this.sizeAs(next, plan) : null
     if (carried !== null) setTradePrefs({ [SIZE_SPECS[next].pref]: carried })
     // Sizing from the stop, a stop stated as a share of the balance is re-stated in pips or price first.
-    if (sizedByStop(next) && this.protectMode() === 'percent' && plan.stop !== undefined) {
-      const to: ProtectMode = this.info().pipSize !== null ? 'pips' : 'price'
-      this.stopLoss = this.express(plan.stop, to, plan)
-      if (plan.target !== undefined) this.takeProfit = this.express(plan.target, to, plan)
-      this.stopField.input.value = this.stopLoss
-      this.targetField.input.value = this.takeProfit
-    }
+    if (sizedByStop(next) && this.protectMode() === 'percent') this.restate(plan, this.info().pipSize !== null ? 'pips' : 'price')
     this.error = ''
+    this.arming.disarm()
+    const value = carried ?? Number(tradePrefs()[SIZE_SPECS[next].pref])
+    this.sizeField.write(tidy(value, SIZE_SPECS[next].digits))
     setTradePrefs({ sizeMode: next })
   }
 
@@ -458,117 +628,114 @@ export class OrderTicket implements DraftController {
     return Number(value.toFixed(mode === 'lots' || mode === 'units' ? 5 : 2))
   }
 
+  // -- presets ------------------------------------------------------------------------------------
+
+  /** Why "Risk N%" cannot place the stop now, or null. */
+  private riskStopRefusal(plan: Plan): string | null {
+    if (sizedByStop(this.sizeMode())) return 'the size already comes from the risk'
+    if (plan.entry === null || plan.units === null) return 'no size yet'
+    if (quoteToAccountRate(plan.ctx) === null) return `no ${plan.ctx.account.currency} rate for ${plan.ctx.currencies.quote}`
+    return null
+  }
+
+  private riskStop(): void {
+    const plan = this.plan()
+    if (this.riskStopRefusal(plan) !== null || plan.entry === null || plan.units === null) return
+    const level = levelForBalancePercent(this.side, 'stop', plan.units, plan.entry, tradePrefs().riskPercent, plan.ctx)
+    if (level !== null) this.writeLevel('stop', levelText(level, this.protectMode(), this.basis(plan)))
+  }
+
   private targetAtRatio(ratio: number): void {
     const plan = this.plan()
     if (plan.entry === null || plan.stop === undefined) return
     const target = targetForReward(this.side, plan.entry, plan.stop, ratio, this.info().precision)
     if (target === null) return
-    this.takeProfit = this.express(target, this.protectMode(), plan)
-    this.targetField.input.value = this.takeProfit
-    this.error = ''
+    this.writeLevel('target', levelText(target, this.protectMode(), this.basis(plan)), false)
     setTradePrefs({ rewardRatio: ratio })
   }
 
   // -- the order as it would be sent --------------------------------------------------------------
 
-  private below(role: 'stop' | 'target'): boolean {
-    return role === 'stop' ? this.side === 'buy' : this.side === 'sell'
-  }
-
-  /** A price, stated in `mode` for the field: pips from the entry, a price, or the share of the
-   * balance that price would lose or make at the planned size. */
-  private express(price: number, mode: ProtectMode, plan: Plan): string {
-    const info = this.info()
-    if (mode === 'price' || plan.entry === null) return formatPrice(price, info.precision)
-    if (mode === 'pips' && info.pipSize !== null) return (Math.abs(price - plan.entry) / info.pipSize).toFixed(1)
-    const o = plan.units ? outcome(this.side, plan.units, plan.entry, price, plan.ctx) : null
-    if (o?.ofBalance === null || o?.ofBalance === undefined) return formatPrice(price, info.precision)
-    return Math.abs(o.ofBalance).toFixed(2)
-  }
-
-  /** A field to a price. Throws a sentence when the value cannot become one. */
-  private resolve(raw: string, role: 'stop' | 'target', entry: number | null, units: number | null, ctx: PricingContext): number | undefined {
-    const trimmed = raw.trim()
-    if (trimmed === '') return undefined
-    const value = Number(trimmed)
-    const name = role === 'stop' ? 'stop loss' : 'take profit'
-    if (!Number.isFinite(value) || value <= 0) throw new Error(`Invalid ${name}`)
-    const mode = this.protectMode()
-    const info = this.info()
-    if (mode === 'price') return value
-    if (entry === null) throw new Error(`No price to measure the ${name} from yet`)
-    if (mode === 'pips' && info.pipSize !== null) {
-      const off = value * info.pipSize
-      return roundTo(this.below(role) ? entry - off : entry + off, info.precision)
-    }
-    if (units === null || units <= 0) throw new Error(`A ${name} in % of balance needs a size`)
-    const level = levelForBalancePercent(this.side, role, units, entry, value, ctx)
-    if (level === null) throw new Error(`No ${ctx.account.currency} rate for ${ctx.currencies.quote}, so % of balance cannot be priced`)
-    return level
+  private basis(plan: Pick<Plan, 'entry' | 'units' | 'ctx'>): LevelBasis {
+    return { side: this.side, entry: plan.entry, units: plan.units, ctx: plan.ctx }
   }
 
   private plan(): Plan {
     const s = this.session.snapshot
     const info = this.info()
     const quote = s.quotes[this.key]
-    const ctx = pricingContext(this.key, info, s.account, quote, s.quotes)
+    const ctx = this.pricing()
     const prefs = tradePrefs()
-    const plan: Plan = { units: null, entry: null, price: undefined, stop: undefined, target: undefined, problem: null, ctx }
-    const fail = (problem: string): Plan => {
-      plan.problem ??= problem
-      return plan
+    const problems: Plan['problems'] = {}
+    const fail = (slot: Slot, problem: string): void => {
+      problems[slot] ??= problem
     }
+    const plan: Plan = { units: null, entry: null, price: undefined, stop: undefined, target: undefined, problems, problem: null, ctx }
 
+    if (!quote) fail('general', this.session.ready ? 'No quote yet' : 'Connecting…')
     if (this.type !== 'market') {
       const price = Number(this.price)
       if (this.price.trim() === '' || !Number.isFinite(price) || price <= 0) {
-        fail(`A ${this.type} order needs a price`)
+        fail('price', `A ${this.type} order needs a price`)
       } else {
         plan.price = price
+        const refusal = restingRefusal(this.side, this.type, price, quote, info.precision)
+        if (refusal) fail('price', refusal)
       }
     }
     plan.entry = plan.price ?? fillingPrice(this.side, quote)
-    if (!quote) fail('No quote yet')
 
     const mode = this.sizeMode()
-    const noRate = `No ${ctx.account.currency} rate for ${ctx.currencies.quote}: size in units instead`
-    try {
-      if (sizedByStop(mode)) {
-        // The stop decides the size, so it resolves first, without one.
-        plan.stop = this.resolve(this.stopLoss, 'stop', plan.entry, null, ctx)
-        if (plan.stop === undefined) return fail('Sizing by risk needs a stop loss')
-        if (plan.entry === null) return plan
-        if (quoteToAccountRate(ctx) === null) return fail(noRate)
-        plan.units =
-          mode === 'risk'
-            ? unitsForRisk(prefs.riskPercent, plan.entry, plan.stop, ctx)
-            : unitsForRiskAmount(prefs.riskAmount, plan.entry, plan.stop, ctx)
-        if (plan.units === null || plan.units <= 0) return fail('The risk is too small for a single unit at that stop')
-      } else {
-        if (mode === 'units') plan.units = prefs.units
-        else if (mode === 'lots') plan.units = Math.round(prefs.lots * LOT * 10 ** info.unitsPrecision) / 10 ** info.unitsPrecision
-        else if (mode === 'notional') plan.units = unitsForNotional(prefs.notional, ctx)
-        else plan.units = unitsForMarginPercent(prefs.marginPercent, ctx)
-        if (plan.units === null) {
-          return fail(quote ? noRate : 'No quote yet')
-        }
-        if (plan.units <= 0) return fail('Too small for a single unit')
-        plan.stop = this.resolve(this.stopLoss, 'stop', plan.entry, plan.units, ctx)
+    const protect = this.protectMode()
+    const level = (role: LevelRole, units: number | null): number | undefined => {
+      try {
+        return parseLevel(this.textOf(role), protect, role, this.basis({ entry: plan.entry, units, ctx })) ?? undefined
+      } catch (err) {
+        fail(role, err instanceof Error ? err.message : `Invalid ${role}`)
+        return undefined
       }
-      plan.target = this.resolve(this.takeProfit, 'target', plan.entry, plan.units, ctx)
-    } catch (err) {
-      return fail(err instanceof Error ? err.message : 'Invalid stop or target')
     }
+    const noRate = `No ${ctx.account.currency} rate for ${ctx.currencies.quote}: size another way`
+    if (sizedByStop(mode)) {
+      // The stop decides the size, so it resolves first, without one.
+      plan.stop = level('stop', null)
+      if (plan.stop === undefined) {
+        if (!problems.stop) fail('size', 'Sizing by risk needs a stop loss')
+      } else if (plan.entry !== null) {
+        if (quoteToAccountRate(ctx) === null) fail('size', noRate)
+        else {
+          const units =
+            mode === 'risk' ? unitsForRisk(prefs.riskPercent, plan.entry, plan.stop, ctx) : unitsForRiskAmount(prefs.riskAmount, plan.entry, plan.stop, ctx)
+          if (units === null || units <= 0) fail('size', 'The risk is too small for a single unit at that stop')
+          else plan.units = units
+        }
+      }
+    } else {
+      let units: number | null
+      if (mode === 'units') units = prefs.units
+      else if (mode === 'lots') units = Math.round(prefs.lots * LOT * 10 ** info.unitsPrecision) / 10 ** info.unitsPrecision
+      else if (mode === 'notional') units = unitsForNotional(prefs.notional, ctx)
+      else units = unitsForMarginPercent(prefs.marginPercent, ctx)
+      if (units === null) {
+        if (quote) fail('size', noRate)
+      } else if (units <= 0) fail('size', 'Too small for a single unit')
+      else plan.units = units
+      plan.stop = level('stop', plan.units)
+    }
+    plan.target = level('target', plan.units)
 
     if (plan.entry !== null) {
       const where = this.type === 'market' ? `the ${this.side === 'buy' ? 'ask' : 'bid'}` : 'the order price'
-      if (plan.stop !== undefined && !protectionValid(this.side, 'stop', plan.stop, plan.entry)) {
-        fail(`The stop loss must be ${this.below('stop') ? 'below' : 'above'} ${where}`)
+      if (plan.stop !== undefined) {
+        const refusal = levelRefusal(this.side, 'stop', plan.stop, plan.entry, where)
+        if (refusal) fail('stop', refusal)
       }
-      if (plan.target !== undefined && !protectionValid(this.side, 'target', plan.target, plan.entry)) {
-        fail(`The take profit must be ${this.below('target') ? 'below' : 'above'} ${where}`)
+      if (plan.target !== undefined) {
+        const refusal = levelRefusal(this.side, 'target', plan.target, plan.entry, where)
+        if (refusal) fail('target', refusal)
       }
     }
+    plan.problem = problems.general ?? problems.price ?? problems.size ?? problems.stop ?? problems.target ?? null
     return plan
   }
 
@@ -578,98 +745,164 @@ export class OrderTicket implements DraftController {
     const prefs = tradePrefs()
     const quote = s.quotes[this.key]
     const plan = this.plan()
+    const { ctx } = plan
+    const precision = info.precision
+    const basis = this.basis(plan)
+    const sell = this.side === 'sell'
 
+    this.element.dataset.side = this.side
     this.symbolNode.textContent = this.key.includes(':') ? this.key.split(':', 2)[1] : this.key
-    if (quote) {
-      const spread = toPips(quote.ask - quote.bid, info.pipSize)
-      this.quoteNode.textContent =
-        `${formatPrice(quote.bid, info.precision)} / ${formatPrice(quote.ask, info.precision)}` +
-        (spread !== null ? ` · ${spread.toFixed(1)} pip${spread === 1 ? '' : 's'}` : '')
-    } else {
-      this.quoteNode.textContent = this.session.ready ? 'no quote yet' : 'connecting…'
-    }
-
-    this.sideControl.set(this.side)
+    this.renderPosition(ctx)
+    const spread = quote ? toPips(quote.ask - quote.bid, info.pipSize) : null
+    this.sides.set(
+      this.side,
+      quote ? formatPrice(quote.bid, precision) : '—',
+      quote ? formatPrice(quote.ask, precision) : '—',
+      spread !== null ? spread.toFixed(1) : quote ? formatPrice(quote.ask - quote.bid, precision) : ''
+    )
     this.typeControl.set(this.type)
-    const sizeMode = this.sizeMode()
-    const byRisk = sizedByStop(sizeMode)
-    this.sizeSelect.value = sizeMode
-    for (const option of this.sizeSelect.options) {
-      const refusal = this.sizeRefusal(option.value as SizeMode)
-      option.disabled = refusal !== null
-      option.title = refusal ?? ''
-    }
-    const spec = SIZE_SPECS[sizeMode]
-    this.sizeField.label.textContent = spec.label(s.account.currency)
-    if (document.activeElement !== this.sizeField.input) this.sizeField.input.value = tidy(Number(prefs[spec.pref]), 5)
+
+    // Price.
     this.priceField.element.hidden = this.type === 'market'
-
-    const mode = this.protectMode()
-    this.modeControl.set(mode, {
-      ...(info.pipSize === null ? { pips: 'This instrument is not priced in pips' } : {}),
-      ...(byRisk ? { percent: 'Sizing by risk already fixes the loss: state the stop in pips or price' } : {})
+    const distance = plan.price !== undefined ? restingDistance(this.side, plan.price, quote, info) : null
+    this.priceField.update({
+      text: this.price,
+      placeholder: 'price',
+      readout: distance ? [{ text: distance, tone: '' }] : [],
+      presets: [],
+      removable: false,
+      problem: plan.problems.price ?? null,
+      pending: false
     })
-    const unit = mode === 'pips' ? ' (pips)' : mode === 'percent' ? ' (% bal)' : ''
-    this.stopField.label.textContent = `Stop loss${unit}`
-    this.targetField.label.textContent = `Take profit${unit}`
 
-    const canRatio = plan.entry !== null && plan.stop !== undefined && targetForReward(this.side, plan.entry, plan.stop, 1, info.precision) !== null
-    for (const b of this.ratioButtons) {
-      b.disabled = !canRatio
-      b.classList.toggle('is-active', canRatio && b.textContent === `${prefs.rewardRatio}R`)
+    // Size.
+    const sizeMode = this.sizeMode()
+    const spec = SIZE_SPECS[sizeMode]
+    if (this.sizeField.select) {
+      for (const option of this.sizeField.select.options) option.textContent = SIZE_SPECS[option.value as SizeMode].unit(s.account.currency)
     }
-    this.ratioRow.title = canRatio ? '' : 'Set a stop loss first'
+    this.sizeField.show(tidy(Number(prefs[spec.pref]), spec.digits))
+    this.sizeField.set({
+      unit: sizeMode,
+      unitRefusals: Object.fromEntries(SIZE_MODES.map((m) => [m, this.sizeRefusal(m)])),
+      invalid: plan.problems.size !== undefined
+    })
+    const size = plan.units !== null ? sizeFigures(plan.units, ctx) : null
+    const sizeParts: ReadoutPart[] = []
+    if (plan.units !== null && sizeMode !== 'units') sizeParts.push({ text: `${formatUnits(plan.units)} units`, tone: '' })
+    if (size?.lots != null && sizeMode !== 'lots') sizeParts.push({ text: `${size.lots.toFixed(2)} lots`, tone: '' })
+    this.sizeReadout.textContent = sizeParts.map((p) => p.text).join(' · ')
+    this.sizeProblem.textContent = plan.problems.size ?? ''
+    this.sizeProblem.hidden = plan.problems.size === undefined
 
-    this.renderSummary(plan)
+    // Stop and target.
+    const mode = this.protectMode()
+    const unitRefusals = Object.fromEntries(
+      (['pips', 'price', 'percent'] as ProtectMode[]).map((m) => [m, levelModeRefusal(m, ctx, sizedByStop(sizeMode))])
+    )
+    const readout = (price: number | undefined): ReadoutPart[] => (price !== undefined ? levelReadout(price, mode, basis) : [])
+    const risk = `${tidy(prefs.riskPercent)}%`
+    this.stopField.update({
+      text: this.stopLoss,
+      placeholder: 'none',
+      unit: mode,
+      unitRefusals,
+      readout: readout(plan.stop),
+      presets: [{ text: `Risk ${risk}`, title: `Put the stop where it loses ${risk} of the balance`, refusal: this.riskStopRefusal(plan) }],
+      removable: this.stopLoss !== '',
+      problem: plan.problems.stop ?? null,
+      pending: false,
+      stepRefusal: plan.entry === null ? 'No price yet' : null
+    })
+    const ratioRefusal = plan.entry === null || plan.stop === undefined ? 'set a stop loss first' : targetForReward(this.side, plan.entry, plan.stop, 1, precision) === null ? 'the stop is past the entry' : null
+    this.targetField.update({
+      text: this.takeProfit,
+      placeholder: 'none',
+      unit: mode,
+      unitRefusals,
+      readout: readout(plan.target),
+      presets: REWARD_RATIOS.map((ratio) => ({
+        text: `${ratio}R`,
+        title: `Take profit at ${ratio}× the stop's distance`,
+        refusal: ratioRefusal,
+        active:
+          ratioRefusal === null && plan.entry !== null && plan.stop !== undefined && plan.target !== undefined &&
+          targetForReward(this.side, plan.entry, plan.stop, ratio, precision) === plan.target
+      })),
+      removable: this.takeProfit !== '',
+      problem: plan.problems.target ?? null,
+      pending: false,
+      stepRefusal: plan.entry === null ? 'No price yet' : null
+    })
 
-    this.errorNode.textContent = this.error
-    this.errorNode.hidden = this.error === ''
-    const label = `${sideLabel(this.side)} ${this.type === 'market' ? 'market' : this.type}`
-    this.submitButton.textContent =
-      plan.units !== null && plan.units > 0 && !plan.problem ? `${label} · ${formatUnits(plan.units)}` : label
-    this.submitButton.className = `kc-button kc-button-primary wd-trade-submit ${this.side === 'buy' ? 'is-buy' : 'is-sell'}`
-    this.submitButton.disabled = !quote
+    // Figures: the same rows the card and the popup show for a working order.
+    const rows: StatRow[] = plan.units !== null ? sizeRows(plan.units, ctx) : []
+    if (plan.units !== null && plan.entry !== null && plan.stop !== undefined && plan.target !== undefined) {
+      const rr = rewardToRisk(outcome(this.side, plan.units, plan.entry, plan.stop, ctx), outcome(this.side, plan.units, plan.entry, plan.target, ctx))
+      if (rr !== null) rows.push({ label: 'R:R', value: rr.toFixed(2) })
+    }
+    this.figures.update(rows)
+    if (document.activeElement !== this.noteInput) this.noteInput.value = this.note
+
+    // What stops it being sent that no field shows, and a refusal from the server.
+    const general = this.error || plan.problems.general || ''
+    this.problemNode.textContent = general
+    this.problemNode.hidden = general === ''
+    this.problemNode.classList.toggle('is-error', this.error !== '')
+
+    const armed = this.arming.key === armKey.place
+    const what = `${sell ? 'Sell' : 'Buy'} ${plan.units !== null ? `${formatUnitsShort(plan.units)} ` : ''}${this.symbolNode.textContent} ${
+      this.type === 'market' ? 'at market' : `${this.type} @ ${formatPrice(plan.price, precision)}`
+    }`
+    this.submitButton.textContent = armed ? `Confirm: ${what}` : what
+    this.submitButton.className = `wd-tk-btn wd-tk-submit is-${this.side}${armed ? ' is-armed' : ''}`
+    allow(this.submitButton, !quote ? (this.session.ready ? 'No quote yet' : 'Connecting…') : plan.problem, armed ? 'Press again to send it' : 'Enter in any field does the same')
+    this.oneClick.checked = prefs.oneClick
+    this.resetButton.hidden = this.type === 'market' && this.stopLoss === '' && this.takeProfit === '' && this.note === ''
     this.draftListener?.()
   }
 
-  private renderSummary(plan: Plan): void {
-    this.summary.innerHTML = ''
-    const { ctx } = plan
-    const line = (className = ''): HTMLElement => {
-      const node = el('div', `wd-trade-summary-line ${className}`)
-      this.summary.appendChild(node)
-      return node
+  /** What is already open on this instrument, so an order is written knowing it. */
+  private renderPosition(ctx: PricingContext): void {
+    const { trades, orders } = workingFor(this.session.snapshot, this.key)
+    const parts: string[] = []
+    if (trades.length > 0) {
+      const summary = positionSummary(trades, orders, ctx)
+      const net = summary.netUnits
+      parts.push(net === 0 ? 'Hedged' : `${net > 0 ? 'Long' : 'Short'} ${formatUnitsShort(net)}`)
+      parts.push(formatMoney(summary.pnl, ctx.currencies.quote))
+      this.positionNode.classList.toggle('is-up', summary.pnl > 0)
+      this.positionNode.classList.toggle('is-down', summary.pnl < 0)
     }
-    if (plan.units === null || plan.entry === null) {
-      if (plan.problem && this.sizeMode() !== 'units') line('is-muted').textContent = plan.problem
+    if (orders.length > 0) parts.push(`${orders.length} order${orders.length === 1 ? '' : 's'}`)
+    this.positionNode.textContent = parts.join(' · ')
+    this.positionNode.hidden = parts.length === 0
+    this.positionNode.title = 'Open on this instrument'
+  }
+
+  /** The button, or Enter: the first press arms it, the second sends -- or the first, one-click. */
+  private press(): void {
+    const plan = this.plan()
+    if (plan.problem || plan.units === null || plan.units <= 0) {
+      // A field's own problem is already under it: go there. Anything else is said at the bottom.
+      const { problems } = plan
+      const input = problems.general
+        ? null
+        : problems.price
+          ? this.priceField.field.input
+          : problems.size
+            ? this.sizeField.input
+            : problems.stop
+              ? this.stopField.field.input
+              : problems.target
+                ? this.targetField.field.input
+                : null
+      if (input) input.focus()
+      else this.showError(plan.problem ?? 'Nothing to send')
       return
     }
-    const size = sizeFigures(plan.units, ctx)
-    const currency = quoteToAccountRate(ctx) !== null ? ctx.account.currency : ctx.currencies.quote
-    const money = (o: ReturnType<typeof outcome>): string =>
-      formatMoney(o.amountAccount ?? o.amount, currency) + (o.ofBalance !== null ? ` (${formatPercent(o.ofBalance)})` : '')
-
-    const first = line()
-    const bits = [`${formatUnits(plan.units)} units`]
-    if (size.lots !== null) bits.push(formatLots(size.lots))
-    if (size.notionalAccount !== null) bits.push(`value ${formatMoney(size.notionalAccount, ctx.account.currency, false)}`)
-    if (size.margin !== null) bits.push(`margin ${formatMoney(size.margin, ctx.account.currency, false)}`)
-    first.textContent = bits.join(' · ')
-    // The engine does not enforce margin, but a live account would refuse this.
-    if (size.margin !== null && size.margin > ctx.account.equity) {
-      first.append(' · ', el('span', 'is-warning', 'more than your equity'))
-    }
-
-    const risk = plan.stop !== undefined ? outcome(this.side, plan.units, plan.entry, plan.stop, ctx) : null
-    const reward = plan.target !== undefined ? outcome(this.side, plan.units, plan.entry, plan.target, ctx) : null
-    const second = line()
-    const riskNode = el('span', risk ? 'is-down' : 'is-warning', risk ? `Risk ${money(risk)}` : 'No stop loss')
-    second.appendChild(riskNode)
-    if (reward) {
-      second.append(' · ', el('span', 'is-up', `Reward ${money(reward)}`))
-      if (risk && risk.amount < 0 && reward.amount > 0) second.append(` · R:R ${(reward.amount / -risk.amount).toFixed(2)}`)
-    }
-    if (plan.problem) line('is-muted').textContent = plan.problem
+    if (!this.arming.press(armKey.place, tradePrefs().oneClick)) return
+    void this.submit().catch(() => {})
   }
 
   private async submit(): Promise<void> {
@@ -689,25 +922,20 @@ export class OrderTicket implements DraftController {
         units: plan.units,
         price: plan.price,
         stopLoss: plan.stop,
-        takeProfit: plan.target
+        takeProfit: plan.target,
+        label: this.note.trim() || undefined
       })
       // Back to a clean market order: a type kept without its price is a draft with nothing to
       // show, which would sit on the chart and keep the order just placed dimmed behind it.
-      this.type = 'market'
-      this.price = ''
-      this.stopLoss = ''
-      this.takeProfit = ''
-      this.priceField.input.value = ''
-      this.stopField.input.value = ''
-      this.targetField.input.value = ''
-      this.refresh()
+      this.reset()
     } catch (err) {
-      this.showError(err instanceof OhlcvApiError ? err.message : 'Order rejected')
+      this.showError(err instanceof OhlcvApiError ? err.message : err instanceof Error ? err.message : 'Order rejected')
       throw err
     }
   }
 
   dispose(): void {
+    this.arming.disarm()
     this.unsubscribe()
     this.unsubscribeSession()
   }

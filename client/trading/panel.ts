@@ -12,7 +12,9 @@ import {
 } from './format'
 import { amendmentRefusal, describeAmendment, type ProposedChange } from './amend'
 import type { InstrumentInfo } from './instrument'
+import { Arming, armKey, ConfirmBar, kbtn } from './kit'
 import { type Amendment, applyAmendment } from './lines'
+import { tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 
 // The trading panel: an account strip and the working-orders / open-positions / history tables.
@@ -36,9 +38,12 @@ import type { TradingSession } from './session'
 // session notification (every two seconds while anything is working), which used to replace the
 // input under the cursor. It catches up when the focus leaves the table.
 //
+// CLOSE, CANCEL and FLATTEN ALL take a second press, as they do on the pane and in the popup (Close
+// and Cancel one press with one-click trading on; Flatten all always two), and its buttons and its
+// confirm bar are the trading kit's (kit.ts), so the account window reads like the rest.
+//
 // Hand-built plain DOM, the house style for app-side chrome (client/chartlayers/settings.ts):
-// the library owns Svelte, the app owns the chrome around it, and the panel reuses the
-// library's own token classes (kc-button, kc-input, kc-field) so it reads as native.
+// the library owns Svelte, the app owns the chrome around it.
 
 export interface PanelContext {
   /** Instrument facts (precision + pip size) for a key, from the config cache. */
@@ -73,10 +78,8 @@ export class TradingPanel {
   private accountStrip: HTMLElement
   private tablesHost: HTMLElement
   private tableContent: HTMLElement
-  private confirmBar: HTMLElement
-  private confirmTitle: HTMLElement
-  private confirmDetail: HTMLElement
-  private confirmButton: HTMLButtonElement
+  private confirmBar: ConfirmBar
+  private arming: Arming
   private tablesNotice: HTMLElement
   private noticeTimer: ReturnType<typeof setTimeout> | null = null
   private renderTimer: ReturnType<typeof setTimeout> | null = null
@@ -91,7 +94,8 @@ export class TradingPanel {
     private session: TradingSession,
     private ctx: PanelContext
   ) {
-    this.element = el('div', 'wd-trade-panel')
+    this.element = el('div', 'wd-tk wd-trade-panel')
+    this.arming = new Arming(() => this.render())
     this.body = el('div', 'wd-trade-panel-body')
     this.element.appendChild(this.body)
 
@@ -100,24 +104,14 @@ export class TradingPanel {
 
     this.tabsBar = this.buildTabs()
     this.tablesHost = el('div', 'wd-trade-tables')
-    this.confirmBar = el('div', 'wd-trade-confirm')
-    this.confirmBar.setAttribute('role', 'alertdialog')
-    this.confirmTitle = el('div', 'wd-trade-confirm-title')
-    this.confirmDetail = el('div', 'wd-trade-confirm-detail')
-    const answers = el('div', 'wd-trade-confirm-actions')
-    const cancel = button('kc-button kc-button-outline wd-trade-confirm-btn', 'Cancel', () => ctx.amendments.cancel())
-    this.confirmButton = button('kc-button kc-button-primary wd-trade-confirm-btn', 'Confirm', () => {
-      ctx.amendments.confirm().catch((err) => this.notice(err instanceof OhlcvApiError ? err.message : 'Request failed'))
-    })
-    answers.append(cancel, this.confirmButton)
-    const words = el('div', 'wd-trade-confirm-text')
-    words.append(this.confirmTitle, this.confirmDetail)
-    this.confirmBar.append(words, answers)
-    this.confirmBar.hidden = true
+    this.confirmBar = new ConfirmBar(
+      () => ctx.amendments.confirm().catch((err) => this.notice(err instanceof OhlcvApiError ? err.message : 'Request failed')),
+      () => ctx.amendments.cancel()
+    )
     this.tablesNotice = el('div', 'kc-field-error wd-trade-tables-notice')
     this.tablesNotice.hidden = true
     this.tableContent = el('div', 'wd-trade-table-content')
-    this.tablesHost.append(this.confirmBar, this.tablesNotice, this.tableContent)
+    this.tablesHost.append(this.confirmBar.element, this.tablesNotice, this.tableContent)
     this.body.appendChild(this.tabsBar)
     this.body.appendChild(this.tablesHost)
     // The focus leaving a table settles whatever was skipped while it was there.
@@ -174,7 +168,7 @@ export class TradingPanel {
       this.accountStrip.appendChild(emptyRow(`Connecting to your ${this.session.mode ?? 'paper'} account…`))
       this.tabsBar.style.display = 'none'
       this.tableContent.innerHTML = ''
-      this.confirmBar.hidden = true
+      this.confirmBar.update(null)
       return
     }
     this.tabsBar.style.display = ''
@@ -208,15 +202,9 @@ export class TradingPanel {
     const position = a ? (a.owner === 'trade' ? s.trades.find((t) => t.id === a.id) : s.orders.find((o) => o.id === a.id)) : undefined
     const info = position ? this.ctx.instrumentFor(position.symbol) : null
     const words = a && info ? describeAmendment(a, s, info) : null
-    this.confirmBar.hidden = !words
-    if (!a || !info || !words) return
-    const refusal = amendmentRefusal(a, s, info)
-    const sending = this.ctx.amendments.sending()
-    this.confirmTitle.textContent = words.title
-    this.confirmDetail.textContent = refusal ?? words.detail
-    this.confirmDetail.classList.toggle('is-warning', refusal !== null)
-    this.confirmButton.disabled = sending || refusal !== null
-    this.confirmButton.textContent = sending ? 'Sending…' : 'Confirm'
+    this.confirmBar.update(
+      a && info && words ? { ...words, refusal: amendmentRefusal(a, s, info), sending: this.ctx.amendments.sending() } : null
+    )
   }
 
   private notice(message: string): void {
@@ -256,11 +244,15 @@ export class TradingPanel {
       stat('Unrealized', `${formatPnl(s.account.unrealizedPnl)} ${c}`, upnlCls),
       stat('Open', String(s.trades.filter((t) => t.closedAt === null).length))
     )
-    const newOrder = button('kc-button kc-button-primary wd-trade-new-order', 'New order', () => this.ctx.openTicket())
-    newOrder.title = 'Open the trade box'
-    const flatten = button('kc-button kc-button-outline wd-trade-flatten', 'Flatten all', () => {
+    const newOrder = kbtn('New order', () => this.ctx.openTicket(), ['primary'], 'Open the trade box')
+    newOrder.classList.add('wd-trade-new-order')
+    // Every instrument at once: always a second press, one-click or not.
+    const armed = this.arming.key === 'flattenAll'
+    const flatten = kbtn(armed ? 'Confirm flatten all' : 'Flatten all', () => {
+      if (!this.arming.press('flattenAll', false)) return
       void this.session.flatten().catch((err) => this.reportError(err))
-    })
+    }, armed ? ['danger', 'armed'] : ['danger'])
+    flatten.title = 'Close every trade and cancel every order, on every instrument'
     if (s.trades.every((t) => t.closedAt !== null) && s.orders.every((o) => o.status !== 'pending')) {
       flatten.disabled = true
     }
@@ -292,12 +284,9 @@ export class TradingPanel {
         editableCell(formatPrice(trade.takeProfit, prec), (raw) => this.edit('trade', trade.id, 'target', raw), this.proposedState('trade', trade.id, 'target')),
         cell(formatPips(pips), dir),
         cell(formatPnl(pnl), dir),
-        cell(
-          button('kc-button kc-button-outline wd-trade-close', 'Close', () => {
-            void this.session.closeTrade(trade.id).catch((err) => this.reportError(err))
-          })
-        )
+        cell(this.armedButton(armKey.close(trade.id, 1), 'Close', 'Confirm close', () => this.session.closeTrade(trade.id)))
       )
+      if (trade.label) row.title = `${trade.label} — show this position`
       tbody.appendChild(row)
     }
     return table
@@ -319,12 +308,9 @@ export class TradingPanel {
         editableCell(formatPrice(order.price, prec), (raw) => this.edit('order', order.id, 'order', raw), this.proposedState('order', order.id, 'order')),
         editableCell(formatPrice(order.stopLoss, prec), (raw) => this.edit('order', order.id, 'stop', raw), this.proposedState('order', order.id, 'stop')),
         editableCell(formatPrice(order.takeProfit, prec), (raw) => this.edit('order', order.id, 'target', raw), this.proposedState('order', order.id, 'target')),
-        cell(
-          button('kc-button kc-button-outline wd-trade-close', 'Cancel', () => {
-            void this.session.cancelOrder(order.id).catch((err) => this.reportError(err))
-          })
-        )
+        cell(this.armedButton(armKey.cancel(order.id), 'Cancel', 'Confirm cancel', () => this.session.cancelOrder(order.id)))
       )
+      if (order.label) row.title = `${order.label} — show this order`
       tbody.appendChild(row)
     }
     return table
@@ -366,6 +352,17 @@ export class TradingPanel {
       tbody.appendChild(row)
     }
     return table
+  }
+
+  /** A table's Close or Cancel: the second press sends it, or the first with one-click trading. */
+  private armedButton(key: string, text: string, armedText: string, send: () => Promise<void>): HTMLButtonElement {
+    const armed = this.arming.key === key
+    const b = kbtn(armed ? armedText : text, () => {
+      if (!this.arming.press(key, tradePrefs().oneClick)) return
+      void send().catch((err) => this.reportError(err))
+    }, armed ? ['danger', 'armed'] : [])
+    b.classList.add('wd-trade-close')
+    return b
   }
 
   /** A table row that selects its position and shows its stats when clicked -- anywhere but on

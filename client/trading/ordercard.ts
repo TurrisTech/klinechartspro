@@ -1,33 +1,53 @@
 import type { SimOrder, SimTrade } from './api'
+import { formatInstant, formatMoney, formatPrice, formatUnitsShort, moveText } from './format'
 import {
-  formatInstant,
-  formatLots,
-  formatMoney,
-  formatPercent,
-  formatPrice,
-  formatUnits,
-  formatUnitsShort,
-  moveText
-} from './format'
-import type { DraftOrder } from './lines'
+  allow,
+  armKey,
+  ConfirmBar,
+  type ConfirmView,
+  FigureList,
+  h,
+  kbtn,
+  LevelField,
+  type PresetView,
+  type TradeAction,
+  TradeActions
+} from './kit'
 import {
-  closingPrice,
-  type Outcome,
-  orderFigures,
-  type PricingContext,
-  positionSummary,
-  outcome,
-  protectionValid,
-  quoteToAccountRate,
-  rewardToRisk,
-  sizeFigures,
-  tradeFigures
-} from './metrics'
+  amountText,
+  type LevelBasis,
+  type LevelRole,
+  levelModeRefusal,
+  levelReadout,
+  levelText,
+  parseLevel,
+  priceStep,
+  restingDistance,
+  stepLevelText
+} from './levels'
+import { type Amendment, type DraftOrder, isComposing } from './lines'
+import { tradeActionsView } from './manage'
+import { orderFigures, outcome, type PricingContext, positionSummary, quoteToAccountRate, rewardToRisk, roundTo, targetForReward, tradeFigures } from './metrics'
+import type { ProtectMode } from './prefs'
+import { sizeRows, type StatRow } from './stats'
+
+export { h } from './kit'
+export { amountText } from './levels'
 
 // The order card: the collapsible widget in the candle pane's lower left that lists what is
-// working on the pane's instrument -- every open trade and pending order -- with the forex
-// figures behind each and the actions that manage them. Rolled up, its header still answers the
-// question it is open for: how many are working, and what they are making.
+// working on the pane's instrument -- every open trade and pending order -- with the figures behind
+// each and the controls that manage them. Rolled up, its header still answers the question it is
+// open for: how many are working, and what they are making.
+//
+// It is built from the same kit (kit.ts) as the trade box, so the two read alike (user,
+// 2026-10-03): a working trade's stop loss is the same field as the stop loss being written --
+// pips, price or % of balance, −/+ steps, Risk N% and 1R/2R/3R, the readout beside it -- and its
+// figures are the same rows. Editing a field here PROPOSES the change, which waits for Confirm
+// like every other on-chart change (user, 2026-09-15); a step or a preset proposes too.
+//
+// The order being written in the trade box (the DRAFT) is the first row while it is for this
+// instrument and has a level of its own: a summary with Place, not a second editor -- the trade box
+// beside it is the editor, and two of them on screen at once was the inconsistency this replaced.
 //
 // Plain DOM like the rest of client/trading. Elements are built ONCE per trade or order and
 // updated in place on every snapshot, because a paper session notifies every two seconds: a
@@ -36,27 +56,36 @@ import {
 // It knows nothing about the chart. Every gesture goes out as a `CardAction` to the layer
 // (onchart.ts), which owns confirmation, the session call and the error.
 
+type Owner = 'trade' | 'order'
+
 export type CardAction =
   | { kind: 'toggle' }
   | { kind: 'select'; id: string }
-  | { kind: 'close'; trade: SimTrade; units?: number }
+  | { kind: 'close'; trade: SimTrade; fraction: number }
+  | { kind: 'reverse'; trade: SimTrade }
   | { kind: 'breakeven'; trade: SimTrade }
   | { kind: 'cancel'; order: SimOrder }
-  | { kind: 'protect'; owner: 'trade' | 'order'; id: string; role: 'stop' | 'target' }
-  | { kind: 'unprotect'; owner: 'trade' | 'order'; id: string; role: 'stop' | 'target' }
-  /** The stop at `riskPercent` of the balance; the target at `rewardRatio` times the stop. */
-  | { kind: 'riskStop'; owner: 'trade' | 'order'; id: string }
-  | { kind: 'rewardTarget'; owner: 'trade' | 'order'; id: string }
+  | { kind: 'protect'; owner: Owner; id: string; role: LevelRole }
+  | { kind: 'unprotect'; owner: Owner; id: string; role: LevelRole }
+  /** A field's value, or a step: propose this level (null removes it). */
+  | { kind: 'setLevel'; owner: Owner; id: string; role: LevelRole | 'order'; price: number | null }
+  /** The stop at `riskPercent` of the balance; the target at `ratio` times the stop. */
+  | { kind: 'riskStop'; owner: Owner; id: string }
+  | { kind: 'rewardTarget'; owner: Owner; id: string; ratio: number }
+  /** How every stop and target is stated, here and in the trade box. */
+  | { kind: 'unit'; mode: ProtectMode }
   | { kind: 'flatten' }
-  /** The ticket's draft: add a level, clear one, apply a preset, or place it. */
-  | { kind: 'draftProtect'; role: 'stop' | 'target' }
-  | { kind: 'draftClear'; role: 'entry' | 'stop' | 'target' }
-  | { kind: 'draftPreset'; role: 'stop' | 'target' }
+  | { kind: 'cancelOrders' }
+  /** The ticket's draft: add a level from its label, clear one, place it, or discard it. */
+  | { kind: 'draftProtect'; role: LevelRole }
+  | { kind: 'draftClear'; role: 'entry' | LevelRole }
   | { kind: 'draftPlace' }
   | { kind: 'draftDiscard' }
   /** The on-chart change waiting for confirmation. */
   | { kind: 'amendConfirm' }
   | { kind: 'amendCancel' }
+  /** A field held something that is not a level. */
+  | { kind: 'error'; message: string }
 
 export interface CardModel {
   symbol: string
@@ -67,41 +96,19 @@ export interface CardModel {
   compact: boolean
   /** The row shown with its details: the selection, or the only entry there is. */
   expanded: string | null
-  /** The action key waiting for its confirming second press ('close:t1', 'flatten'). */
+  /** The action key waiting for its confirming second press (kit.ts `armKey`). */
   armed: string | null
-  /** The shared presets behind the "Risk N%" and "NR" buttons (prefs.ts). */
+  /** The shared numbers behind the presets, and how levels are stated (prefs.ts). */
   riskPercent: number
-  rewardRatio: number
+  protectMode: ProtectMode
   /** The order being written in the ticket, when it is for this instrument. */
   draft: DraftOrder | null
-  /** A change to a stop, target or pending price waiting to be confirmed, in words. */
-  confirm: { title: string; detail: string; refusal: string | null; sending: boolean } | null
+  /** The change waiting for confirmation, and the same in words. */
+  amendment: Amendment | null
+  confirm: ConfirmView | null
 }
 
-export function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className = '',
-  text?: string
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  if (text !== undefined) node.textContent = text
-  return node
-}
-
-function btn(className: string, text: string, onClick: () => void, label?: string): HTMLButtonElement {
-  const b = h('button', className, text)
-  b.type = 'button'
-  if (label) {
-    b.setAttribute('aria-label', label)
-    b.title = label
-  }
-  b.addEventListener('click', (event) => {
-    event.stopPropagation()
-    onClick()
-  })
-  return b
-}
+export const REWARD_RATIOS = [1, 2, 3]
 
 function tone(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value === 0) return ''
@@ -115,21 +122,6 @@ function setTone(node: HTMLElement, value: number | null | undefined): void {
 
 export { moveText } from './format'
 
-/** An amount in the quote currency, then -- only where it differs and converts exactly -- the
- * account-currency figure. */
-export function amountText(
-  amount: number | null,
-  accountAmount: number | null,
-  ctx: PricingContext,
-  signed = true
-): string {
-  if (amount === null) return '—'
-  const quote = ctx.currencies.quote
-  const main = formatMoney(amount, quote, signed)
-  if (quote === ctx.account.currency || accountAmount === null) return main
-  return `${main} ≈ ${formatMoney(accountAmount, ctx.account.currency, signed)}`
-}
-
 export class OrderCard {
   readonly element: HTMLElement
   private readonly toggle: HTMLButtonElement
@@ -141,25 +133,24 @@ export class OrderCard {
   private readonly list: HTMLElement
   private readonly foot: HTMLElement
   private readonly footText: HTMLElement
+  private readonly cancelOrdersButton: HTMLButtonElement
   private readonly flattenButton: HTMLButtonElement
   private readonly errorNode: HTMLElement
   private readonly rows = new Map<string, TradeRow | OrderRow>()
   private readonly draftRow: DraftRow
-  private readonly confirmBar: HTMLElement
-  private readonly confirmTitle: HTMLElement
-  private readonly confirmDetail: HTMLElement
-  private readonly confirmButton: HTMLButtonElement
+  private readonly confirmBar: ConfirmBar
   private flashTimer: ReturnType<typeof setTimeout> | null = null
   private errorTimer: ReturnType<typeof setTimeout> | null = null
   private flashing = false
   private empty = true
 
   constructor(private readonly dispatch: (action: CardAction) => void) {
-    this.element = h('section', 'wd-oc-card')
+    this.element = h('section', 'wd-tk wd-oc-card')
     this.element.setAttribute('aria-label', 'Working orders')
 
     const head = h('div', 'wd-oc-card-head')
-    this.toggle = btn('wd-oc-card-toggle', '', () => dispatch({ kind: 'toggle' }))
+    this.toggle = kbtn('', () => dispatch({ kind: 'toggle' }))
+    this.toggle.className = 'wd-oc-card-toggle'
     const chevron = h('span', 'wd-oc-card-chevron')
     chevron.setAttribute('aria-hidden', 'true')
     this.symbol = h('span', 'wd-oc-card-symbol')
@@ -176,25 +167,19 @@ export class OrderCard {
     this.list.setAttribute('role', 'list')
     this.foot = h('div', 'wd-oc-card-foot')
     this.footText = h('span', 'wd-oc-card-foot-text')
-    this.flattenButton = btn('wd-oc-btn is-danger', 'Flatten', () => dispatch({ kind: 'flatten' }))
-    this.foot.append(this.footText, this.flattenButton)
+    this.cancelOrdersButton = kbtn('Cancel orders', () => dispatch({ kind: 'cancelOrders' }))
+    this.flattenButton = kbtn('Flatten', () => dispatch({ kind: 'flatten' }), ['danger'])
+    this.foot.append(this.footText, this.cancelOrdersButton, this.flattenButton)
     this.errorNode = h('div', 'wd-oc-card-error')
     this.errorNode.setAttribute('role', 'alert')
     this.errorNode.hidden = true
     this.draftRow = new DraftRow(dispatch)
     // The confirmation for an on-chart change: first in the card, so it is where the eye goes.
-    this.confirmBar = h('div', 'wd-oc-confirm')
-    this.confirmBar.setAttribute('role', 'alertdialog')
-    const words = h('div', 'wd-oc-confirm-text')
-    this.confirmTitle = h('div', 'wd-oc-confirm-title')
-    this.confirmDetail = h('div', 'wd-oc-confirm-detail')
-    words.append(this.confirmTitle, this.confirmDetail)
-    const answers = h('div', 'wd-oc-actions')
-    this.confirmButton = btn('wd-oc-btn is-primary', 'Confirm', () => dispatch({ kind: 'amendConfirm' }))
-    answers.append(btn('wd-oc-btn', 'Cancel', () => dispatch({ kind: 'amendCancel' })), this.confirmButton)
-    this.confirmBar.append(words, answers)
-    this.confirmBar.hidden = true
-    this.body.append(this.confirmBar, this.draftRow.element, this.list, this.foot, this.errorNode)
+    this.confirmBar = new ConfirmBar(
+      () => dispatch({ kind: 'amendConfirm' }),
+      () => dispatch({ kind: 'amendCancel' })
+    )
+    this.body.append(this.confirmBar.element, this.draftRow.element, this.list, this.foot, this.errorNode)
 
     this.element.append(head, this.body)
     this.element.hidden = true
@@ -202,7 +187,10 @@ export class OrderCard {
 
   render(model: CardModel): void {
     const { trades, orders, ctx } = model
-    this.empty = trades.length === 0 && orders.length === 0 && model.draft === null
+    // The draft is listed once it has a level of its own -- the rule the chart draws it by. A bare
+    // market order is only the trade box's button, which is right beside it.
+    const draft = isComposing(model.draft) ? model.draft : null
+    this.empty = trades.length === 0 && orders.length === 0 && draft === null
     this.element.hidden = this.empty && !this.flashing
     // A question waiting for an answer opens the card, whatever its rolled-up preference.
     const collapsed = model.collapsed && model.confirm === null
@@ -211,15 +199,7 @@ export class OrderCard {
     this.element.classList.toggle('is-confirming', model.confirm !== null)
     this.toggle.setAttribute('aria-expanded', String(!collapsed))
     this.toggle.title = collapsed ? 'Show working orders' : 'Hide working orders'
-
-    this.confirmBar.hidden = model.confirm === null
-    if (model.confirm) {
-      this.confirmTitle.textContent = model.confirm.title
-      this.confirmDetail.textContent = model.confirm.refusal ?? model.confirm.detail
-      this.confirmDetail.classList.toggle('is-warning', model.confirm.refusal !== null)
-      this.confirmButton.disabled = model.confirm.sending || model.confirm.refusal !== null
-      this.confirmButton.textContent = model.confirm.sending ? 'Sending…' : 'Confirm'
-    }
+    this.confirmBar.update(model.confirm)
 
     // Header: instrument, what is working, and the open P&L -- in the quote currency, which is
     // uniform across one instrument, so the sum is exact.
@@ -230,7 +210,7 @@ export class OrderCard {
     if (orders.length > 0) {
       parts.push(model.compact ? `${orders.length} ord` : `${orders.length} order${orders.length === 1 ? '' : 's'}`)
     }
-    if (model.draft) parts.push('draft')
+    if (draft) parts.push('draft')
     this.count.textContent = parts.join(' · ')
     this.count.hidden = parts.length === 0
     if (summary.pnlAccount !== null || trades.length > 0) {
@@ -241,8 +221,8 @@ export class OrderCard {
       this.pnl.hidden = true
     }
 
-    this.draftRow.element.hidden = model.draft === null
-    if (model.draft) this.draftRow.update(model.draft, model)
+    this.draftRow.element.hidden = draft === null
+    if (draft) this.draftRow.update(draft, model)
 
     // Rows, keyed by id and kept in the order they opened.
     const wanted = new Set<string>()
@@ -294,8 +274,13 @@ export class OrderCard {
         )
       }
       this.footText.textContent = bits.join(' · ')
-      this.footText.classList.toggle('is-warning', trades.length > 0 && summary.riskAtStops === null)
-      const armed = model.armed === 'flatten'
+      this.footText.classList.toggle('is-warn', trades.length > 0 && summary.riskAtStops === null)
+      const armedCancel = model.armed === 'cancelOrders'
+      this.cancelOrdersButton.hidden = orders.length === 0 || trades.length === 0
+      this.cancelOrdersButton.textContent = armedCancel ? 'Confirm cancel' : 'Cancel orders'
+      this.cancelOrdersButton.classList.toggle('is-armed', armedCancel)
+      this.cancelOrdersButton.title = `Cancel every pending ${model.symbol} order, keeping the trades`
+      const armed = model.armed === armKey.flatten
       this.flattenButton.textContent = armed ? 'Confirm flatten' : 'Flatten'
       this.flattenButton.classList.toggle('is-armed', armed)
       this.flattenButton.title = `Close every ${model.symbol} trade and cancel every ${model.symbol} order`
@@ -335,78 +320,123 @@ export class OrderCard {
   }
 }
 
-// -- rows ------------------------------------------------------------------------------------------
+// -- levels on a working position ----------------------------------------------------------------
 
-/** One "Stop" / "Target" line of a row's details, with its add/remove control. */
-class LevelLine {
-  readonly element: HTMLElement
-  private readonly price: HTMLElement
-  private readonly move: HTMLElement
-  private readonly amount: HTMLElement
-  private readonly extra: HTMLElement
-  readonly preset: HTMLButtonElement
-  readonly add: HTMLButtonElement
-  readonly remove: HTMLButtonElement
+/** What a working position's level fields need: who it is, where it is measured from, and the
+ * level it has now (the waiting change applied). */
+interface Working {
+  owner: Owner
+  id: string
+  basis: LevelBasis
+  stop: number | null
+  target: number | null
+}
 
-  constructor(role: 'stop' | 'target', onAdd: () => void, onRemove: () => void, onPreset: () => void) {
-    this.element = h('div', `wd-oc-level is-${role}`)
-    const label = h('span', 'wd-oc-level-label', role === 'stop' ? 'Stop' : 'Target')
-    const figures = h('span', 'wd-oc-level-figures')
-    this.price = h('span', 'wd-oc-level-price')
-    this.move = h('span', 'wd-oc-level-move')
-    this.amount = h('span', 'wd-oc-level-amount')
-    this.extra = h('span', 'wd-oc-level-extra')
-    figures.append(this.price, this.move, this.amount, this.extra)
-    const name = role === 'stop' ? 'stop loss' : 'take profit'
-    this.preset = btn('wd-oc-btn wd-oc-preset', '', onPreset)
-    this.add = btn('wd-oc-btn', '+ Add', onAdd, `Add a ${name}`)
-    this.remove = btn('wd-oc-btn wd-oc-icon', '×', onRemove, `Remove the ${name}`)
-    this.element.append(label, figures, this.preset, this.add, this.remove)
+function unitRefusals(ctx: PricingContext): Record<string, string | null> {
+  return Object.fromEntries((['pips', 'price', 'percent'] as ProtectMode[]).map((m) => [m, levelModeRefusal(m, ctx)]))
+}
+
+function pendingOn(model: CardModel, owner: Owner, id: string, role: LevelRole | 'order'): boolean {
+  const a = model.amendment
+  return a !== null && a.owner === owner && a.id === id && a.role === role
+}
+
+/** A working stop or target: the trade box's field, wired to propose rather than to write. */
+class WorkingLevel {
+  readonly field: LevelField
+  private working: Working | null = null
+  private mode: ProtectMode = 'pips'
+
+  constructor(
+    private readonly role: LevelRole,
+    owner: Owner,
+    id: string,
+    dispatch: (action: CardAction) => void
+  ) {
+    const propose = (text: string): boolean => {
+      const w = this.working
+      if (!w) return false
+      try {
+        dispatch({ kind: 'setLevel', owner, id, role, price: parseLevel(text, this.mode, role, w.basis) })
+        return true
+      } catch (err) {
+        dispatch({ kind: 'error', message: err instanceof Error ? err.message : 'Not a level' })
+        return false
+      }
+    }
+    this.field = new LevelField({
+      role,
+      label: role === 'stop' ? 'Stop loss' : 'Take profit',
+      withUnits: true,
+      onCommit: (text) => void propose(text),
+      onStep: (direction, big) => {
+        const w = this.working
+        if (!w) return
+        const text = stepLevelText(this.field.field.value(), this.mode, role, direction, big, w.basis)
+        if (propose(text)) this.field.write(text)
+      },
+      onUnit: (mode) => dispatch({ kind: 'unit', mode }),
+      onPreset: (i) =>
+        role === 'stop' ? dispatch({ kind: 'riskStop', owner, id }) : dispatch({ kind: 'rewardTarget', owner, id, ratio: REWARD_RATIOS[i] }),
+      onClear: () => dispatch({ kind: 'unprotect', owner, id, role })
+    })
   }
 
-  /** The preset button: its label, and the reason it cannot be used (null when it can). */
-  setPreset(text: string, title: string, refusal: string | null): void {
-    this.preset.textContent = text
-    this.preset.disabled = refusal !== null
-    this.preset.title = refusal ?? title
-    this.preset.setAttribute('aria-label', refusal ? `${title} (${refusal})` : title)
-  }
-
-  update(outcome: Outcome | null, ctx: PricingContext, extra: string): void {
-    const set = outcome !== null
-    this.add.hidden = set
-    this.remove.hidden = !set
-    this.price.textContent = set ? formatPrice(outcome.price, ctx.info.precision) : 'none'
-    this.element.classList.toggle('is-unset', !set)
-    this.move.textContent = set ? moveText(outcome) : ''
-    this.amount.textContent = set ? amountText(outcome.amount, outcome.amountAccount, ctx) : ''
-    setTone(this.move, outcome?.amount)
-    setTone(this.amount, outcome?.amount)
-    this.extra.textContent = extra
-    this.extra.hidden = extra === ''
+  update(w: Working, model: CardModel): void {
+    this.working = w
+    const { ctx } = w.basis
+    this.mode = model.protectMode
+    if (levelModeRefusal(this.mode, ctx) !== null) this.mode = ctx.info.pipSize !== null ? 'pips' : 'price'
+    const price = this.role === 'stop' ? w.stop : w.target
+    const presets: PresetView[] =
+      this.role === 'stop'
+        ? [
+            {
+              text: `Risk ${Number(model.riskPercent.toFixed(2))}%`,
+              title: `Put the stop where it loses ${Number(model.riskPercent.toFixed(2))}% of the balance`,
+              refusal: quoteToAccountRate(ctx) === null ? `no ${ctx.account.currency} rate for ${ctx.currencies.quote}` : null
+            }
+          ]
+        : REWARD_RATIOS.map((ratio) => {
+            const stopOutcome = w.stop !== null && w.basis.entry !== null ? outcome(w.basis.side, 1, w.basis.entry, w.stop, ctx) : null
+            const refusal = stopOutcome === null ? 'set a stop loss first' : stopOutcome.move >= 0 ? 'the stop is past the entry and risks nothing' : null
+            const at = refusal === null && w.basis.entry !== null && w.stop !== null ? targetForReward(w.basis.side, w.basis.entry, w.stop, ratio, ctx.info.precision) : null
+            return { text: `${ratio}R`, title: `Put the target at ${ratio}× the stop's distance`, refusal, active: at !== null && at === price }
+          })
+    this.field.update({
+      text: price !== null ? levelText(price, this.mode, w.basis) : '',
+      placeholder: 'none',
+      unit: this.mode,
+      unitRefusals: unitRefusals(ctx),
+      readout: price !== null ? levelReadout(price, this.mode, w.basis) : [],
+      presets,
+      removable: price !== null,
+      problem: null,
+      pending: pendingOn(model, w.owner, w.id, this.role),
+      stepRefusal: w.basis.entry === null ? 'No price yet' : null
+    })
   }
 }
 
-/** The order still being written in the ticket: always open, since it is what is being worked
- * on, with what it would risk and make, and Place. Nothing here is sent until Place is pressed
- * twice -- a second press, as for close and flatten, because the chart is an easy place to press
- * by accident. */
+// -- rows ------------------------------------------------------------------------------------------
+
+/** The order still being written in the trade box, for this instrument: what it would do, and
+ * Place -- two presses (or one, one-click), because the chart is an easy place to press by
+ * accident. Its levels are edited in the trade box or by dragging its lines. */
 class DraftRow {
   readonly element: HTMLElement
   private readonly badge: HTMLElement
   private readonly size: HTMLElement
   private readonly prices: HTMLElement
   private readonly ratio: HTMLElement
-  private readonly stop: LevelLine
-  private readonly target: LevelLine
-  private readonly units: { element: HTMLElement; value: HTMLElement }
-  private readonly margin: { element: HTMLElement; value: HTMLElement }
+  private readonly figures: FigureList
   private readonly problem: HTMLElement
   private readonly discard: HTMLButtonElement
   private readonly placeButton: HTMLButtonElement
 
   constructor(dispatch: (action: CardAction) => void) {
     this.element = h('div', 'wd-oc-row is-draft is-expanded')
+    this.element.title = 'The order in the trade box: edit it there, or drag its lines'
     const main = h('div', 'wd-oc-row-main')
     this.badge = h('span', 'wd-oc-badge is-pending', 'Draft')
     this.size = h('span', 'wd-oc-row-size')
@@ -414,29 +444,13 @@ class DraftRow {
     this.ratio = h('span', 'wd-oc-row-pips')
     main.append(this.badge, this.size, this.prices, this.ratio)
     const detail = h('div', 'wd-oc-row-detail')
-    this.stop = new LevelLine(
-      'stop',
-      () => dispatch({ kind: 'draftProtect', role: 'stop' }),
-      () => dispatch({ kind: 'draftClear', role: 'stop' }),
-      () => dispatch({ kind: 'draftPreset', role: 'stop' })
-    )
-    this.target = new LevelLine(
-      'target',
-      () => dispatch({ kind: 'draftProtect', role: 'target' }),
-      () => dispatch({ kind: 'draftClear', role: 'target' }),
-      () => dispatch({ kind: 'draftPreset', role: 'target' })
-    )
-    const grid = h('div', 'wd-oc-kvs')
-    this.units = keyValue('Size')
-    this.margin = keyValue('Margin')
-    grid.append(this.units.element, this.margin.element)
-    this.problem = h('div', 'wd-oc-draft-problem')
-    const actions = h('div', 'wd-oc-actions')
-    this.discard = btn('wd-oc-btn', 'Discard', () => dispatch({ kind: 'draftDiscard' }))
-    this.discard.title = 'Clear the draft: back to a market order with no stop or target'
-    this.placeButton = btn('wd-oc-btn is-primary', 'Place', () => dispatch({ kind: 'draftPlace' }))
+    this.figures = new FigureList('is-single')
+    this.problem = h('div', 'wd-tk-problem')
+    const actions = h('div', 'wd-tk-row is-end')
+    this.discard = kbtn('Discard', () => dispatch({ kind: 'draftDiscard' }), [], 'Clear the draft: back to a market order with no stop or target')
+    this.placeButton = kbtn('Place', () => dispatch({ kind: 'draftPlace' }), ['primary'])
     actions.append(this.discard, this.placeButton)
-    detail.append(this.stop.element, this.target.element, grid, this.problem, actions)
+    detail.append(this.figures.element, this.problem, actions)
     this.element.append(main, detail)
   }
 
@@ -446,80 +460,40 @@ class DraftRow {
     const precision = ctx.info.precision
     this.element.dataset.side = draft.side
     this.badge.className = `wd-oc-badge is-pending ${buy ? 'is-buy' : 'is-sell'}`
-    this.size.textContent = `${buy ? 'Buy' : 'Sell'} ${draft.type} ${draft.units !== null ? formatUnitsShort(draft.units) : '—'}`
+    const what = `${buy ? 'Buy' : 'Sell'} ${draft.type === 'market' ? 'market' : draft.type} ${draft.units !== null ? formatUnitsShort(draft.units) : '—'}`
+    this.size.textContent = what
     this.prices.textContent = `@ ${formatPrice(draft.entry, precision)}`
-    const at = (price: number | null): Outcome | null =>
-      price === null || draft.units === null ? null : outcome(draft.side, draft.units, draft.entry, price, ctx)
-    const stop = at(draft.stop)
-    const target = at(draft.target)
-    const rr = rewardToRisk(stop, target)
+    const basis: LevelBasis = { side: draft.side, entry: draft.entry, units: draft.units, ctx }
+    const at = (price: number | null) => (price === null || draft.units === null ? null : outcome(draft.side, draft.units, draft.entry, price, ctx))
+    const rr = rewardToRisk(at(draft.stop), at(draft.target))
     this.ratio.textContent = rr !== null ? `R:R ${rr.toFixed(2)}` : ''
 
-    const ofBalance = stop?.ofBalance ?? null
-    this.stop.update(stop, ctx, ofBalance !== null ? `${formatPercent(ofBalance)} of balance` : '')
-    this.target.update(target, ctx, rr !== null ? `R:R ${rr.toFixed(2)}` : '')
-    // A level with no size (the size comes from a stop that is not set yet) still shows its price.
-    if (draft.stop !== null && !stop) this.stop.update(null, ctx, formatPrice(draft.stop, precision))
-    if (draft.target !== null && !target) this.target.update(null, ctx, formatPrice(draft.target, precision))
-    const risk = `${Number(model.riskPercent.toFixed(2))}%`
-    this.stop.setPreset(
-      `Risk ${risk}`,
-      `Put the stop where it loses ${risk} of the balance`,
-      draft.riskPercent !== null
-        ? 'the size already comes from the risk'
-        : quoteToAccountRate(ctx) === null
-          ? `no ${ctx.account.currency} rate for ${ctx.currencies.quote}`
-          : null
-    )
-    const ratio = `${Number(model.rewardRatio.toFixed(2))}R`
-    this.target.setPreset(
-      ratio,
-      `Put the target at ${ratio}: ${Number(model.rewardRatio.toFixed(2))}× the stop's distance`,
-      draft.stop === null ? 'set a stop loss first' : !protectionValid(draft.side, 'stop', draft.stop, draft.entry) ? 'the stop is past the entry' : null
-    )
-
-    const size = draft.units !== null ? sizeFigures(draft.units, ctx) : null
-    this.units.value.textContent =
-      draft.units === null
-        ? '—'
-        : `${formatUnits(draft.units)}${size?.lots != null ? ` · ${formatLots(size.lots)}` : ''}${draft.riskPercent !== null ? ` · ${Number(draft.riskPercent.toFixed(2))}% risk` : ''}`
-    this.margin.element.hidden = size?.margin == null
-    this.margin.value.textContent = formatMoney(size?.margin ?? null, ctx.account.currency, false)
+    const level = (price: number | null): string =>
+      price === null ? 'none' : [formatPrice(price, precision), ...levelReadout(price, 'price', basis).map((p) => p.text)].join(' · ')
+    const rows: StatRow[] = [
+      { label: 'Stop loss', value: level(draft.stop), tone: draft.stop === null ? 'warn' : '' },
+      { label: 'Take profit', value: level(draft.target) }
+    ]
+    if (draft.units !== null) rows.push(...sizeRows(draft.units, ctx).filter((r) => r.label === 'Size' || r.label === 'Margin'))
+    this.figures.update(rows)
     this.problem.textContent = draft.problem ?? ''
     this.problem.hidden = draft.problem === null
     this.discard.hidden = draft.type === 'market' && draft.stop === null && draft.target === null
-    const armed = model.armed === 'place'
-    this.placeButton.disabled = draft.problem !== null
-    this.placeButton.title = draft.problem ?? ''
-    this.placeButton.textContent = armed ? 'Confirm' : `Place ${buy ? 'buy' : 'sell'} ${draft.type}`
-    this.placeButton.classList.toggle('is-armed', armed)
+    const armed = model.armed === armKey.place
+    this.placeButton.textContent = armed
+      ? 'Confirm'
+      : `Place ${buy ? 'buy' : 'sell'} ${draft.type} ${draft.units !== null ? formatUnitsShort(draft.units) : ''}`.trim()
+    this.placeButton.className = `wd-tk-btn is-${draft.side}${armed ? ' is-armed' : ''}`
+    allow(this.placeButton, draft.problem, armed ? 'Press again to send it' : '')
   }
 }
 
-/** The "Risk N%" and "NR" buttons. What they would do is priced by the layer when pressed;
- * here only whether they can: a stop from a share of the balance needs a conversion to the account
- * currency, and a target as a multiple of the risk needs a stop that is a loss. */
-function presets(stop: LevelLine, target: LevelLine, stopOutcome: Outcome | null, model: CardModel): void {
-  const { riskPercent, rewardRatio, ctx } = model
-  const risk = `${Number(riskPercent.toFixed(2))}%`
-  stop.setPreset(
-    `Risk ${risk}`,
-    `Put the stop where it loses ${risk} of the balance`,
-    quoteToAccountRate(ctx) === null ? `no ${ctx.account.currency} rate for ${ctx.currencies.quote}` : null
-  )
-  const ratio = `${Number(rewardRatio.toFixed(2))}R`
-  target.setPreset(
-    ratio,
-    `Put the target at ${ratio}: ${Number(rewardRatio.toFixed(2))}× the stop's distance`,
-    !stopOutcome ? 'set a stop loss first' : stopOutcome.amount >= 0 ? 'the stop is past the entry and risks nothing' : null
-  )
-}
-
-function keyValue(label: string): { element: HTMLElement; value: HTMLElement } {
-  const element = h('div', 'wd-oc-kv')
-  const value = h('span', 'wd-oc-kv-value')
-  element.append(h('span', 'wd-oc-kv-label', label), value)
-  return { element, value }
+function workingRows(units: number, ctx: PricingContext, rr: number | null, when: StatRow, label: string | null): StatRow[] {
+  const rows = sizeRows(units, ctx)
+  if (rr !== null) rows.push({ label: 'R:R', value: rr.toFixed(2) })
+  rows.push(when)
+  if (label) rows.push({ label: 'Note', value: label })
+  return rows
 }
 
 class TradeRow {
@@ -531,27 +505,20 @@ class TradeRow {
   private readonly pips: HTMLElement
   private readonly pnl: HTMLElement
   private readonly detail: HTMLElement
-  private readonly stop: LevelLine
-  private readonly target: LevelLine
-  private readonly units: { element: HTMLElement; value: HTMLElement }
-  private readonly pipValue: { element: HTMLElement; value: HTMLElement }
-  private readonly margin: { element: HTMLElement; value: HTMLElement }
-  private readonly opened: { element: HTMLElement; value: HTMLElement }
-  private readonly breakeven: HTMLButtonElement
-  private readonly half: HTMLButtonElement
-  private readonly close: HTMLButtonElement
+  private readonly stop: WorkingLevel
+  private readonly target: WorkingLevel
+  private readonly figures: FigureList
+  private readonly actions: TradeActions
   private trade: SimTrade | null = null
 
   constructor(
     readonly id: string,
     dispatch: (action: CardAction) => void
   ) {
-    const withTrade = (fn: (trade: SimTrade) => void) => () => {
-      if (this.trade) fn(this.trade)
-    }
     this.element = h('div', 'wd-oc-row')
     this.element.setAttribute('role', 'listitem')
-    this.main = btn('wd-oc-row-main', '', () => dispatch({ kind: 'select', id }))
+    this.main = kbtn('', () => dispatch({ kind: 'select', id }))
+    this.main.className = 'wd-oc-row-main'
     this.badge = h('span', 'wd-oc-badge')
     this.size = h('span', 'wd-oc-row-size')
     this.prices = h('span', 'wd-oc-row-prices')
@@ -560,30 +527,16 @@ class TradeRow {
     this.main.append(this.badge, this.size, this.prices, this.pips, this.pnl)
 
     this.detail = h('div', 'wd-oc-row-detail')
-    this.stop = new LevelLine(
-      'stop',
-      () => dispatch({ kind: 'protect', owner: 'trade', id, role: 'stop' }),
-      () => dispatch({ kind: 'unprotect', owner: 'trade', id, role: 'stop' }),
-      () => dispatch({ kind: 'riskStop', owner: 'trade', id })
-    )
-    this.target = new LevelLine(
-      'target',
-      () => dispatch({ kind: 'protect', owner: 'trade', id, role: 'target' }),
-      () => dispatch({ kind: 'unprotect', owner: 'trade', id, role: 'target' }),
-      () => dispatch({ kind: 'rewardTarget', owner: 'trade', id })
-    )
-    const grid = h('div', 'wd-oc-kvs')
-    this.units = keyValue('Size')
-    this.pipValue = keyValue('Pip value')
-    this.margin = keyValue('Margin')
-    this.opened = keyValue('Opened')
-    grid.append(this.units.element, this.pipValue.element, this.margin.element, this.opened.element)
-    const actions = h('div', 'wd-oc-actions')
-    this.breakeven = btn('wd-oc-btn', 'Breakeven', withTrade((trade) => dispatch({ kind: 'breakeven', trade })))
-    this.half = btn('wd-oc-btn', 'Close ½', withTrade((trade) => dispatch({ kind: 'close', trade, units: Math.floor(trade.units / 2) })))
-    this.close = btn('wd-oc-btn is-danger', 'Close', withTrade((trade) => dispatch({ kind: 'close', trade })))
-    actions.append(this.breakeven, this.half, this.close)
-    this.detail.append(this.stop.element, this.target.element, grid, actions)
+    this.stop = new WorkingLevel('stop', 'trade', id, dispatch)
+    this.target = new WorkingLevel('target', 'trade', id, dispatch)
+    this.figures = new FigureList()
+    this.actions = new TradeActions((action: TradeAction) => {
+      const trade = this.trade
+      if (!trade) return
+      if (action.kind === 'close') dispatch({ kind: 'close', trade, fraction: action.fraction })
+      else dispatch({ kind: action.kind, trade })
+    })
+    this.detail.append(this.stop.field.element, this.target.field.element, this.figures.element, this.actions.element)
     this.element.append(this.main, this.detail)
   }
 
@@ -604,40 +557,23 @@ class TradeRow {
     this.pnl.textContent = f.pnl ? formatMoney(f.pnl.amount) : '—'
     setTone(this.pips, f.pnl?.amount)
     setTone(this.pnl, f.pnl?.amount)
-    this.main.title = `${long ? 'Long' : 'Short'} ${formatUnits(trade.units)} ${model.symbol} from ${formatPrice(trade.entryPrice, ctx.info.precision)}${
+    this.main.title = `${long ? 'Long' : 'Short'} ${formatUnitsShort(trade.units)} ${model.symbol} from ${formatPrice(trade.entryPrice, ctx.info.precision)}${
       f.pnl ? `, ${amountText(f.pnl.amount, f.pnl.amountAccount, ctx)}` : ''
-    }`
+    }${trade.label ? ` — ${trade.label}` : ''}`
 
     this.detail.hidden = !expanded
     if (!expanded) return
-    const ofBalance = f.stop?.ofBalance ?? null
-    const stopExtra = ofBalance !== null ? `${formatPercent(ofBalance)} of balance` : ''
-    const targetExtra = f.rewardToRisk !== null ? `R:R ${f.rewardToRisk.toFixed(2)}` : ''
-    this.stop.update(f.stop, ctx, stopExtra)
-    this.target.update(f.target, ctx, targetExtra)
-    presets(this.stop, this.target, f.stop, model)
-    this.units.value.textContent = f.lots !== null ? `${formatUnits(trade.units)} · ${formatLots(f.lots)}` : formatUnits(trade.units)
-    this.pipValue.element.hidden = f.pipValue === null
-    this.pipValue.value.textContent = amountText(f.pipValue, f.pipValueAccount, ctx, false)
-    this.margin.element.hidden = f.margin === null
-    this.margin.value.textContent = formatMoney(f.margin, ctx.account.currency, false)
-    this.opened.value.textContent = formatInstant(trade.openedAt)
-
-    // Breakeven: the stop moved to the entry, which the engine accepts only once the market is
-    // past the entry in the trade's favour.
-    const mark = closingPrice(trade.side, ctx.quote)
-    const canBreakeven =
-      mark !== null && trade.stopLoss !== trade.entryPrice && protectionValid(trade.side, 'stop', trade.entryPrice, mark)
-    this.breakeven.disabled = !canBreakeven
-    this.breakeven.title = canBreakeven
-      ? `Move the stop to the entry, ${formatPrice(trade.entryPrice, ctx.info.precision)}`
-      : trade.stopLoss === trade.entryPrice
-        ? 'The stop is already at the entry'
-        : 'Available once the price is past the entry in your favour'
-    this.half.hidden = trade.units < 2
-    const armedClose = model.armed === `close:${trade.id}`
-    this.close.textContent = armedClose ? 'Confirm close' : 'Close'
-    this.close.classList.toggle('is-armed', armedClose)
+    const working: Working = {
+      owner: 'trade',
+      id: trade.id,
+      basis: { side: trade.side, entry: trade.entryPrice, units: trade.units, ctx },
+      stop: trade.stopLoss,
+      target: trade.takeProfit
+    }
+    this.stop.update(working, model)
+    this.target.update(working, model)
+    this.figures.update(workingRows(trade.units, ctx, f.rewardToRisk, { label: 'Opened', value: formatInstant(trade.openedAt) }, trade.label))
+    this.actions.update(tradeActionsView(trade, ctx, model.armed))
   }
 }
 
@@ -649,14 +585,14 @@ class OrderRow {
   private readonly prices: HTMLElement
   private readonly distance: HTMLElement
   private readonly detail: HTMLElement
-  private readonly stop: LevelLine
-  private readonly target: LevelLine
-  private readonly units: { element: HTMLElement; value: HTMLElement }
-  private readonly pipValue: { element: HTMLElement; value: HTMLElement }
-  private readonly margin: { element: HTMLElement; value: HTMLElement }
-  private readonly placed: { element: HTMLElement; value: HTMLElement }
+  private readonly price: LevelField
+  private readonly stop: WorkingLevel
+  private readonly target: WorkingLevel
+  private readonly figures: FigureList
   private readonly cancel: HTMLButtonElement
   private order: SimOrder | null = null
+  private precision = 5
+  private step = 0.0001
 
   constructor(
     readonly id: string,
@@ -664,7 +600,8 @@ class OrderRow {
   ) {
     this.element = h('div', 'wd-oc-row is-pending')
     this.element.setAttribute('role', 'listitem')
-    this.main = btn('wd-oc-row-main', '', () => dispatch({ kind: 'select', id }))
+    this.main = kbtn('', () => dispatch({ kind: 'select', id }))
+    this.main.className = 'wd-oc-row-main'
     this.badge = h('span', 'wd-oc-badge')
     this.size = h('span', 'wd-oc-row-size')
     this.prices = h('span', 'wd-oc-row-prices')
@@ -672,36 +609,43 @@ class OrderRow {
     this.main.append(this.badge, this.size, this.prices, this.distance)
 
     this.detail = h('div', 'wd-oc-row-detail')
-    this.stop = new LevelLine(
-      'stop',
-      () => dispatch({ kind: 'protect', owner: 'order', id, role: 'stop' }),
-      () => dispatch({ kind: 'unprotect', owner: 'order', id, role: 'stop' }),
-      () => dispatch({ kind: 'riskStop', owner: 'order', id })
-    )
-    this.target = new LevelLine(
-      'target',
-      () => dispatch({ kind: 'protect', owner: 'order', id, role: 'target' }),
-      () => dispatch({ kind: 'unprotect', owner: 'order', id, role: 'target' }),
-      () => dispatch({ kind: 'rewardTarget', owner: 'order', id })
-    )
-    const grid = h('div', 'wd-oc-kvs')
-    this.units = keyValue('Size')
-    this.pipValue = keyValue('Pip value')
-    this.margin = keyValue('Margin')
-    this.placed = keyValue('Placed')
-    grid.append(this.units.element, this.pipValue.element, this.margin.element, this.placed.element)
-    const actions = h('div', 'wd-oc-actions')
-    this.cancel = btn('wd-oc-btn is-danger', 'Cancel order', () => {
-      if (this.order) dispatch({ kind: 'cancel', order: this.order })
+    const propose = (text: string): boolean => {
+      const value = Number(text.trim())
+      if (text.trim() === '' || !(value > 0)) {
+        dispatch({ kind: 'error', message: 'An order must keep a price' })
+        return false
+      }
+      dispatch({ kind: 'setLevel', owner: 'order', id, role: 'order', price: roundTo(value, this.precision) })
+      return true
+    }
+    this.price = new LevelField({
+      role: 'entry',
+      label: 'Price',
+      withUnits: false,
+      onCommit: (text) => void propose(text),
+      onStep: (direction, big) => {
+        const current = Number(this.price.field.value()) || this.order?.price || 0
+        const next = roundTo(current + direction * this.step * (big ? 10 : 1), this.precision)
+        if (next > 0 && propose(formatPrice(next, this.precision))) this.price.write(formatPrice(next, this.precision))
+      }
     })
+    this.stop = new WorkingLevel('stop', 'order', id, dispatch)
+    this.target = new WorkingLevel('target', 'order', id, dispatch)
+    this.figures = new FigureList()
+    const actions = h('div', 'wd-tk-row is-end')
+    this.cancel = kbtn('Cancel order', () => {
+      if (this.order) dispatch({ kind: 'cancel', order: this.order })
+    }, ['danger'])
     actions.append(this.cancel)
-    this.detail.append(this.stop.element, this.target.element, grid, actions)
+    this.detail.append(this.price.element, this.stop.field.element, this.target.field.element, this.figures.element, actions)
     this.element.append(this.main, this.detail)
   }
 
   update(order: SimOrder, model: CardModel): void {
     this.order = order
     const { ctx } = model
+    this.precision = ctx.info.precision
+    this.step = priceStep(ctx.info)
     const f = orderFigures(order, ctx)
     const expanded = model.expanded === order.id
     const buy = order.side === 'buy'
@@ -714,21 +658,34 @@ class OrderRow {
     this.size.textContent = `${type} ${formatUnitsShort(order.units)}`
     this.prices.textContent = `@ ${formatPrice(order.price, ctx.info.precision)}`
     this.distance.textContent = f.distance ? `${moveText(f.distance, false)} away` : '—'
-    this.main.title = `${buy ? 'Buy' : 'Sell'} ${type} ${formatUnits(order.units)} ${model.symbol} at ${formatPrice(order.price, ctx.info.precision)}`
+    this.main.title = `${buy ? 'Buy' : 'Sell'} ${type} ${formatUnitsShort(order.units)} ${model.symbol} at ${formatPrice(order.price, ctx.info.precision)}${
+      order.label ? ` — ${order.label}` : ''
+    }`
 
     this.detail.hidden = !expanded
     if (!expanded) return
-    const ofBalance = f.stop?.ofBalance ?? null
-    const stopExtra = ofBalance !== null ? `${formatPercent(ofBalance)} of balance` : ''
-    const targetExtra = f.rewardToRisk !== null ? `R:R ${f.rewardToRisk.toFixed(2)}` : ''
-    this.stop.update(f.stop, ctx, stopExtra)
-    this.target.update(f.target, ctx, targetExtra)
-    presets(this.stop, this.target, f.stop, model)
-    this.units.value.textContent = f.lots !== null ? `${formatUnits(order.units)} · ${formatLots(f.lots)}` : formatUnits(order.units)
-    this.pipValue.element.hidden = f.pipValue === null
-    this.pipValue.value.textContent = amountText(f.pipValue, f.pipValueAccount, ctx, false)
-    this.margin.element.hidden = f.margin === null
-    this.margin.value.textContent = formatMoney(f.margin, ctx.account.currency, false)
-    this.placed.value.textContent = formatInstant(order.createdAt)
+    const distance = order.price !== null ? restingDistance(order.side, order.price, ctx.quote, ctx.info) : null
+    this.price.update({
+      text: formatPrice(order.price, ctx.info.precision),
+      placeholder: 'price',
+      readout: distance ? [{ text: distance, tone: '' }] : [],
+      presets: [],
+      removable: false,
+      problem: null,
+      pending: pendingOn(model, 'order', order.id, 'order')
+    })
+    const working: Working = {
+      owner: 'order',
+      id: order.id,
+      basis: { side: order.side, entry: order.price, units: order.units, ctx },
+      stop: order.stopLoss,
+      target: order.takeProfit
+    }
+    this.stop.update(working, model)
+    this.target.update(working, model)
+    this.figures.update(workingRows(order.units, ctx, f.rewardToRisk, { label: 'Placed', value: formatInstant(order.createdAt) }, order.label))
+    const armed = model.armed === armKey.cancel(order.id)
+    this.cancel.textContent = armed ? 'Confirm cancel' : 'Cancel order'
+    this.cancel.classList.toggle('is-armed', armed)
   }
 }

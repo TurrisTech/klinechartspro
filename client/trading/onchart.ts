@@ -33,8 +33,10 @@ import {
   tradeFigures
 } from './metrics'
 import { amendmentRefusal, describeAmendment } from './amend'
+import { armKey } from './kit'
+import { closeFraction, reverseTrade } from './manage'
 import { type CardAction, h, moveText, OrderCard } from './ordercard'
-import { tradePrefs } from './prefs'
+import { setTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 
 // The HTML half of what a trading session puts on one candle pane: a LABEL on every trade line
@@ -425,8 +427,9 @@ export class OnChartLayer {
       expanded: selected,
       armed: this.armed,
       riskPercent: tradePrefs().riskPercent,
-      rewardRatio: tradePrefs().rewardRatio,
+      protectMode: tradePrefs().protectMode,
       draft: this.draft,
+      amendment: this.host.amendment(),
       confirm: this.describeAmendment(snapshot, ctx, key)
     })
     this.schedule()
@@ -492,7 +495,7 @@ export class OnChartLayer {
       }
       label.addStop.hidden = draft.stop !== null
       label.addTarget.hidden = draft.target !== null
-      const armed = this.armed === 'place'
+      const armed = this.armed === armKey.place
       label.place.hidden = false
       label.place.disabled = draft.problem !== null
       label.place.textContent = armed ? 'Confirm' : 'Place'
@@ -516,7 +519,7 @@ export class OnChartLayer {
       amount = f.pnl?.amount ?? null
       label.addStop.hidden = trade.stopLoss !== null
       label.addTarget.hidden = trade.takeProfit !== null
-      const armed = this.armed === `close:${trade.id}`
+      const armed = this.armed === armKey.close(trade.id, 1)
       label.remove.textContent = armed ? 'Close?' : '×'
       label.remove.classList.toggle('is-armed', armed)
       label.remove.setAttribute('aria-label', armed ? 'Confirm closing this trade' : 'Close this trade')
@@ -529,8 +532,10 @@ export class OnChartLayer {
       move = f.distance ? `${moveText(f.distance, false)} away` : ''
       label.addStop.hidden = order.stopLoss !== null
       label.addTarget.hidden = order.takeProfit !== null
-      label.remove.textContent = '×'
-      label.remove.setAttribute('aria-label', 'Cancel this order')
+      const armed = this.armed === armKey.cancel(order.id)
+      label.remove.textContent = armed ? 'Cancel?' : '×'
+      label.remove.classList.toggle('is-armed', armed)
+      label.remove.setAttribute('aria-label', armed ? 'Confirm cancelling this order' : 'Cancel this order')
       title = `${formatPrice(price, precision)} — drag to move the order`
     } else if ((line.role === 'stop' || line.role === 'target') && (trade || order)) {
       const side = line.side
@@ -619,9 +624,10 @@ export class OnChartLayer {
   // -- actions ------------------------------------------------------------------------------------
 
   /** Two-press confirmation for what cannot be undone, with no modal: the first press relabels
-   * the button, a second within `CONFIRM_MS` does it. */
-  private confirmed(key: string): boolean {
-    if (this.armed === key) {
+   * the button, a second within `CONFIRM_MS` does it -- or the first, where one-click trading
+   * covers it (placing, closing, cancelling; never flattening or cancelling every order). */
+  private confirmed(key: string, oneClick = false): boolean {
+    if (oneClick || this.armed === key) {
       this.disarm()
       return true
     }
@@ -673,7 +679,7 @@ export class OnChartLayer {
     if (!snapshot) return
     if (line.role === 'entry') {
       const trade = snapshot.trades.find((t) => t.id === line.id)
-      if (trade) this.perform({ kind: 'close', trade })
+      if (trade) this.perform({ kind: 'close', trade, fraction: 1 })
     } else if (line.role === 'order') {
       const order = snapshot.orders.find((o) => o.id === line.id)
       if (order) this.perform({ kind: 'cancel', order })
@@ -696,9 +702,18 @@ export class OnChartLayer {
         else this.host.inspect(action.id)
         return
       case 'close': {
-        const partial = action.units !== undefined && action.units > 0 && action.units < action.trade.units
-        if (!partial && !this.confirmed(`close:${action.trade.id}`)) return
-        this.run(session.closeTrade(action.trade.id, partial ? action.units : undefined))
+        if (!this.confirmed(armKey.close(action.trade.id, action.fraction), tradePrefs().oneClick)) return
+        this.run(closeFraction(session, action.trade, action.fraction, this.pricing(snapshot ?? session.snapshot)))
+        return
+      }
+      case 'reverse': {
+        if (!this.confirmed(armKey.reverse(action.trade.id), tradePrefs().oneClick)) return
+        reverseTrade(session, action.trade, this.pricing(snapshot ?? session.snapshot))
+          .then((text) => this.flash(text, 'info'))
+          .catch((err) => {
+            this.showError(err)
+            this.render(this.snapshot)
+          })
         return
       }
       case 'breakeven':
@@ -711,14 +726,30 @@ export class OnChartLayer {
         this.host.cancelAmendment()
         return
       case 'cancel':
+        if (!this.confirmed(armKey.cancel(action.order.id), tradePrefs().oneClick)) return
         this.run(session.cancelOrder(action.order.id))
         return
+      case 'cancelOrders': {
+        if (!this.confirmed('cancelOrders')) return
+        const ids = (snapshot ? workingFor(snapshot, this.key).orders : []).map((o) => o.id)
+        this.run(ids.reduce<Promise<void>>((chain, id) => chain.then(() => session.cancelOrder(id)), Promise.resolve()))
+        return
+      }
       case 'flatten':
-        if (!this.confirmed('flatten')) return
+        if (!this.confirmed(armKey.flatten)) return
         this.run(session.flatten(this.key))
         return
       case 'unprotect':
         this.proposeOrSay({ owner: action.owner, id: action.id, role: action.role, price: null })
+        return
+      case 'setLevel':
+        this.proposeOrSay({ owner: action.owner, id: action.id, role: action.role, price: action.price })
+        return
+      case 'unit':
+        setTradePrefs({ protectMode: action.mode })
+        return
+      case 'error':
+        this.showError(action.message)
         return
       case 'riskStop':
       case 'rewardTarget': {
@@ -728,6 +759,7 @@ export class OnChartLayer {
           this.showError(level)
           return
         }
+        if (action.kind === 'rewardTarget') setTradePrefs({ rewardRatio: action.ratio })
         this.proposeOrSay({ owner: action.owner, id: action.id, role: action.kind === 'riskStop' ? 'stop' : 'target', price: level })
         return
       }
@@ -747,18 +779,10 @@ export class OnChartLayer {
         this.host.draft?.clearLevel('target')
         this.host.draft?.clearLevel('entry')
         return
-      case 'draftPreset': {
-        const draft = this.draft
-        if (!snapshot || !draft || !this.host.draft) return
-        const level = this.draftPreset(snapshot, draft, action.role)
-        if (typeof level === 'string') this.showError(level)
-        else this.host.draft.setLevel(action.role, level)
-        return
-      }
       case 'draftPlace': {
         const controller = this.host.draft
         if (!controller || !this.draft) return
-        if (!this.confirmed('place')) return
+        if (!this.confirmed(armKey.place, tradePrefs().oneClick)) return
         controller.place().catch((err) => this.showError(err))
         return
       }
@@ -792,7 +816,8 @@ export class OnChartLayer {
     action: Extract<CardAction, { kind: 'riskStop' | 'rewardTarget' }>
   ): number | string {
     const ctx = this.pricing(snapshot)
-    const { riskPercent, rewardRatio } = tradePrefs()
+    const { riskPercent } = tradePrefs()
+    const rewardRatio = action.kind === 'rewardTarget' ? action.ratio : tradePrefs().rewardRatio
     const trade = action.owner === 'trade' ? snapshot.trades.find((t) => t.id === action.id) : undefined
     const order = action.owner === 'order' ? snapshot.orders.find((o) => o.id === action.id) : undefined
     const position = trade ?? order
@@ -818,26 +843,6 @@ export class OnChartLayer {
       }
     }
     return level
-  }
-
-  /** The card's presets applied to the draft: the stop at `riskPercent` of the balance for its
-   * size, or the target at `rewardRatio` times its stop. */
-  private draftPreset(snapshot: SimSnapshot, draft: DraftOrder, role: 'stop' | 'target'): number | string {
-    const ctx = this.pricing(snapshot)
-    const { riskPercent, rewardRatio } = tradePrefs()
-    if (role === 'stop') {
-      if (draft.riskPercent !== null) return 'The size already comes from the risk: move the stop instead'
-      if (draft.units === null) return 'The draft has no size yet'
-      return (
-        levelForBalancePercent(draft.side, 'stop', draft.units, draft.entry, riskPercent, ctx) ??
-        `No ${ctx.account.currency} rate for ${ctx.currencies.quote}, so a stop cannot be priced from the balance`
-      )
-    }
-    if (draft.stop === null) return 'Set a stop loss first'
-    return (
-      targetForReward(draft.side, draft.entry, draft.stop, rewardRatio, ctx.info.precision) ??
-      'The stop is past the entry, so there is no risk to multiply'
-    )
   }
 
   /** Where a new stop or target is put: a slice of the pane's visible price range beyond the

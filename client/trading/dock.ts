@@ -111,6 +111,17 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     if (ticketOpen) overlays.draftChanged()
   })
 
+  // The waiting change to a stop, target or price, held by the overlays and asked in the same
+  // words wherever it was started: on the pane, in the account window's tables, in the popup.
+  const amendments = {
+    current: () => overlays.currentAmendment(),
+    sending: () => overlays.isSending(),
+    propose: (change: Parameters<TradingOverlays['propose']>[0]) => overlays.propose(change),
+    confirm: () => overlays.confirmAmendment(),
+    cancel: () => overlays.cancelAmendment(),
+    onChange: (listener: () => void) => overlays.onAmendmentChange(listener)
+  }
+
   const inspector = new PositionInspector({
     session,
     instrumentFor,
@@ -119,7 +130,8 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     theme,
     selected: () => overlays.selectedId(),
     select: (id) => overlays.select(id),
-    onSelectionChange: (listener) => overlays.onSelectionChange(listener)
+    onSelectionChange: (listener) => overlays.onSelectionChange(listener),
+    amendments
   })
   const unsubscribeInspect = overlays.onInspect((id) => inspector.show(id))
 
@@ -130,14 +142,7 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     inspect: (id) => overlays.inspect(id),
     openTicket: () => setTicketOpen(true),
     // Table edits are confirmed through the same waiting change the chart shows.
-    amendments: {
-      current: () => overlays.currentAmendment(),
-      sending: () => overlays.isSending(),
-      propose: (change) => overlays.propose(change),
-      confirm: () => overlays.confirmAmendment(),
-      cancel: () => overlays.cancelAmendment(),
-      onChange: (listener) => overlays.onAmendmentChange(listener)
-    }
+    amendments
   })
 
   const win = createDockableWindow({

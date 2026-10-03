@@ -1,8 +1,14 @@
 import { OhlcvApiError } from '../config'
 import { createDockableWindow, type DockableWindow, type Point } from '../chrome/window'
+import { amendmentRefusal, describeAmendment } from './amend'
 import type { InstrumentInfo } from './instrument'
-import { findInspected, type Inspected, positionStats, type StatRow } from './stats'
+import { Arming, armKey, ConfirmBar, type ConfirmView, FigureList, h, kbtn, type TradeAction, TradeActions } from './kit'
+import { closeFraction, reverseTrade, tradeActionsView } from './manage'
+import { pricingContext } from './metrics'
+import type { PanelAmendments } from './panel'
+import { tradePrefs } from './prefs'
 import type { TradingSession } from './session'
+import { findInspected, type Inspected, positionStats } from './stats'
 
 // The position popup: click a position -- its line or label on a pane, its row on the order card,
 // its row in the account window's tables -- and a small window opens beside the click with that
@@ -13,6 +19,11 @@ import type { TradingSession } from './session'
 // ×. It follows the selection while it is open -- a click on another position, or a fill selecting
 // the new trade, switches it -- and lets go when the selection is let go. A trade that closes while
 // shown stays shown, as the closed trade it now is; an order that fills becomes its trade.
+//
+// Built from the trading kit like the trade box and the order card (user, 2026-10-03): its figures
+// are the same rows, an open trade's actions are the same row as the card's -- Breakeven, Reverse,
+// Close ¼ ½ ¾ All -- with the same two-press rule (or one press, one-click), and a breakeven it
+// proposes asks the same question in the same bar, here as well as on the pane.
 
 export interface InspectorContext {
   session: TradingSession
@@ -26,34 +37,25 @@ export interface InspectorContext {
   selected(): string | null
   select(id: string | null): void
   onSelectionChange(listener: (id: string | null) => void): () => void
+  /** The waiting change shared with the pane and the account window (TradingOverlays). */
+  amendments: PanelAmendments
 }
 
 /** A click this recent placed the popup beside itself. Older, it opens where it last was. */
 const CLICK_MS = 1_500
-const CONFIRM_MS = 3_000
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  if (text !== undefined) node.textContent = text
-  return node
-}
 
 export class PositionInspector {
   private readonly win: DockableWindow
   private readonly headline: HTMLElement
-  private readonly grid: HTMLElement
-  private readonly actions: HTMLElement
-  private readonly errorNode: HTMLElement
-  private readonly closeHalf: HTMLButtonElement
-  private readonly closeAll: HTMLButtonElement
+  private readonly figures: FigureList
+  private readonly confirmBar: ConfirmBar
+  private readonly tradeActions: TradeActions
+  private readonly orderActions: HTMLElement
   private readonly cancel: HTMLButtonElement
+  private readonly errorNode: HTMLElement
+  private readonly arming: Arming
   private id: string | null = null
   private open = false
-  private armed: string | null = null
-  private armTimer: ReturnType<typeof setTimeout> | null = null
-  private rowSignature = ''
-  private values: HTMLElement[] = []
   private lastClick: { point: Point; at: number } | null = null
   private readonly unsubscribe: Array<() => void> = []
 
@@ -69,22 +71,22 @@ export class PositionInspector {
       onClose: () => this.hide()
     })
     this.win.setVisible(false)
+    this.win.body.classList.add('wd-tk')
+    this.arming = new Arming(() => this.render())
     this.headline = h('div', 'wd-pos-headline')
-    this.grid = h('dl', 'wd-pos-grid')
-    this.errorNode = h('div', 'kc-field-error wd-pos-error')
+    this.figures = new FigureList('is-single')
+    this.confirmBar = new ConfirmBar(
+      () => ctx.amendments.confirm().catch((err) => this.showError(err)),
+      () => ctx.amendments.cancel()
+    )
+    this.tradeActions = new TradeActions((action) => this.act(action))
+    this.orderActions = h('div', 'wd-tk-row is-end')
+    this.cancel = kbtn('Cancel order', () => this.act({ kind: 'cancel' }), ['danger'])
+    this.orderActions.append(this.cancel)
+    this.errorNode = h('div', 'wd-tk-problem is-error')
+    this.errorNode.setAttribute('role', 'alert')
     this.errorNode.hidden = true
-    this.actions = h('div', 'wd-pos-actions')
-    const action = (text: string, onClick: () => void, cls = 'kc-button-outline'): HTMLButtonElement => {
-      const b = h('button', `kc-button ${cls} wd-pos-action`, text)
-      b.type = 'button'
-      b.addEventListener('click', onClick)
-      return b
-    }
-    this.closeHalf = action('Close ½', () => this.act('half'))
-    this.closeAll = action('Close', () => this.act('close'))
-    this.cancel = action('Cancel order', () => this.act('cancel'))
-    this.actions.append(this.closeHalf, this.closeAll, this.cancel)
-    this.win.body.append(this.headline, this.grid, this.actions, this.errorNode)
+    this.win.body.append(this.headline, this.confirmBar.element, this.figures.element, this.tradeActions.element, this.orderActions, this.errorNode)
 
     // Where the click that opens it happened. Captured on the window, before the chart layer stops
     // the event reaching anything else.
@@ -95,6 +97,7 @@ export class PositionInspector {
     this.unsubscribe.push(() => window.removeEventListener('pointerdown', onPointer, true))
     this.unsubscribe.push(ctx.session.subscribe(() => this.render()))
     this.unsubscribe.push(ctx.onSelectionChange((id) => this.followSelection(id)))
+    this.unsubscribe.push(ctx.amendments.onChange(() => this.render()))
   }
 
   isOpen(): boolean {
@@ -105,7 +108,7 @@ export class PositionInspector {
   show(id: string): void {
     const switching = this.id !== id
     this.id = id
-    if (switching) this.disarm()
+    if (switching) this.arming.disarm()
     this.errorNode.hidden = true
     const click = this.lastClick && performance.now() - this.lastClick.at < CLICK_MS ? this.lastClick.point : null
     this.render()
@@ -120,7 +123,7 @@ export class PositionInspector {
   hide(): void {
     if (!this.open) return
     this.open = false
-    this.disarm()
+    this.arming.disarm()
     this.win.setVisible(false)
     // Closing the popup lets the position go on the panes too, unless something else took over.
     if (this.id !== null && this.ctx.selected() === this.id) this.ctx.select(null)
@@ -162,7 +165,9 @@ export class PositionInspector {
       return
     }
     const key = item.kind === 'trade' ? item.trade.symbol : item.order.symbol
-    const stats = positionStats(item, this.ctx.session.snapshot, this.ctx.instrumentFor(key))
+    const snapshot = this.ctx.session.snapshot
+    const info = this.ctx.instrumentFor(key)
+    const stats = positionStats(item, snapshot, info)
 
     this.win.element.dataset.side = stats.side
     const title = this.win.element.querySelector('.wd-window-title')
@@ -170,80 +175,67 @@ export class PositionInspector {
     this.headline.hidden = stats.headline === null
     this.headline.textContent = stats.headline?.text ?? ''
     this.headline.className = `wd-pos-headline ${stats.headline?.tone ? `is-${stats.headline.tone}` : ''}`
-    this.renderRows(stats.rows)
+    this.figures.update(stats.rows)
+    this.confirmBar.update(this.question(item, info))
 
-    const open = stats.kind === 'trade'
-    this.closeHalf.hidden = !open
-    this.closeAll.hidden = !open
-    this.cancel.hidden = stats.kind !== 'order'
-    this.actions.hidden = stats.kind === 'closed'
-    this.closeHalf.disabled = !open || (item.kind === 'trade' && Math.floor(item.trade.units / 2) <= 0)
-    this.closeAll.textContent = this.armed === 'close' ? 'Confirm close' : 'Close'
-    this.closeAll.classList.toggle('is-armed', this.armed === 'close')
+    const ctx = pricingContext(key, info, snapshot.account, snapshot.quotes[key], snapshot.quotes)
+    const armed = this.arming.key
+    this.tradeActions.element.hidden = stats.kind !== 'trade'
+    if (stats.kind === 'trade' && item.kind === 'trade') this.tradeActions.update(tradeActionsView(item.trade, ctx, armed))
+    this.orderActions.hidden = stats.kind !== 'order'
+    const cancelArmed = item.kind === 'order' && armed === armKey.cancel(item.order.id)
+    this.cancel.textContent = cancelArmed ? 'Confirm cancel' : 'Cancel order'
+    this.cancel.classList.toggle('is-armed', cancelArmed)
     this.win.reflow()
   }
 
-  /** Rows are rebuilt only when WHICH rows there are changes; otherwise their values are written
-   * in place, so a two-second poll does not rebuild what is being read (or selected to copy). */
-  private renderRows(rows: StatRow[]): void {
-    const signature = rows.map((r) => r.label).join('|')
-    if (signature !== this.rowSignature) {
-      this.rowSignature = signature
-      this.grid.innerHTML = ''
-      this.values = rows.map((row) => {
-        const dt = h('dt', 'wd-pos-label', row.label)
-        const dd = h('dd', 'wd-pos-value')
-        this.grid.append(dt, dd)
-        return dd
-      })
-    }
-    rows.forEach((row, i) => {
-      const node = this.values[i]
-      node.textContent = row.value
-      node.className = `wd-pos-value ${row.tone ? `is-${row.tone}` : ''}`
-    })
+  /** The waiting change, when it is to the position shown. */
+  private question(item: Inspected, info: InstrumentInfo): ConfirmView | null {
+    const a = this.ctx.amendments.current()
+    const id = item.kind === 'trade' ? item.trade.id : item.order.id
+    if (!a || a.id !== id) return null
+    const snapshot = this.ctx.session.snapshot
+    const words = describeAmendment(a, snapshot, info)
+    if (!words) return null
+    return { ...words, refusal: amendmentRefusal(a, snapshot, info), sending: this.ctx.amendments.sending() }
   }
 
-  private act(kind: 'half' | 'close' | 'cancel'): void {
+  private act(action: TradeAction | { kind: 'cancel' }): void {
     const item = this.item()
     if (!item) return
     const session = this.ctx.session
-    let request: Promise<unknown>
-    if (item.kind === 'order') {
-      request = session.cancelOrder(item.order.id)
-    } else if (kind === 'half') {
-      request = session.closeTrade(item.trade.id, Math.floor(item.trade.units / 2))
-    } else {
-      // Closing the whole trade takes two presses, like everywhere else it can be done.
-      if (this.armed !== 'close') {
-        this.armed = 'close'
-        if (this.armTimer) clearTimeout(this.armTimer)
-        this.armTimer = setTimeout(() => {
-          this.disarm()
-          this.render()
-        }, CONFIRM_MS)
-        this.render()
-        return
-      }
-      this.disarm()
-      request = session.closeTrade(item.trade.id)
-    }
+    const oneClick = tradePrefs().oneClick
     this.errorNode.hidden = true
-    request.catch((err) => {
-      this.errorNode.textContent = err instanceof OhlcvApiError ? err.message : 'Request failed'
-      this.errorNode.hidden = false
-    })
-    this.render()
+    if (item.kind === 'order') {
+      if (action.kind !== 'cancel' || !this.arming.press(armKey.cancel(item.order.id), oneClick)) return
+      session.cancelOrder(item.order.id).catch((err) => this.showError(err))
+      return
+    }
+    const trade = item.trade
+    const snapshot = session.snapshot
+    const ctx = pricingContext(trade.symbol, this.ctx.instrumentFor(trade.symbol), snapshot.account, snapshot.quotes[trade.symbol], snapshot.quotes)
+    if (action.kind === 'breakeven') {
+      // Proposed, like every change to a working stop: the bar above asks.
+      this.ctx.amendments.propose({ owner: 'trade', id: trade.id, role: 'stop', price: trade.entryPrice })
+      return
+    }
+    if (action.kind === 'reverse') {
+      if (!this.arming.press(armKey.reverse(trade.id), oneClick)) return
+      reverseTrade(session, trade, ctx).catch((err) => this.showError(err))
+      return
+    }
+    if (action.kind !== 'close' || !this.arming.press(armKey.close(trade.id, action.fraction), oneClick)) return
+    closeFraction(session, trade, action.fraction, ctx).catch((err) => this.showError(err))
   }
 
-  private disarm(): void {
-    this.armed = null
-    if (this.armTimer) clearTimeout(this.armTimer)
-    this.armTimer = null
+  private showError(err: unknown): void {
+    this.errorNode.textContent = err instanceof OhlcvApiError ? err.message : err instanceof Error ? err.message : 'Request failed'
+    this.errorNode.hidden = false
+    this.win.reflow()
   }
 
   dispose(): void {
-    this.disarm()
+    this.arming.disarm()
     for (const off of this.unsubscribe) off()
     this.win.dispose()
   }
