@@ -26,9 +26,14 @@ import type { IndicatorPlugin } from './types'
 // an indicator the server computes but the quote half of the bars themselves; TradeTalk,
 // which is a trading method computed here from daily bars and the bars the pane already holds;
 // and the volume profile, computed here from bars of a lower timeframe than the pane's.
+//
+// Levels and Zones (`levels`) are the picker's first group -- they were two buttons on the
+// toolbar until 2026-10-03 -- and are built by the caller, which also hands
+// their controllers the wall's panes and the replay (client/levels/indicator.ts).
 
-export function builtinPlugins(): IndicatorPlugin[] {
+export function builtinPlugins(levels: IndicatorPlugin): IndicatorPlugin[] {
   return [
+    levels,
     createRegistryPlugin(),
     createArevLabPlugin(),
     createArev21DivergencePlugin(),

@@ -12,6 +12,7 @@ import { fromStoredDivConfig, toStoredDivConfig, type DivConfig, type StoredDivC
 import { fromStoredLabConfig, toStoredLabConfig, type LabConfig, type StoredLabConfig } from './arevlab/config'
 import { fromStoredMtfConfig, toStoredMtfConfig, type MtfConfig, type StoredMtfConfig } from './mtf/config'
 import { fromStoredVpConfig, toStoredVpConfig, type StoredVpConfig, type VpConfig } from './volprofile/config'
+import type { StoredLayerConfig } from './chartlayers/persist'
 import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 
 // The SHAPE of one wall document -- per pane its symbol/period/indicators, those indicators'
@@ -61,6 +62,11 @@ interface PersistedPane {
   // drawn -- stored the same way: the differences from the defaults, flat by path, omitted for
   // a pane never configured.
   vp?: StoredVpConfig
+  // The chart layers' settings for THIS pane (client/chartlayers -- Levels and Zones), by layer
+  // id, each stored the same way: the differences from the layer's defaults, flat by path,
+  // omitted for a pane never configured. The layer validates them as it reads them back
+  // (chartlayers/persist.ts), so this file only checks their shape.
+  ly?: Record<string, StoredLayerConfig>
 }
 
 // One pane's view -- the library's PaneViewState, minus what is not worth storing. Kept
@@ -109,6 +115,9 @@ export interface HydratedPane {
   divConfig?: DivConfig
   /** Undefined for a pane never configured; the volume profile uses its defaults there. */
   vpConfig?: VpConfig
+  /** The chart layers' stored settings by layer id, still as stored (the layer validates them);
+   * undefined for a pane none was configured on. */
+  layerConfigs?: Record<string, StoredLayerConfig>
   view: PaneViewState | null
 }
 
@@ -300,6 +309,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     const labConfig = fromStoredLabConfig(pane.al)
     const divConfig = fromStoredDivConfig(pane.dv)
     const vpConfig = fromStoredVpConfig(pane.vp)
+    const layerConfigs = hydrateLayerConfigs(pane.ly)
     const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
     return {
       symbol: symbols[index],
@@ -314,6 +324,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
       ...(labConfig ? { labConfig } : {}),
       ...(divConfig ? { divConfig } : {}),
       ...(vpConfig ? { vpConfig } : {}),
+      ...(layerConfigs ? { layerConfigs } : {}),
       ...(mtfOverlayConfigs ? { mtfOverlayConfigs } : {}),
       view: hydrateView(pane)
     }
@@ -403,9 +414,24 @@ export interface PanePluginState {
   arev21div?: Record<number, DivConfig>
   /** The volume profile's. */
   volprofile?: Record<number, VpConfig>
+  /** The chart layers', already in their stored form, by layer id (chartlayers/plugin.ts). */
+  levels?: Record<number, Record<string, StoredLayerConfig>>
   /** Every other MTF overlay's, under its plugin id -- which is always `mtf_<name>`
    * (client/mtf/overlays.ts), so a new overlay persists without a change here. */
   [overlayId: `${typeof MTF_OVERLAY_PREFIX}${string}`]: Record<number, MtfConfig> | undefined
+}
+
+/** A pane's stored `ly`: every layer entry that is a non-empty object; undefined when none is.
+ * Only the shape -- the values are the layer's to judge, and it does so as it reads them. */
+function hydrateLayerConfigs(stored: unknown): Record<string, StoredLayerConfig> | undefined {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
+  const out: Record<string, StoredLayerConfig> = {}
+  for (const [id, config] of Object.entries(stored)) {
+    if (config && typeof config === 'object' && !Array.isArray(config) && Object.keys(config).length > 0) {
+      out[id] = config as StoredLayerConfig
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** The prefix every non-original MTF overlay's plugin id carries (client/mtf/overlays.ts). */
@@ -466,7 +492,16 @@ export function toPersistedLayout(
       const dv = pluginState.arev21div?.[index] ? toStoredDivConfig(pluginState.arev21div[index]) : undefined
       const vp = pluginState.volprofile?.[index] ? toStoredVpConfig(pluginState.volprofile[index]) : undefined
       const mx = storedOverlayConfigs(pluginState, index)
-      return { ...persisted, ...(mtf ? { mtf } : {}), ...(al ? { al } : {}), ...(dv ? { dv } : {}), ...(vp ? { vp } : {}), ...(mx ? { mx } : {}) }
+      const ly = hydrateLayerConfigs(pluginState.levels?.[index])
+      return {
+        ...persisted,
+        ...(mtf ? { mtf } : {}),
+        ...(al ? { al } : {}),
+        ...(dv ? { dv } : {}),
+        ...(vp ? { vp } : {}),
+        ...(mx ? { mx } : {}),
+        ...(ly ? { ly } : {})
+      }
     }),
     sync
   }

@@ -1,9 +1,12 @@
 import { hasFeature } from '../capabilities'
-import { loadPreferences, savePreference } from '../preferences'
+import { loadPreferences } from '../preferences'
 
-// Per-layer settings persistence. `/preferences` (client/preferences.ts) is dev-only — it
-// requires the `auth` feature, which prod does not advertise (client/capabilities.ts) — so a
-// layer's config falls back to localStorage there rather than silently never persisting.
+// The wall-wide settings a layer had while it was a toolbar button, READ ONLY. Since
+// 2026-10-03 a layer is an indicator and each pane keeps its own settings in the wall
+// document (controller.ts); what a user chose here before that is where every pane of theirs
+// that was never configured starts, and nothing writes it any more. `/preferences`
+// (client/preferences.ts) is dev-only — it requires the `auth` feature, which prod does not
+// advertise (client/capabilities.ts) — so prod's copy is in localStorage.
 
 const STORAGE_PREFIX = 'wd.layer.'
 
@@ -15,7 +18,7 @@ function preferenceKey(layerId: string): string {
   return `layer.${layerId}`
 }
 
-// A layer always saves its complete config (the settings panel holds the full object, not a
+// A layer always saved its complete config (the settings panel held the full object, not a
 // diff), so a merge only has to fill in keys a stored, older document is missing — but it
 // has to do that at every nesting level, not just the top one, or an update that adds a
 // field inside an existing nested object (e.g. a new Encoding property) would silently lose
@@ -53,19 +56,5 @@ export async function loadLayerConfig<T extends object>(
   } catch (err) {
     console.warn(`[chartlayers] localStorage load failed for ${layerId}, using defaults`, err)
     return defaults
-  }
-}
-
-// Fire-and-forget, like preferences.ts's own saveStarredTimeframes — the settings panel's
-// onChange has no way to await or surface an error.
-export function saveLayerConfig<T>(layerId: string, config: T): void {
-  if (hasFeature('preferences')) {
-    savePreference(preferenceKey(layerId), config)
-    return
-  }
-  try {
-    window.localStorage.setItem(storageKey(layerId), JSON.stringify(config))
-  } catch (err) {
-    console.warn(`[chartlayers] localStorage save failed for ${layerId}`, err)
   }
 }

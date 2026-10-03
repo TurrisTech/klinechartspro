@@ -1,18 +1,34 @@
 # Chart layers
 
 A **ChartLayer** is a server-derived, price-anchored overlay: fetch data for the current
-view, turn it into overlays, expose settings. `client/levels/` is the only one today and the
-reference implementation. This is deliberately **not** the indicator-plugin model
-(`client/plugins/`) — a plugin binds sources to a pane's indicator template on the bar grid,
-a layer draws objects anchored to *price*, with lifespans that predate the loaded bars.
+view, turn it into overlays, expose settings. `client/levels/` (Levels) is the reference
+implementation and `client/levels2/` (Zones) the second. Its data path is deliberately **not**
+the indicator-plugin model (`client/plugins/`) — a plugin binds sources to a pane's indicator
+template on the bar grid, a layer draws objects anchored to *price*, with lifespans that
+predate the loaded bars, and fetches by price band as well as time.
+
+**On the chart, though, a layer is an indicator** (since 2026-10-03; until then each was one
+toolbar button and one config for the whole wall). `plugin.ts` registers a template per layer
+(`LEVELS:levels`, `LEVELS:levels2` — saved walls name them, so never rename one) under one
+"Levels" picker group on the price pane; the template draws nothing itself. The controller
+draws a pane's overlays exactly while that pane carries the template, visible, so the picker,
+the legend's eye and ×, and the indicator manager turn it on and off per pane like anything
+else. Settings are per pane: the legend's gear opens the panel, the indicator manager edits
+the same fields inline, and the wall document keeps each pane's differences from the defaults
+as `ly` (`persist.ts` validates them on the way back in). A pane never configured starts from
+what the user last chose under the old toolbar button (`store.ts`, read only). The legend
+names the timeframes drawn, or why nothing is (`none for <ticker>`, `not served here` for
+Zones while no server advertises `levels2`).
 
 | file | what it is |
 |---|---|
 | `types.ts` | `ChartLayer`, `LayerWindow`, `LayerContext` — the contract |
-| `controller.ts` | the per-pane lifecycle: toolbar button, settings panel, wiring, debounced redraw |
+| `controller.ts` | the per-pane lifecycle: on while the pane carries the template, per-pane settings, debounced redraw |
+| `plugin.ts` | the layers as one indicator plugin: templates, picker group, legend, gear, inline settings, `paneState` |
+| `persist.ts` | a layer config's stored form (diff from defaults, flat by path) and its validation against the fields |
 | `window.ts` | **pure**: what a pane has covered and what it still needs |
 | `paint.ts` | **pure**: whether a redraw would change the picture |
-| `store.ts` | per-layer settings persistence (`/preferences`, or localStorage where auth is off) |
+| `store.ts` | the toolbar-era wall-wide settings, read once as the starting point of an unconfigured pane |
 | `settings.ts` | the declarative field schema and its plain-DOM renderer |
 | `encoding.ts`, `color.ts` | metrics → line width/opacity/colour |
 
@@ -63,9 +79,10 @@ and `/levels` answers a conditional GET.
 
 ## Tests
 
-`bun test client` — `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
+`bun test client` — `indicator.test.ts` (drawn only on panes carrying the template, off when
+hidden or removed, settings per pane, the wall document's shape, the legend), `persist.test.ts`
+(what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
 `paint.test.ts` (the signature is blind to nothing visible and to everything invisible),
 `../levels/freshness.test.ts` (the horizon in all three states, both DST directions, and that
 a dead feed is still bounded), `../levels/levels.test.ts` (what identifies a request, what is
-drawn, the tick case end to end, and that the horizon is read per instrument). The controller's
-DOM half has no coverage; the decisions it makes were moved out of it so they could have some.
+drawn, the tick case end to end, and that the horizon is read per instrument).

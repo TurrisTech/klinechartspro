@@ -1,7 +1,7 @@
 import { KLineChartPro, type ChartProPane } from '../src'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
-import { attachToSlot, createLayerController } from './chartlayers/controller'
+import { attachToSlot } from './chartlayers/controller'
 import { setFocusSource } from './chrome/focus'
 import { WdashboardDatafeed } from './datafeed'
 import {
@@ -13,8 +13,7 @@ import {
   type PanePluginState,
   type PersistedLayout
 } from './layout'
-import { levelsLayer } from './levels/layer'
-import { levels2Layer } from './levels2/layer'
+import { createLevelsIndicators } from './levels/indicator'
 import { mountNotificationCenter, notifications } from './notifications'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
@@ -302,8 +301,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     hydrateLayout(options.layout),
     hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES)
   ])
+  // Levels and Zones: indicators in the picker, drawn by a controller per layer that follows
+  // the wall's panes (onPanesChange below) and that the replay invalidates directly.
+  const levels = createLevelsIndicators()
   const pluginHost = await createPluginHost({
-    plugins: builtinPlugins(),
+    plugins: builtinPlugins(levels.plugin),
     facilities: createFacilities({ requestPersist: () => persist(), stream: replayBoot ? inertStream : undefined }),
     paneState: {
       // The AREV21 overlay's per-pane settings: app state the library's PaneSnapshot has
@@ -323,15 +325,14 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       volprofile: Object.fromEntries(
         hydrated.panes.flatMap((pane, index) => (pane.vpConfig ? [[index, pane.vpConfig]] : []))
       ),
+      // Levels' and Zones', by layer id, still in their stored form.
+      levels: Object.fromEntries(
+        hydrated.panes.flatMap((pane, index) => (pane.layerConfigs ? [[index, pane.layerConfigs]] : []))
+      ),
       // The other MTF overlays' (the arev21_outlier rank ones), each under its plugin id.
       ...overlayPaneState(hydrated.panes)
     }
   })
-
-  // Every chart layer (Levels, and the levels2 Zones beside it) is built before the chart
-  // exists: its `sync` becomes the wall's onPanesChange, which is a constructor argument.
-  const levelsController = createLayerController(levelsLayer)
-  const levels2Controller = createLayerController(levels2Layer)
 
   const periods = availablePeriods()
 
@@ -423,8 +424,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // Debug hook, like window.__wdPlugins: the live wall panes, so a console (or a
       // headless test) can reach a pane's chart. Read-only by convention.
       window.__wdPanes = panes
-      levelsController.sync(panes)
-      levels2Controller.sync(panes)
+      levels.sync(panes)
       pluginHost.sync(panes)
       paper?.sync(panes)
       replay?.sync(panes)
@@ -462,7 +462,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   if (replayBoot) {
     replay = await mountBarReplay(chartPro, container, replayBoot, {
       pluginHost,
-      levelsController,
+      levelsController: levels.levels,
       // The replay raises its watch alerts into the same centre a live wall's server-side
       // ones arrive in; this is the only place that hands it over.
       notify: notifications,
@@ -515,7 +515,6 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 
   const detachExtras = mountChartExtras(
     chartPro,
-    [levelsController, levels2Controller],
     switcher,
     saveControls,
     paper,
@@ -532,8 +531,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // component unmount each ChartPane (which unsubscribes its own bar stream).
       // ChartPro.svelte's onPanesChange effect is destroyed with the component, so it never
       // fires an empty list of its own -- this is the only teardown signal they get.
-      levelsController.sync([])
-      levels2Controller.sync([])
+      levels.sync([])
       pluginHost.teardown()
       // Clears its overlays against the still-alive charts and removes the dock, before the
       // component (and its panes) is unmounted below.
@@ -547,8 +545,6 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
         notifications.detach(remoteNotifications)
         remoteNotifications.dispose()
       }
-      levelsController.detach()
-      levels2Controller.detach()
       detachExtras()
       chartPro?.remove()
       chartPro = null
@@ -558,8 +554,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 }
 
 // Populates the two slots the library exposes (src/types.ts ChartPro.getSlot): the top-rail
-// toolbar gets the workspace switcher and each mounted chart layer's toggle (today just
-// Levels), the bottom of the left drawing rail gets the stream-liveness dot, server version,
+// toolbar gets the workspace switcher and its Save and Revert, the bottom of the left drawing rail gets the stream-liveness dot, server version,
 // and (when logged in) a sign-out control. The rail-footer trio lives in the chrome because
 // it answers questions the chart itself cannot — a chart with a dead socket looks exactly
 // like a quiet market.
@@ -567,7 +562,6 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 // Returns a disposer, because a workspace switch replaces the chart these are attached to.
 function mountChartExtras(
   chartPro: KLineChartPro,
-  layerControllers: ReturnType<typeof createLayerController>[],
   switcher: ReturnType<typeof createWorkspaceSwitcher>,
   saveControls: WorkspaceSaveControls,
   paper: PaperTradingController | null,
@@ -668,7 +662,6 @@ function mountChartExtras(
   // Save and Revert right after it: they act on the workspace the switcher names.
   const detachSaveControls = attachToSlot(chartPro, 'toolbar', saveControls.element)
   const detachFooter = attachToSlot(chartPro, 'rail-footer', footer)
-  for (const controller of layerControllers) controller.attach(chartPro)
 
   return () => {
     switcher.close()

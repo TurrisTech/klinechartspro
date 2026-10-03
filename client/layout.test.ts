@@ -127,6 +127,21 @@ describe('a round trip through the document', () => {
     expect(fromStoredVpConfig(JSON.parse(JSON.stringify(written.panes[0].vp)))).toEqual(vp)
   })
 
+  test("Levels' and Zones' settings ride in `ly`, by layer id, as the layers stored them", () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }, { ...PANE, id: 'p3' }], 0, sync, {
+      levels: {
+        0: { levels: { showSpent: true }, levels2: { 'intervals.4h': true } },
+        // Nothing usable: the pane writes no `ly` at all rather than an empty record.
+        2: { levels: {}, levels2: [] as unknown as Record<string, unknown> }
+      }
+    })
+    expect(written.panes[0].ly).toEqual({ levels: { showSpent: true }, levels2: { 'intervals.4h': true } })
+    expect('ly' in written.panes[1]).toBe(false)
+    expect('ly' in written.panes[2]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+  })
+
   test("the outlier MTF overlays' settings ride in `mx`, by plugin id, apart from AREV21 MTF's", () => {
     const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
     const r90 = structuredClone(MTF_DEFAULTS)

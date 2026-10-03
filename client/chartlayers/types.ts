@@ -34,12 +34,14 @@ export interface LayerContext extends LayerWindow {
 export interface ChartLayer<TDatum, TConfig> {
   /** Also the overlay groupId and the persisted-settings key — must be stable and unique. */
   id: string
-  /** The single toolbar button's text — click opens the settings panel, whose first row is
-   * always the enable/disable switch regardless of what `fields` adds below it. */
+  /** The layer's name on screen: its picker entry, its legend and its settings panel's
+   * title (plugin.ts). */
   label: string
   available(symbol: SymbolInfo, vendor: string): boolean
   defaults: TConfig
-  /** Layer-specific settings, shown below the enable/disable switch. May be empty. */
+  /** The layer's settings, per pane: drawn by its panel (the legend's gear) and inline by
+   * the indicator manager. They also say what a stored value may be (persist.ts). May be
+   * empty. */
   fields: SettingsField[]
   /** Everything that identifies a request EXCEPT its price/time window. A change here
    * throws a pane's accumulated data away; a window change only fetches what is missing,
