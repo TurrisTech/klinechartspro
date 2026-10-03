@@ -16,7 +16,7 @@ import { registerTradeTalkIndicator, TEMPLATE_NAME } from './templates'
 // statement about a session. Without it nothing is drawn, and the legend says so, rather
 // than a guessed zone putting every boundary an hour or seven out.
 
-const INTERVAL_PATTERN = /^(\d+)([mhDWMY])$/
+const INTERVAL_PATTERN = /^(\d+)([smhDWMY])$/
 
 /** Whether bars of this interval are dated by their SESSION (daily and coarser, which the
  * wire dates canonically) rather than by their open. */

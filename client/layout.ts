@@ -7,6 +7,7 @@ import type {
   SymbolInfo,
   SyncOptions
 } from '../src'
+import { periodFor } from '../src/utils/period'
 import { availablePeriods, defaultPeriod } from './periods'
 import { fromStoredDivConfig, toStoredDivConfig, type DivConfig, type StoredDivConfig } from './arev21div/config'
 import { fromStoredLabConfig, toStoredLabConfig, type LabConfig, type StoredLabConfig } from './arevlab/config'
@@ -313,7 +314,13 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
     return {
       symbol: symbols[index],
-      period: periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
+      // Restored through the same rule the picker applies: a saved 5s pane on an instrument
+      // that holds no 5s opens on 1m rather than issuing a load that can only be empty.
+      period: periodFor(
+        periods.find((item) => item.text === pane.p) ?? defaultPeriod(periods),
+        periods,
+        symbols[index]
+      ),
       mainIndicators: live(pane.mi ?? ['MA']),
       subIndicators: live(pane.si ?? ['VOL']),
       indicatorParams: hydrateIndicatorParams(pane),

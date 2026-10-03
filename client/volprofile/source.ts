@@ -27,8 +27,8 @@ import { lowerBound, type SourceBar } from './atoms'
 //
 // Only STORED intervals are candidates (`baseIntervalsFor`, which differs per vendor: schwab
 // keeps 30m and no 1h), because a derived one is folded out of a stored one's tiles and costs
-// exactly as many bars. 5s is never picked: it is prod-only, runs up to a week behind, and is
-// far more bars than any profile needs.
+// exactly as many bars. 5s is never picked: it exists only for the FX pairs it is fed for, and
+// it is twelve times the bars of 1m for a resolution no profile needs.
 
 /** How many bars a pane typically shows. Fixed rather than read off the zoom, so zooming does
  * not change the source and throw away what was fetched. */

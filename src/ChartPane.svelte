@@ -221,6 +221,10 @@
   const displayTimezone = $derived(pane.symbol?.timezone ?? timezone)
 
   function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
+    if (pane.period.timespan === 'second') {
+      return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
+        ? 'HH:mm:ss' : 'YYYY-MM-DD HH:mm:ss')
+    }
     if (pane.period.timespan === 'minute') {
       return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
         ? 'HH:mm' : 'YYYY-MM-DD HH:mm')
