@@ -1025,6 +1025,10 @@
 	-webkit-touch-callout: none;
 	-webkit-user-select: none;
 	user-select: none;
+	/* So is a dragged one. klinecharts cancels a touchmove only for a pinch or a manually ranged
+	   y axis, never for an ordinary pan, so the browser takes the drag as its own pan of the
+	   page and, once it has, the chart can no longer cancel the rest of the gesture. */
+	touch-action: none;
 }
 
 .klinecharts-pro-price-unit {
