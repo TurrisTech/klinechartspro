@@ -43,6 +43,7 @@ export type {
   IndicatorSettingsModel,
   PaneOptions,
   PaneSnapshot,
+  PaneStyleOverrides,
   PaneViewState,
   PaneYAxisRange,
   Period,

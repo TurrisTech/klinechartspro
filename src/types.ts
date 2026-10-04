@@ -110,6 +110,20 @@ export interface PaneViewState {
   }
 }
 
+/** The settings dialog's style fields for one pane, by the dotted klinecharts style path the
+ * dialog writes (`src/config/settings.ts`): `'candle.type'` -> `'area'`, `'grid.show'` -> false.
+ * Only what the pane actually DIFFERS by appears -- a field set back to the chart's own default
+ * is dropped rather than stored -- so a pane nobody has styled carries an empty record, and a
+ * change to a default reaches every pane that never overrode it.
+ *
+ * The same dialog's two y-axis fields are deliberately NOT here: klinecharts takes those
+ * through `overrideYAxis` rather than `setStyles`, and they ride in `PaneViewState.yAxis`.
+ *
+ * Every entry is validated against the dialog's own option table on the way in
+ * (`settingStyleValue`), because this is a stored document handed back to a later build of
+ * the chart. */
+export type PaneStyleOverrides = Record<string, string | boolean>
+
 /** klinecharts' own AxisRange, carried verbatim: a manual scale is an absolute price window,
  * and every derived field (real/display) is a pure function of the axis type it was captured
  * under, so round-tripping the whole record is exact where recomputing two of nine fields
@@ -144,6 +158,9 @@ export interface PaneOptions {
   /** Where this pane was looking. Omitted for a pane that has never been read back -- it then
    * mounts at the live edge, which is what a fresh pane has always done. */
   view?: PaneViewState
+  /** This pane's own answers from the settings dialog. Omitted, or empty, for a pane that
+   * draws the way the app's own `styles` say. */
+  styleOverrides?: PaneStyleOverrides
 }
 
 // A plain-data read of one pane's current construction-relevant state -- what
@@ -161,6 +178,8 @@ export interface PaneSnapshot {
   indicatorParams: Record<string, unknown[]>
   /** As PaneOptions.view. Null until this pane's chart has mounted and been read once. */
   view: PaneViewState | null
+  /** As PaneOptions.styleOverrides. Empty for a pane whose settings dialog was never used. */
+  styleOverrides: PaneStyleOverrides
 }
 
 // Public per-pane handle returned by getPanes()/getPane(). Only ever handed out for a pane

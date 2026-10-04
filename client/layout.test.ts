@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { PaneSnapshot } from '../src'
+import type { PaneSnapshot, PaneStyleOverrides } from '../src'
 
 // `window` does not exist under bun, and client/config.ts reads it at MODULE LOAD -- this
 // module reaches it through ./symbols. Installed before the dynamic import rather than at the
@@ -11,8 +11,15 @@ const hadWindow = 'window' in globalThis
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 }
 
-const { defaultLayout, hydrateLayout, isPersistedLayout, overlayPaneState, toPaneOptions, toPersistedLayout } =
-  await import('./layout')
+const {
+  defaultLayout,
+  hydrateLayout,
+  isPersistedLayout,
+  layoutSettingsSignature,
+  overlayPaneState,
+  toPaneOptions,
+  toPersistedLayout
+} = await import('./layout')
 const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
 const { MTF_DEFAULTS, fromStoredMtfConfig } = await import('./mtf/config')
 const { DIV_DEFAULTS, fromStoredDivConfig } = await import('./arev21div/config')
@@ -41,7 +48,8 @@ const PANE: PaneSnapshot = {
   mainIndicators: ['MA'],
   subIndicators: ['VOL'],
   indicatorParams: {},
-  view: null
+  view: null,
+  styleOverrides: {}
 }
 
 describe('isPersistedLayout', () => {
@@ -163,6 +171,58 @@ describe('a round trip through the document', () => {
     expect(back).toEqual(r90)
     const panes = [{}, { mtfOverlayConfigs: { mtf_arev21_outlier_rank_90: r90 } }] as never
     expect(overlayPaneState(panes)).toEqual({ mtf_arev21_outlier_rank_90: { 1: r90 } })
+  })
+
+  test("the settings dialog's styles ride in `st`, and a pane drawing as the app says writes none", () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const styled = { ...PANE, styleOverrides: { 'candle.type': 'area', 'grid.show': false } }
+    const written = toPersistedLayout('2h', [styled, { ...PANE, id: 'p2' }], 0, sync)
+    expect(written.panes[0].st).toEqual({ 'candle.type': 'area', 'grid.show': false })
+    expect('st' in written.panes[1]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+  })
+
+  test('and come back on the pane they were set on', async () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const written = toPersistedLayout(
+      '2h',
+      [{ ...PANE, styleOverrides: { 'candle.type': 'ohlc' } }, { ...PANE, id: 'p2' }],
+      0,
+      sync
+    )
+    const hydrated = await hydrateOffline(JSON.parse(JSON.stringify(written)))
+    expect(hydrated.panes[0].styleOverrides).toEqual({ 'candle.type': 'ohlc' })
+    expect(hydrated.panes[1].styleOverrides).toBeUndefined()
+    expect(toPaneOptions(hydrated.panes[0]).styleOverrides).toEqual({ 'candle.type': 'ohlc' })
+    // A pane that was never styled seeds no record at all rather than an empty one.
+    expect('styleOverrides' in toPaneOptions(hydrated.panes[1])).toBe(false)
+  })
+
+  test('a style that is not a style field\'s shape is dropped, and an empty `st` reads as never styled', async () => {
+    const hydrated = await hydrateOffline({
+      ...OLD_DOCUMENT,
+      panes: [
+        { s: 'EURUSD', p: '1h', st: { 'candle.type': 'area', 'grid.show': 3 as unknown as boolean } },
+        { s: 'EURUSD', p: '1h', st: {} },
+        { s: 'EURUSD', p: '1h', st: ['candle.type'] as unknown as PaneStyleOverrides },
+        { s: 'EURUSD', p: '1h', st: 'area' as unknown as PaneStyleOverrides }
+      ]
+    })
+    // The shape is all this file judges; which PATHS exist, and what each may be set to, is
+    // the library's call as it seeds the pane (src/config/settings.ts settingStyleValue).
+    expect(hydrated.panes[0].styleOverrides).toEqual({ 'candle.type': 'area' })
+    expect(hydrated.panes.slice(1).map((pane) => pane.styleOverrides)).toEqual([
+      undefined,
+      undefined,
+      undefined
+    ])
+  })
+
+  test('a styled pane is unsaved WORK, unlike a pan: it changes the settings signature', () => {
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const plain = toPersistedLayout('1', [PANE], 0, sync)
+    const styled = toPersistedLayout('1', [{ ...PANE, styleOverrides: { 'grid.show': false } }], 0, sync)
+    expect(layoutSettingsSignature(styled)).not.toEqual(layoutSettingsSignature(plain))
   })
 })
 

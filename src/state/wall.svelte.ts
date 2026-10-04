@@ -15,12 +15,14 @@
 import type { Chart, DeepPartial, OverlayCreate, OverlayMode, Styles } from 'klinecharts'
 
 import { getLayouts, layoutById, type LayoutPreset } from '../config/layouts'
+import { settingStyleValue } from '../config/settings'
 import { clampAbove, moveOrder } from './paneOrder'
 import type {
   DatafeedFactory,
   Datafeed,
   PaneOptions,
   PaneSnapshot,
+  PaneStyleOverrides,
   PaneViewState,
   Period,
   SymbolInfo
@@ -61,6 +63,20 @@ export interface PaneApi {
   screenshot(background: string): string
 }
 
+// A seed's style overrides, keeping only what the settings dialog could itself have written
+// (settingStyleValue) -- the one gate between a stored document and klinecharts' style tree,
+// whether the document came from the app's own storage or from a consumer's `panes` option.
+function cloneStyleOverrides(options?: PaneOptions | null): PaneStyleOverrides {
+  const stored = options?.styleOverrides
+  if (!stored || typeof stored !== 'object') return {}
+  const kept: PaneStyleOverrides = {}
+  for (const [key, value] of Object.entries(stored)) {
+    const settled = settingStyleValue(key, value)
+    if (settled !== undefined) kept[key] = settled
+  }
+  return kept
+}
+
 function cloneOptions(options?: PaneOptions | null): {
   symbol: SymbolInfo
   period: Period | undefined
@@ -69,6 +85,7 @@ function cloneOptions(options?: PaneOptions | null): {
   subIndicatorsAbove: number
   indicatorParams: Record<string, unknown[]>
   view: PaneViewState | null
+  styleOverrides: PaneStyleOverrides
 } {
   const subIndicators = options?.subIndicators ? [...options.subIndicators] : []
   return {
@@ -80,7 +97,8 @@ function cloneOptions(options?: PaneOptions | null): {
     // Structurally cloned, not aliased: these are the caller's own persisted documents, and a
     // pane mutating one in place would edit storage behind the caller's back.
     indicatorParams: options?.indicatorParams ? structuredClone(options.indicatorParams) : {},
-    view: options?.view ? structuredClone(options.view) : null
+    view: options?.view ? structuredClone(options.view) : null,
+    styleOverrides: cloneStyleOverrides(options)
   }
 }
 
@@ -103,6 +121,12 @@ export class PaneState {
   subIndicatorsAbove = $state(0)
   yAxisType = $state('normal')
   yAxisReverse = $state(false)
+  // The rest of the settings dialog -- candle type, the price marks, the grid -- as a flat
+  // record by style path. Durable for the same reason indicatorParams is: klinecharts' own
+  // copy of a style lives inside the chart, and a layout shrink, a workspace switch or a
+  // reload disposes it. Written only by ChartPane (setStyleValue/restoreStyles), which
+  // replaces the record rather than mutating it.
+  styleOverrides = $state.raw<PaneStyleOverrides>({})
   // Indicator template name -> calcParams, for every indicator on this pane carrying any.
   // Durable for the same reason the name lists are: a layout shrink disposes the chart that
   // holds klinecharts' own copy.
@@ -130,6 +154,7 @@ export class PaneState {
     this.subIndicatorsAbove = resolved.subIndicatorsAbove
     this.indicatorParams = resolved.indicatorParams
     this.view = resolved.view
+    this.styleOverrides = resolved.styleOverrides
     if (resolved.view?.yAxis?.type) this.yAxisType = resolved.view.yAxis.type
     if (resolved.view?.yAxis?.reverse !== undefined) this.yAxisReverse = resolved.view.yAxis.reverse
   }
@@ -150,6 +175,7 @@ export class PaneState {
     this.subIndicatorsAbove = resolved.subIndicatorsAbove
     this.indicatorParams = resolved.indicatorParams
     this.view = resolved.view
+    this.styleOverrides = resolved.styleOverrides
   }
 
   snapshot(): PaneSnapshot {
@@ -161,7 +187,8 @@ export class PaneState {
       subIndicators: [...this.subIndicatorNames],
       subIndicatorsAbove: this.subIndicatorsAbove,
       indicatorParams: structuredClone(this.indicatorParams),
-      view: this.view ? structuredClone(this.view) : null
+      view: this.view ? structuredClone(this.view) : null,
+      styleOverrides: { ...this.styleOverrides }
     }
   }
 }
