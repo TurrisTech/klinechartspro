@@ -240,10 +240,12 @@
     })
   )
 
-  // The clock the pane DISPLAYS on: the instrument's own market timezone when it states
-  // one (a Coinbase pane reads UTC -- its bars open on the UTC grid, and any other zone
-  // splits its days mid-bar), else the app-level timezone prop (New York, the market
-  // clock of every FX instrument here).
+  // The clock the pane DISPLAYS on: the instrument's own market timezone (a Coinbase pane
+  // reads UTC -- its bars open on the UTC grid, and any other zone splits its days
+  // mid-bar). The app-level prop is only what an instrument that states NO zone falls back
+  // to, which means one the server holds no configuration for; it is not a preference, and
+  // there is no UI for it -- the wall-wide timezone picker was removed in 2026-10 precisely
+  // because every configured instrument answers this for itself.
   const displayTimezone = $derived(pane.symbol?.timezone ?? timezone)
 
   function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
