@@ -1,6 +1,7 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, IndicatorSettingsModel } from '../../src'
 import { permuteByIndex } from '../../src/state/paneOrder'
+import { gridFor } from '../replay/timeframes'
 import { knownThrough } from './horizon'
 import { dropStore, liveStores, storeFor, WindowStore } from './store'
 import type {
@@ -524,11 +525,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // -- one per stop (`horizon.ts`, and notes/architecture/freshness-horizons.md).
       const seen = new Set<string>()
       for (const entry of wired.values()) {
+        // On the schedule of the instrument THIS pane shows: its forming bar is where it is.
+        const grid = gridFor(entry.pane.getSymbol())
         for (const b of entry.bindings.values()) {
           if (b.disposed) continue
           for (const s of b.sources) {
             seen.add(s.key)
-            s.store.forgetAfter?.(knownThrough(s.spec.resolution, clock))
+            s.store.forgetAfter?.(knownThrough(s.spec.resolution, clock, grid))
           }
         }
       }

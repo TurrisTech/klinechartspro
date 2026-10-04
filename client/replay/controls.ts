@@ -1,10 +1,10 @@
 import type { SignalCatalogueEntry } from '../plugins/types'
 import { Arming } from '../trading/kit'
-import { formatClock } from './format'
+import { formatClock, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import type { AdvanceResult, ReplayController } from './session'
-import { type BaseCheck, defaultBase, intervalStart, isMarketOpen, sortByLength, validateBase } from './timeframes'
+import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
 import { dragByHandle } from '../chrome/drag'
 import { createDockableWindow } from '../chrome/window'
 
@@ -219,8 +219,11 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     // reach as if the chart were there.
     const at = controller.advanceFrom ?? controller.cursor
     const clock = el('span', 'wd-replay-clock-value')
-    clock.textContent = formatClock(at)
-    clock.title = `${new Date(at).toISOString()} — the replay's clock, New York time. Every pane shows the bars that had closed by then.`
+    // On the instrument's own clock, the zone its chart is drawn in: New York for the FX week,
+    // UTC for a coinbase pair.
+    const zone = controller.grid.schedule.timezone
+    clock.textContent = formatClock(at, zone)
+    clock.title = `${new Date(at).toISOString()} — the replay's clock, ${zoneName(zone)}. Every pane shows the bars that had closed by then.`
     win.titleSlot.append(symbol, clock)
   }
 
@@ -241,7 +244,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   }
 
   function showWalk(line: HTMLElement, walked: number): void {
-    line.textContent = `Walking… reached ${formatClock(walked)}`
+    line.textContent = `Walking… reached ${formatClock(walked, controller.grid.schedule.timezone)}`
     line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
   }
 
@@ -638,6 +641,9 @@ export interface StartDialogOptions {
   stored: string[]
   /** Newest instant the store has for the instrument (the latest a replay can start). */
   latest: number
+  /** The instrument's candle schedule: the default start and Random land on its candle opens,
+   * and every date in the dialog is read and written on its clock. */
+  grid: CandleGrid
   /** Choose the start by clicking a bar on the chart (./pickbar.ts): the dialog steps aside
    * while it runs and gets the bar's close back, or null when the pick was cancelled. Absent,
    * there is no "On chart" button. */
@@ -670,8 +676,14 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   const suggested = defaultBase(options.intervalsInUse, options.stored)
   const initialBase = suggested ?? options.stored[0] ?? '1m'
 
-  const defaultStart = defaultStartAt(initialBase, options.latest)
-  const startField = field('Start (New York time)')
+  const grid = options.grid
+  const zone = grid.schedule.timezone
+  const toLocalInputValue = (ms: number): string => localInputValue(ms, zone)
+  const fromLocalInputValue = (value: string): number | null => instantOfInput(value, zone)
+  const toDayInputValue = (ms: number): string => localInputValue(ms, zone).slice(0, 10)
+  const defaultStart = defaultStartAt(initialBase, options.latest, grid)
+  // The instrument's own clock, named: a coinbase replay is chosen in UTC, as its chart reads.
+  const startField = field(`Start (${zoneName(zone)})`)
   const startRow = el('div', 'wd-replay-dialog-row')
   const startInput = dateInput(toLocalInputValue(defaultStart))
   startInput.max = toLocalInputValue(options.latest)
@@ -750,7 +762,7 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
     const range = drawRange()
     if (!range) return
     rangeError.textContent = ''
-    startInput.value = toLocalInputValue(randomStart(range, basePicker.value))
+    startInput.value = toLocalInputValue(randomStart(range, basePicker.value, grid))
     baseError.textContent = ''
   }
 
@@ -845,47 +857,30 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
  * replay opened there shows Friday's close and makes the first Step cross two days of nothing;
  * this backs off, an hour at a time, to the last candle that opened while the market traded.
  * (Random is deliberately NOT treated like this: see pick.ts.) */
-export function defaultStartAt(base: string, latest: number): number {
-  let at = intervalStart(base, latest - 7 * DAY_MS)
-  for (let i = 0; i < 24 * 7 && !isMarketOpen(at); i++) at = intervalStart(base, at - HOUR_MS)
+export function defaultStartAt(base: string, latest: number, grid: CandleGrid): number {
+  let at = grid.start(base, latest - 7 * DAY_MS)
+  for (let i = 0; i < 24 * 7 && !grid.isOpen(at); i++) at = grid.start(base, at - HOUR_MS)
   return at
 }
 
 const HOUR_MS = 3_600_000
 const DAY_MS = 24 * HOUR_MS
 
-// New York wall clock <-> the datetime-local input, which is timezone-less text.
-const nyParts = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
-  hourCycle: 'h23',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit'
-})
+// The instrument's wall clock <-> the datetime-local input, which is timezone-less text. Through
+// the replay's own wall-clock conversion (timeframes.ts), which resolves a DST gap and a repeated
+// hour the way wmarkettypes does.
 
-/** The New York calendar date of an instant, for a `type=date` input. */
-function toDayInputValue(ms: number): string {
-  return toLocalInputValue(ms).slice(0, 10)
+/** `YYYY-MM-DDTHH:MM` of an instant on `zone`'s wall clock. */
+function localInputValue(ms: number, zone: string): string {
+  return new Date(toWall(ms, zone)).toISOString().slice(0, 16)
 }
 
-function toLocalInputValue(ms: number): string {
-  const p = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
-  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`
-}
-
-function fromLocalInputValue(value: string): number | null {
+/** The instant a `YYYY-MM-DDTHH:MM` reading names on `zone`'s wall clock; null when unreadable. */
+function instantOfInput(value: string, zone: string): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value)
   if (!m) return null
   const [y, mo, d, h, mi] = m.slice(1).map(Number)
-  // Resolve the New York wall time to an instant (timeframes.fromWall semantics, inlined
-  // to keep this module DOM-only): try both offsets around the date.
-  const naive = Date.UTC(y, mo - 1, d, h, mi)
-  for (const guess of [naive + 4 * 3_600_000, naive + 5 * 3_600_000]) {
-    if (toLocalInputValue(guess) === value.slice(0, 16)) return guess
-  }
-  return naive + 5 * 3_600_000
+  return fromWall(Date.UTC(y, mo - 1, d, h, mi), zone)
 }
 
 // -- small DOM helpers -------------------------------------------------------------------------

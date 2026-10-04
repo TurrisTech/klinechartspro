@@ -18,10 +18,11 @@ afterAll(() => GlobalRegistrator.unregister())
 const { createReplayControls, openStartDialog, defaultStartAt } = await import('./controls')
 const { SignalBook } = await import('./signals')
 const { formatClock } = await import('./format')
-const { validateBase, nominalMs } = await import('./timeframes')
+const { validateBase, nominalMs, FX_GRID, CONTINUOUS_DAY, gridOf } = await import('./timeframes')
 const { setFocusSource } = await import('../chrome/focus')
 
 const SYM = 'oanda:EURUSD'
+const NY_TZ = 'America/New_York'
 const H = 3_600_000
 
 const catalogue: SignalCatalogueEntry[] = [
@@ -78,6 +79,7 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
     storedIntervals: ['1m', '1h', '1D'],
     intervalsInUse: ['5m', '1h'],
     symbol: SYM,
+    grid: FX_GRID,
     setBase(base) {
       calls.setBase.push(base)
       const check = validateBase(base, controller.intervalsInUse, controller.storedIntervals)
@@ -249,7 +251,7 @@ describe('the title bar and the transport', () => {
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
     // With the weekday: a cursor in the weekend has to read as one.
     expect(clock.textContent).toBe('Mon, Mar 04, 09:00')
-    expect(clock.textContent).toBe(formatClock(m.controller.cursor))
+    expect(clock.textContent).toBe(formatClock(m.controller.cursor, NY_TZ))
     expect(clock.title).toStartWith(new Date(m.controller.cursor).toISOString())
 
     const step = m.button('Step')
@@ -300,9 +302,9 @@ describe('the title bar and the transport', () => {
     m.controller.cursor = walked
     m.controller.walkedTo = walked
     m.button('Stop').click()
-    expect(clock().textContent).toBe(formatClock(from))
+    expect(clock().textContent).toBe(formatClock(from, NY_TZ))
     expect(clock().title).toStartWith(new Date(from).toISOString())
-    expect(clock().textContent).not.toBe(formatClock(walked))
+    expect(clock().textContent).not.toBe(formatClock(walked, NY_TZ))
 
     // Landed: the chart is at the cursor now, and so is the clock.
     m.controller.busy = false
@@ -310,7 +312,7 @@ describe('the title bar and the transport', () => {
     m.controller.advanceFrom = null
     m.controller.walkedTo = null
     m.emit()
-    expect(clock().textContent).toBe(formatClock(walked))
+    expect(clock().textContent).toBe(formatClock(walked, NY_TZ))
   })
 
   test('a quick advance never shows: no red Stop, nothing greyed, and a second click is not a cancel', async () => {
@@ -347,6 +349,16 @@ describe('the title bar and the transport', () => {
     w.controller.walkedTo = w.controller.cursor + H
     w.emitWalk()
     expect(w.button('Stop')).not.toBeNull()
+  })
+
+  test('the clock reads on the instrument\'s own zone: a coinbase replay in UTC', () => {
+    const f = fake()
+    f.controller.grid = gridOf({ timezone: 'UTC', day: CONTINUOUS_DAY })
+    const m = mount(f)
+    const clock = m.q('.wd-replay-clock-value') as HTMLElement
+    // 14:00 UTC, which New York would have shown as 09:00.
+    expect(clock.textContent).toBe('Mon, Mar 04, 14:00')
+    expect(clock.title).toContain('UTC')
   })
 
   test('Exit takes two presses: the first only asks, because a replay cannot be reopened', () => {
@@ -463,12 +475,12 @@ describe('the status line', () => {
     m.controller.walkedTo = first
     m.emitWalk()
     const line = m.q('.wd-replay-walk') as HTMLElement
-    expect(line.textContent).toBe(`Walking… reached ${formatClock(first)}`)
+    expect(line.textContent).toBe(`Walking… reached ${formatClock(first, NY_TZ)}`)
     expect(line.title).toContain(new Date(first).toISOString())
     expect(line.title).toContain('The chart and the clock move when it stops')
     // The stale reason is gone, and the clock still reads the start.
     expect(m.q('.wd-replay-stop-reason')).toBeNull()
-    expect((m.q('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatClock(from))
+    expect((m.q('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatClock(from, NY_TZ))
 
     // Later reports patch the one line: the Stop button is the SAME element, so a press on it
     // is not released onto a replacement (which would be no click at all).
@@ -477,7 +489,7 @@ describe('the status line', () => {
     m.controller.walkedTo = later
     m.emitWalk()
     expect(m.q('.wd-replay-walk')).toBe(line)
-    expect(line.textContent).toBe(`Walking… reached ${formatClock(later)}`)
+    expect(line.textContent).toBe(`Walking… reached ${formatClock(later, NY_TZ)}`)
     expect(m.button('Stop')).toBe(stop)
 
     // Ended: the reach goes and why it stopped comes back.
@@ -871,7 +883,7 @@ describe('lifetime', () => {
     expect(f.listeners.size).toBe(1)
     f.controller.cursor += H
     controls.refresh()
-    expect((controls.element.querySelector('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatClock(f.controller.cursor))
+    expect((controls.element.querySelector('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatClock(f.controller.cursor, NY_TZ))
 
     controls.dispose()
     expect(f.listeners.size).toBe(0)
@@ -884,7 +896,10 @@ describe('the start dialog', () => {
   const JULY = Date.UTC(2024, 6, 15, 20, 0)
   const JANUARY = Date.UTC(2024, 0, 15, 21, 0)
 
-  function open(latest = JULY, over: { intervalsInUse?: string[]; stored?: string[]; pickOnChart?: (done: (startAt: number | null) => void) => void } = {}) {
+  function open(
+    latest = JULY,
+    over: { intervalsInUse?: string[]; stored?: string[]; pickOnChart?: (done: (startAt: number | null) => void) => void; grid?: ReturnType<typeof gridOf> } = {}
+  ) {
     const anchor = document.createElement('div')
     document.body.appendChild(anchor)
     const starts: Array<{ startAt: number; balance: number; base: string }> = []
@@ -894,6 +909,7 @@ describe('the start dialog', () => {
       intervalsInUse: over.intervalsInUse ?? ['5m', '1h'],
       stored: over.stored ?? ['1m', '1h', '1D'],
       latest,
+      grid: over.grid ?? FX_GRID,
       pickOnChart: over.pickOnChart,
       onStart: (choice) => starts.push(choice)
     })
@@ -934,9 +950,23 @@ describe('the start dialog', () => {
     const d = open(saturday)
     expect(d.start.value).toBe('2024-07-12T16:00')
     // On whatever base the dialog suggests (here 1h, for 1h + 4h panes)...
-    for (const base of ['1m', '1h', '4h']) expect(formatClock(defaultStartAt(base, saturday)).startsWith('Fri, Jul 12')).toBe(true)
+    for (const base of ['1m', '1h', '4h']) expect(formatClock(defaultStartAt(base, saturday, FX_GRID), NY_TZ).startsWith('Fri, Jul 12')).toBe(true)
     // ...and the daily base's own session floor already lands on a trading day.
-    expect(formatClock(defaultStartAt('1D', saturday))).toBe('Thu, Jul 11, 17:00')
+    expect(formatClock(defaultStartAt('1D', saturday, FX_GRID), NY_TZ)).toBe('Thu, Jul 11, 17:00')
+  })
+
+  test('a coinbase replay is chosen on its own clock: UTC, named so, and its weekend is a market', () => {
+    const crypto = gridOf({ timezone: 'UTC', day: CONTINUOUS_DAY })
+    // Saturday 20 Jul 2024 18:00 UTC. A week earlier is Saturday the 13th -- closed for forex,
+    // an ordinary trading day for crypto, so the default stays there rather than backing off.
+    const saturday = Date.UTC(2024, 6, 20, 18, 0)
+    const d = open(saturday, { grid: crypto })
+    expect((d.root.querySelector('.wd-replay-field .wd-replay-label') as HTMLElement).textContent).toBe('Start (UTC)')
+    expect(d.start.value).toBe('2024-07-13T18:00')
+    // A typed date is read in UTC too.
+    change(d.start, '2024-03-09T12:00')
+    d.byText('Start').click()
+    expect(d.starts[0].startAt).toBe(Date.UTC(2024, 2, 9, 12, 0))
   })
 
   test('On chart steps aside for a pick on the chart and takes the bar it gets back', () => {

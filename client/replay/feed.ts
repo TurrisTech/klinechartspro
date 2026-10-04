@@ -5,7 +5,7 @@ import type { PluginStream } from '../plugins/types'
 import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
 import { BarCache, type BarSource, type ReplayBar, composeForming, nonWeekendGaps } from './cache'
-import { fromWireDate, intervalStart, nominalMs } from './timeframes'
+import { type CandleGrid, gridFor, nominalMs } from './timeframes'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
 // every pane. No stream: only this client moves the clock.
@@ -130,20 +130,20 @@ export class ReplayFeedHub {
     this.baseCaches.clear()
   }
 
-  private paneCache(symbol: string, interval: string): BarCache {
+  private paneCache(symbol: string, interval: string, grid: CandleGrid): BarCache {
     const key = `${symbol}|${interval}`
     let c = this.paneCaches.get(key)
     if (!c) {
-      c = new BarCache(this.source, symbol, interval, 'core')
+      c = new BarCache(this.source, symbol, interval, grid, 'core')
       this.paneCaches.set(key, c)
     }
     return c
   }
 
-  private baseCache(symbol: string): BarCache {
+  private baseCache(symbol: string, grid: CandleGrid): BarCache {
     let c = this.baseCaches.get(symbol)
     if (!c) {
-      c = new BarCache(this.source, symbol, this.base, 'core')
+      c = new BarCache(this.source, symbol, this.base, grid, 'core')
       this.baseCaches.set(symbol, c)
     }
     return c
@@ -158,8 +158,13 @@ export class ReplayFeedHub {
       const report = await this.pushPane(pane, previous)
       if (report) reports.push(report)
     }
-    // Let go of base bars no pane's forming bucket can still need.
-    const earliest = Math.min(...panes.map((p) => intervalStart(periodToResolution(p.getPeriod()), Math.max(this.cursor - 1, 0))))
+    // Let go of base bars no pane's forming bucket can still need -- each pane's bucket on its
+    // own instrument's schedule.
+    const opens = panes.flatMap((p) => {
+      const grid = gridFor(p.getSymbol())
+      return grid ? [grid.start(periodToResolution(p.getPeriod()), Math.max(this.cursor - 1, 0))] : []
+    })
+    const earliest = Math.min(...opens)
     if (Number.isFinite(earliest)) for (const c of this.baseCaches.values()) c.trimBefore(earliest)
     return reports
   }
@@ -186,27 +191,32 @@ export class ReplayFeedHub {
     const last = data.at(-1)?.timestamp
     const base: PushReport = { paneId: pane.id, key, pushed: 0, forming: false, reloaded: false, problem: null }
     if (!callback || last === undefined) return { ...base, problem: callback ? null : 'no subscription' }
+    // The pane's OWN instrument's schedule: a coinbase pane beside an FX one closes its days
+    // at UTC midnight, not 17:00 New York. With none resolved there is no honest label for a
+    // forming bar -- and the server could not have served the pane any bars either.
+    const grid = gridFor(symbolInfo)
+    if (!grid) return { ...base, problem: `no market hours for ${symbol}` }
     const cursor = this.cursor
-    const lastOpen = fromWireDate(interval, last)
+    const lastOpen = grid.fromWire(interval, last)
 
     // A jump longer than the append threshold: reload the pane's window at the cursor.
     const nominal = Math.max(1, Math.floor((cursor - Math.max(lastOpen, previous)) / nominalMs(interval)))
     if (nominal > SEEK_THRESHOLD_BARS) {
-      this.reload(pane, symbol, interval)
+      this.reload(pane, symbol, interval, grid)
       return { ...base, reloaded: true }
     }
 
     // Whole bars: every stored bar of the interval opening at or after the chart's last bar
     // (the last may be the previously forming bar, now closed: its final version replaces
     // it) and closed by the cursor.
-    const cache = this.paneCache(symbol, interval)
+    const cache = this.paneCache(symbol, interval, grid)
     await cache.cover(lastOpen, cursor)
     const whole = cache.slice(lastOpen, cursor).filter((b) => b.end <= cursor)
     if (whole.length > SEEK_THRESHOLD_BARS) {
-      this.reload(pane, symbol, interval)
+      this.reload(pane, symbol, interval, grid)
       return { ...base, reloaded: true }
     }
-    const gaps = nonWeekendGaps(interval, [{ open: lastOpen, end: lastOpen, date: last, o: 0, h: 0, l: 0, c: 0, v: 0 }, ...whole])
+    const gaps = nonWeekendGaps(interval, [{ open: lastOpen, end: lastOpen, date: last, o: 0, h: 0, l: 0, c: 0, v: 0 }, ...whole], grid)
     let expectedLast = last
     for (const b of whole) {
       callback(toKLine(b))
@@ -215,12 +225,12 @@ export class ReplayFeedHub {
     // The forming bar: the bucket containing the cursor, composed from base bars that
     // closed by the cursor. Its label is the same open `/getbars` labels the whole bar with.
     let forming = false
-    const bucketOpen = intervalStart(interval, cursor - 1)
+    const bucketOpen = grid.start(interval, cursor - 1)
     if (bucketOpen < cursor && (whole.length === 0 || bucketOpen > whole[whole.length - 1].open) && bucketOpen >= lastOpen) {
-      const baseCache = this.baseCache(symbol)
+      const baseCache = this.baseCache(symbol, grid)
       await baseCache.cover(bucketOpen, cursor)
       const parts = baseCache.slice(bucketOpen, cursor).filter((b) => b.end <= cursor)
-      const bar = composeForming(interval, bucketOpen, parts)
+      const bar = composeForming(interval, bucketOpen, parts, grid)
       if (bar) {
         callback(toKLine(bar))
         expectedLast = bar.date
@@ -242,10 +252,10 @@ export class ReplayFeedHub {
     return { ...base, pushed: whole.length, forming, problem }
   }
 
-  private reload(pane: ChartProPane, symbol: string, interval: string): void {
+  private reload(pane: ChartProPane, symbol: string, interval: string, grid: CandleGrid): void {
     // The pane's init load runs through getHistoryKLineData, which ends its window at the
     // cursor; the pane cache is re-anchored there, lazily.
-    this.paneCache(symbol, interval).seek(this.cursor - HISTORY_WINDOW_BARS * nominalMs(interval))
+    this.paneCache(symbol, interval, grid).seek(this.cursor - HISTORY_WINDOW_BARS * nominalMs(interval))
     try {
       pane.getChart().resetData()
     } catch (err) {

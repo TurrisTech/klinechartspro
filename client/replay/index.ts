@@ -7,7 +7,7 @@ import { isNoData, type OHLCVBar } from '../ohlcv'
 import { loadSignalCatalogue } from '../plugins/api'
 import type { PluginHost } from '../plugins/host'
 import { periodToResolution } from '../periods'
-import { symbolVendor } from '../symbols'
+import { fetchSymbolInfo, symbolVendor } from '../symbols'
 import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { symbolKey } from '../trading/format'
@@ -21,7 +21,7 @@ import { drawsSignal } from '../mtf/drawn'
 import { SignalBook } from './signals'
 import { HttpBarSource, HttpSignalSource } from './source'
 import { ReplayWatches } from './watches'
-import { STORED_LADDER, fromWireDate, intervalStart, nominalMs, sortByLength } from './timeframes'
+import { type CandleGrid, gridOf, nominalMs, scheduleOf, STORED_LADDER, sortByLength } from './timeframes'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
 // session bound to the shared trading dock, the floating control window over the chart, and
@@ -114,13 +114,13 @@ function nextFrame(): Promise<void> {
 }
 
 /** Probe which of the stored ladder the store holds for the instrument around `at`. */
-async function storedIntervalsFor(symbol: string, at: number): Promise<string[]> {
+async function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promise<string[]> {
   // All at once, not one after another: they are independent one-bar reads, and the user is
   // waiting on the last of them (the start dialog, or the replay wall's mount).
   const held = await Promise.all(
     STORED_LADDER.map(async (code) => {
       try {
-        const shift = at - fromWireDate(code, at)
+        const shift = grid.toWire(code, at) - at
         const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
           symbol,
           resolution: code,
@@ -147,8 +147,17 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
   const symbolInfo = active?.getSymbol() ?? chartPro.getSymbol()
   const symbol = symbolKey(symbolInfo)
   const intervalsInUse = sortByLength([...new Set(chartPro.getPanes().map((p) => periodToResolution(p.getPeriod())))])
+  // The instrument's own candle schedule, from the market hours the server resolved for it.
+  // Without one there is nowhere honest to put a candle boundary -- and a guess (the FX week)
+  // would close a crypto day at 17:00 New York and skip its weekends -- so the replay says so.
+  const schedule = scheduleOf(symbolInfo)
+  if (!schedule) {
+    console.warn(`${REPLAY_LOG} no market hours for ${symbol}`)
+    return `No market hours for ${symbolInfo.ticker}`
+  }
+  const grid = gridOf(schedule)
   const latest = capabilities().serverTime || Date.now()
-  const stored = await storedIntervalsFor(symbol, latest)
+  const stored = await storedIntervalsFor(symbol, latest, grid)
   if (stored.length === 0) {
     console.warn(`${REPLAY_LOG} no stored bars for ${symbol}`)
     return `No stored bars for ${symbolInfo.ticker}`
@@ -159,12 +168,13 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
     intervalsInUse,
     stored,
     latest,
+    grid,
     pickOnChart: (done) => {
       pickBarOnChart(chartPro.getPanes(), (pick) => done(pick?.startAt ?? null))
     },
     onStart: ({ startAt, balance, base }) => {
       void (async () => {
-        const cursor = intervalStart(base, startAt)
+        const cursor = grid.start(base, startAt)
         const created = await simApi.create({ mode: 'replay', balance, symbol })
         const session = created.session
         const engine = new Engine(balance, session.account.currency)
@@ -174,6 +184,7 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
           createdAt: session.createdAt,
           vendor: symbolVendor(symbolInfo),
           symbol,
+          grid,
           cursor,
           startedAt: cursor,
           base,
@@ -199,6 +210,23 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
 }
 
 // -- the replay wall -------------------------------------------------------------------------------
+
+/** The market hours of the instrument a replay walks: off a pane showing it when there is one
+ * (already resolved, no request), else asked of the server. */
+async function replayScheduleFor(chartPro: KLineChartPro, symbol: string) {
+  const onWall = chartPro
+    .getPanes()
+    .map((p) => p.getSymbol())
+    .find((s) => `${symbolVendor(s)}:${s.ticker}` === symbol)
+  if (onWall && scheduleOf(onWall)) return scheduleOf(onWall)
+  const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+  try {
+    return scheduleOf(await fetchSymbolInfo(ticker, vendor))
+  } catch (err) {
+    console.error(`${REPLAY_LOG} could not resolve ${symbol}`, err)
+    return null
+  }
+}
 
 /** Mount the replay on a wall built with `bootReplay`'s datafeed. Resolves null (and clears
  * the intent) when the session cannot be loaded, so the app falls back to a live wall. */
@@ -229,7 +257,17 @@ export async function mountBarReplay(
   const signals = new SignalBook(catalogue, new HttpSignalSource())
   for (const ref of stored.starred) signals.star(ref)
   signals.setArmed(stored.armed)
-  const storedIntervals = await storedIntervalsFor(stored.symbol, stored.cursor)
+  // The walked instrument's schedule, resolved again rather than stored in the blob: market
+  // hours live in Postgres, and a copy carried in a session would go stale behind it.
+  const schedule = await replayScheduleFor(chartPro, stored.symbol)
+  if (!schedule) {
+    console.error(`${REPLAY_LOG} no market hours for ${stored.symbol}; leaving replay`)
+    clearReplay()
+    ctx.rebuild()
+    return null
+  }
+  const grid = gridOf(schedule)
+  const storedIntervals = await storedIntervalsFor(stored.symbol, stored.cursor, grid)
   const latest = capabilities().serverTime || Date.now()
   const hub = boot.hub
   hub.setBase(stored.base)
@@ -250,6 +288,7 @@ export async function mountBarReplay(
     createdAt: answer.session.createdAt,
     vendor: stored.vendor,
     symbol: stored.symbol,
+    grid,
     cursor: stored.cursor,
     startedAt: stored.startedAt,
     base: stored.base,
@@ -308,7 +347,7 @@ export async function mountBarReplay(
       // DAILY boundary. Refetching on every step instead cost three slow reads per 15-minute
       // step, which saturated the browser's six-connection budget and starved the panes' own
       // history loads (measured: 31 `/levels` reads, the slowest 4.5s, during a short run).
-      if (intervalStart('1D', result.from) !== intervalStart('1D', result.to)) ctx.levelsController.invalidate()
+      if (grid.start('1D', result.from) !== grid.start('1D', result.to)) ctx.levelsController.invalidate()
       dock.overlays.update(session.snapshot)
       // A pane that was reloaded at the new cursor (a long jump) has a new oldest bar, which
       // is what every watch line is anchored to; re-emitting redraws them against it.

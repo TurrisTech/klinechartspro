@@ -4,7 +4,7 @@ import { isNoData, type OHLCVBar } from '../ohlcv'
 import { fetchSignals } from '../plugins/api'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import type { SignalHit, SignalSource } from './signals'
-import { fromWireDate, intervalEnd, nominalMs } from './timeframes'
+import { type CandleGrid, nominalMs } from './timeframes'
 
 // GLUE. `BarSource` and `SignalSource` over `/getbars` and `/plugins/{id}/signals`. The only
 // module in client/replay that fetches. Both read PAST the page-wide read clock on purpose
@@ -12,12 +12,12 @@ import { fromWireDate, intervalEnd, nominalMs } from './timeframes'
 // the chart until the cursor reaches them -- every read the chart itself makes stays clamped
 // by config.ts.
 
-/** A `/getbars` bar (columns=all) as a store-clock `ReplayBar`. */
-export function toReplayBar(interval: string, bar: OHLCVBar & Record<string, unknown>): ReplayBar {
-  const open = fromWireDate(interval, bar.date)
+/** A `/getbars` bar (columns=all) as a store-clock `ReplayBar`, on the instrument's schedule. */
+export function toReplayBar(interval: string, bar: OHLCVBar & Record<string, unknown>, grid: CandleGrid): ReplayBar {
+  const open = grid.fromWire(interval, bar.date)
   const out: ReplayBar = {
     open,
-    end: intervalEnd(interval, open),
+    end: grid.end(interval, open),
     date: bar.date,
     o: bar.open,
     h: bar.high,
@@ -49,13 +49,13 @@ function pageBars(): number {
 }
 
 export class HttpBarSource implements BarSource {
-  async fetch(symbol: string, interval: string, from: number, to: number, columns: Columns): Promise<ReplayBar[]> {
+  async fetch(symbol: string, interval: string, from: number, to: number, columns: Columns, grid: CandleGrid): Promise<ReplayBar[]> {
     const out: ReplayBar[] = []
     const page = pageBars() * nominalMs(interval)
     let cursor = from
     while (cursor < to) {
       const end = Math.min(to, cursor + page)
-      const bars = await this.fetchRange(symbol, interval, cursor, end, columns)
+      const bars = await this.fetchRange(symbol, interval, cursor, end, columns, grid)
       for (const b of bars) if (b.open >= cursor && b.open < end) out.push(b)
       cursor = end
     }
@@ -64,9 +64,10 @@ export class HttpBarSource implements BarSource {
 
   /** One range, split in halves on the server's 413 (a span denser than its nominal
    * length suggested -- 5s bars over a busy hour, say). */
-  private async fetchRange(symbol: string, interval: string, from: number, to: number, columns: Columns): Promise<ReplayBar[]> {
-    // `/getbars` takes `from`/`to` on the WIRE clock (session-dated for daily and coarser).
-    const shift = from - fromWireDate(interval, from)
+  private async fetchRange(symbol: string, interval: string, from: number, to: number, columns: Columns, grid: CandleGrid): Promise<ReplayBar[]> {
+    // `/getbars` takes `from`/`to` on the WIRE clock (session-dated for daily and coarser:
+    // +7h forex, 0 crypto, -9h equities).
+    const shift = grid.toWire(interval, from) - from
     try {
       const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
         symbol,
@@ -77,11 +78,11 @@ export class HttpBarSource implements BarSource {
         asof: null
       })
       if (isNoData(body) || !Array.isArray(body)) return []
-      return body.map((b) => toReplayBar(interval, b as OHLCVBar & Record<string, unknown>))
+      return body.map((b) => toReplayBar(interval, b as OHLCVBar & Record<string, unknown>, grid))
     } catch (err) {
       if (err instanceof OhlcvApiError && err.code === 'too_large' && to - from > nominalMs(interval)) {
         const mid = from + Math.floor((to - from) / 2)
-        const [a, b] = await Promise.all([this.fetchRange(symbol, interval, from, mid, columns), this.fetchRange(symbol, interval, mid, to, columns)])
+        const [a, b] = await Promise.all([this.fetchRange(symbol, interval, from, mid, columns, grid), this.fetchRange(symbol, interval, mid, to, columns, grid)])
         return [...a, ...b]
       }
       throw err

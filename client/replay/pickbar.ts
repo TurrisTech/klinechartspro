@@ -3,7 +3,7 @@ import type { ChartProPane } from '../../src'
 import { periodToResolution } from '../periods'
 import { chartTheme } from './controls'
 import { formatClock } from './format'
-import { fromWireDate, intervalEnd } from './timeframes'
+import { gridFor } from './timeframes'
 
 // GLUE (DOM). Choosing where a replay starts by pointing at the chart: hover a bar, see the
 // bars that will be hidden shaded out to its right, click it. The bar clicked is the LAST one
@@ -67,7 +67,10 @@ export function pickBarOnChart(panes: ChartProPane[], done: (pick: BarPick | nul
   for (const pane of panes) {
     const chart = pane.getChart()
     const root = chart?.getDom()
-    if (!chart || !root) continue
+    // A bar's close is a fact of ITS instrument's schedule (a coinbase day closes at UTC
+    // midnight). A pane whose instrument has no resolved market hours has no close to offer.
+    const grid = gridFor(pane.getSymbol())
+    if (!chart || !root || !grid) continue
     let downX = 0
     let downY = 0
     const at = (event: MouseEvent): { bar: KLineData; x: number; main: DOMRect; root: DOMRect } | null => {
@@ -91,7 +94,7 @@ export function pickBarOnChart(panes: ChartProPane[], done: (pick: BarPick | nul
     }
     const pickOf = (bar: KLineData): BarPick => {
       const resolution = periodToResolution(pane.getPeriod())
-      return { startAt: intervalEnd(resolution, fromWireDate(resolution, bar.timestamp)), resolution }
+      return { startAt: grid.end(resolution, grid.fromWire(resolution, bar.timestamp)), resolution }
     }
     const onMove = (event: PointerEvent): void => {
       const hit = at(event)
@@ -103,7 +106,7 @@ export function pickBarOnChart(panes: ChartProPane[], done: (pick: BarPick | nul
       layer.hidden = false
       line.style.cssText = `left:${hit.x}px;top:${hit.root.top}px;height:${hit.root.height}px`
       shade.style.cssText = `left:${hit.x}px;top:${hit.root.top}px;height:${hit.root.height}px;width:${Math.max(0, right - hit.x)}px`
-      tag.textContent = `Start ${formatClock(pickOf(hit.bar).startAt)}`
+      tag.textContent = `Start ${formatClock(pickOf(hit.bar).startAt, grid.schedule.timezone)}`
       // At the foot of the price pane, beside klinecharts' own crosshair date (the bar's OPEN)
       // on the axis below: the two together read "this bar, and the replay starts as it closes".
       tag.style.cssText = `left:${hit.x}px;top:${hit.main.bottom - 26}px`
