@@ -2626,9 +2626,14 @@ body.wd-has-dock > #app {
   box-shadow: 0 12px 40px color-mix(in oklab, black 40%, transparent);
 }
 
+/* The drag handle (client/chrome/drag.ts). `touch-action: none` so a finger drags the card
+   instead of panning the page. */
 .wd-replay-dialog-title {
   font-weight: 600;
   font-size: 0.9375rem;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
 }
 
 .wd-replay-dialog-info,

@@ -19,6 +19,7 @@ const { createReplayControls, openStartDialog, defaultStartAt } = await import('
 const { SignalBook } = await import('./signals')
 const { formatClock } = await import('./format')
 const { validateBase, nominalMs } = await import('./timeframes')
+const { setFocusSource } = await import('../chrome/focus')
 
 const SYM = 'oanda:EURUSD'
 const H = 3_600_000
@@ -881,6 +882,25 @@ describe('the start dialog', () => {
     expect(d.start.value).toBe('2024-03-11T10:00')
   })
 
+  test('is centred on the app, not over the active pane, however wide the page', () => {
+    // A three-monitor window, with the pane last touched on the left-hand display: the rule that
+    // moves a body-level card over that pane (chrome/focus.ts) must not move this one -- a replay
+    // is the whole wall's mode.
+    const width = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+    Object.defineProperty(window, 'innerWidth', { value: 5760, configurable: true })
+    setFocusSource(() => new DOMRect(0, 0, 1920, 1080))
+    try {
+      const d = open(JULY)
+      const backdrop = document.querySelector('.wd-replay-dialog-backdrop') as HTMLElement
+      expect(backdrop.style.justifyContent).toBe('')
+      expect(d.root.style.marginLeft).toBe('')
+    } finally {
+      setFocusSource(null)
+      if (width) Object.defineProperty(window, 'innerWidth', width)
+      else delete (window as { innerWidth?: number }).innerWidth
+    }
+  })
+
   test('without a chart to pick on there is no On chart button', () => {
     const d = open(JULY)
     expect(d.byText('On chart')).toBeUndefined()
@@ -978,6 +998,27 @@ describe('the start dialog', () => {
     expect(d.start.value).toBe(before)
   })
 
+  test('drags by its title, stays in the window, and a drag released over the backdrop does not close it', () => {
+    const d = open(JULY)
+    const title = d.root.querySelector('.wd-replay-dialog-title') as HTMLElement
+    const backdrop = document.querySelector('.wd-replay-dialog-backdrop') as HTMLElement
+    // happy-dom lays nothing out: the card's rect is all zeros, so the grab offset is the press.
+    title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 100, pointerId: 1 }))
+    expect(d.root.style.position).toBe('fixed')
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 300, clientY: 250, pointerId: 1 }))
+    expect([d.root.style.left, d.root.style.top]).toEqual(['200px', '150px'])
+    // Never off the page: pulled back to the edge margin.
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: -500, clientY: -500, pointerId: 1 }))
+    expect([d.root.style.left, d.root.style.top]).toEqual(['8px', '8px'])
+    // Released over the backdrop: the browser's click lands on the common ancestor, the backdrop.
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: -500, clientY: -500, pointerId: 1 }))
+    backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(d.isOpen()).toBe(true)
+    // Released: a later move goes nowhere.
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 400, clientY: 400, pointerId: 1 }))
+    expect(d.root.style.left).toBe('8px')
+  })
+
   test('Cancel, Escape and a click on the backdrop each close it without starting', () => {
     const a = open()
     a.byText('Cancel').click()
@@ -989,6 +1030,7 @@ describe('the start dialog', () => {
 
     const c = open()
     const backdrop = document.querySelector('.wd-replay-dialog-backdrop') as HTMLElement
+    backdrop.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     backdrop.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(c.isOpen()).toBe(false)
 

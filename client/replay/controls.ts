@@ -5,7 +5,7 @@ import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, intervalStart, isMarketOpen, sortByLength, validateBase } from './timeframes'
-import { placeOverFocus } from '../chrome/focus'
+import { dragByHandle } from '../chrome/drag'
 import { createDockableWindow } from '../chrome/window'
 
 // GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
@@ -577,7 +577,11 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   overlay.appendChild(dialog)
   const title = el('div', 'wd-replay-dialog-title')
   title.textContent = 'Start bar replay'
+  title.title = 'Drag to move'
   dialog.appendChild(title)
+  // Movable by its title, like the replay's own window: centred on the app is where it opens,
+  // not necessarily where it should sit over the bars you are choosing between.
+  const undrag = dragByHandle(dialog, title)
 
   const info = el('div', 'wd-replay-dialog-info')
   info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
@@ -730,15 +734,26 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
     }
   }
   document.addEventListener('keydown', onKey)
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close()
+  // Only a click that both STARTED and ended on the backdrop closes it. A click is dispatched to
+  // the nearest common ancestor of the press and the release, so a drag of the title -- or a
+  // text selection in a field -- released over the backdrop arrives as a click on it.
+  let pressedBackdrop = false
+  overlay.addEventListener('pointerdown', (e) => {
+    pressedBackdrop = e.target === overlay
   })
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay && pressedBackdrop) close()
+    pressedBackdrop = false
+  })
+  // Centred on the APP, not over the active pane (chrome/focus.ts's rule for a very wide page):
+  // a replay is the whole wall's mode -- it rebuilds every pane on one clock -- so the dialog
+  // that starts one belongs to no single pane (user, 2026-10-04).
   document.body.appendChild(overlay)
-  placeOverFocus(overlay, dialog)
   startInput.focus()
 
   function close(): void {
     document.removeEventListener('keydown', onKey)
+    undrag()
     overlay.remove()
   }
   return { close }
