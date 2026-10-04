@@ -1,11 +1,14 @@
 import type { LocalWatchState } from '../watch/local'
 import type { EngineState } from './engine'
-import type { ArmedSignal } from './signals'
 
 // The replay state blob: what `PUT /sim/sessions/{id}/state` stores and a reload restores.
 // The engine runs client-side, so the client computes this and saves it on each change; the
 // server keeps it opaque (wdashboard_server/sim: `client_state`). Serialize / restore only --
 // no I/O here.
+//
+// A blob written before Next alert replaced Next signal also carries `starred` and `armed` (the
+// signal pause points). Not a version bump: `restore` ignores them, so a replay in progress
+// opens with its account and watches and simply has no signal stops.
 
 export const REPLAY_STATE_VERSION = 1
 
@@ -26,8 +29,6 @@ export interface ReplayState {
   base: string
   advance: AdvanceSetting
   pauseOnFill: boolean
-  starred: string[]
-  armed: ArmedSignal[]
   /** The replay's own price watches, evaluated in this tab against the base-bar walk
    * (client/replay/watches.ts). Optional, and NOT a version bump: every replay in progress
    * when this shipped has a blob without it, and refusing those would have thrown away the
@@ -44,8 +45,6 @@ export interface ReplayStateInput {
   base: string
   advance: AdvanceSetting
   pauseOnFill: boolean
-  starred: Iterable<string>
-  armed: readonly ArmedSignal[]
   watches: readonly LocalWatchState[]
   engine: EngineState
 }
@@ -60,8 +59,6 @@ export function serialize(input: ReplayStateInput): ReplayState {
     base: input.base,
     advance: { ...input.advance },
     pauseOnFill: input.pauseOnFill,
-    starred: [...input.starred].sort(),
-    armed: input.armed.map((a) => ({ ref: a.ref, resolution: a.resolution })),
     watches: [...input.watches],
     engine: input.engine
   }
@@ -75,7 +72,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 export function restore(value: unknown): ReplayState | null {
   if (!isRecord(value)) return null
   if (value.version !== REPLAY_STATE_VERSION) return null
-  const { vendor, symbol, cursor, startedAt, base, advance, pauseOnFill, starred, armed, watches, engine } = value
+  const { vendor, symbol, cursor, startedAt, base, advance, pauseOnFill, watches, engine } = value
   if (typeof vendor !== 'string' || typeof symbol !== 'string' || typeof base !== 'string') return null
   if (typeof cursor !== 'number' || !Number.isFinite(cursor)) return null
   if (!isRecord(advance) || typeof advance.interval !== 'string' || typeof advance.multiple !== 'number') return null
@@ -89,10 +86,6 @@ export function restore(value: unknown): ReplayState | null {
     base,
     advance: { interval: advance.interval, multiple: Math.max(1, Math.floor(advance.multiple)) },
     pauseOnFill: pauseOnFill === true,
-    starred: Array.isArray(starred) ? starred.filter((s): s is string => typeof s === 'string') : [],
-    armed: Array.isArray(armed)
-      ? armed.filter((a): a is ArmedSignal => isRecord(a) && typeof a.ref === 'string' && typeof a.resolution === 'string').map((a) => ({ ref: a.ref, resolution: a.resolution }))
-      : [],
     // A blob written before replay watches existed simply has none.
     watches: Array.isArray(watches) ? (watches.filter(isWatchState) as LocalWatchState[]) : [],
     engine: engine as unknown as EngineState

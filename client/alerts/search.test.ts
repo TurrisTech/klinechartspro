@@ -1,0 +1,176 @@
+import { describe, expect, test } from 'bun:test'
+import { installWindow } from '../plugins/testing'
+
+// klinecharts touches `window` at import.
+installWindow()
+const { AlertSearch, earliestHit, SEARCH_CHUNK_BARS } = await import('./search')
+const { buildTrack, indexPoints } = await import('./compute')
+const { compile } = await import('./rules')
+const { instants, scan } = await import('./timeline')
+import type { AlertBar } from './compute'
+import type { AlertData, Point } from './data'
+import type { ServerCatalogue } from './catalogue'
+import type { Alert, Operand, Rule } from './types'
+
+const H = 3_600_000
+const T0 = Date.UTC(2024, 0, 1)
+const SYM = 'oanda:EURUSD'
+
+/** A continuous hourly market: a slow wave with a faster one on it, so an RSI and a moving
+ * average cross their levels many times over a few thousand bars. */
+function hourly(count: number): AlertBar[] {
+  return Array.from({ length: count }, (_, i) => {
+    const c = 1.1 + 0.01 * Math.sin(i / 40) + 0.003 * Math.sin(i / 7)
+    const o = 1.1 + 0.01 * Math.sin((i - 1) / 40) + 0.003 * Math.sin((i - 1) / 7)
+    const open = T0 + i * H
+    return { open, end: open + H, date: open, o, h: Math.max(o, c) + 0.0005, l: Math.min(o, c) - 0.0005, c, v: 100 }
+  })
+}
+
+class FakeData implements AlertData {
+  barReads = 0
+  pointReads = 0
+  constructor(
+    readonly series: Map<string, AlertBar[]>,
+    readonly pointRows: Point[] = []
+  ) {}
+  async bars(_symbol: string, interval: string, from: number, to: number): Promise<AlertBar[]> {
+    this.barReads++
+    return (this.series.get(interval) ?? []).filter((b) => b.open >= from && b.open < to)
+  }
+  async points(_source: unknown, _symbol: string, _interval: string, from: number, to: number): Promise<Point[]> {
+    this.pointReads++
+    return this.pointRows.filter((p) => p.date >= from && p.date < to)
+  }
+}
+
+const NO_CATALOGUE: ServerCatalogue = { stored: [], signals: [] }
+
+function alert(rule: Rule, trigger: Alert['trigger'] = 'level'): Alert {
+  return {
+    id: 'a1', kind: 'client', name: 'test', note: '', enabled: true, symbol: SYM, rule, trigger, repeat: 'always',
+    cooldownMs: 0, createdAt: 0, updatedAt: 0, armedAt: 0, status: 'armed', lastFiredAt: null, fireCount: 0
+  }
+}
+
+/** Every instant the rule triggers at, by one evaluation over the whole series at once -- the
+ * answer the chunked search must reproduce. */
+async function wholeSeriesHits(bars: AlertBar[], rule: Rule, trigger: Alert['trigger'], after: number): Promise<number[]> {
+  const compiled = compile(rule)
+  const track = await buildTrack('1h', bars, compiled.operands.values(), () => undefined)
+  const list = instants([track], compiled.fields)
+  const hits: number[] = []
+  let cursor = after
+  for (let i = 0; i < 5; i++) {
+    const hit = scan(compiled.condition, trigger, list, cursor, Number.POSITIVE_INFINITY)
+    if (!hit) break
+    hits.push(hit.at)
+    cursor = hit.at
+  }
+  return hits
+}
+
+describe('AlertSearch', () => {
+  const bars = hourly(SEARCH_CHUNK_BARS * 3)
+  const data = (): FakeData => new FakeData(new Map([['1h', bars]]))
+  const until = bars[bars.length - 1].end
+
+  const ma: Operand = { kind: 'indicator', interval: '1h', name: 'MA', params: [20], output: 'ma1' }
+  const close: Operand = { kind: 'bar', interval: '1h', field: 'close' }
+  const rsi: Operand = { kind: 'indicator', interval: '1h', name: 'RSI', params: [14], output: 'rsi1' }
+
+  test('finds what one whole-series evaluation finds, across chunk boundaries', async () => {
+    const rule: Rule = { left: close, op: 'crosses_above', right: { operand: ma } }
+    // Starting deep enough that the hits straddle the first chunk's end.
+    const after = bars[SEARCH_CHUNK_BARS - 200].end
+    const expected = await wholeSeriesHits(bars, rule, 'level', after)
+    expect(expected.length).toBeGreaterThan(2)
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    let cursor = after
+    const found: number[] = []
+    for (const _ of expected) {
+      const hit = await search.next(alert(rule), cursor, until)
+      if (!hit) break
+      found.push(hit.at)
+      cursor = hit.at
+    }
+    expect(found).toEqual(expected)
+  })
+
+  test('a recursive indicator lands on the same bars with a windowed lead-in', async () => {
+    const rule: Rule = { left: rsi, op: 'crosses_below', right: { value: 35 } }
+    const after = bars[2000].end
+    const expected = await wholeSeriesHits(bars, rule, 'edge', after)
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    const hit = await search.next(alert(rule, 'edge'), after, until)
+    expect(hit?.at).toBe(expected[0])
+  })
+
+  test('nothing to find answers null, and a stop is heard between chunks', async () => {
+    const never: Rule = { left: close, op: '>', right: { value: 5 } }
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    expect(await search.next(alert(never), bars[100].end, until)).toBeNull()
+    let chunks = 0
+    const stopped = await search.next(alert(never), bars[100].end, until, {
+      onProgress: () => {
+        chunks++
+      },
+      shouldStop: () => chunks >= 1
+    })
+    expect(stopped).toBeNull()
+    expect(chunks).toBe(1)
+  })
+
+  test('a second search starting where the first stopped refetches nothing it holds', async () => {
+    const rule: Rule = { left: close, op: 'crosses_above', right: { operand: ma } }
+    const fake = data()
+    const search = new AlertSearch(fake, async () => NO_CATALOGUE)
+    const first = await search.next(alert(rule), bars[500].end, until)
+    const reads = fake.barReads
+    await search.next(alert(rule), first?.at ?? 0, (first?.at ?? 0) + 10 * H)
+    expect(fake.barReads).toBe(reads)
+  })
+
+  test('a signal is read off the plugin points by bar date', async () => {
+    const signal: Operand = { kind: 'signal', interval: '1h', plugin: 'arev', variant: 'arev21' }
+    const points: Point[] = bars.slice(0, 400).map((b, i) => ({ date: b.date, signal: i === 150 || i === 300 ? 'long' : null }))
+    const fake = new FakeData(new Map([['1h', bars]]), points)
+    const search = new AlertSearch(fake, async () => NO_CATALOGUE)
+    const rule: Rule = { left: signal, op: '==', right: { label: 'long' } }
+    expect((await search.next(alert(rule), bars[100].end, until))?.at).toBe(bars[150].end)
+    expect((await search.next(alert(rule), bars[150].end, until))?.at).toBe(bars[300].end)
+    // Served bars with no label are "no signal", which never holds.
+    expect(await search.next(alert(rule), bars[300].end, bars[399].end)).toBeNull()
+  })
+
+  test('earliestHit takes the soonest of several', async () => {
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    const a = { ...alert({ left: close, op: '>', right: { value: 5 } }), id: 'never' }
+    const b = { ...alert({ left: close, op: 'crosses_above', right: { operand: ma } }), id: 'cross' }
+    const hit = await earliestHit(search, [a, b], bars[100].end, until)
+    expect(hit?.alert.id).toBe('cross')
+  })
+})
+
+describe('familyTitle', () => {
+  test('a variant that repeats its plugin is named by what it adds', async () => {
+    const { familyTitle } = await import('./catalogue')
+    expect(familyTitle('AREV21 outlier', 'arev21_outlier_rank')).toBe('AREV21 outlier rank')
+    expect(familyTitle('AREV', 'arev21')).toBe('AREV arev21')
+    expect(familyTitle('KREV', '')).toBe('KREV')
+  })
+})
+
+describe('indexPoints', () => {
+  test('folds several rows on one bar under their side', () => {
+    const index = indexPoints(
+      [
+        { date: 1, side: 'top', p: 0.7 },
+        { date: 1, side: 'bottom', p: 0.2 }
+      ] as Point[],
+      'side'
+    )
+    expect(index.get(1)?.folded).toEqual({ top: { date: 1, side: 'top', p: 0.7 }, bottom: { date: 1, side: 'bottom', p: 0.2 } })
+    expect(index.get(1)?.rows.length).toBe(2)
+  })
+})

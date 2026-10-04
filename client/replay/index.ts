@@ -4,22 +4,23 @@ import type { LayerController } from '../chartlayers/controller'
 import { apiGet, OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
 import { isNoData, type OHLCVBar } from '../ohlcv'
-import { loadSignalCatalogue } from '../plugins/api'
 import type { PluginHost } from '../plugins/host'
 import { periodToResolution } from '../periods'
 import { symbolVendor } from '../symbols'
 import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
-import { symbolKey } from '../trading/format'
+import { formatInstant, symbolKey } from '../trading/format'
+import type { ServerCatalogue } from '../alerts/catalogue'
+import type { AlertSearch } from '../alerts/search'
+import type { Alert } from '../alerts/types'
+import { ReplayAlerts } from './alerts'
 import { createReplayControls, openStartDialog } from './controls'
 import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
-import { drawsSignal } from '../mtf/drawn'
-import { SignalBook } from './signals'
-import { HttpBarSource, HttpSignalSource } from './source'
+import { HttpBarSource } from './source'
 import { ReplayWatches } from './watches'
 import { STORED_LADDER, fromWireDate, intervalStart, nominalMs, sortByLength } from './timeframes'
 
@@ -46,12 +47,25 @@ export interface BarReplayController {
   teardown(): void
 }
 
+/** The alert manager, as a replay uses it: the alerts Next alert stops at, the search that
+ * finds them, and the window the controls' Alerts toggle opens. */
+export interface ReplayAlertsContext {
+  enabledOn(symbol: string): Alert[]
+  subscribe(listener: () => void): () => void
+  search: AlertSearch
+  catalogue: () => Promise<ServerCatalogue>
+  manager: { isOpen: () => boolean; toggle: () => void }
+}
+
 export interface ReplayWallContext {
   pluginHost: PluginHost
   levelsController: LayerController
-  /** Where a fired replay watch is announced. Supplied by client/index.ts, the one module
-   * that knows the Notification Center and the watches exist together. */
+  /** Where a fired replay watch, and an alert Next alert stops at, is announced. Supplied by
+   * client/index.ts, the one module that knows the Notification Center, the watches and the
+   * alerts exist together. */
   notify: NotificationSink
+  /** Null where the page has no alert manager. */
+  alerts: ReplayAlertsContext | null
   /** Rebuild the wall (leaving replay). */
   rebuild: () => void
 }
@@ -103,15 +117,6 @@ const PLAY_SETTLE_MS = 5_000
 /** How far back the stored-ladder probe looks: a store's finest series may lag the newest
  * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
 const PROBE_WINDOW_MS = 10 * 86_400_000
-
-/** One repaint, so a template that recomputes on the chart's next frame has done so. Falls
- * back to a timer where there is no animation frame (a headless test). */
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-    else setTimeout(resolve, 32)
-  })
-}
 
 /** Probe which of the stored ladder the store holds for the instrument around `at`. */
 async function storedIntervalsFor(symbol: string, at: number): Promise<string[]> {
@@ -181,7 +186,6 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
           pauseOnFill: false,
           storedIntervals: stored,
           engine,
-          signals: new SignalBook([], new HttpSignalSource()),
           barSource: new HttpBarSource(),
           dataEnd: () => latest,
           save: async () => {},
@@ -225,10 +229,6 @@ export async function mountBarReplay(
     return null
   }
   let rev = answer.session.rev
-  const catalogue = await loadSignalCatalogue().catch(() => [])
-  const signals = new SignalBook(catalogue, new HttpSignalSource())
-  for (const ref of stored.starred) signals.star(ref)
-  signals.setArmed(stored.armed)
   const storedIntervals = await storedIntervalsFor(stored.symbol, stored.cursor)
   const latest = capabilities().serverTime || Date.now()
   const hub = boot.hub
@@ -257,22 +257,10 @@ export async function mountBarReplay(
     pauseOnFill: stored.pauseOnFill,
     storedIntervals: storedIntervals.length > 0 ? storedIntervals : [stored.base],
     engine: Engine.fromState(stored.engine),
-    signals,
     observer: watches,
+    alerts: ctx.alerts ? new ReplayAlerts(stored.symbol, (symbol) => ctx.alerts?.enabledOn(symbol) ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
     barSource: new HttpBarSource(),
     dataEnd: () => latest,
-    // "The next signal would be a visible signal only" (user, 2026-09-21). The signal book is
-    // the SERVER's: it knows every published signal, not which of them this wall draws -- the
-    // timeframes a pane has switched on, and the graph filter that can hide the rest
-    // (client/mtf/drawn.ts). So a stop is judged by what the panes drew once they have caught
-    // up to it: the host's fetches first, then a frame for klinecharts to recompute the
-    // indicator off the new data. Anything nothing can answer for reads as visible, so an
-    // unknown never skips a stop the user armed.
-    signalVisible: async (signal) => {
-      await ctx.pluginHost.settled()
-      await nextFrame()
-      return drawsSignal(stored.symbol, signal.ref, signal.resolution, signal.date, signal.effective)
-    },
     save: async (state) => {
       try {
         const saved = await simApi.putState(answer.session.id, rev, state)
@@ -348,6 +336,17 @@ export async function mountBarReplay(
       ctx.rebuild()
     },
     onStop: (result) => {
+      if (result.reason === 'alert' && result.alert) {
+        // Announced like a replay watch: dated when raised, the replay instant in the body,
+        // tagged `replay` so it never reads as news about the live market.
+        ctx.notify.notify({
+          title: result.alert.name,
+          body: [stored.symbol.split(':')[1] ?? stored.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective)}`].filter(Boolean).join(' · '),
+          level: 'alert',
+          source: 'replay',
+          data: { alertId: result.alert.alertId, eventAt: result.alert.effective, replay: true }
+        })
+      }
       if (result.events.length === 0) return
       dock.setOpen(true)
       dock.panel.showTab(result.events.some((e) => e.kind === 'close') ? 'history' : 'positions')
@@ -356,8 +355,11 @@ export async function mountBarReplay(
     // last one invalidated. Bounded, so a slow source slows the play rather than stalling it.
     settled: () => ctx.pluginHost.settled(PLAY_SETTLE_MS),
     account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() },
-    trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() }
+    trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() },
+    alerts: ctx.alerts?.manager
   })
+  // An alert added, switched or removed changes what Next alert can stop at.
+  const unsubscribeAlerts = ctx.alerts?.subscribe(() => controls.refresh()) ?? (() => {})
   await session.primeQuote()
 
   return {
@@ -370,6 +372,7 @@ export async function mountBarReplay(
     },
     quote: async (key: string) => session.snapshot.quotes[key],
     teardown(): void {
+      unsubscribeAlerts()
       controls.dispose()
       dock.teardown()
       session.dispose()

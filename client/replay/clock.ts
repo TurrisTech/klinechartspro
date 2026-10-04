@@ -1,35 +1,38 @@
 import type { SimOrder, SimTrade } from '../trading/api'
 import { advanceTarget } from './timeframes'
 
-// PURE. Advance planning: given the cursor, what the user asked for, the armed signals'
-// next occurrences and what is working in the account, decide where the walk stops and
-// why, and whether a candle may be consumed whole or must be refined. No fetching, no
-// chart, no DOM -- the session (session.ts) does the walking.
+// PURE. Advance planning: given the cursor, what the user asked for, the next alert found
+// ahead of it and what is working in the account, decide where the walk stops and why, and
+// whether a candle may be consumed whole or must be refined. No fetching, no chart, no DOM --
+// the session (session.ts) does the walking.
 
-/** `watch`: an observer (a price watch) fired during the advance -- discovered while walking,
- * like `fill`. `cancel`: the user stopped it, between two base bars. See `session.ts`. */
-export type StopReason = 'target' | 'signal' | 'fill' | 'watch' | 'cancel' | 'end'
+/** `alert`: Next alert reached the instant a client alert triggers at. `watch`: an observer (a
+ * price watch) fired during the advance -- discovered while walking, like `fill`. `cancel`:
+ * the user stopped it, between two base bars. `none`: Next alert found nothing to go to, and
+ * the cursor did not move. See `session.ts`. */
+export type StopReason = 'target' | 'alert' | 'fill' | 'watch' | 'cancel' | 'end' | 'none'
 
 /** What the user asked for: N whole candles of an interval, or "to the end of the data". */
 export type AdvanceRequest = { interval: string; multiple: number } | { toEnd: true; end: number }
 
-/** One armed signal's next occurrence, as the signal book reports it. */
-export interface SignalOccurrence {
-  ref: string
-  resolution: string
-  /** The absolute instant the signal became knowable (its bar's close). */
+/** Where a client alert next triggers, as the replay's alert book found it
+ * (client/alerts/search.ts). */
+export interface AlertOccurrence {
+  alertId: string
+  name: string
+  /** The bar close it triggers at: the instant the rule's values became knowable. */
   effective: number
-  /** The bar it sits on (wire date), for the panel to scroll to. */
-  date: number
+  /** What the rule read there, for the stop's notification. */
+  readings: string
 }
 
 export interface AdvancePlan {
   /** Where the user asked to land. */
   target: number
-  /** Where the walk stops: the target, or an armed signal's effective instant before it. */
+  /** Where the walk stops: the target, or the alert's effective instant before it. */
   stopAt: number
-  reason: 'target' | 'signal'
-  signal: SignalOccurrence | null
+  reason: 'target' | 'alert'
+  alert: AlertOccurrence | null
 }
 
 /** The target instant for a request from `cursor`, on the candle boundary rules. */
@@ -38,19 +41,15 @@ export function targetOf(cursor: number, request: AdvanceRequest): number {
   return advanceTarget(request.interval, cursor, Math.max(1, Math.floor(request.multiple)))
 }
 
-/** Where an advance stops, whichever comes first: the target, or the earliest armed signal
- * effective strictly after the cursor and at or before the target -- an intervening signal
- * wins over the requested target. (A fill stop is discovered while walking; see
- * `session.ts`.) */
-export function planAdvance(cursor: number, request: AdvanceRequest, armed: readonly SignalOccurrence[]): AdvancePlan {
+/** Where an advance stops, whichever comes first: the target, or the alert when it is
+ * effective strictly after the cursor and at or before the target. (A fill or a watch stop is
+ * discovered while walking; see `session.ts`.) */
+export function planAdvance(cursor: number, request: AdvanceRequest, alert: AlertOccurrence | null = null): AdvancePlan {
   const target = targetOf(cursor, request)
-  let best: SignalOccurrence | null = null
-  for (const s of armed) {
-    if (s.effective <= cursor || s.effective > target) continue
-    if (best === null || s.effective < best.effective) best = s
+  if (alert && alert.effective > cursor && alert.effective <= target) {
+    return { target, stopAt: alert.effective, reason: 'alert', alert }
   }
-  if (best) return { target, stopAt: best.effective, reason: 'signal', signal: best }
-  return { target, stopAt: target, reason: 'target', signal: null }
+  return { target, stopAt: target, reason: 'target', alert: null }
 }
 
 /** A candle's price band on both sides. */

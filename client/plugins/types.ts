@@ -253,6 +253,10 @@ export interface PointsRequest {
    * second KIND of row -- mtf01's trades beside its cascade events -- names them here and
    * reads them back off `Page.arrays`. Omitted: the single-array wire. */
   arrays?: readonly string[]
+  /** The read clock for this request; `null` reads past it on purpose (an alert's look-ahead
+   * through a bar replay, client/alerts/search.ts). Absent: the page-wide clock (config.ts)
+   * applies, which is what every pane's read wants. */
+  asof?: number | null
 }
 
 /** A plugin's per-pane config as fields, read and written one pane at a time (see

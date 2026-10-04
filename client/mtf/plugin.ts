@@ -321,8 +321,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
         extendData: () => ({
           chartInterval: ctx.interval,
           config,
-          graphRoots: roots,
-          symbol: `${ctx.vendor}:${ctx.ticker}`
+          graphRoots: roots
         })
       }
     },

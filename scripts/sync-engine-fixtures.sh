@@ -27,7 +27,7 @@ sim=${SERVER_FIXTURES:-$root/tests/sim/fixtures}
 pairs=(
   "$sim|$here/client/replay/fixtures|engine_cases.json"
   "$sim|$here/client/replay/fixtures|boundaries.json"
-  "$root/tests/watch/fixtures|$here/client/watch/fixtures|watch_cases.json"
+  "$root/tests/watch/fixtures|$here/client/alerts/fixtures|watch_cases.json"
   "$root/tests/arevlab/fixtures|$here/client/arevlab/fixtures|rules_parity.json"
 )
 status=0

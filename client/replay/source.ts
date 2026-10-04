@@ -1,16 +1,14 @@
 import { capabilities } from '../capabilities'
 import { apiGet, OhlcvApiError } from '../config'
 import { isNoData, type OHLCVBar } from '../ohlcv'
-import { fetchSignals } from '../plugins/api'
 import type { BarSource, Columns, ReplayBar } from './cache'
-import type { SignalHit, SignalSource } from './signals'
 import { fromWireDate, intervalEnd, nominalMs } from './timeframes'
 
-// GLUE. `BarSource` and `SignalSource` over `/getbars` and `/plugins/{id}/signals`. The only
-// module in client/replay that fetches. Both read PAST the page-wide read clock on purpose
-// (`asof: null`): the caches and the signal book are the replay's own look-ahead, hidden from
-// the chart until the cursor reaches them -- every read the chart itself makes stays clamped
-// by config.ts.
+// GLUE. `BarSource` over `/getbars` -- the only module in client/replay that fetches bars. It
+// reads PAST the page-wide read clock on purpose (`asof: null`): the caches are the replay's
+// own look-ahead, hidden from the chart until the cursor reaches them -- every read the chart
+// itself makes stays clamped by config.ts. The alert manager's look-ahead
+// (client/alerts/data.ts) reads bars through this too.
 
 /** A `/getbars` bar (columns=all) as a store-clock `ReplayBar`. */
 export function toReplayBar(interval: string, bar: OHLCVBar & Record<string, unknown>): ReplayBar {
@@ -86,28 +84,5 @@ export class HttpBarSource implements BarSource {
       }
       throw err
     }
-  }
-}
-
-export class HttpSignalSource implements SignalSource {
-  async points(ref: string, symbol: string, resolution: string, from: number, to: number): Promise<SignalHit[]> {
-    const out: SignalHit[] = []
-    let cursor = from
-    const limit = capabilities().limits.maxBarsPerRequest
-    for (let pages = 0; cursor < to && pages < 50; pages++) {
-      const page = await fetchSignals<{ date: number }>({
-        ref,
-        vendorSymbol: symbol,
-        resolution,
-        from: cursor,
-        to,
-        limit,
-        asof: null
-      })
-      for (const p of page.points) out.push({ date: p.date, effective: p.effective })
-      if (page.nextFrom === null || page.nextFrom <= cursor) break
-      cursor = page.nextFrom
-    }
-    return out
   }
 }

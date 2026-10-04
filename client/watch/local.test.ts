@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { resolve } from 'node:path'
 import { type LocalWatchSource, LocalWatchRegistry } from './local'
-import type { Observation } from './evaluate'
+import type { Observation } from '../alerts/conditions'
 import type { Condition, SourceField, WatchDraft } from './types'
 
 // PARITY, part two. `watch_cases.json`'s `policy` cases are one watch driven through a script
@@ -77,7 +77,7 @@ interface PolicyCase {
   expect: Snapshot[]
 }
 
-const cases = ((await Bun.file(resolve(import.meta.dir, 'fixtures/watch_cases.json')).json()) as { policy: PolicyCase[] }).policy
+const cases = ((await Bun.file(resolve(import.meta.dir, '../alerts/fixtures/watch_cases.json')).json()) as { policy: PolicyCase[] }).policy
 
 const TARGET = 'TARGET'
 

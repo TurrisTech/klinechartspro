@@ -52,33 +52,31 @@ describe('planAdvance', () => {
     expect(targetOf(cursor, { interval: '1h', multiple: 3 })).toBe(ny('2024-03-04 13:00'))
     expect(targetOf(cursor, { toEnd: true, end: 123 })).toBe(123)
   })
-  test('an armed signal before the target wins', () => {
-    const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, [
-      { ref: 'arev:arev21:long', resolution: '1h', effective: ny('2024-03-04 12:00'), date: ny('2024-03-04 11:00') },
-      { ref: 'krev:krev01:top', resolution: '1h', effective: ny('2024-03-04 15:00'), date: 0 }
-    ])
+  const alert = (effective: number) => ({ alertId: 'a1', name: 'oversold', effective, readings: '' })
+  test('an alert before the target wins', () => {
+    const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, alert(ny('2024-03-04 12:00')))
     // The 4h grid is anchored at 17:00: 09:00-13:00 then 13:00-17:00.
     expect(plan.target).toBe(ny('2024-03-04 17:00'))
     expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
-    expect(plan.reason).toBe('signal')
-    expect(plan.signal?.ref).toBe('arev:arev21:long')
+    expect(plan.reason).toBe('alert')
+    expect(plan.alert?.alertId).toBe('a1')
   })
-  test('a signal at the cursor or after the target does not stop the advance', () => {
-    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, [
-      { ref: 'a', resolution: '1h', effective: cursor, date: 0 },
-      { ref: 'b', resolution: '1h', effective: ny('2024-03-04 12:01'), date: 0 }
-    ])
-    expect(plan.reason).toBe('target')
-    expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
+  test('an alert at the cursor or after the target does not stop the advance', () => {
+    for (const at of [cursor, ny('2024-03-04 12:01')]) {
+      const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, alert(at))
+      expect(plan.reason).toBe('target')
+      expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
+    }
   })
-  test('a signal exactly at the target stops with reason signal', () => {
-    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, [{ ref: 'a', resolution: '1h', effective: ny('2024-03-04 12:00'), date: 0 }])
-    expect(plan.reason).toBe('signal')
+  test('an alert exactly at the target stops with reason alert', () => {
+    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, alert(ny('2024-03-04 12:00')))
+    expect(plan.reason).toBe('alert')
     expect(plan.stopAt).toBe(plan.target)
   })
-  test('next-signal is an advance to the end of the data', () => {
-    const plan = planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, [{ ref: 'a', resolution: '1h', effective: ny('2024-03-06 12:00'), date: 0 }])
+  test('Next alert is an advance to the end of the data that stops at the alert', () => {
+    const plan = planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, alert(ny('2024-03-06 12:00')))
     expect(plan.stopAt).toBe(ny('2024-03-06 12:00'))
+    expect(planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }).stopAt).toBe(ny('2024-12-31 17:00'))
   })
 })
 

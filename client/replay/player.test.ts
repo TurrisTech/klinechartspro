@@ -6,7 +6,7 @@ import type { AdvanceResult } from './session'
 // it is allowed to wait on besides. No DOM, no timers of its own.
 
 function result(reason: AdvanceResult['reason'] = 'target'): AdvanceResult {
-  return { from: 0, to: 1, request: { interval: '1h', multiple: 1 }, reason, signal: null, events: [], bars: [], walked: false, observed: [] }
+  return { from: 0, to: 1, request: { interval: '1h', multiple: 1 }, reason, alert: null, events: [], bars: [], walked: false, observed: [] }
 }
 
 const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))

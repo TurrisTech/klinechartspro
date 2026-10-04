@@ -1,7 +1,7 @@
 # client/replay — bar replay
 
 Replay stored history from a chosen instant on any wall, stepping a clock forward — by any
-timeframe or multiple, or to the next occurrence of an armed signal — with the account,
+timeframe or multiple, or to where the next of your alerts triggers (**Next alert**) — with the account,
 orders and fills behaving exactly as they do in paper trading. The fill engine runs **in the
 client** (a TypeScript port of `wdashboard_server/sim/engine.py`); the server only clamps its
 reads to the cursor (`asof`) and keeps the state blob.
@@ -14,16 +14,16 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 |---|---|
 | `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval` (`intervalStart` / `intervalEnd` / `nextIntervalStart` / `isMarketOpen`, `advanceTarget`) on the New York wall clock. Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
-| `clock.ts` | PURE. `planAdvance(cursor, request, armed)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `hasWorking`. |
+| `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
-| `signals.ts` | `SignalBook`: catalogue, starred set, armed set (a signal is armed *on a resolution*), `nextSignalAt` over an injected `SignalSource`, keyed off `effective`. |
+| `alerts.ts` | `ReplayAlerts`: the user's enabled client alerts on this instrument (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, and the local backend `client/watch` draws. |
 | — glue — | |
-| `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split) and `HttpSignalSource` (`/plugins/{id}/signals`). The only module here that fetches. Both read past the page-wide read clock on purpose (`asof: null`). |
+| `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
@@ -41,9 +41,9 @@ thing being replayed. On screen there is only what every step uses:
 | ::  REPLAY  EURUSD  Thu, Aug 20, 19:00                 ^ ⇲   |   the title bar: the drag handle
 +--------------------------------------------------------------+
 | [▶] [ Step ]  [1h v] × [1]  every [1 s v]                    |   transport
-| [Next signal]  Stepped 1h                                    |   the status, once there is one
+| [Next alert]  Stepped 1h                                     |   the status, once there is one
 |--------------------------------------------------------------|
-| [Signals 2] [Base 1h] [Account] [Trade]        Exit replay   |   one panel open at a time
+| [Alerts 2] [Base 1h] [Account] [Trade]         Exit replay   |   the alert manager; one panel
 +--------------------------------------------------------------+
 ```
 
@@ -71,11 +71,11 @@ klinecharts' `document` listener hears it). A key typed into a field is the fiel
 
 **Play** (`player.ts`) presses Step again and again, one step every `EVERY` (¼ s to 5 s,
 remembered per browser), and **stops by itself on anything but reaching the target** — a fill
-pause, an armed signal, a firing watch, a cancel, the end of the data: each is the replay
+pause, a firing watch, a cancel, the end of the data: each is the replay
 saying "look at this". The pace is a floor, not a metronome: the next step also waits for the
 plugin host to settle (`pluginHost.settled`, bounded at 5 s), because every step moves the read
 clock and every plugin on every pane refetches its forming bar — a ¼ s pace must not queue
-reads faster than the server answers them. A Step, Next signal or Exit pressed by hand ends the
+reads faster than the server answers them. A Step, Next alert or Exit pressed by hand ends the
 play. (In a background tab Chrome stretches the pace to its timer clamp, ~1 s; nobody is
 watching it there.)
 
@@ -89,12 +89,19 @@ session did it: whether the span was walked or seeked (nothing working could fil
 engine's business, and "Jumped — nothing working" on an ordinary one-candle step read as an
 error.
 
-The **signal list** puts the arm buttons (one per pane interval) on **every row**: arming used
-to appear only after starring, so a first-time user saw a list of names and nothing to press.
-Arming stars (the book's rule); a star alone shortlists. Rows are grouped by plugin under a
-heading and named by what tells them apart there ("arev21 · long", "rank · long"), with the
-starred ones first under their own heading by their full name.
-The signal list, the base timeframe and pause-on-fill are behind their toggles; **Account**
+**Next alert** (2026-10-04) replaced Next signal and its Signals panel (user: "let's remove
+bar replay's next signal feature as we will have next alert"). It runs to where the next of the
+user's **enabled client alerts on this instrument** triggers -- the alert manager's list
+(`client/alerts`), opened from the **Alerts** toggle, whose badge counts them. A published
+signal is something an alert reads (`AREV arev21 signal 4h is long`), so "the next AREV21
+long" is an alert of one condition; a rule may combine it with anything else. With only price
+watches armed it still runs, to the first watch that fires. With neither it is disabled, and
+**with nothing ahead it does not move** ("No alert triggers before the end of the data"): a
+replay cannot step back, and running to the end of the data on a search that found nothing
+would spend the session. While it searches, the status reads "Looking for the next alert…
+reached <date>" and Stop abandons the search before anything moves.
+
+The base timeframe and pause-on-fill are behind their toggle; **Account**
 shows and hides the account window, which starts **closed** — an advance that produced events
 (a fill, a close) opens it itself, on the tab the event landed in.
 
@@ -172,24 +179,27 @@ floored to the coarsest stored interval dividing it (`defaultBase`): 3m+5m → 1
 ## Advancing
 
 `advanceBy(request)`: plan the target on the boundary rules (`advanceTarget`, never a
-timedelta), ask the signal book for armed occurrences in `(cursor, target]`, stop at the
-earliest of those (**an intervening signal wins**), else the target; then **walk or seek**.
+timedelta) and stop there; then **walk or seek**. `nextAlert()` is the same advance to the
+end of the data, planned to stop at the alert the search found first
+(`client/alerts/search.ts`: ahead of the cursor, a chunk of bars at a time, every rule with
+its indicators' lead-in), which is effective strictly after the cursor. Only Next alert
+searches: a Step is not stopped by an alert, only by a fill pause or a firing watch.
 
 **Walk vs seek.** `canFill` (clock.ts) asks whether any bar could produce an event — a
 resting limit/stop, or an open trade carrying a stop loss or take profit. When it is false
 the account cannot change however the price moves, so the advance **seeks**: the cursor lands
 on the same instant, `quoteAt` takes the closing quote there, and `AdvanceResult.walked` is
-false. (A months-long "next signal" jump used to feed ~10⁵ bars to the engine for nothing —
+false. (A months-long jump used to feed ~10⁵ bars to the engine for nothing —
 measured at 5s per 20 market days at a 1m base.) When it is true the advance **walks** base
 bars from the cache, feeding each to the engine — or, when a candle's band intersects a working order or
 an open trade's stop/target, the finer stored bars inside it instead (recursively; a per-span
 refinement that never lowers the base). "Pause on fill" stops at the filling bar, and **any
-advance — Step or Next signal — stops at the first bar a price watch fires on** (stop reason
-`watch`; see below). `nextSignal` is an advance to the end of the data.
+advance — Step or Next alert — stops at the first bar a price watch fires on** (stop reason
+`watch`; see below).
 
 **Stopping a long advance.** While an advance runs, the title bar's Step button reads **Stop**
 and calls `cancel()`; the advance stops at its next natural place — **between two whole base
-bars**, or before moving at all if it is still looking up signals — with reason `cancel` and
+bars**, or before moving at all if Next alert is still searching — with reason `cancel` and
 the cursor on the last bar walked, exactly where a fill pause would leave it. A seek (nothing
 could fill, nothing watched) is one read and is not interrupted. Two things had to change for a
 Stop to be hearable at all, and each was a bug before it was a feature:
@@ -249,12 +259,12 @@ Three things follow, each of which was a decision:
   crossing without a baseline makes it fire on its first bar. A restored session keeps the
   STORED baseline instead — the reading the watch was armed with — which is the same decision
   the server's `restore()` makes.
-- **A firing watch stops the advance, Step and Next signal alike.** `onBar` returns what it
+- **A firing watch stops the advance, Step and Next alert alike.** `onBar` returns what it
   raised (`ObserverStop[]`), and the walk breaks on the first bar that raised anything, so the
   cursor lands on that base bar's close with reason `watch` — a Step short of its target, or
   on its last bar (still reported as `watch`, not `target`). `armedStops()` is what enables Next
-  signal with no signal armed. Order when two land on one bar: a fill pause, then the armed
-  signal the advance was planned to stop at, then the watch (whose notification is raised
+  alert with no alert. Order when two land on one bar: a fill pause, then the alert the
+  advance was planned to stop at, then the watch (whose notification is raised
   either way). Stopping a Step too was the user's call (2026-09-15): walking on past a firing
   puts the cursor, and every pane, somewhere other than where it happened.
 - **The event clock is the bar's close, never the wall clock.** A session replaying 2024 has
@@ -295,23 +305,26 @@ whole bar.
 ## Persistence
 
 `sim_session` with `mode='replay'` via `PUT /sim/sessions/{id}/state` (optimistic `rev`); the
-blob holds cursor, engine state, base, advance setting, pause-on-fill, starred and armed
-sets. The intent (session id + cursor) lives in `sessionStorage` so it survives the wall
+blob holds cursor, engine state, base, advance setting, pause-on-fill and the replay's price
+watches. A blob written while Next signal existed also carries `starred` and `armed`; `restore`
+ignores them (not a version bump, which would have thrown those replays away). The alerts are
+not in the blob: they are the account's, and the replay only reads them. The intent (session id + cursor) lives in `sessionStorage` so it survives the wall
 rebuild entering/leaving replay needs.
 
 ## Tests
 
 `bun test client/replay`: fixtures parity (engine + boundaries), the base table and
-rejections, boundary math across Friday 17:00, the planner's signal-beats-target precedence,
+rejections, boundary math across Friday 17:00, the planner's alert-beats-target precedence,
 the intersection rule descending / not descending, cache walk-vs-seek, the session walk
-(fake source, fake signals), persist round trip, and `watches.test.ts` — a real session over a
+(fake source, fake alerts: Next alert seeks to the hit, stays put with nothing ahead, runs on
+for a watch, Stop during the search), persist round trip (an old blob with signal stops), and `watches.test.ts` — a real session over a
 synthetic path: an armed watch forcing the walk, firing on the base bar that reaches the
 level, the band (a level between two closes), the blob round trip and the one-instrument
 refusal. The firing RULE is tested against the server's own fixtures in `client/watch`.
 `controls.test.ts` renders the controls and the start dialog into a real DOM (happy-dom,
 registered for that file only and removed after it) over a fake `ReplayController`: which
 controller call every gesture makes, when each button is usable, Step becoming Stop, every stop
-reason's wording, the one-panel rule, the signal list's grouping and arm-without-star, the base
+reason's wording, the search's progress line, the Alerts toggle, the base
 refusal, Play (pace, self-stop on every reason, the settle wait, a hand-pressed Step ending it),
 the keys (kept from the chart, the repeat that must not cancel, a field's own keys), Exit's two
 presses, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
