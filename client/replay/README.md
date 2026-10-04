@@ -12,12 +12,13 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 
 | module | role |
 |---|---|
-| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval` (`intervalStart` / `intervalEnd` / `nextIntervalStart` / `isMarketOpen`, `advanceTarget`) on the New York wall clock. Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. |
+| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
 | `clock.ts` | PURE. `planAdvance(cursor, request, armed)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `hasWorking`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
 | `signals.ts` | `SignalBook`: catalogue, starred set, armed set (a signal is armed *on a resolution*), `nextSignalAt` over an injected `SignalSource`, keyed off `effective`. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
+| `results.ts` | PURE. `replayResults`: the session's score from its snapshot -- net and realised P&L, win rate, averages, profit factor, expectancy, best/worst, the max drawdown of the realised curve -- and the rows the Results panel draws. |
 | `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
@@ -43,7 +44,7 @@ thing being replayed. On screen there is only what every step uses:
 | [▶] [ Step ]  [1h v] × [1]  every [1 s v]                    |   transport
 | [Next signal]  Stepped 1h                                    |   the status, once there is one
 |--------------------------------------------------------------|
-| [Signals 2] [Base 1h] [Account] [Trade]        Exit replay   |   one panel open at a time
+| [Signals 2] [Base 1h] [Results] [Account] [Trade]  Exit replay |   one panel open at a time
 +--------------------------------------------------------------+
 ```
 
@@ -78,6 +79,18 @@ clock and every plugin on every pane refetches its forming bar — a ¼ s pace m
 reads faster than the server answers them. A Step, Next signal or Exit pressed by hand ends the
 play. (In a background tab Chrome stretches the pace to its timer clamp, ~1 s; nobody is
 watching it there.)
+
+**Results** is the third panel: net P&L large, then the session's figures in the trading kit's
+`FigureList` (`results.ts`) -- closed trades, win rate, profit factor, expectancy, average win and
+loss, best and worst, the max drawdown of the realised balance curve, what is open, how much
+market time has been replayed. It follows the account between advances too (`subscribe`), so a
+trade closed from the chart re-scores at once. Before the first close it shows only the open
+position and the time replayed: a column of dashes is noise.
+
+**The wall is framed** while a replay is mounted: a thin edge in the replay's orange round the
+chart grid (`.wd-replay-wall`, on the container), so the wall reads as history at a glance however
+far away or rolled up the controls are. Round the grid rather than each pane: every pane is on the
+one replay clock, and a per-pane edge would collide with the active pane's ring.
 
 **Exit takes two presses** — the trading kit's `Arming`, the same rule as its own irreversible
 buttons: nothing lists a replay to reopen, and Exit sits beside Step, the button pressed most.
@@ -161,6 +174,36 @@ daily boundary**: they are computed on 1W/1M, so one can only appear or be spent
 market-day close. Invalidating them every step cost three slow `/levels` reads per 15-minute
 step, which saturated the browser's six-connection budget and starved the panes' own history
 loads.
+
+## Every instrument on its own schedule
+
+A replay walks its instrument on **that instrument's** candle grid -- its own zone and day
+geometry, resolved by the server from Postgres and carried on `SymbolInfo` (`timezone`,
+`dayGeometry`). A `CandleGrid` (`timeframes.ts`) answers every boundary question on it, and every
+module that floors, steps, labels or dates a bar takes one:
+
+- the **session** -- advance targets, its base and refinement caches -- for the walked instrument;
+- the **feed hub** -- each pane on the grid of the instrument *it* shows (a replay wall can mix
+  them), so a coinbase pane's forming day is labelled at UTC midnight, the label `/getbars`
+  gives the whole bar, while an FX pane beside it forms from 17:00 New York;
+- the **bar source** -- a wire label to a candle's open and close, and the `from`/`to` shift;
+- the **start dialog** -- default start, Random, and every typed date, read on the instrument's
+  clock and named: "Start (UTC)" for a coinbase pair. The replay's clock reads there too, as the
+  chart does;
+- the **chart pick** -- a bar's close on its pane's own grid;
+- the **plugin host's horizons** -- what each source forgets after a step, per pane.
+
+**No schedule is never guessed** (CLAUDE.md: never hardcode a zone). The replay refuses to start
+("No market hours for X"), a replay wall whose instrument has none is left, a pane without one gets
+no forming bar (reported, not labelled), and a horizon without one falls back to an instant earlier
+than any schedule could need -- forgetting too much costs a refetch, too little a permanent hole.
+
+Before 2026-10-04 all of this ran on the FX week: a coinbase replay closed its days at 17:00 New
+York, skipped its weekends and labelled forming bars where the server does not. Checked after the
+change on `coinbase:BTCUSD` from Friday 22:00 UTC: steps land on Saturday's hours, and a 1D pane's
+forming bar composed from the 1h base equals the server's `asof` rebuild in all five fields at each
+step; EURUSD steps and labels exactly as before (pinned by `timeframes.test.ts`, which sweeps the
+FX grid against the old functions).
 
 ## The base timeframe
 
@@ -315,7 +358,12 @@ reason's wording, the one-panel rule, the signal list's grouping and arm-without
 refusal, Play (pace, self-stop on every reason, the settle wait, a hand-pressed Step ending it),
 the keys (kept from the chart, the repeat that must not cancel, a field's own keys), Exit's two
 presses, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
-Enter, its refusals and Random's range. `player.test.ts` pins the player alone (one loop however
+Enter, its refusals and Random's range. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
+drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
+hub on a coinbase pane's own grid, and the refusal for a pane with no market hours.
+`timeframes.test.ts` pins `CandleGrid` against the wmarkettypes fixture for all three schedules,
+sweeps the FX grid against the old functions, and steps crypto through a weekend and equities
+across an overnight. `player.test.ts` pins the player alone (one loop however
 it is toggled, pause mid-step, an error ends it). happy-dom applies no stylesheet, so anything
 that hinges on CSS (`[hidden]` against a `display: flex`, as the dialog's backdrop is) is checked
 in the browser, not here. `scripts/sync-engine-fixtures.sh` vendors the

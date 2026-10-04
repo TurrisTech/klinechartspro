@@ -2234,6 +2234,23 @@ body.wd-has-dock > #app {
 
 /* --- Bar replay (client/replay) ------------------------------------------------------ */
 
+/* A replay wall: a thin edge in the replay's orange (the rail's "replay" dot, the watch line)
+   round the whole chart, so the wall reads as history at a glance however far away or rolled up
+   the controls are. Round the GRID, not each pane: every pane is on the one replay clock, and a
+   per-pane edge would collide with the active pane's own ring (src/app.css, z-index 3). */
+.wd-replay-wall .klinecharts-pro-grid {
+  position: relative;
+}
+
+.wd-replay-wall .klinecharts-pro-grid::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 2px color-mix(in oklab, #ff9800 85%, transparent);
+}
+
 /* The replay's controls are a dockable window (../chrome/window.ts) whose body sizes itself
    to its content, so the card gets its width from here rather than from a stored size. */
 .wd-replay-window[data-mode='float'] {
@@ -2566,6 +2583,29 @@ body.wd-has-dock > #app {
 
 .wd-replay-muted {
   color: var(--muted-foreground);
+}
+
+/* The Results panel: net P&L large, then the kit's two-column figures. */
+.wd-replay-results-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.wd-replay-results-net {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-replay-results .wd-tk-figs {
+  border-top: none;
+  padding-top: 0.125rem;
+}
+
+.wd-replay-results-note {
+  font-size: 0.6875rem;
 }
 
 /* Docked, the footer takes the rest of the line, so Exit ends up at its far right. */

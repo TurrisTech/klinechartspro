@@ -1,8 +1,9 @@
 import type { SignalCatalogueEntry } from '../plugins/types'
-import { Arming } from '../trading/kit'
+import { Arming, FigureList } from '../trading/kit'
 import { formatClock, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
+import { replayResults, resultHeadline, resultRows } from './results'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
 import { dragByHandle } from '../chrome/drag'
@@ -19,8 +20,8 @@ import { createDockableWindow } from '../chrome/window'
 //               with nothing in it that acts on the replay
 //   transport   Play and Step, each beside the setting it uses (timeframe x multiple, the pace)
 //   next        Next signal, and how far a running walk has got or why the last advance stopped
-//   footer      Signals / Base, one panel open at a time; Account and Trade, the two windows;
-//               Exit replay, set apart at the far end
+//   footer      Signals / Base / Results, one panel open at a time; Account and Trade, the two
+//               windows; Exit replay, set apart at the far end
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
 // permanently on screen, and the account window and the trade box are opened from here rather
@@ -48,7 +49,7 @@ const EXIT = 'exit'
  * its progress, or a Stop already pressed, shows at once. */
 const BUSY_REVEAL_MS = 300
 
-type PanelId = 'signals' | 'settings' | null
+type PanelId = 'signals' | 'settings' | 'results' | null
 
 export interface ReplayControlsOptions {
   controller: ReplayController
@@ -146,6 +147,13 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     sleep: options.sleep,
     delayMs: readDelay()
   })
+  // The Results panel's figures: one list for the controls' life, so a re-render updates its
+  // values in place rather than rebuilding what is being read.
+  const figures = new FigureList('wd-replay-results-figures')
+  // A trade placed or closed between advances changes the score with no control change.
+  const unsubscribeSnapshot = controller.subscribe(() => {
+    if (panel === 'results') renderBody()
+  })
   const unsubscribe = controller.onControlChange((change) => {
     // A progress report moves one date, several times a second: patch that line. Rebuilding
     // the window instead would replace the Stop button under a pointer pressing it, and a
@@ -231,7 +239,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   //
   //   [▶] [Step]  [1h v] × [1]  every [1 s v]      transport: each button beside what it uses
   //   [Next signal]  Stepped 1h                     the other way to move, and why it stopped
-  //   Signals 1  Base 1h  Account  Trade    Exit replay   panels and windows; Exit set apart
+  //   Signals 1  Base 1h  Results  Account  Trade   Exit replay   panels, windows; Exit set apart
 
   function renderBody(): void {
     const body = win.body
@@ -240,6 +248,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     body.append(renderTransport(), renderNext(), renderToggles())
     if (panel === 'signals') body.appendChild(renderSignals())
     if (panel === 'settings') body.appendChild(renderSettings())
+    if (panel === 'results') body.appendChild(renderResults())
     win.reflow()
   }
 
@@ -368,7 +377,9 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const settings = toggleButton(`Base ${controller.base}`, '', panel === 'settings', () => showPanel('settings'))
     settings.classList.toggle('is-invalid', !baseCheck.ok)
     settings.title = baseCheck.ok ? 'Base timeframe and pause on fill' : (baseCheck.reason ?? '')
-    row.append(signals, settings)
+    const results = toggleButton('Results', '', panel === 'results', () => showPanel('results'))
+    results.title = 'How the session is going: P&L, win rate, drawdown'
+    row.append(signals, settings, results)
 
     if (options.account) {
       const account = options.account
@@ -439,6 +450,35 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       const warn = el('div', 'wd-replay-warning')
       warn.textContent = baseCheck.reason ?? ''
       box.appendChild(warn)
+    }
+    return box
+  }
+
+  /** The session's score (results.ts), in the trading kit's figures. */
+  function renderResults(): HTMLElement {
+    // `wd-tk`: the kit's own scope, so the figures read exactly as they do in the trade box.
+    const box = el('div', 'wd-replay-panel wd-tk wd-replay-results')
+    const r = replayResults(controller.snapshot, controller.startedAt, controller.cursor)
+    const headline = resultHeadline(r)
+    const head = el('div', 'wd-replay-results-head')
+    const label = el('span', 'wd-replay-label')
+    label.textContent = 'Net P&L'
+    const value = el('span', `wd-replay-results-net${headline.tone ? ` is-${headline.tone}` : ''}`)
+    value.textContent = headline.text
+    head.append(label, value)
+    box.appendChild(head)
+    if (r.closed === 0 && r.open === 0) {
+      const none = el('div', 'wd-replay-muted')
+      none.textContent = 'No trades yet. Trade from the Trade box or the chart, and the score builds here.'
+      box.appendChild(none)
+      return box
+    }
+    figures.update(resultRows(r))
+    box.appendChild(figures.element)
+    if (r.closed === 0) {
+      const note = el('div', 'wd-replay-muted wd-replay-results-note')
+      note.textContent = 'Win rate, profit factor and drawdown follow the first closed trade.'
+      box.appendChild(note)
     }
     return box
   }
@@ -521,6 +561,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       player.dispose()
       arming.disarm()
       unsubscribe()
+      unsubscribeSnapshot()
       win.dispose()
     }
   }

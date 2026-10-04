@@ -34,6 +34,9 @@ import { type CandleGrid, gridOf, nominalMs, scheduleOf, STORED_LADDER, sortByLe
 
 export const REPLAY_LOG = '[replay]'
 
+/** On the wall's container while a replay is mounted: what draws the replay edge. */
+export const REPLAY_WALL_CLASS = 'wd-replay-wall'
+
 export interface BarReplayController {
   /** Resync the dock's overlays and the base check to the wall's panes. */
   sync(panes: ChartProPane[]): void
@@ -398,6 +401,9 @@ export async function mountBarReplay(
     trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() }
   })
   await session.primeQuote()
+  // The wall reads as history at a glance: a thin edge in the replay's orange round the chart,
+  // however far away or rolled up the controls are (client/style.css `.wd-replay-wall`).
+  container.classList.add(REPLAY_WALL_CLASS)
 
   return {
     watches,
@@ -409,6 +415,7 @@ export async function mountBarReplay(
     },
     quote: async (key: string) => session.snapshot.quotes[key],
     teardown(): void {
+      container.classList.remove(REPLAY_WALL_CLASS)
       controls.dispose()
       dock.teardown()
       session.dispose()

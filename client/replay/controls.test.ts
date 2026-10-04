@@ -1,6 +1,8 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { SignalCatalogueEntry } from '../plugins/types'
+import type { SimSnapshot, SimTrade } from '../trading/api'
+import type { SessionListener } from '../trading/session'
 import type { AdvanceResult, ReplayController } from './session'
 
 // THE REPLAY CONTROLS, rendered into a real DOM (happy-dom) and driven the way a user drives
@@ -49,6 +51,42 @@ interface Fake {
   /** A walk's progress report: only `walkedTo` moved. */
   emitWalk(): void
   listeners: Set<(change?: 'walk') => void>
+  /** The account changed (a trade placed or closed between advances). */
+  emitSnapshot(): void
+}
+
+function snapshotOf(trades: SimTrade[] = [], account: Partial<SimSnapshot['account']> = {}): SimSnapshot {
+  return {
+    id: 's1',
+    mode: 'replay',
+    name: 'Replay',
+    createdAt: 0,
+    rev: 0,
+    account: { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000, ...account },
+    quotes: {},
+    orders: [],
+    trades,
+    symbols: [SYM]
+  }
+}
+
+function closedTrade(id: string, pnl: number, closedAt: number): SimTrade {
+  return {
+    id,
+    symbol: SYM,
+    side: 'buy',
+    units: 10_000,
+    entryPrice: 1.1,
+    openedAt: closedAt - H,
+    orderId: `o${id}`,
+    stopLoss: null,
+    takeProfit: null,
+    closedAt,
+    closePrice: 1.1,
+    closeReason: 'manual',
+    realizedPnl: pnl,
+    label: null
+  }
 }
 
 function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
@@ -57,6 +95,7 @@ function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
 
 function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
   const listeners = new Set<(change?: 'walk') => void>()
+  const snapshotListeners = new Set<SessionListener>()
   const calls: Fake['calls'] = { step: 0, nextSignal: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
   const emit = (): void => {
     for (const l of [...listeners]) l()
@@ -80,6 +119,14 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
     intervalsInUse: ['5m', '1h'],
     symbol: SYM,
     grid: FX_GRID,
+    startedAt: Date.UTC(2024, 2, 4, 14, 0),
+    snapshot: snapshotOf(),
+    subscribe(listener) {
+      snapshotListeners.add(listener)
+      return () => {
+        snapshotListeners.delete(listener)
+      }
+    },
     setBase(base) {
       calls.setBase.push(base)
       const check = validateBase(base, controller.intervalsInUse, controller.storedIntervals)
@@ -120,7 +167,10 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
       calls.persist++
     }
   }
-  return { controller, calls, emit, emitWalk, listeners }
+  const emitSnapshot = (): void => {
+    for (const l of [...snapshotListeners]) l(controller.snapshot, [])
+  }
+  return { controller, calls, emit, emitWalk, listeners, emitSnapshot }
 }
 
 interface Mounted extends Fake {
@@ -628,6 +678,37 @@ describe('the panels', () => {
     toggle.click()
     expect((m.q('.wd-replay-warning') as HTMLElement).textContent).toContain('5m')
     expect((m.q('.wd-replay-panel select') as HTMLSelectElement).classList.contains('is-invalid')).toBe(true)
+  })
+
+  test('Results: an empty session says how to start scoring', () => {
+    const m = mount()
+    m.button('Results').click()
+    const panel = m.q('.wd-replay-results') as HTMLElement
+    expect((panel.querySelector('.wd-replay-results-net') as HTMLElement).textContent).toBe('0.00 USD · 0.00%')
+    expect(panel.textContent).toContain('No trades yet')
+    expect(panel.querySelector('.wd-tk-figs')).toBeNull()
+  })
+
+  test('Results: the score, and it follows a trade closed between advances', () => {
+    const f = fake()
+    f.controller.snapshot = snapshotOf([closedTrade('1', 120, f.controller.cursor - 3 * H)], { balance: 10_120, equity: 10_120 })
+    const m = mount(f)
+    m.button('Results').click()
+    const net = (): HTMLElement => m.q('.wd-replay-results-net') as HTMLElement
+    const figure = (label: string): string =>
+      ([...m.root.querySelectorAll('.wd-tk-fig')].find((n) => n.querySelector('dt')?.textContent === label)?.querySelector('dd')?.textContent ?? '') as string
+    expect(net().textContent).toBe('+120.00 USD · +1.20%')
+    expect(net().classList.contains('is-up')).toBe(true)
+    expect(figure('Win rate')).toBe('100% · 1W 0L')
+    expect(figure('Profit factor')).toBe('∞')
+
+    // A losing close arrives with no control change: the panel follows the account.
+    f.controller.snapshot = snapshotOf([closedTrade('1', 120, f.controller.cursor - 3 * H), closedTrade('2', -200, f.controller.cursor - H)], { balance: 9_920, equity: 9_920 })
+    f.emitSnapshot()
+    expect(net().textContent).toBe('−80.00 USD · −0.80%')
+    expect(figure('Win rate')).toBe('50% · 1W 1L')
+    expect(figure('Profit factor')).toBe('0.60')
+    expect(figure('Max drawdown')).toBe('−200.00 · 1.98%')
   })
 
   test('settings: pause on fill', () => {

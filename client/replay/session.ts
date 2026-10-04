@@ -107,6 +107,11 @@ export interface ReplayController {
   /** The instrument's candle schedule: where its candles open and close, and the zone its
    * clock reads in (the controls show the cursor on it, as its chart does). */
   readonly grid: CandleGrid
+  /** Where the session started, and its account as of now -- what the Results panel scores. */
+  readonly startedAt: number
+  readonly snapshot: SimSnapshot
+  /** Every change to the account (an advance, an order, a close). */
+  subscribe(listener: SessionListener): () => void
   setBase(base: string): BaseCheck
   setAdvance(setting: AdvanceSetting): void
   setPauseOnFill(on: boolean): void
@@ -181,6 +186,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   readonly storedIntervals: readonly string[]
   readonly symbol: string
   readonly grid: CandleGrid
+  readonly startedAt: number
   private readonly engine: Engine
   private readonly listeners = new Set<SessionListener>()
   private readonly controlListeners = new Set<(change?: 'walk') => void>()
@@ -194,6 +200,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   constructor(private readonly opts: ReplaySessionOptions) {
     this.symbol = opts.symbol
     this.grid = opts.grid
+    this.startedAt = opts.startedAt
     this.cursor = opts.cursor
     this.base = opts.base
     this.advance = { ...opts.advance }
@@ -319,7 +326,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       vendor: this.opts.vendor,
       symbol: this.symbol,
       cursor: this.cursor,
-      startedAt: this.opts.startedAt,
+      startedAt: this.startedAt,
       base: this.base,
       advance: this.advance,
       pauseOnFill: this.pauseOnFill,
