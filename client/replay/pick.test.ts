@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { defaultRange, DEFAULT_RANGE_MS, randomStart } from './pick'
-import { fromWall, intervalStart } from './timeframes'
+import { FX_GRID, fromWall, intervalStart } from './timeframes'
 
 const TZ = 'America/New_York'
 
@@ -23,7 +23,7 @@ describe('randomStart', () => {
   test('lands on a base candle open', () => {
     for (const u of [0, 0.13, 0.37, 0.5, 0.71, 0.999]) {
       for (const base of ['5s', '1m', '15m', '1h', '1D']) {
-        const at = randomStart(range, base, () => u, TZ)
+        const at = randomStart(range, base, FX_GRID, () => u)
         expect(at).toBe(intervalStart(base, at, TZ))
       }
     }
@@ -31,7 +31,7 @@ describe('randomStart', () => {
 
   test('stays inside the range, bar the floor onto the candle it opens in', () => {
     for (let i = 0; i < 200; i++) {
-      const at = randomStart(range, '1h', () => i / 200, TZ)
+      const at = randomStart(range, '1h', FX_GRID, () => i / 200)
       expect(at).toBeLessThanOrEqual(range.to)
       expect(at).toBeGreaterThan(range.from - 86_400_000)
     }
@@ -40,21 +40,21 @@ describe('randomStart', () => {
   test('draws inside the closed window rather than rejecting it', () => {
     // 0.42 of this range is Friday 21:00: the market is shut, and the 1h candle that most
     // recently opened is Friday's 21:00 one. The wall draws that; nothing here rejects it.
-    const at = randomStart(range, '1h', rngOf([0.42]), TZ)
+    const at = randomStart(range, '1h', FX_GRID, rngOf([0.42]))
     expect(at).toBe(ny('2024-03-08 21:00'))
   })
 
   test('spreads over the range', () => {
     const seen = new Set<number>()
-    for (let i = 0; i < 100; i++) seen.add(randomStart(range, '1h', () => i / 100, TZ))
+    for (let i = 0; i < 100; i++) seen.add(randomStart(range, '1h', FX_GRID, () => i / 100))
     // 11.7 days of hourly candles: every draw of 100 should be a distinct one.
     expect(seen.size).toBe(100)
   })
 
   test('an empty range collapses onto its own start', () => {
     const one = ny('2024-03-06 10:30')
-    expect(randomStart({ from: one, to: one }, '1h', rngOf([0.9]), TZ)).toBe(ny('2024-03-06 10:00'))
-    expect(randomStart({ from: one, to: one - 1 }, '1h', rngOf([0.9]), TZ)).toBe(ny('2024-03-06 10:00'))
+    expect(randomStart({ from: one, to: one }, '1h', FX_GRID, rngOf([0.9]))).toBe(ny('2024-03-06 10:00'))
+    expect(randomStart({ from: one, to: one - 1 }, '1h', FX_GRID, rngOf([0.9]))).toBe(ny('2024-03-06 10:00'))
   })
 })
 

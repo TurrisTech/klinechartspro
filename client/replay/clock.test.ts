@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimOrder, SimTrade } from '../trading/api'
 import { canFill, intersectsWorking, planAdvance, targetOf } from './clock'
-import { fromWall } from './timeframes'
+import { FX_GRID, fromWall } from './timeframes'
 
 function ny(text: string): number {
   const [d, t] = text.split(' ')
@@ -49,12 +49,12 @@ const trade = (over: Partial<SimTrade>): SimTrade => ({
 describe('planAdvance', () => {
   const cursor = ny('2024-03-04 10:00')
   test('the target is N whole candles on the boundary rules', () => {
-    expect(targetOf(cursor, { interval: '1h', multiple: 3 })).toBe(ny('2024-03-04 13:00'))
-    expect(targetOf(cursor, { toEnd: true, end: 123 })).toBe(123)
+    expect(targetOf(cursor, { interval: '1h', multiple: 3 }, FX_GRID)).toBe(ny('2024-03-04 13:00'))
+    expect(targetOf(cursor, { toEnd: true, end: 123 }, FX_GRID)).toBe(123)
   })
   const alert = (effective: number) => ({ alertId: 'a1', name: 'oversold', effective, readings: '' })
   test('an alert before the target wins', () => {
-    const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, alert(ny('2024-03-04 12:00')))
+    const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, FX_GRID, alert(ny('2024-03-04 12:00')))
     // The 4h grid is anchored at 17:00: 09:00-13:00 then 13:00-17:00.
     expect(plan.target).toBe(ny('2024-03-04 17:00'))
     expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
@@ -63,20 +63,20 @@ describe('planAdvance', () => {
   })
   test('an alert at the cursor or after the target does not stop the advance', () => {
     for (const at of [cursor, ny('2024-03-04 12:01')]) {
-      const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, alert(at))
+      const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, FX_GRID, alert(at))
       expect(plan.reason).toBe('target')
       expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
     }
   })
   test('an alert exactly at the target stops with reason alert', () => {
-    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, alert(ny('2024-03-04 12:00')))
+    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, FX_GRID, alert(ny('2024-03-04 12:00')))
     expect(plan.reason).toBe('alert')
     expect(plan.stopAt).toBe(plan.target)
   })
   test('Next alert is an advance to the end of the data that stops at the alert', () => {
-    const plan = planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, alert(ny('2024-03-06 12:00')))
+    const plan = planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, FX_GRID, alert(ny('2024-03-06 12:00')))
     expect(plan.stopAt).toBe(ny('2024-03-06 12:00'))
-    expect(planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }).stopAt).toBe(ny('2024-12-31 17:00'))
+    expect(planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, FX_GRID).stopAt).toBe(ny('2024-12-31 17:00'))
   })
 })
 

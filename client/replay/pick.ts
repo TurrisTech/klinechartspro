@@ -1,4 +1,4 @@
-import { intervalStart, MARKET_TZ } from './timeframes'
+import type { CandleGrid } from './timeframes'
 
 // PURE. Picking a random start instant for a replay, out of a range of past dates.
 //
@@ -24,10 +24,11 @@ export function defaultRange(latest: number): StartRange {
   return { from: latest - DEFAULT_RANGE_MS, to: latest - 86_400_000 }
 }
 
-/** A uniform instant in `range`, snapped down to a `base` candle open. The snap is a floor, so
- * the result can sit up to one candle before `range.from` -- harmless, and cheaper than the
- * arithmetic to avoid it. `rng` is injected for the tests; it must return [0, 1). */
-export function randomStart(range: StartRange, base: string, rng: () => number = Math.random, tz: string = MARKET_TZ): number {
+/** A uniform instant in `range`, snapped down to a `base` candle open on the instrument's own
+ * schedule. The snap is a floor, so the result can sit up to one candle before `range.from` --
+ * harmless, and cheaper than the arithmetic to avoid it. `rng` is injected for the tests; it
+ * must return [0, 1). */
+export function randomStart(range: StartRange, base: string, grid: CandleGrid, rng: () => number = Math.random): number {
   const span = Math.max(0, range.to - range.from)
-  return intervalStart(base, range.from + Math.floor(rng() * span), tz)
+  return grid.start(base, range.from + Math.floor(rng() * span))
 }

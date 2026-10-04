@@ -4,6 +4,7 @@ import { installWindow } from '../plugins/testing'
 installWindow()
 const { AlertMonitor } = await import('./monitor')
 const { ClientAlertStore } = await import('./store')
+const { FX_GRID } = await import('../replay/timeframes')
 import type { NotificationSpec } from '../notifications'
 import type { OHLCVBar } from '../ohlcv'
 import type { StreamListener } from '../stream'
@@ -51,6 +52,9 @@ class FakeStream {
 class FakeData implements AlertData {
   points_: Point[] = []
   constructor(public history: AlertBar[]) {}
+  async grid() {
+    return FX_GRID
+  }
   async bars(): Promise<AlertBar[]> {
     return this.history
   }

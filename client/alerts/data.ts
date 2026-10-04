@@ -12,12 +12,19 @@
 import { capabilities } from '../capabilities'
 import { fetchPoints } from '../plugins/api'
 import { HttpBarSource } from '../replay/source'
+import { type CandleGrid, gridFor } from '../replay/timeframes'
+import { fetchSymbolInfo } from '../symbols'
 import type { AlertBar, PointSource } from './compute'
 
 export type Point = { date: number } & Record<string, unknown>
 
 export interface AlertData {
-  /** Bars of `interval` opening in `[from, to)` (store clock), ascending. */
+  /** The instrument's candle schedule -- where its bars open and close, which is when every
+   * value on them becomes knowable -- or null when the server resolved no market hours for it.
+   * An instrument with none cannot be evaluated: there is no instant to evaluate at. */
+  grid(symbol: string): Promise<CandleGrid | null>
+  /** Bars of `interval` opening in `[from, to)` (store clock), ascending, on the instrument's
+   * own schedule; none for an instrument with no schedule. */
   bars(symbol: string, interval: string, from: number, to: number): Promise<AlertBar[]>
   /** A plugin's points dated in `[from, to)` (wire dates, as the bars carry them), ascending. */
   points(source: PointSource, symbol: string, interval: string, from: number, to: number): Promise<Point[]>
@@ -29,9 +36,25 @@ const MAX_POINT_PAGES = 200
 
 export class HttpAlertData implements AlertData {
   private readonly source = new HttpBarSource()
+  private readonly grids = new Map<string, Promise<CandleGrid | null>>()
 
-  bars(symbol: string, interval: string, from: number, to: number): Promise<AlertBar[]> {
-    return this.source.fetch(symbol, interval, from, to, 'core')
+  /** Read once per instrument per page, from the market hours `/instrument` resolves. */
+  grid(symbol: string): Promise<CandleGrid | null> {
+    let grid = this.grids.get(symbol)
+    if (!grid) {
+      const at = symbol.indexOf(':')
+      grid = fetchSymbolInfo(symbol.slice(at + 1), symbol.slice(0, at))
+        .then((info) => gridFor(info))
+        .catch(() => null)
+      this.grids.set(symbol, grid)
+    }
+    return grid
+  }
+
+  async bars(symbol: string, interval: string, from: number, to: number): Promise<AlertBar[]> {
+    const grid = await this.grid(symbol)
+    if (!grid) return []
+    return this.source.fetch(symbol, interval, from, to, 'core', grid)
   }
 
   async points(source: PointSource, symbol: string, interval: string, from: number, to: number): Promise<Point[]> {

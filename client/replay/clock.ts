@@ -1,5 +1,5 @@
 import type { SimOrder, SimTrade } from '../trading/api'
-import { advanceTarget } from './timeframes'
+import type { CandleGrid } from './timeframes'
 
 // PURE. Advance planning: given the cursor, what the user asked for, the next alert found
 // ahead of it and what is working in the account, decide where the walk stops and why, and
@@ -35,17 +35,18 @@ export interface AdvancePlan {
   alert: AlertOccurrence | null
 }
 
-/** The target instant for a request from `cursor`, on the candle boundary rules. */
-export function targetOf(cursor: number, request: AdvanceRequest): number {
+/** The target instant for a request from `cursor`, on the candle boundary rules of the
+ * instrument's own schedule (`grid`). */
+export function targetOf(cursor: number, request: AdvanceRequest, grid: CandleGrid): number {
   if ('toEnd' in request) return request.end
-  return advanceTarget(request.interval, cursor, Math.max(1, Math.floor(request.multiple)))
+  return grid.advanceTarget(request.interval, cursor, Math.max(1, Math.floor(request.multiple)))
 }
 
 /** Where an advance stops, whichever comes first: the target, or the alert when it is
  * effective strictly after the cursor and at or before the target. (A fill or a watch stop is
  * discovered while walking; see `session.ts`.) */
-export function planAdvance(cursor: number, request: AdvanceRequest, alert: AlertOccurrence | null = null): AdvancePlan {
-  const target = targetOf(cursor, request)
+export function planAdvance(cursor: number, request: AdvanceRequest, grid: CandleGrid, alert: AlertOccurrence | null = null): AdvancePlan {
+  const target = targetOf(cursor, request, grid)
   if (alert && alert.effective > cursor && alert.effective <= target) {
     return { target, stopAt: alert.effective, reason: 'alert', alert }
   }

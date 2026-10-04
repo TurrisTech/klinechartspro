@@ -7,7 +7,7 @@ import type { ReplayAlertBook } from './alerts'
 import { type AdvanceRequest, type AlertOccurrence, type StopReason, canFill, intersectsWorking, planAdvance, targetOf } from './clock'
 import { type BidAskBar, type Engine, SimError } from './engine'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
-import { type BaseCheck, finerStored, nominalMs, validateBase } from './timeframes'
+import { type BaseCheck, type CandleGrid, finerStored, nominalMs, validateBase } from './timeframes'
 
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50
@@ -110,6 +110,14 @@ export interface ReplayController {
   readonly storedIntervals: readonly string[]
   readonly intervalsInUse: readonly string[]
   readonly symbol: string
+  /** The instrument's candle schedule: where its candles open and close, and the zone its
+   * clock reads in (the controls show the cursor on it, as its chart does). */
+  readonly grid: CandleGrid
+  /** Where the session started, and its account as of now -- what the Results panel scores. */
+  readonly startedAt: number
+  readonly snapshot: SimSnapshot
+  /** Every change to the account (an advance, an order, a close). */
+  subscribe(listener: SessionListener): () => void
   setBase(base: string): BaseCheck
   setAdvance(setting: AdvanceSetting): void
   setPauseOnFill(on: boolean): void
@@ -138,6 +146,9 @@ export interface ReplaySessionOptions {
   vendor: string
   /** The engine's instrument key, `vendor:TICKER`. */
   symbol: string
+  /** That instrument's candle schedule, from its resolved market hours. Every step, every
+   * floor and every bar the session reads is on it. */
+  grid: CandleGrid
   cursor: number
   startedAt: number
   base: string
@@ -172,6 +183,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   intervalsInUse: string[] = []
   readonly storedIntervals: readonly string[]
   readonly symbol: string
+  readonly grid: CandleGrid
+  readonly startedAt: number
   private readonly engine: Engine
   private readonly listeners = new Set<SessionListener>()
   private readonly controlListeners = new Set<(change?: 'walk') => void>()
@@ -184,13 +197,15 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   constructor(private readonly opts: ReplaySessionOptions) {
     this.symbol = opts.symbol
+    this.grid = opts.grid
+    this.startedAt = opts.startedAt
     this.cursor = opts.cursor
     this.base = opts.base
     this.advance = { ...opts.advance }
     this.pauseOnFill = opts.pauseOnFill
     this.storedIntervals = opts.storedIntervals
     this.engine = opts.engine
-    this.baseCache = new BarCache(opts.barSource, opts.symbol, opts.base, 'all')
+    this.baseCache = new BarCache(opts.barSource, opts.symbol, opts.base, opts.grid, 'all')
     this.baseCache.seek(this.cursor)
     this.snapshot = this.buildSnapshot()
   }
@@ -308,7 +323,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       vendor: this.opts.vendor,
       symbol: this.symbol,
       cursor: this.cursor,
-      startedAt: this.opts.startedAt,
+      startedAt: this.startedAt,
       base: this.base,
       advance: this.advance,
       pauseOnFill: this.pauseOnFill,
@@ -341,7 +356,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   async barAt(at: number): Promise<ReplayBar | null> {
     let span = QUOTE_PROBE_BARS * nominalMs(this.base)
     for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
-      const probe = new BarCache(this.opts.barSource, this.symbol, this.base, 'all')
+      const probe = new BarCache(this.opts.barSource, this.symbol, this.base, this.grid, 'all')
       probe.seek(at - span)
       await probe.ensure(at)
       const last = probe
@@ -412,7 +427,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     if (base !== this.base) {
       this.base = base
       // A new base is a new walk: the old run is meaningless at another granularity.
-      this.baseCache = new BarCache(this.opts.barSource, this.symbol, base, 'all')
+      this.baseCache = new BarCache(this.opts.barSource, this.symbol, base, this.grid, 'all')
       this.baseCache.seek(this.cursor)
       this.persist()
     }
@@ -469,10 +484,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     this.advanceFrom = from
     this.controlsChanged()
     try {
-      const target = targetOf(from, request)
+      const target = targetOf(from, request, this.grid)
       const end = Math.min(target, this.opts.dataEnd())
       const alert = options.alerts ? await this.findAlert(from, end) : null
-      const plan = planAdvance(from, { toEnd: true, end }, alert)
+      const plan = planAdvance(from, { toEnd: true, end }, this.grid, alert)
       let reason: StopReason = plan.reason === 'alert' ? 'alert' : 'toEnd' in request || end < target ? 'end' : 'target'
       const stopAt = plan.stopAt
       const events: SimEvent[] = []
@@ -651,7 +666,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   private refinement(interval: string): BarCache {
     let c = this.refinements.get(interval)
     if (!c) {
-      c = new BarCache(this.opts.barSource, this.symbol, interval, 'all')
+      c = new BarCache(this.opts.barSource, this.symbol, interval, this.grid, 'all')
       this.refinements.set(interval, c)
     }
     return c

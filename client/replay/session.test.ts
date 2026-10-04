@@ -5,7 +5,7 @@ import type { BarSource, ReplayBar } from './cache'
 import type { AlertOccurrence } from './clock'
 import type { ReplayObserver } from './session'
 import { Engine } from './engine'
-import { fromWall, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from './timeframes'
+import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from './timeframes'
 
 // session.ts imports ../trading/api -> ../auth -> ../config, which read `window` at import.
 installWindow()
@@ -145,6 +145,7 @@ function make(
     name: 'Replay',
     createdAt: 0,
     vendor: 'oanda',
+    grid: FX_GRID,
     symbol: SYM,
     cursor: opts.cursor ?? start,
     startedAt: start,
@@ -472,6 +473,7 @@ describe('cancelling an advance', () => {
         name: 'Replay',
         createdAt: 0,
         vendor: 'oanda',
+        grid: FX_GRID,
         symbol: SYM,
         cursor: start,
         startedAt: start,
@@ -614,3 +616,77 @@ describe('reporting how far a walk has got', () => {
     expect(made.session.walkedTo).toBeNull()
   })
 })
+
+describe('a session on another market\'s schedule', () => {
+  /** Hourly BTC bars for every hour of the week -- weekends included -- labelled on the grid the
+   * cache asks with. */
+  class EveryHour implements BarSource {
+    async fetch(_symbol: string, interval: string, from: number, to: number, _columns: unknown, grid: CandleGrid): Promise<ReplayBar[]> {
+      const out: ReplayBar[] = []
+      for (let open = grid.start(interval, from); open < to; open = grid.nextStart(interval, open)) {
+        if (open < from) continue
+        const px = 60_000 + (open / H) % 100
+        out.push({ open, end: grid.end(interval, open), date: grid.toWire(interval, open), o: px, h: px + 5, l: px - 5, c: px + 1, v: 1 })
+      }
+      return out
+    }
+  }
+
+  const UTC = (d: number, h = 0): number => Date.UTC(2024, 2, d, h)
+  const crypto = gridOf({ timezone: 'UTC', day: CONTINUOUS_DAY })
+
+  function cryptoSession(cursor: number, observer?: ReplayObserver) {
+    const session = new ReplayTradingSession({
+      id: 'c1',
+      name: 'Replay',
+      createdAt: 0,
+      vendor: 'coinbase',
+      symbol: 'coinbase:BTCUSD',
+      grid: crypto,
+      cursor,
+      startedAt: cursor,
+      base: '1h',
+      advance: { interval: '1h', multiple: 1 },
+      pauseOnFill: false,
+      storedIntervals: ['1h', '1D'],
+      engine: new Engine(10_000),
+      barSource: new EveryHour(),
+      dataEnd: () => UTC(20),
+      save: async () => {},
+      onAdvanced: () => {},
+      observer
+    })
+    session.setIntervalsInUse(['1h'])
+    return session
+  }
+
+  test('steps from Friday night into Saturday -- the weekend is a market here', async () => {
+    const session = cryptoSession(UTC(8, 23))
+    await session.step()
+    expect(session.cursor).toBe(UTC(9, 0))
+    session.setAdvance({ interval: '1D', multiple: 1 })
+    await session.step()
+    expect(session.cursor).toBe(UTC(10, 0))
+  })
+
+  test('a walk through the weekend consumes the weekend\'s bars', async () => {
+    const seen: number[] = []
+    const watching: ReplayObserver = {
+      needsBars: () => true,
+      armedStops: () => 0,
+      onBar: (bar) => {
+        seen.push(bar.open)
+        return []
+      },
+      seeked: () => {},
+      toState: () => []
+    }
+    const session = cryptoSession(UTC(8, 22), watching)
+    session.setAdvance({ interval: '1h', multiple: 4 })
+    const r = await session.step()
+    expect(r?.walked).toBe(true)
+    expect(seen).toEqual([UTC(8, 22), UTC(8, 23), UTC(9, 0), UTC(9, 1)])
+    expect(session.cursor).toBe(UTC(9, 2))
+  })
+})
+

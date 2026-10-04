@@ -5,7 +5,7 @@ import { priceCondition, PRICE_SOURCE } from '../watch/types'
 import type { BarSource, ReplayBar } from './cache'
 import { Engine } from './engine'
 import type { ReplayAlertBook } from './alerts'
-import { fromWall, intervalEnd, toWireDate } from './timeframes'
+import { FX_GRID, fromWall, intervalEnd, toWireDate } from './timeframes'
 
 // PRICE WATCHES ON A REPLAY WALL, end to end: a watch created the way the chart's dialog
 // creates one, driven by a real session over a synthetic price path.
@@ -97,6 +97,7 @@ async function make(cursor = START + H, alertsAt: number[] = []): Promise<Harnes
     name: 'Replay',
     createdAt: 0,
     vendor: 'oanda',
+    grid: FX_GRID,
     symbol: SYM,
     cursor,
     startedAt: START,

@@ -22,6 +22,7 @@ import type { NotificationSink } from '../notifications'
 import type { OHLCVBar } from '../ohlcv'
 import { resolutionDurationMs } from '../periods'
 import { toReplayBar } from '../replay/source'
+import type { CandleGrid } from '../replay/timeframes'
 import type { StreamListener } from '../stream'
 import { byInterval, labelOperand, leadInFor, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
@@ -66,6 +67,10 @@ const HISTORY_PAD_MS = 4 * 86_400_000
 class Feed {
   bars: AlertBar[] = []
   ready = false
+  /** The instrument's schedule, once read: what turns a streamed bar's label into its open and
+   * close. Frames that arrive before it are held, not dropped. */
+  private grid: CandleGrid | null = null
+  private early: OHLCVBar[] = []
   private depth = 0
   private loading: Promise<void> | null = null
   private readonly listeners = new Set<() => void>()
@@ -117,6 +122,17 @@ class Feed {
       const now = this.owner.now()
       const length = resolutionDurationMs(this.interval)
       try {
+        this.grid ??= await this.owner.data.grid(this.symbol)
+        if (!this.grid) {
+          // No market hours: no bar here has a close, so nothing can be evaluated. Ready, empty.
+          console.warn(`[alerts] no market hours for ${this.symbol}: its alerts cannot be evaluated`)
+          this.ready = true
+          this.changed()
+          return
+        }
+        const grid = this.grid
+        this.mergeBars(this.early.map((b) => toReplayBar(this.interval, b as OHLCVBar & Record<string, unknown>, grid)))
+        this.early = []
         const bars = await this.owner.data.bars(this.symbol, this.interval, now - 2 * this.depth * length - HISTORY_PAD_MS, now + length)
         // Only CLOSED bars: a history read ends with the forming one.
         this.mergeBars(bars.filter((b) => b.end <= this.owner.now()))
@@ -132,7 +148,12 @@ class Feed {
   }
 
   private merge(bars: OHLCVBar[]): void {
-    this.mergeBars(bars.map((b) => toReplayBar(this.interval, b as OHLCVBar & Record<string, unknown>)))
+    const grid = this.grid
+    if (!grid) {
+      this.early.push(...bars)
+      return
+    }
+    this.mergeBars(bars.map((b) => toReplayBar(this.interval, b as OHLCVBar & Record<string, unknown>, grid)))
     this.changed()
   }
 

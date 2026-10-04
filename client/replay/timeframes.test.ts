@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import boundaries from './fixtures/boundaries.json'
 import {
+  CONTINUOUS_DAY,
+  FX_DAY,
+  FX_GRID,
+  FX_SCHEDULE,
   advanceTarget,
+  gridFor,
+  gridOf,
+  scheduleOf,
   defaultBase,
   divides,
   finerStored,
@@ -124,6 +131,81 @@ describe('wire dates', () => {
     const open = ny('2024-03-03 17:00')
     expect(toWireDate('1D', open)).toBe(open + 7 * 3_600_000)
     expect(toWireDate('1h', open)).toBe(open)
+  })
+})
+
+describe('an instrument\'s grid', () => {
+  const rows = boundaries.rows as Array<{
+    at: number
+    tz: string
+    schedule: string
+    day: { open: number; close: number; everyDay: boolean }
+    interval: string
+    start: number
+    end: number
+    next: number
+    marketOpen: boolean
+  }>
+
+  test('answers exactly as wmarkettypes does, for all three schedules in the fixture', () => {
+    for (const row of rows) {
+      const grid = gridOf({ timezone: row.tz, day: { openOffset: row.day.open, closeOffset: row.day.close, everyDayTrades: row.day.everyDay } })
+      expect([grid.start(row.interval, row.at), grid.end(row.interval, row.at), grid.nextStart(row.interval, row.at), grid.isOpen(row.at)]).toEqual([
+        row.start,
+        row.end,
+        row.next,
+        row.marketOpen
+      ])
+    }
+  })
+
+  test('the FX grid steps exactly as the replay always has, across weekends, DST and month ends', () => {
+    // An hour-by-hour sweep over a fortnight spanning the spring DST change, from every kind of
+    // cursor: mid-bar, on a close, inside the closed window.
+    const from = ny('2024-03-01 00:00')
+    for (let t = from; t < from + 16 * 86_400_000; t += 3_600_000 + 17 * 60_000) {
+      for (const code of ['5m', '1h', '4h', '1D', '1W', '1M']) {
+        expect(FX_GRID.advanceTarget(code, t, 2)).toBe(advanceTarget(code, t, 2))
+      }
+    }
+  })
+
+  const UTC = (d: number, h = 0, mi = 0): number => Date.UTC(2024, 2, d, h, mi)
+  const crypto = gridOf({ timezone: 'UTC', day: CONTINUOUS_DAY })
+  const equities = gridOf({ timezone: 'America/New_York', day: { openOffset: 9, closeOffset: 16, everyDayTrades: false } })
+
+  test('a crypto replay walks through the weekend on UTC days', () => {
+    // Friday 23:00 UTC: the next hour is Saturday's first, not Sunday 17:00 New York.
+    expect(crypto.advanceTarget('1h', UTC(8, 23), 1)).toBe(UTC(9, 0))
+    // A daily step from Saturday noon closes at Sunday's midnight -- every day is a market day.
+    expect(crypto.advanceTarget('1D', UTC(9, 12), 1)).toBe(UTC(10, 0))
+    expect(crypto.advanceTarget('1D', UTC(10, 0), 1)).toBe(UTC(11, 0))
+    // The FX week would have skipped the whole weekend from the same cursor.
+    expect(FX_GRID.advanceTarget('1h', ny('2024-03-08 17:00'), 1)).toBe(ny('2024-03-10 18:00'))
+    // Daily bars are dated by their open: no session shift on the wire.
+    expect(crypto.toWire('1D', UTC(9))).toBe(UTC(9))
+    expect(crypto.fromWire('1D', UTC(9))).toBe(UTC(9))
+  })
+
+  test('an equity replay steps 09:00-16:00 days and skips the overnight', () => {
+    // The 15:00 candle closes at the 16:00 close...
+    expect(equities.advanceTarget('1h', ny('2024-03-04 15:30'), 1)).toBe(ny('2024-03-04 16:00'))
+    // ...and from the close the next hour is Tuesday's 09:00 candle, closing 10:00.
+    expect(equities.advanceTarget('1h', ny('2024-03-04 16:00'), 1)).toBe(ny('2024-03-05 10:00'))
+    // A day closes at 16:00; Friday's close steps to Monday's.
+    expect(equities.advanceTarget('1D', ny('2024-03-04 12:00'), 1)).toBe(ny('2024-03-04 16:00'))
+    expect(equities.advanceTarget('1D', ny('2024-03-08 16:00'), 1)).toBe(ny('2024-03-11 16:00'))
+    // Daily bars are dated 9h before their 09:00 open: the midnight of their date.
+    expect(equities.toWire('1D', ny('2024-03-04 09:00'))).toBe(ny('2024-03-04 00:00'))
+  })
+
+  test('the schedule comes off the SymbolInfo, and none is none -- never a guess', () => {
+    expect(scheduleOf({ timezone: 'America/New_York', dayGeometry: FX_DAY })).toEqual(FX_SCHEDULE)
+    expect(scheduleOf({ timezone: 'UTC' })).toBeNull()
+    expect(scheduleOf({ dayGeometry: FX_DAY })).toBeNull()
+    expect(scheduleOf(null)).toBeNull()
+    expect(gridFor({ timezone: 'UTC', dayGeometry: CONTINUOUS_DAY })?.schedule.timezone).toBe('UTC')
+    expect(gridFor(undefined)).toBeNull()
   })
 })
 

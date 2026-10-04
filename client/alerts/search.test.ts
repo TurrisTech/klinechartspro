@@ -7,6 +7,7 @@ const { AlertSearch, earliestHit, SEARCH_CHUNK_BARS } = await import('./search')
 const { buildTrack, indexPoints } = await import('./compute')
 const { compile } = await import('./rules')
 const { instants, scan } = await import('./timeline')
+const { FX_GRID } = await import('../replay/timeframes')
 import type { AlertBar } from './compute'
 import type { AlertData, Point } from './data'
 import type { ServerCatalogue } from './catalogue'
@@ -34,6 +35,9 @@ class FakeData implements AlertData {
     readonly series: Map<string, AlertBar[]>,
     readonly pointRows: Point[] = []
   ) {}
+  async grid() {
+    return FX_GRID
+  }
   async bars(_symbol: string, interval: string, from: number, to: number): Promise<AlertBar[]> {
     this.barReads++
     return (this.series.get(interval) ?? []).filter((b) => b.open >= from && b.open < to)

@@ -58,7 +58,7 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     const { restore } = await import('./persist')
     const { ReplayTradingSession } = await import('./session')
     const { HttpBarSource } = await import('./source')
-    const { fromWall, intervalStart, nominalMs, nonWeekendGaps, toWireDate } = await import('./timeframes').then(async (tf) => ({
+    const { FX_GRID, FX_SCHEDULE, fromWall, intervalStart, nominalMs, nonWeekendGaps, toWireDate } = await import('./timeframes').then(async (tf) => ({
       ...tf,
       nonWeekendGaps: (await import('./cache')).nonWeekendGaps
     }))
@@ -68,7 +68,8 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     expect(capabilities().features).toContain('sim')
 
     const SYMBOL = 'oanda:EURUSD'
-    const symbolInfo = { ticker: 'EURUSD', exchange: 'oanda', pricePrecision: 5 } as unknown as SymbolInfo
+    // The schedule travels on the symbol, as client/symbols.ts resolves it from the server.
+    const symbolInfo = { ticker: 'EURUSD', exchange: 'oanda', pricePrecision: 5, timezone: FX_SCHEDULE.timezone, dayGeometry: FX_SCHEDULE.day } as unknown as SymbolInfo
     // Monday 2024-03-04 10:00 New York, a 1m base (1m divides 15m, 1h, 4h).
     const start = fromWall(Date.UTC(2024, 2, 4, 10, 0), 'America/New_York')
     const base = '1m'
@@ -130,15 +131,16 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     const barSource = new HttpBarSource()
     const fetchLog: string[] = []
     const origFetch = barSource.fetch.bind(barSource)
-    barSource.fetch = async (s, i, f, t, c) => {
+    barSource.fetch = async (s, i, f, t, c, g) => {
       fetchLog.push(i)
-      return origFetch(s, i, f, t, c)
+      return origFetch(s, i, f, t, c, g)
     }
     const session = new ReplayTradingSession({
       id: created.session.id,
       name: created.session.name,
       createdAt: created.session.createdAt,
       vendor: 'oanda',
+      grid: FX_GRID,
       symbol: SYMBOL,
       cursor: start,
       startedAt: start,
@@ -189,7 +191,7 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     // Peek the coming three hours (the harness may; the engine may not) and rest a buy limit
     // just above the lowest ask and a sell stop just below the lowest bid they reach -- both
     // inside the band a 1m base bar will present, so the intersection rule must descend.
-    const ahead = await new HttpBarSource().fetch(SYMBOL, '1h', session.cursor, session.cursor + 3 * H, 'all')
+    const ahead = await new HttpBarSource().fetch(SYMBOL, '1h', session.cursor, session.cursor + 3 * H, 'all', FX_GRID)
     expect(ahead.length).toBeGreaterThan(0)
     const askLow = Math.min(...ahead.map((b) => b.ask?.l as number))
     const bidLow = Math.min(...ahead.map((b) => b.bid?.l as number))
@@ -241,7 +243,8 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
         data.map((b) => {
           const open = b.timestamp - (interval === '1D' ? 7 * H : 0)
           return { open, end: open, date: b.timestamp, o: 0, h: 0, l: 0, c: 0, v: 0 }
-        })
+        }),
+        FX_GRID
       )
       expect(gaps.filter((gp) => gp.before > jumpFrom - 4 * H)).toEqual([])
     }
