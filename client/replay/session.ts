@@ -36,6 +36,8 @@ export const WALK_PROGRESS_MS = 250
 export interface AdvanceResult {
   from: number
   to: number
+  /** What was asked for: a Step's `interval` × `multiple`, or "next signal"'s run to the end. */
+  request: AdvanceRequest
   reason: StopReason
   signal: SignalOccurrence | null
   events: SimEvent[]
@@ -586,7 +588,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // answer.
       else if (!(this.cursor === stopAt && reason === 'signal')) reason = 'watch'
       if (reason !== 'watch') observed = []
-      const result: AdvanceResult = { from, to: this.cursor, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed, walked, observed }
+      const result: AdvanceResult = { from, to: this.cursor, request, reason, signal: reason === 'signal' ? plan.signal : null, events, bars: consumed, walked, observed }
       this.lastStop = result
       this.rev++
       this.snapshot = this.buildSnapshot()

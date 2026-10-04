@@ -18,13 +18,16 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
 | `signals.ts` | `SignalBook`: catalogue, starred set, armed set (a signal is armed *on a resolution*), `nextSignalAt` over an injected `SignalSource`, keyed off `effective`. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
+| `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
+| `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, and the local backend `client/watch` draws. |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split) and `HttpSignalSource` (`/plugins/{id}/signals`). The only module here that fetches. Both read past the page-wide read clock on purpose (`asof: null`). |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
-| `controls.ts` | The controls that fill the window (`../chrome/window.ts`), and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
+| `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
+| `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
 | `index.ts` | `mountBarReplay` — mirrors `mountPaperTrading` on the shared `mountTradingDock`; `startReplayFlow`, `bootReplay`, `clearReplay`. |
 
 ## The controls
@@ -34,16 +37,50 @@ nailed inside the account panel cost the wall ~90px it never gave back, and the 
 thing being replayed. On screen there is only what every step uses:
 
 ```
-+-------------------------------------------------+
-| ::  REPLAY  Aug 20, 19:00  [Step] [Exit]  ^ ⇲   |   the title bar is the drag handle
-+-------------------------------------------------+
-| ADVANCE [1h v] x [1]   [Next signal]            |
-| Advanced 1 bar                                  |   only once an advance has stopped
-| [Signals 2] [Base 1h] [Account]                 |   one panel open at a time
-+-------------------------------------------------+
++------------------------------------------------------------+
+| ::  REPLAY  Thu, Aug 20, 19:00  [▶] [Step] [Exit]   ^ ⇲    |   the title bar is the drag handle
++------------------------------------------------------------+
+| STEP [1h v] x [1]  EVERY [1 s v]  [Next signal]            |
+| Stepped 1h                                                 |   only once an advance has stopped
+| [Signals 2] [Base 1h] [Account] [Trade]                    |   one panel open at a time
++------------------------------------------------------------+
 ```
 
-Step is in the TITLE BAR, so the window rolled up to that bar alone (36px tall) still steps.
+Play and Step are in the TITLE BAR, so the window rolled up to that bar alone (36px tall)
+still plays and steps. The clock carries the **weekday**: a cursor lands in the FX weekend as
+readily as anywhere, and "Sep 26, 20:00" does not say nothing trades then.
+
+**Keys** (TradingView's, so the hands already know them): **Shift+→** is Step — Stop while an
+advance runs, but a held key's *repeat* never cancels the step it is waiting on — and
+**Shift+↓** is Play/Pause. Shift+→ is also klinecharts' own "scroll right"; on a replay wall
+the replay takes it (a `window` listener in the capture phase, which stops the event before
+klinecharts' `document` listener hears it). A key typed into a field is the field's.
+
+**Play** (`player.ts`) presses Step again and again, one step every `EVERY` (¼ s to 5 s,
+remembered per browser), and **stops by itself on anything but reaching the target** — a fill
+pause, an armed signal, a firing watch, a cancel, the end of the data: each is the replay
+saying "look at this". The pace is a floor, not a metronome: the next step also waits for the
+plugin host to settle (`pluginHost.settled`, bounded at 5 s), because every step moves the read
+clock and every plugin on every pane refetches its forming bar — a ¼ s pace must not queue
+reads faster than the server answers them. A Step, Next signal or Exit pressed by hand ends the
+play. (In a background tab Chrome stretches the pace to its timer clamp, ~1 s; nobody is
+watching it there.)
+
+**Exit takes two presses** — the trading kit's `Arming`, the same rule as its own irreversible
+buttons: nothing lists a replay to reopen, and Exit sits beside Step, the button pressed most.
+The rail's Replay button does the same while in replay, and the rail's stream status reads
+**replay** (orange) instead of a green "live" under a chart frozen in the past.
+
+The status line says what was asked — **"Stepped 1h"**, **"Stepped 3 × 15m"** — not how the
+session did it: whether the span was walked or seeked (nothing working could fill) is the
+engine's business, and "Jumped — nothing working" on an ordinary one-candle step read as an
+error.
+
+The **signal list** puts the arm buttons (one per pane interval) on **every row**: arming used
+to appear only after starring, so a first-time user saw a list of names and nothing to press.
+Arming stars (the book's rule); a star alone shortlists. Rows are grouped by plugin under a
+heading and named by what tells them apart there ("arev21 · long", "rank · long"), with the
+starred ones first under their own heading by their full name.
 The signal list, the base timeframe and pause-on-fill are behind their toggles; **Account**
 shows and hides the account window, which starts **closed** — an advance that produced events
 (a fill, a close) opens it itself, on the tab the event landed in.
@@ -55,9 +92,25 @@ persistence — belongs to the window, not here.
 
 ## Choosing where to start
 
-The start dialog takes a date, a balance and a base. Next to the date is **Random**, and under
-it an optional **date range** it draws from — unchecked, that is the last two years ending a
-day before the newest bar.
+The start dialog takes a date, a balance and a base. Next to the date are **On chart** and
+**Random**, and under them an optional **date range** Random draws from — unchecked, that is
+the last two years ending a day before the newest bar.
+
+**On chart** (`pickbar.ts`) is how a start is usually found: the dialog steps aside, the bars
+right of the pointer are shaded out with the start written under them, and a click on a bar
+picks it. **The bar clicked is the last one the replay opens with** — the start is its close
+(`intervalEnd` of the pane's own interval, from the wire date), which is the replay's own rule
+for what a pane shows. Nothing laid over the chart takes the pointer, so a drag still pans and
+the wheel still zooms while looking; only a click (under klinecharts' 5px of travel) picks, and
+it is stopped in the capture phase before `ChartPane`'s click-to-scroll would re-centre the
+rest of the wall on it. Escape or the hint's Cancel goes back to the dialog unchanged.
+
+The **default** start is a week before the newest bar, on a base candle open (the instant Start
+will use, not the minute the dialog opened at) and **inside the market week**: a week before a
+weekend afternoon is a weekend afternoon, so `defaultStartAt` backs off an hour at a time to
+the last candle that opened while the market traded. (This replay's `intervalStart` floors an
+intraday instant by arithmetic — Saturday 20:22 is Saturday 20:00 — so the floor alone does not
+do it.) Enter starts from any field.
 
 A draw is `from + random() * span` floored to a `base` candle open, and nothing else. It is
 **not** filtered to market-open instants and the store is **not** probed first: a draw in the
@@ -138,7 +191,7 @@ could not be told from "hung". `walkedTo` is the close of the last base bar walk
 `reach`, so the date shown is never past where a Stop would leave the cursor — reported at the
 top of every page (before it downloads) and at the yields, at most every `WALK_PROGRESS_MS`
 (250 ms), and null for a seek. The controls show it in the status row as **"Walking… reached
-Mar 04, 10:32"**, never in the title bar: the chart is not drawn there until the advance
+Wed, Mar 04, 10:32"**, never in the title bar: the chart is not drawn there until the advance
 lands. Two traps:
 
 - **The clock reads `advanceFrom` while busy, not `cursor`.** The session moves `cursor` bar
@@ -238,6 +291,12 @@ refusal. The firing RULE is tested against the server's own fixtures in `client/
 `controls.test.ts` renders the controls and the start dialog into a real DOM (happy-dom,
 registered for that file only and removed after it) over a fake `ReplayController`: which
 controller call every gesture makes, when each button is usable, Step becoming Stop, every stop
-reason's wording, the one-panel rule, the signal list's star/arm, the base refusal, and the
-dialog's New York clock on both sides of DST, its refusals and Random's range. `scripts/sync-engine-fixtures.sh` vendors the
+reason's wording, the one-panel rule, the signal list's grouping and arm-without-star, the base
+refusal, Play (pace, self-stop on every reason, the settle wait, a hand-pressed Step ending it),
+the keys (kept from the chart, the repeat that must not cancel, a field's own keys), Exit's two
+presses, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
+Enter, its refusals and Random's range. `player.test.ts` pins the player alone (one loop however
+it is toggled, pause mid-step, an error ends it). happy-dom applies no stylesheet, so anything
+that hinges on CSS (`[hidden]` against a `display: flex`, as the dialog's backdrop is) is checked
+in the browser, not here. `scripts/sync-engine-fixtures.sh` vendors the
 fixtures from wdashboard-server; `--check` (run by `fixtures.test.ts`) fails if they differ.

@@ -96,6 +96,11 @@ body {
   background: #ef5350;
 }
 
+/* A replay wall: not live, whatever the socket says. The replay's own orange (the watch line's). */
+.wd-status[data-stream='replay'] .wd-status-dot {
+  background: #ff9800;
+}
+
 .wd-version {
   color: var(--muted-foreground);
 }
@@ -542,6 +547,33 @@ body {
   color: var(--foreground);
 }
 
+/* Waiting for its second press (leaving a replay). */
+.wd-rail-button.is-armed {
+  border-color: #ef5350;
+  background: color-mix(in oklab, #ef5350 18%, transparent);
+  color: var(--foreground);
+}
+
+.wd-rail-button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+/* Why a rail button did nothing: a few words beside it, for a few seconds. */
+.wd-rail-note {
+  position: fixed;
+  z-index: 70;
+  transform: translateY(-50%);
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: #2a2e39;
+  color: #d1d4dc;
+  font-size: 0.75rem;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.35);
+}
+
 /* The dock column is a sibling of #app (client/chrome/window.ts), so it takes its own row
    below the wall. When it holds a visible window the page becomes a flex column: #app flexes
    to fill the space above, the column takes its height below. `body.wd-has-dock > #app`
@@ -639,7 +671,7 @@ body.wd-has-dock > #app {
    `.wd-window button` it would weigh (0,1,1) and beat `.kc-button-primary`'s own background
    and colour, which is the exact trap app.css documents -- and which the watch dialog walked
    straight into before it was added here. */
-:where(.wd-window, .wd-replay-dialog, .wd-watch-dialog) button {
+:where(.wd-window, .wd-replay-dialog, .wd-watch-dialog, .wd-replay-pick-hint) button {
   appearance: none;
   border: 0;
   background: transparent;
@@ -647,7 +679,7 @@ body.wd-has-dock > #app {
   text-align: inherit;
 }
 
-:where(.wd-window, .wd-replay-dialog, .wd-watch-dialog) button,
+:where(.wd-window, .wd-replay-dialog, .wd-watch-dialog, .wd-replay-pick-hint) button,
 :where(.wd-window, .wd-replay-dialog, .wd-watch-dialog) input,
 :where(.wd-window, .wd-replay-dialog, .wd-watch-dialog) select {
   margin: 0;
@@ -2228,6 +2260,9 @@ body.wd-has-dock > #app {
   gap: 0.375rem;
 }
 
+/* Both wrap rather than overflow: the step row carries six controls, and a phone-width card
+   (92vw) is narrower than they are. */
+.wd-replay-row,
 .wd-replay-toggles {
   flex-wrap: wrap;
 }
@@ -2331,6 +2366,35 @@ body.wd-has-dock > #app {
   font-variant-numeric: tabular-nums;
 }
 
+/* Play/Pause: an icon the height of its neighbours. On while playing, so a glance at a rolled-up
+   window says whether it is still going. */
+.wd-replay-window .wd-replay-play {
+  width: 1.75rem;
+  padding: 0;
+  border: 1px solid var(--border);
+}
+
+.wd-replay-play svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.wd-replay-play.is-on {
+  border-color: color-mix(in oklab, var(--primary) 55%, transparent);
+  background: color-mix(in oklab, var(--primary) 22%, transparent);
+  color: var(--foreground);
+}
+
+/* Exit waiting for its second press: it is about to throw the replay away. */
+.wd-replay-exit.is-armed {
+  background: color-mix(in oklab, #ef5350 80%, var(--background));
+  color: #ffffff;
+}
+
+.wd-replay-pace {
+  width: auto;
+}
+
 /* Step while an advance runs: the button stops it, so it should not read as "go". */
 .wd-replay-step.is-stop {
   background: color-mix(in oklab, #ef5350 80%, var(--background));
@@ -2376,6 +2440,23 @@ body.wd-has-dock > #app {
   display: flex;
   align-items: center;
   gap: 0.25rem;
+}
+
+/* One heading per plugin (and one for the starred shortlist). */
+.wd-replay-signal-group {
+  padding: 0.375rem 0 0.125rem;
+  color: var(--muted-foreground);
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wd-replay-signal-group:first-child {
+  padding-top: 0;
+}
+
+.wd-replay-signal-help {
+  font-size: 0.6875rem;
 }
 
 .wd-replay-signal-name {
@@ -2447,6 +2528,73 @@ body.wd-has-dock > #app {
   max-height: 7rem;
 }
 
+/* Docked, the signal list runs in columns, so a heading breaks onto its own row. */
+.wd-replay-window[data-mode='dock'] .wd-replay-signal-group {
+  flex-basis: 100%;
+}
+
+/* Choosing the start on the chart (client/replay/pickbar.ts). Nothing here takes the pointer --
+   the chart keeps its pan and zoom -- except the hint's Cancel. */
+.wd-replay-pick {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+}
+
+.wd-replay-pick > * {
+  position: fixed;
+}
+
+/* The bars the replay will hide: everything right of the bar under the pointer. */
+.wd-replay-pick-shade {
+  background: color-mix(in oklab, #131722 55%, transparent);
+}
+
+.wd-replay-pick-line {
+  width: 0;
+  border-left: 1px dashed #2962ff;
+}
+
+.wd-replay-pick-tag {
+  transform: translateX(-50%);
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  background: #2962ff;
+  color: #ffffff;
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wd-replay-pick-hint {
+  position: fixed;
+  z-index: 46;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.375rem 0.375rem 0.375rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  box-shadow: 0 8px 28px color-mix(in oklab, black 45%, transparent);
+}
+
+.wd-replay-pick-keys {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-replay-pick-hint .kc-button {
+  height: 1.625rem;
+  padding: 0 0.5rem;
+  font-size: 0.75rem;
+}
+
 /* The start dialog: a centred card over a backdrop, kc tokens throughout. */
 .wd-replay-dialog-backdrop {
   position: fixed;
@@ -2456,6 +2604,12 @@ body.wd-has-dock > #app {
   align-items: center;
   justify-content: center;
   background: color-mix(in oklab, var(--background) 60%, transparent);
+}
+
+/* Stepped aside while the start is picked on the chart: its `display: flex` would beat the
+   `hidden` attribute's UA rule. */
+.wd-replay-dialog-backdrop[hidden] {
+  display: none;
 }
 
 .wd-replay-dialog {
@@ -2508,7 +2662,8 @@ body.wd-has-dock > #app {
   min-width: 0;
 }
 
-.wd-replay-random {
+.wd-replay-random,
+.wd-replay-pick-button {
   flex: 0 0 auto;
   height: 1.875rem;
   padding: 0 0.625rem;
