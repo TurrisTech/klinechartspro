@@ -3,6 +3,7 @@ import { installWindow } from '../plugins/testing'
 
 installWindow()
 const { chartBarAt, knowableSignals, shiftSignals } = await import('./shift')
+const { CONTINUOUS_DAY, FX_GRID, gridOf } = await import('../replay/timeframes')
 import type { KLineData } from 'klinecharts'
 import type { ArevPoint } from '../arev/api'
 
@@ -23,12 +24,12 @@ const hourly = (from: number, count: number) => Array.from({ length: count }, (_
 describe('knowableSignals', () => {
   test('a vote with a successor in the grid is knowable at the successor\'s open', () => {
     const grid = [at('2026-10-01T05:00Z'), at('2026-10-01T07:00Z')]
-    expect(knowableSignals('2h', [vote(grid[0])], grid).map((s) => s.knownAt)).toEqual([grid[1]])
+    expect(knowableSignals('2h', [vote(grid[0])], grid, FX_GRID).map((s) => s.knownAt)).toEqual([grid[1]])
   })
 
   test('the newest vote, its successor still forming, is knowable at its own close', () => {
     const grid = [at('2026-10-01T05:00Z'), at('2026-10-01T07:00Z')]
-    const [signal] = knowableSignals('2h', [vote(grid[1])], grid)
+    const [signal] = knowableSignals('2h', [vote(grid[1])], grid, FX_GRID)
     expect(signal.knownAt).toBe(at('2026-10-01T09:00Z'))
     expect(signal.up).toBe(false)
   })
@@ -36,11 +37,11 @@ describe('knowableSignals', () => {
   test('a daily vote is knowable at its session close, on the absolute clock', () => {
     // Wire date 2026-10-01 is the session that opened 17:00 New York on 09-30 (21:00Z).
     const wire = at('2026-10-01T04:00Z')
-    expect(knowableSignals('1D', [vote(wire)], [wire]).map((s) => s.knownAt)).toEqual([at('2026-10-01T21:00Z')])
+    expect(knowableSignals('1D', [vote(wire)], [wire], FX_GRID).map((s) => s.knownAt)).toEqual([at('2026-10-01T21:00Z')])
   })
 
   test('no grid, nothing placed', () => {
-    expect(knowableSignals('2h', [vote(at('2026-10-01T07:00Z'))], [])).toEqual([])
+    expect(knowableSignals('2h', [vote(at('2026-10-01T07:00Z'))], [], FX_GRID)).toEqual([])
   })
 })
 
@@ -76,19 +77,48 @@ describe('shiftSignals at the live edge', () => {
 
   test('the 2h 03:00 New York short draws on the 1h bar that opened at its close', () => {
     const chartBars = bars(hourly(at('2026-10-01T05:00Z'), 5))
-    const placed = shiftSignals({ sourceInterval: '2h', chartInterval: '1h', points, grid, chartBars })
+    const placed = shiftSignals({ clock: FX_GRID, sourceInterval: '2h', chartInterval: '1h', points, grid, chartBars })
     expect([...placed.keys()]).toEqual([at('2026-10-01T09:00Z')])
     expect(placed.get(at('2026-10-01T09:00Z'))?.map((s) => s.sourceDate)).toEqual([grid[2]])
   })
 
   test('and on nothing while the chart has no bar at or after that close', () => {
     const chartBars = bars(hourly(at('2026-10-01T05:00Z'), 4)) // through the 08:00Z bar
-    expect(shiftSignals({ sourceInterval: '2h', chartInterval: '1h', points, grid, chartBars }).size).toBe(0)
+    expect(shiftSignals({ clock: FX_GRID, sourceInterval: '2h', chartInterval: '1h', points, grid, chartBars }).size).toBe(0)
   })
 
   test('on its own timeframe, one bar forward, onto the forming bar', () => {
     const chartBars = bars([...grid, at('2026-10-01T09:00Z')])
-    const placed = shiftSignals({ sourceInterval: '2h', chartInterval: '2h', points, grid, chartBars })
+    const placed = shiftSignals({ clock: FX_GRID, sourceInterval: '2h', chartInterval: '2h', points, grid, chartBars })
     expect([...placed.keys()]).toEqual([at('2026-10-01T09:00Z')])
+  })
+})
+
+describe('on the pane\'s own schedule', () => {
+  const crypto = gridOf({ timezone: 'UTC', day: CONTINUOUS_DAY })
+  const days = (from: string, count: number): number[] => Array.from({ length: count }, (_, k) => at(from) + k * 24 * H)
+
+  test('a coinbase daily vote draws on the hourly bar at the next UTC midnight, when it became knowable', () => {
+    // The prod case (BTCUSD arev21, 2026-08-28): cast on the day dated 08-28, knowable at its
+    // close, 08-29 00:00 UTC. On the forex 7h it drew on 08-28 17:00 -- seven hours before the
+    // vote existed.
+    const grid = days('2026-08-27T00:00Z', 4)
+    const chart = bars(hourly(at('2026-08-28T00:00Z'), 48))
+    const placed = shiftSignals({ clock: crypto, sourceInterval: '1D', chartInterval: '1h', points: [vote(at('2026-08-28T00:00Z'))], grid, chartBars: chart })
+    expect([...placed.keys()]).toEqual([at('2026-08-29T00:00Z')])
+    // ...and the forex reading of the same rows is exactly the lookahead the prod chart showed.
+    const fx = shiftSignals({ clock: FX_GRID, sourceInterval: '1D', chartInterval: '1h', points: [vote(at('2026-08-28T00:00Z'))], grid, chartBars: chart })
+    expect([...fx.keys()]).toEqual([at('2026-08-28T17:00Z')])
+  })
+
+  test('a daily vote on a daily chart lands on the next day, on either clock', () => {
+    // Both sides are session-dated, so a wrong offset shifts both alike and cancels: the defect
+    // was confined to a daily vote on an INTRADAY chart. Pinned so a fix cannot break this one.
+    const grid = days('2026-08-27T00:00Z', 4)
+    const chart = bars(grid)
+    for (const clock of [crypto, FX_GRID]) {
+      const placed = shiftSignals({ clock, sourceInterval: '1D', chartInterval: '1D', points: [vote(at('2026-08-28T00:00Z'))], grid, chartBars: chart })
+      expect([...placed.keys()]).toEqual([at('2026-08-29T00:00Z')])
+    }
   })
 })

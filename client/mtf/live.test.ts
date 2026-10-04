@@ -5,6 +5,8 @@ installWindow()
 const { createMtfPlugin, mtfLiveWire } = await import('./plugin')
 const { AREV21_MTF, AREV21_OUTLIER_RANK_85_MTF } = await import('./overlays')
 const { storeFactory } = await import('../tsregistry/store')
+const { FX_DAY } = await import('../replay/timeframes')
+const FX_DAY_TZ = 'America/New_York'
 import type { PluginCatalogue } from '../plugins/api'
 import type { BindContext, PluginFacilities, SourceStore } from '../plugins/types'
 import type { PluginPointListener } from '../stream'
@@ -45,7 +47,7 @@ describe('mtfLiveWire', () => {
 })
 
 describe('a bound overlay', () => {
-  function harness() {
+  function harness(withSchedule = true) {
     const subs: Array<{ args: unknown[]; listener: PluginPointListener }> = []
     const f = {
       hasFeature: () => true,
@@ -57,10 +59,19 @@ describe('a bound overlay', () => {
     } as unknown as PluginFacilities
     const plugin = createMtfPlugin(AREV21_OUTLIER_RANK_85_MTF, loaders(['arev']))
     plugin.register(f)
-    const ctx = { vendor: 'oanda', ticker: 'EURUSD', interval: '1h', paneIndex: 0 } as unknown as BindContext
+    // The schedule rides on the symbol, as client/symbols.ts resolves it; without one the overlay
+    // declines to bind (it cannot place a vote without knowing how the market dates its days).
+    const symbol = withSchedule ? { ticker: 'EURUSD', exchange: 'oanda', timezone: FX_DAY_TZ, dayGeometry: FX_DAY } : { ticker: 'EURUSD', exchange: 'oanda' }
+    const ctx = { vendor: 'oanda', ticker: 'EURUSD', interval: '1h', paneIndex: 0, symbol } as unknown as BindContext
     const spec = plugin.bind(ctx)
     return { subs, spec }
   }
+
+  test('an instrument with no market hours binds nothing, and says why', () => {
+    const { spec } = harness(false)
+    expect(spec?.sources).toEqual([])
+    expect(spec?.label({} as never)).toContain('no market hours')
+  })
 
   test("each source timeframe subscribes at its OWN interval, not the chart's", async () => {
     const { subs, spec } = harness()

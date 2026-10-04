@@ -1,5 +1,6 @@
 import type { ArevPoint } from '../arev/api'
 import { resolutionDurationMs } from '../periods'
+import type { CandleGrid } from '../replay/timeframes'
 import type { GridBody } from '../tsregistry/store'
 import { knowableSignals } from './shift'
 
@@ -322,10 +323,10 @@ export interface GraphSourceStore {
 
 /** One timeframe's knowable signals as graph signals, priced at their source candles' bodies.
  * A signal whose candle's body is not held is left out rather than guessed. */
-export function storeGraphSignals(interval: string, store: GraphSourceStore): GraphSignal[] {
+export function storeGraphSignals(interval: string, store: GraphSourceStore, clock: CandleGrid): GraphSignal[] {
   const durationMs = resolutionDurationMs(interval)
   const out: GraphSignal[] = []
-  for (const signal of knowableSignals(interval, store.values.values(), store.grid())) {
+  for (const signal of knowableSignals(interval, store.values.values(), store.grid(), clock)) {
     const body = store.gridBody(signal.sourceDate)
     if (!body) continue
     out.push({

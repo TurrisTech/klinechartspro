@@ -4,6 +4,7 @@ import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
 import { applyEncodings, toLineStyle, type LineAppearance } from '../chartlayers/encoding'
 import { fetchLevels, levelsComputedThrough, type Level } from './api'
+import { gridFor } from '../replay/timeframes'
 import { levelsStaleAt } from './freshness'
 import {
   DEFAULT_LEVELS_CONFIG,
@@ -191,16 +192,17 @@ function requestedIntervals(config: LevelsConfig): string[] | undefined {
 // When a fetched level book can FIRST be out of date. Levels are computed on 1W and 1M only
 // (wdashboard-server levels.py: LEVELS_INTERVAL_ALLOWLIST), so a level can only appear, or
 // take another invalidation, or be spent, when a weekly or monthly candle CLOSES — and every
-// one of those closes is at 17:00 on a market day. Between two 17:00s the server is holding
+// one of those closes is at the hour the instrument's day closes (17:00 New York for forex,
+// 00:00 UTC for a coinbase pair, 16:00 New York for schwab), on the instrument's own grid. Between two 17:00s the server is holding
 // the same book, so refetching is asking the same question again; the alternative the
 // controller falls back to is a five-minute timer, which on a chart left open through a
 // session meant a full refetch per pane roughly a hundred times a day.
 //
 // But a close is when the book can change, NOT when it has been written — see
 // `freshness.ts`, which is where that distinction and the bound on waiting for it live. The
-// watermark is per instrument, which is why this reads `ctx`.
+// watermark and the schedule are both per instrument, which is why this reads `ctx`.
 function staleAt(fetchedAt: number, ctx: LayerContext): number {
-  return levelsStaleAt(fetchedAt, levelsComputedThrough(ctx.vendor, ctx.symbol.ticker))
+  return levelsStaleAt(fetchedAt, levelsComputedThrough(ctx.vendor, ctx.symbol.ticker), gridFor(ctx.symbol))
 }
 
 export const levelsLayer: ChartLayer<Level, LevelsConfig> = {

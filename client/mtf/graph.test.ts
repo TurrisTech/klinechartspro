@@ -5,6 +5,7 @@ import { installWindow } from '../plugins/testing'
 // signal steps from which, and how a stored config carries the graph's settings.
 installWindow()
 const { buildGraphs, buildRootGraphs, canStep, graphStart, isEntry, storeGraphSignals } = await import('./graph')
+const { FX_GRID } = await import('../replay/timeframes')
 const { MTF_DEFAULTS, fromStoredMtfConfig, graphLineStyle, graphRoots, toStoredMtfConfig } = await import('./config')
 const { MTF_INTERVALS } = await import('./api')
 const { resolutionDurationMs } = await import('../periods')
@@ -319,7 +320,7 @@ describe('storeGraphSignals', () => {
         { date: 16 * H, open: 1.28, close: 1.3 }
       ]
     })
-    const out = storeGraphSignals('4h', store)
+    const out = storeGraphSignals('4h', store, FX_GRID)
     expect(out.map(({ side, price, knownAt }) => ({ side, price, knownAt }))).toEqual([
       { side: 'top', price: 1.15, knownAt: 4 * H },
       { side: 'bottom', price: 1.12, knownAt: 8 * H },
@@ -338,16 +339,16 @@ describe('storeGraphSignals', () => {
         { date: 4 * H, open: 1.1, close: 1.2 }
       ]
     })
-    expect(storeGraphSignals('4h', store).map((s) => s.knownAt)).toEqual([4 * H, 8 * H])
+    expect(storeGraphSignals('4h', store, FX_GRID).map((s) => s.knownAt)).toEqual([4 * H, 8 * H])
   })
 
   test('a signal whose candle body is not held is left out, and a price-less re-fetch keeps a known body', () => {
     const store = new RegistryStore<ArevPoint>('k', (p) => p as ArevPoint)
     store.ingest([point(0, 'long')], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0 }, { date: 4 * H }] })
-    expect(storeGraphSignals('4h', store)).toEqual([])
+    expect(storeGraphSignals('4h', store, FX_GRID)).toEqual([])
     store.ingest([], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0, open: 1.1, close: 1.2 }] })
     store.ingest([], { from: 0, to: 8 * H }, { [GRID_ARRAY]: [{ date: 0 }] })
-    expect(storeGraphSignals('4h', store).map((s) => s.price)).toEqual([1.2])
+    expect(storeGraphSignals('4h', store, FX_GRID).map((s) => s.price)).toEqual([1.2])
   })
 })
 
