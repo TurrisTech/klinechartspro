@@ -132,7 +132,11 @@ export interface PaneOptions {
   symbol: SymbolInfo
   period?: Period
   mainIndicators?: string[]
+  /** Top to bottom: each gets a chart pane of its own, in this order. */
   subIndicators?: string[]
+  /** How many of `subIndicators` (the first ones) sit ABOVE the price pane. 0, the default, is
+   * the price pane on top. Clamped to the number of sub-indicators. */
+  subIndicatorsAbove?: number
   /** Indicator template name -> calcParams, for any indicator on this pane whose parameters
    * were changed from its template default. Applied AT CREATION (klinecharts' own
    * `createIndicator` takes them), so a restored MA(50) is never briefly drawn at MA(5). */
@@ -151,6 +155,8 @@ export interface PaneSnapshot {
   period: Period
   mainIndicators: string[]
   subIndicators: string[]
+  /** As PaneOptions.subIndicatorsAbove; 0 when omitted. */
+  subIndicatorsAbove?: number
   /** As PaneOptions.indicatorParams. Only templates that actually carry calcParams appear. */
   indicatorParams: Record<string, unknown[]>
   /** As PaneOptions.view. Null until this pane's chart has mounted and been read once. */
@@ -355,6 +361,12 @@ export interface ChartProOptions {
   syncPeriod?: boolean
   onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void
   onActivePaneChange?: (paneId: string) => void
+  /** Fires when panes change places on the wall (a pane dragged onto another, or `swapPanes`),
+   * BEFORE anything else hears of it: `order[newIndex]` is the position the pane now at
+   * `newIndex` held before. Pane ids, charts and per-pane state all move with their pane; what
+   * this is for is anything the app keeps by pane POSITION, which has to be re-keyed here or
+   * it will be read by whichever pane moved into that position. onPaneLayoutChange follows. */
+  onPaneOrderChange?: (order: number[]) => void
   /** Fires whenever a pane's own durable state changes without the layout, the symbol or the
    * period changing: an indicator added, removed or re-parameterised, and -- debounced to the
    * end of a gesture -- the time and price axes moving. Carries only the pane id: like every
@@ -428,6 +440,9 @@ export interface ChartPro {
   getActivePaneId(): string
   setActivePane(id: string): void
   setPaneLayout(id: string): void
+  /** Exchange the places of two visible panes (by id). Each keeps its chart, its symbol, its
+   * indicators and where it was looking; only the cells they occupy change. */
+  swapPanes(firstId: string, secondId: string): void
   getPaneLayout(): string
   getPaneLayouts(): LayoutPreset[]
 }

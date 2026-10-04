@@ -11,7 +11,8 @@ const hadWindow = 'window' in globalThis
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 }
 
-const { defaultLayout, isPersistedLayout, overlayPaneState, toPersistedLayout } = await import('./layout')
+const { defaultLayout, hydrateLayout, isPersistedLayout, overlayPaneState, toPaneOptions, toPersistedLayout } =
+  await import('./layout')
 const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
 const { MTF_DEFAULTS, fromStoredMtfConfig } = await import('./mtf/config')
 const { DIV_DEFAULTS, fromStoredDivConfig } = await import('./arev21div/config')
@@ -164,3 +165,59 @@ describe('a round trip through the document', () => {
     expect(overlayPaneState(panes)).toEqual({ mtf_arev21_outlier_rank_90: { 1: r90 } })
   })
 })
+
+// Symbols are looked up while hydrating; offline, a lookup reads as "no configuration" rather
+// than failing, which is all these tests need -- and says so, which they do not.
+async function hydrateOffline(layout: Parameters<typeof hydrateLayout>[0]) {
+  const realFetch = globalThis.fetch
+  const realWarn = console.warn
+  globalThis.fetch = (() => Promise.reject(new Error('offline'))) as unknown as typeof fetch
+  console.warn = () => {}
+  try {
+    return await hydrateLayout(layout)
+  } finally {
+    globalThis.fetch = realFetch
+    console.warn = realWarn
+  }
+}
+
+describe('the order of the panes', () => {
+  const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+
+  test('sub-panes above the price pane ride in `sa`, and a pane with none above writes nothing', () => {
+    const raised = { ...PANE, subIndicators: ['RSI', 'VOL', 'MACD'], subIndicatorsAbove: 2 }
+    const written = toPersistedLayout('2h', [raised, { ...PANE, id: 'p2' }], 0, sync)
+    expect(written.panes[0]).toMatchObject({ si: ['RSI', 'VOL', 'MACD'], sa: 2 })
+    expect('sa' in written.panes[1]).toBe(false)
+    expect(isPersistedLayout(written)).toBe(true)
+  })
+
+  test('and come back above it', async () => {
+    const written = toPersistedLayout('1', [{ ...PANE, subIndicators: ['RSI', 'VOL'], subIndicatorsAbove: 1 }], 0, sync)
+    const hydrated = await hydrateOffline(JSON.parse(JSON.stringify(written)))
+    expect(hydrated.panes[0]).toMatchObject({ subIndicators: ['RSI', 'VOL'], subIndicatorsAbove: 1 })
+    expect(toPaneOptions(hydrated.panes[0])).toMatchObject({ subIndicators: ['RSI', 'VOL'], subIndicatorsAbove: 1 })
+  })
+
+  test('a document without `sa`, or with one that is not a count, has the price pane on top', async () => {
+    const hydrated = await hydrateOffline({
+      ...OLD_DOCUMENT,
+      panes: [
+        { s: 'EURUSD', p: '1h', si: ['VOL'] },
+        { s: 'EURUSD', p: '1h', si: ['VOL'], sa: -1 },
+        { s: 'EURUSD', p: '1h', si: ['VOL'], sa: 1.5 },
+        { s: 'EURUSD', p: '1h', si: ['VOL'], sa: 9 }
+      ]
+    })
+    expect(hydrated.panes.map((pane) => pane.subIndicatorsAbove)).toEqual([0, 0, 0, 1])
+  })
+
+  test('a retired template that sat above the price pane does not pull the next one up', async () => {
+    const hydrated = await hydrateOffline({
+      ...OLD_DOCUMENT,
+      panes: [{ s: 'EURUSD', p: '1h', si: ['KREV:krev01', 'RSI', 'VOL'], sa: 1 }]
+    })
+    expect(hydrated.panes[0]).toMatchObject({ subIndicators: ['RSI', 'VOL'], subIndicatorsAbove: 0 })
+  })
+})
+

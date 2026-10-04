@@ -15,6 +15,7 @@
 import type { Chart, DeepPartial, OverlayCreate, OverlayMode, Styles } from 'klinecharts'
 
 import { getLayouts, layoutById, type LayoutPreset } from '../config/layouts'
+import { clampAbove, swapOrder } from './paneOrder'
 import type {
   DatafeedFactory,
   Datafeed,
@@ -65,14 +66,17 @@ function cloneOptions(options?: PaneOptions | null): {
   period: Period | undefined
   mainIndicators: string[]
   subIndicators: string[]
+  subIndicatorsAbove: number
   indicatorParams: Record<string, unknown[]>
   view: PaneViewState | null
 } {
+  const subIndicators = options?.subIndicators ? [...options.subIndicators] : []
   return {
     symbol: options?.symbol as SymbolInfo,
     period: options?.period,
     mainIndicators: options?.mainIndicators ? [...options.mainIndicators] : [],
-    subIndicators: options?.subIndicators ? [...options.subIndicators] : [],
+    subIndicators,
+    subIndicatorsAbove: clampAbove(options?.subIndicatorsAbove ?? 0, subIndicators.length),
     // Structurally cloned, not aliased: these are the caller's own persisted documents, and a
     // pane mutating one in place would edit storage behind the caller's back.
     indicatorParams: options?.indicatorParams ? structuredClone(options.indicatorParams) : {},
@@ -94,6 +98,9 @@ export class PaneState {
   // is transient (meaningless once the chart is disposed) and lives as local $state inside
   // ChartPane, not here.
   subIndicatorNames = $state.raw<string[]>([])
+  // How many of subIndicatorNames (the first ones) sit above the price pane -- see
+  // src/state/paneOrder.ts. Always written together with subIndicatorNames.
+  subIndicatorsAbove = $state(0)
   yAxisType = $state('normal')
   yAxisReverse = $state(false)
   // Indicator template name -> calcParams, for every indicator on this pane carrying any.
@@ -120,6 +127,7 @@ export class PaneState {
     if (resolved.period) this.period = resolved.period
     this.mainIndicators = resolved.mainIndicators
     this.subIndicatorNames = resolved.subIndicators
+    this.subIndicatorsAbove = resolved.subIndicatorsAbove
     this.indicatorParams = resolved.indicatorParams
     this.view = resolved.view
     if (resolved.view?.yAxis?.type) this.yAxisType = resolved.view.yAxis.type
@@ -139,6 +147,7 @@ export class PaneState {
     if (resolved.period) this.period = resolved.period
     this.mainIndicators = resolved.mainIndicators
     this.subIndicatorNames = resolved.subIndicators
+    this.subIndicatorsAbove = resolved.subIndicatorsAbove
     this.indicatorParams = resolved.indicatorParams
     this.view = resolved.view
   }
@@ -150,6 +159,7 @@ export class PaneState {
       period: this.period,
       mainIndicators: [...this.mainIndicators],
       subIndicators: [...this.subIndicatorNames],
+      subIndicatorsAbove: this.subIndicatorsAbove,
       indicatorParams: structuredClone(this.indicatorParams),
       view: this.view ? structuredClone(this.view) : null
     }
@@ -166,6 +176,7 @@ export interface WallOptions {
   seeds: PaneOptions[]
   onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void
   onActivePaneChange?: (paneId: string) => void
+  onPaneOrderChange?: (order: number[]) => void
 }
 
 // The reactive model backing the whole wall: which panes exist, which layout preset is
@@ -175,10 +186,15 @@ export interface WallOptions {
 export class Wall {
   layoutId = $state('1')
   activeId = $state('p1')
-  readonly panes: PaneState[]
+  // In WALL order: position i is drawn in the layout's i-th cell. Ids start out matching
+  // positions ('p1' first) and stop doing so once panes are swapped -- an id names a pane, and
+  // goes wherever it goes. $state.raw because only the order changes, by replacing the array;
+  // the PaneStates in it carry their own runes.
+  panes = $state.raw<PaneState[]>([])
 
   private readonly onPaneLayoutChangeCb?: (layoutId: string, panes: PaneSnapshot[]) => void
   private readonly onActivePaneChangeCb?: (paneId: string) => void
+  private readonly onPaneOrderChangeCb?: (order: number[]) => void
 
   constructor(options: WallOptions) {
     const seeds = options.seeds.length > 0 ? options.seeds : []
@@ -196,6 +212,7 @@ export class Wall {
       : 'p1'
     this.onPaneLayoutChangeCb = options.onPaneLayoutChange
     this.onActivePaneChangeCb = options.onActivePaneChange
+    this.onPaneOrderChangeCb = options.onPaneOrderChange
   }
 
   get layout(): LayoutPreset {
@@ -225,6 +242,23 @@ export class Wall {
     // pane the grid no longer renders.
     const stillVisible = this.panes.slice(0, next.paneCount).some((p) => p.id === this.activeId)
     if (!stillVisible) this.activate(this.panes[next.paneCount - 1].id)
+    this.onPaneLayoutChangeCb?.(this.layoutId, this.visiblePanes.map((p) => p.snapshot()))
+  }
+
+  // Two visible panes exchange cells. Neither chart is rebuilt: the grid draws each pane by its
+  // position, so the same mounted ChartPane is simply placed in the other cell. The order
+  // callback goes first because the app keeps per-pane settings by POSITION, and they must be
+  // re-keyed before the panes are next reported (onPanesChange) or persisted.
+  swapPanes(firstId: string, secondId: string): void {
+    if (firstId === secondId) return
+    const visible = this.visiblePanes
+    const first = visible.findIndex((pane) => pane.id === firstId)
+    const second = visible.findIndex((pane) => pane.id === secondId)
+    if (first < 0 || second < 0) return
+    const next = [...this.panes]
+    ;[next[first], next[second]] = [next[second], next[first]]
+    this.panes = next
+    this.onPaneOrderChangeCb?.(swapOrder(visible.length, first, second))
     this.onPaneLayoutChangeCb?.(this.layoutId, this.visiblePanes.map((p) => p.snapshot()))
   }
 

@@ -1,5 +1,6 @@
 import type { IndicatorGroup } from '../../src'
 import { setByPath } from '../chartlayers/settings'
+import { replacePaneConfigs } from '../plugins/panestate'
 import { peekStore } from '../plugins/store'
 import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire, subscribeLive } from '../tsregistry/plugin'
 import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
@@ -333,9 +334,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
     settings: (templateName) => (templateName === overlay.templateName ? settings : null),
     paneState: {
       hydrate(initial) {
-        for (const [index, config] of Object.entries(initial)) {
-          if (config) configs[Number(index)] = structuredClone(config as MtfConfig)
-        }
+        replacePaneConfigs(configs, configRevs, initial, (stored) => structuredClone(stored as MtfConfig))
       },
       snapshot: () => ({ ...configs })
     },

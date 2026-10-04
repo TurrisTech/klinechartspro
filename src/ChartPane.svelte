@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import {
     dispose,
     init,
@@ -21,12 +21,14 @@
   } from 'klinecharts'
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle'
   import ChevronsRightIcon from '@lucide/svelte/icons/chevrons-right'
+  import GripIcon from '@lucide/svelte/icons/grip'
 
   import i18n from './i18n'
 
   import type { PaneViewState, PaneYAxisRange, Period, SymbolInfo } from './types'
   import { getOptions } from './config/settings'
   import type { PaneApi, PaneState } from './state/wall.svelte'
+  import { chartPaneStack, moveSubPane, subPaneMoves, withoutSubPane } from './state/paneOrder'
   import { clone, setByPath } from './utils/object'
   import { templateTooltipDataSource } from './indicators'
   import { periodDurationMs } from './utils/period'
@@ -65,18 +67,31 @@
     onActivate,
     onIndicatorSettings,
     onStateChange,
-    placement = undefined,
-    concealed = false
+    placement,
+    concealed = false,
+    reorderable = false,
+    dragRole = undefined,
+    onGripPointerDown = () => {},
+    onGripStep = () => {}
   }: {
     pane: PaneState
     active: boolean
-    /** Inline grid placement, when the wall is not drawing its preset as declared (see
-     *  src/config/fit.ts). Omitted, the pane takes its own named area. */
-    placement?: string
+    /** Inline grid placement -- the cell of the pane's POSITION on the wall, which is not its
+     *  id once panes have been swapped (src/config/fit.ts's panePlacement). */
+    placement: string
     /** Mounted and live, but behind the active pane on a one-pane-at-a-time wall: invisible,
      *  and `inert` so neither a pointer nor keyboard focus can reach -- or activate -- it. Its
      *  chart keeps the size of the cell it shares, so showing it again costs no resize. */
     concealed?: boolean
+    /** Whether the wall has another pane to swap with, which is when the grip is drawn. */
+    reorderable?: boolean
+    /** This pane's part in a swap being dragged (ChartPro's paneDrag): the pane under the grip,
+     *  or the one it would be swapped with if released now. */
+    dragRole?: 'source' | 'target'
+    /** The grip was pressed: the wall takes the gesture from here. */
+    onGripPointerDown?: (event: PointerEvent, paneId: string) => void
+    /** An arrow key on the focused grip: swap with the previous (-1) or next (+1) pane. */
+    onGripStep?: (paneId: string, step: -1 | 1) => void
     theme: string
     styles: DeepPartial<Styles>
     locale: string
@@ -89,6 +104,7 @@
   } = $props()
 
   let paneElement = $state<HTMLDivElement>()
+  let gripElement = $state<HTMLButtonElement>()
   let widgetElement: HTMLDivElement
   let widget: Nullable<Chart> = null
   let priceUnitElement: HTMLElement | null = null
@@ -149,9 +165,19 @@
       createTooltipDataSource: (params) => {
         const { indicator } = params
         const defaultFeatures = widget?.getStyles().indicator.tooltip.features ?? []
-        const icons = indicator.visible
-          ? defaultFeatures.slice(1, 4)
-          : [defaultFeatures[0], ...defaultFeatures.slice(2, 4)].filter(Boolean)
+        // A sub-pane's legend also moves its pane, offering only the directions it can go --
+        // read on every draw, so the arrows follow the stack as it changes.
+        const moves = indicator.paneId === 'candle_pane'
+          ? { up: false, down: false }
+          : subPaneMoves(pane.subIndicatorNames, pane.subIndicatorsAbove, indicator.name)
+        const ids = [
+          indicator.visible ? 'invisible' : 'visible',
+          'setting',
+          'close',
+          ...(moves.up ? ['pane_up'] : []),
+          ...(moves.down ? ['pane_down'] : [])
+        ]
+        const icons = ids.flatMap((id) => defaultFeatures.filter((feature) => feature.id === id))
         const own = templateTooltipDataSource(indicator.name)?.(params)
         return { ...own, features: icons } as IndicatorTooltipData
       }
@@ -267,6 +293,13 @@
       backgroundColor: 'transparent',
       activeBackgroundColor: 'color-mix(in srgb, currentColor 12%, transparent)'
     })
+    // The icon font has no arrows, so the two pane moves are drawn as paths: chevrons in the
+    // same 14px box. klinecharts' path parser only handles absolute commands correctly.
+    const chevron = (id: string, path: string) => ({
+      ...icon(id, ''),
+      type: 'path' as const,
+      content: { path, style: 'stroke' as const, lineWidth: 1.5 }
+    })
     widget.setStyles({
       indicator: {
         tooltip: {
@@ -274,7 +307,9 @@
             icon('visible', '', 8),
             icon('invisible', '', 8),
             icon('setting', ''),
-            icon('close', '')
+            icon('close', ''),
+            chevron('pane_up', 'M3 9L7 5L11 9'),
+            chevron('pane_down', 'M3 5L7 9L11 5')
           ]
         }
       }
@@ -801,6 +836,42 @@
     pane.indicatorParams = next
   }
 
+  // Puts the chart panes in the stack's order (src/state/paneOrder.ts). klinecharts sorts its
+  // panes by `order`, stably, and every pane starts at 0 -- so an untouched chart already
+  // shows the price pane first and the sub-panes in creation order, and only a pane whose
+  // order differs is told. A new sub-pane arrives at 0 and is always told. An order-only
+  // setPaneOptions re-sorts the panes but does not re-measure their positions; the resize in
+  // the same tick folds both into the one layout klinecharts runs on its next microtask.
+  function applyChartPaneOrder(): void {
+    const chart = widget
+    if (!chart) return
+    let changed = false
+    chartPaneStack(pane.subIndicatorNames, pane.subIndicatorsAbove).forEach((name, order) => {
+      const id = name === null ? 'candle_pane' : subIndicatorMap[name]
+      if (!id) return
+      const current = chart.getPaneOptions(id) as { order?: number } | null
+      if (current?.order === order) return
+      chart.setPaneOptions({ id, order })
+      changed = true
+    })
+    if (!changed) return
+    chart.resize()
+    // The jump-to-live control is placed against the price pane's measured position, and a
+    // move can shift that pane without resizing it -- which its ResizeObserver never sees.
+    requestAnimationFrame(refreshViewState)
+  }
+
+  // A sub-pane's up/down arrows: one place in the stack, past the price pane if that is what is
+  // next to it.
+  function moveSubIndicatorPane(name: string, step: -1 | 1): void {
+    const next = moveSubPane(pane.subIndicatorNames, pane.subIndicatorsAbove, name, step)
+    if (!next) return
+    pane.subIndicatorNames = next.subIndicators
+    pane.subIndicatorsAbove = next.above
+    applyChartPaneOrder()
+    onStateChange(pane.id)
+  }
+
   function changeIndicator(name: string, main: boolean, added: boolean) {
     if (main) {
       if (added) {
@@ -820,13 +891,16 @@
       if (chartPaneId) {
         subIndicatorMap = { ...subIndicatorMap, [name]: chartPaneId }
         pane.subIndicatorNames = [...pane.subIndicatorNames, name]
+        applyChartPaneOrder()
       }
     } else if (subIndicatorMap[name]) {
       widget?.removeIndicator({ paneId: subIndicatorMap[name], name })
       const nextMap = { ...subIndicatorMap }
       delete nextMap[name]
       subIndicatorMap = nextMap
-      pane.subIndicatorNames = pane.subIndicatorNames.filter((item) => item !== name)
+      const next = withoutSubPane(pane.subIndicatorNames, pane.subIndicatorsAbove, name)
+      pane.subIndicatorNames = next.subIndicators
+      pane.subIndicatorsAbove = next.above
       forgetIndicatorParams(name)
     }
     onStateChange(pane.id)
@@ -975,6 +1049,7 @@
       if (chartPaneId) initialSubIndicatorMap[name] = chartPaneId
     }
     subIndicatorMap = initialSubIndicatorMap
+    applyChartPaneOrder()
     // createIndicator applies these to each sub-pane it creates; the candle pane has no such
     // moment, so a restored logarithmic or reversed price axis needs saying here.
     applyYAxisSettings('candle_pane')
@@ -1003,6 +1078,8 @@
         })
       } else if (featureId === 'close') {
         changeIndicator(indicator.name, data.paneId === 'candle_pane', false)
+      } else if (featureId === 'pane_up' || featureId === 'pane_down') {
+        moveSubIndicatorPane(indicator.name, featureId === 'pane_up' ? -1 : 1)
       }
     }
     widget.subscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
@@ -1229,7 +1306,8 @@
   data-concealed={concealed || undefined}
   inert={concealed}
   aria-hidden={concealed || undefined}
-  style={placement ?? `grid-area: ${pane.id};`}
+  data-drag-role={dragRole}
+  style={placement}
   tabindex="-1"
   onpointerdowncapture={() => {
     // Captured BEFORE onActivate, which is what makes the answer meaningful -- see
@@ -1242,6 +1320,31 @@
   onfocusin={() => onActivate(pane.id)}
 >
   <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
+  {#if reorderable}
+    <!-- The pane's handle for rearranging the wall: drag it onto another pane (or a tab of the
+         one-pane-at-a-time strip) to swap the two; with it focused, the arrow keys swap with the
+         previous or next pane. Over the top of the right-hand axis, which draws nothing there. -->
+    <button
+      bind:this={gripElement}
+      type="button"
+      class="klinecharts-pro-pane-grip"
+      aria-label={i18n('move_pane', locale)}
+      title={i18n('move_pane', locale)}
+      onpointerdown={(event) => onGripPointerDown(event, pane.id)}
+      onkeydown={(event) => {
+        const step = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1
+          : event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : 0
+        if (step === 0) return
+        event.preventDefault()
+        onGripStep(pane.id, step)
+        // The swap moves this pane's element within the grid, and an element moved in the
+        // DOM loses focus -- give it back so the keys can keep going.
+        void tick().then(() => gripElement?.focus())
+      }}
+    >
+      <GripIcon />
+    </button>
+  {/if}
   {#snippet liveJump(bottom: number, right: number)}
     <button
       type="button"

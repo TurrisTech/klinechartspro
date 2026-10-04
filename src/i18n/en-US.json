@@ -39,6 +39,7 @@
   "sync_period": "Sync timeframe",
   "sync_time_auto_hint": "Auto sync is following every pan, so click to scroll is off.",
   "jump_to_live": "Jump to latest bar",
+  "move_pane": "Move pane: drag onto another pane to swap them",
   "screenshot": "Screenshot",
   "full_screen": "Full Screen",
   "exit_full_screen": "Exit",

@@ -1,5 +1,6 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, IndicatorSettingsModel } from '../../src'
+import { permuteByIndex } from '../../src/state/paneOrder'
 import { knownThrough } from './horizon'
 import { dropStore, liveStores, storeFor, WindowStore } from './store'
 import type {
@@ -81,6 +82,10 @@ export interface PluginHost {
   readonly validateParams: ((request: ValidateRequest) => Promise<IndicatorParamsCheck>) | null
   /** Per-plugin, per-pane document state -- what the wall document persists. */
   paneState(): Record<string, Record<number, unknown>>
+  /** Panes changed places on the wall (ChartProOptions.onPaneOrderChange: `order[newIndex] =
+   * oldIndex`): every plugin's per-pane state moves with its pane. Called BEFORE the next
+   * `sync`, which then finds each moved pane at its new index and rebinds it there. */
+  reorderPanes(order: readonly number[]): void
   /** The read clock moved forward off `clock` (a replay step): forget the coverage that
    * `clock` made incomplete and re-cover every binding. */
   invalidateFrom(clock: number): void
@@ -493,6 +498,11 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const out: Record<string, Record<number, unknown>> = {}
       for (const p of plugins) if (p.paneState) out[p.id] = p.paneState.snapshot()
       return out
+    },
+    reorderPanes(order: readonly number[]): void {
+      for (const p of plugins) {
+        if (p.paneState) p.paneState.hydrate(permuteByIndex(p.paneState.snapshot(), order))
+      }
     },
     async settled(timeoutMs = 3000): Promise<void> {
       const deadline = Date.now() + timeoutMs
