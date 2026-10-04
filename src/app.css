@@ -1133,8 +1133,8 @@
 	height: 0.75rem;
 }
 
-/* While a grip is dragged: the pane being moved dims, and the pane it would swap with if
-   released now is outlined and tinted. Above the active-pane ring (z-index 3) but not the
+/* While a grip is dragged: the pane being moved dims, and the pane whose position it would take
+   if released now is outlined and tinted. Above the active-pane ring (z-index 3) but not the
    grip, and like the ring it never takes the pointer -- the drag hit-tests the panes under it. */
 .klinecharts-pro-pane[data-drag-role]::before {
 	content: '';

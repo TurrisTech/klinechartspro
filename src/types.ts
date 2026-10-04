@@ -361,7 +361,7 @@ export interface ChartProOptions {
   syncPeriod?: boolean
   onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void
   onActivePaneChange?: (paneId: string) => void
-  /** Fires when panes change places on the wall (a pane dragged onto another, or `swapPanes`),
+  /** Fires when panes change places on the wall (a pane dragged onto another, or `movePane`),
    * BEFORE anything else hears of it: `order[newIndex]` is the position the pane now at
    * `newIndex` held before. Pane ids, charts and per-pane state all move with their pane; what
    * this is for is anything the app keeps by pane POSITION, which has to be re-keyed here or
@@ -440,9 +440,11 @@ export interface ChartPro {
   getActivePaneId(): string
   setActivePane(id: string): void
   setPaneLayout(id: string): void
-  /** Exchange the places of two visible panes (by id). Each keeps its chart, its symbol, its
-   * indicators and where it was looking; only the cells they occupy change. */
-  swapPanes(firstId: string, secondId: string): void
+  /** Move a visible pane (by id) to position `toIndex` of the wall, in reading order; the panes
+   * in between close up behind it, so moving the second of six last gives 1, 3, 4, 5, 6, 2.
+   * Every pane keeps its chart, its symbol, its indicators and where it was looking; only the
+   * cells they occupy change. An index past either end is clamped to it. */
+  movePane(paneId: string, toIndex: number): void
   getPaneLayout(): string
   getPaneLayouts(): LayoutPreset[]
 }

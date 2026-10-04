@@ -15,7 +15,7 @@
 import type { Chart, DeepPartial, OverlayCreate, OverlayMode, Styles } from 'klinecharts'
 
 import { getLayouts, layoutById, type LayoutPreset } from '../config/layouts'
-import { clampAbove, swapOrder } from './paneOrder'
+import { clampAbove, moveOrder } from './paneOrder'
 import type {
   DatafeedFactory,
   Datafeed,
@@ -187,7 +187,7 @@ export class Wall {
   layoutId = $state('1')
   activeId = $state('p1')
   // In WALL order: position i is drawn in the layout's i-th cell. Ids start out matching
-  // positions ('p1' first) and stop doing so once panes are swapped -- an id names a pane, and
+  // positions ('p1' first) and stop doing so once panes are moved -- an id names a pane, and
   // goes wherever it goes. $state.raw because only the order changes, by replacing the array;
   // the PaneStates in it carry their own runes.
   panes = $state.raw<PaneState[]>([])
@@ -245,20 +245,21 @@ export class Wall {
     this.onPaneLayoutChangeCb?.(this.layoutId, this.visiblePanes.map((p) => p.snapshot()))
   }
 
-  // Two visible panes exchange cells. Neither chart is rebuilt: the grid draws each pane by its
-  // position, so the same mounted ChartPane is simply placed in the other cell. The order
-  // callback goes first because the app keeps per-pane settings by POSITION, and they must be
-  // re-keyed before the panes are next reported (onPanesChange) or persisted.
-  swapPanes(firstId: string, secondId: string): void {
-    if (firstId === secondId) return
+  // A visible pane moves to another position of the wall and the panes in between close up
+  // behind it -- moving the second of six last gives 1, 3, 4, 5, 6, 2. No chart is rebuilt: the
+  // grid draws each pane by its position, so the same mounted ChartPanes are simply placed in
+  // other cells. The order callback goes first because the app keeps per-pane settings by
+  // POSITION, and they must be re-keyed before the panes are next reported (onPanesChange) or
+  // persisted. `to` is clamped into the visible panes; a hidden pane never moves.
+  movePane(id: string, to: number): void {
     const visible = this.visiblePanes
-    const first = visible.findIndex((pane) => pane.id === firstId)
-    const second = visible.findIndex((pane) => pane.id === secondId)
-    if (first < 0 || second < 0) return
-    const next = [...this.panes]
-    ;[next[first], next[second]] = [next[second], next[first]]
-    this.panes = next
-    this.onPaneOrderChangeCb?.(swapOrder(visible.length, first, second))
+    const from = visible.findIndex((pane) => pane.id === id)
+    if (from < 0 || !Number.isInteger(to)) return
+    const target = Math.min(Math.max(to, 0), visible.length - 1)
+    if (target === from) return
+    const order = moveOrder(visible.length, from, target)
+    this.panes = [...order.map((index) => visible[index]), ...this.panes.slice(visible.length)]
+    this.onPaneOrderChangeCb?.(order)
     this.onPaneLayoutChangeCb?.(this.layoutId, this.visiblePanes.map((p) => p.snapshot()))
   }
 

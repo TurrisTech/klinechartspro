@@ -192,8 +192,8 @@ export default class KLineChartPro implements ChartPro {
     this.component.setPaneLayout(id)
   }
 
-  swapPanes(firstId: string, secondId: string): void {
-    this.component.swapPanes(firstId, secondId)
+  movePane(paneId: string, toIndex: number): void {
+    this.component.movePane(paneId, toIndex)
   }
 
   getPaneLayout(): string {

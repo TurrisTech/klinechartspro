@@ -22,8 +22,9 @@
 //    price pane (`subIndicatorsAbove`). A reader that predates the second fact still gets the
 //    sub-panes in the right order, merely all below the price, which is where they always were.
 //
-// 2. Across the wall, which pane sits in which cell. Panes keep their ids and their charts;
-//    only their positions change, and everything an app keeps by pane POSITION (the plugins'
+// 2. Across the wall, which pane sits in which cell. A pane moved to another position takes
+//    it and the panes in between close up -- `moveOrder`. Panes keep their ids and their
+//    charts; only their positions change, and everything an app keeps by pane POSITION (the plugins'
 //    per-pane settings) has to move with them -- `permuteByIndex`.
 
 /** One chart pane in a wall pane's vertical stack: a sub-indicator's template name, or null
@@ -95,11 +96,13 @@ export function withoutSubPane(
   return fromStack(chartPaneStack(subIndicators, above).filter((slot) => slot !== name))
 }
 
-/** The wall order after swapping the panes at positions `a` and `b`, as `order[newIndex] =
- * oldIndex` over the first `count` positions -- the shape `permuteByIndex` takes. */
-export function swapOrder(count: number, a: number, b: number): number[] {
+/** The wall order after moving the pane at position `from` to position `to`, as `order[newIndex]
+ * = oldIndex` over the first `count` positions -- the shape `permuteByIndex` takes. The panes
+ * in between close up behind it rather than trading places with it: moving the second of six
+ * last gives 1, 3, 4, 5, 6, 2, not 1, 6, 3, 4, 5, 2. */
+export function moveOrder(count: number, from: number, to: number): number[] {
   const order = Array.from({ length: count }, (_, index) => index)
-  ;[order[a], order[b]] = [order[b], order[a]]
+  order.splice(to, 0, ...order.splice(from, 1))
   return order
 }
 

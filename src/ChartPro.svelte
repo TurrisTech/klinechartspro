@@ -681,7 +681,7 @@
   export function getActivePaneId() { return wall.activeId }
   export function setActivePane(id: string) { wall.activate(id) }
   export function setPaneLayout(id: string) { wall.setLayout(id) }
-  export function swapPanes(firstId: string, secondId: string) { wall.swapPanes(firstId, secondId) }
+  export function movePane(paneId: string, toIndex: number) { wall.movePane(paneId, toIndex) }
   export function getPaneLayout() { return wall.layoutId }
   export function getPaneLayouts() { return [...wall.layouts] }
 
@@ -750,15 +750,16 @@
   })
 
   // Rearranging the wall: a pane's grip (ChartPane) dragged onto another pane, or onto a tab of
-  // the one-pane-at-a-time strip, swaps the two. The gesture is held here rather than in the
-  // pane because its target is any pane. The grip captures the pointer, so the charts under the
-  // drag see none of it -- no crosshair, no pan -- and the target is found by hit-testing the
-  // point instead. A concealed pane is `visibility: hidden` and cannot be hit, so on the strip
+  // the one-pane-at-a-time strip, moves it to that pane's position and the panes in between
+  // close up (Wall.movePane) -- the two do not trade places. The gesture is held here rather
+  // than in the pane because its target is any pane. The grip captures the pointer, so the
+  // charts under the drag see none of it -- no crosshair, no pan -- and the target is found by
+  // hit-testing the point instead. A concealed pane is `visibility: hidden` and cannot be hit, so on the strip
   // wall only the tabs are targets. Escape, or a release anywhere that is not another pane,
   // leaves the wall as it was.
   let paneDrag = $state<{ sourceId: string; targetId: string | null } | null>(null)
-  // Ends the drag in flight without swapping; null when there is none. Also run at teardown,
-  // so a chart removed mid-drag leaves no window listeners behind.
+  // Ends the drag in flight without moving anything; null when there is none. Also run at
+  // teardown, so a chart removed mid-drag leaves no window listeners behind.
   let cancelPaneDrag: (() => void) | null = null
   $effect(() => () => cancelPaneDrag?.())
 
@@ -789,7 +790,9 @@
       cancelPaneDrag = null
       const drag = paneDrag
       paneDrag = null
-      if (commit && drag?.targetId) wall.swapPanes(drag.sourceId, drag.targetId)
+      if (!commit || !drag?.targetId) return
+      const to = wall.visiblePanes.findIndex((pane) => pane.id === drag.targetId)
+      if (to >= 0) wall.movePane(drag.sourceId, to)
     }
     const onMove = (move: PointerEvent): void => {
       if (move.pointerId !== event.pointerId || !paneDrag) return
@@ -821,10 +824,9 @@
 
   // The grip's keyboard path: one place earlier or later in the wall's reading order.
   function stepPane(paneId: string, step: -1 | 1): void {
-    const panes = wall.visiblePanes
-    const index = panes.findIndex((pane) => pane.id === paneId)
-    const neighbour = panes[index + step]
-    if (index >= 0 && neighbour) wall.swapPanes(paneId, neighbour.id)
+    const index = wall.visiblePanes.findIndex((pane) => pane.id === paneId)
+    const to = index + step
+    if (index >= 0 && to >= 0 && to < wall.visiblePanes.length) wall.movePane(paneId, to)
   }
 
   // On a one-pane-at-a-time wall the strip scrolls sideways; keep the active tab in view,
