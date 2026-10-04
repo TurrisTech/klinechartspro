@@ -1,5 +1,5 @@
 import type { SimOrder, SimTrade } from '../trading/api'
-import { advanceTarget } from './timeframes'
+import type { CandleGrid } from './timeframes'
 
 // PURE. Advance planning: given the cursor, what the user asked for, the armed signals'
 // next occurrences and what is working in the account, decide where the walk stops and
@@ -32,18 +32,19 @@ export interface AdvancePlan {
   signal: SignalOccurrence | null
 }
 
-/** The target instant for a request from `cursor`, on the candle boundary rules. */
-export function targetOf(cursor: number, request: AdvanceRequest): number {
+/** The target instant for a request from `cursor`, on the candle boundary rules of the
+ * instrument's own schedule (`grid`). */
+export function targetOf(cursor: number, request: AdvanceRequest, grid: CandleGrid): number {
   if ('toEnd' in request) return request.end
-  return advanceTarget(request.interval, cursor, Math.max(1, Math.floor(request.multiple)))
+  return grid.advanceTarget(request.interval, cursor, Math.max(1, Math.floor(request.multiple)))
 }
 
 /** Where an advance stops, whichever comes first: the target, or the earliest armed signal
  * effective strictly after the cursor and at or before the target -- an intervening signal
  * wins over the requested target. (A fill stop is discovered while walking; see
  * `session.ts`.) */
-export function planAdvance(cursor: number, request: AdvanceRequest, armed: readonly SignalOccurrence[]): AdvancePlan {
-  const target = targetOf(cursor, request)
+export function planAdvance(cursor: number, request: AdvanceRequest, armed: readonly SignalOccurrence[], grid: CandleGrid): AdvancePlan {
+  const target = targetOf(cursor, request, grid)
   let best: SignalOccurrence | null = null
   for (const s of armed) {
     if (s.effective <= cursor || s.effective > target) continue

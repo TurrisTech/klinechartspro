@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { BarCache, type BarSource, type ReplayBar, composeForming, nonWeekendGaps } from './cache'
-import { fromWall, intervalEnd, toWireDate } from './timeframes'
+import { FX_GRID, fromWall, intervalEnd, toWireDate } from './timeframes'
 
 function ny(text: string): number {
   const [d, t] = text.split(' ')
@@ -58,7 +58,7 @@ describe('BarCache', () => {
 
   test('walk: ensure then take consumes contiguously and never twice', async () => {
     const src = new RecordingSource(data)
-    const cache = new BarCache(src, 'oanda:EURUSD', '1h')
+    const cache = new BarCache(src, 'oanda:EURUSD', '1h', FX_GRID)
     await cache.ensure(start + 3 * H, start)
     expect(cache.size).toBeGreaterThanOrEqual(3)
     const taken = cache.take(start + 2 * H)
@@ -72,7 +72,7 @@ describe('BarCache', () => {
 
   test('ensure prefetches ahead so a later step needs no fetch', async () => {
     const src = new RecordingSource(data)
-    const cache = new BarCache(src, 'oanda:EURUSD', '1h')
+    const cache = new BarCache(src, 'oanda:EURUSD', '1h', FX_GRID)
     await cache.ensure(start + H, start)
     expect(src.calls.length).toBe(1)
     await cache.ensure(start + 10 * H)
@@ -82,19 +82,19 @@ describe('BarCache', () => {
 
   test('ensure extends only from the run end; the run stays contiguous', async () => {
     const src = new RecordingSource(data)
-    const cache = new BarCache(src, 'oanda:EURUSD', '1h')
+    const cache = new BarCache(src, 'oanda:EURUSD', '1h', FX_GRID)
     await cache.ensure(start + H, start)
     const reach = cache.reach as number
     await cache.ensure(reach + 5 * H)
     expect(src.calls[1].from).toBe(reach)
     const opens = cache.peekAll().map((b) => b.open)
     for (let i = 1; i < opens.length; i++) expect(opens[i]).toBeGreaterThan(opens[i - 1])
-    expect(nonWeekendGaps('1h', cache.peekAll())).toEqual([])
+    expect(nonWeekendGaps('1h', cache.peekAll(), FX_GRID)).toEqual([])
   })
 
   test('seek dumps everything and reloads at the new anchor -- no bridging fetch', async () => {
     const src = new RecordingSource(data)
-    const cache = new BarCache(src, 'oanda:EURUSD', '1h')
+    const cache = new BarCache(src, 'oanda:EURUSD', '1h', FX_GRID)
     await cache.ensure(start + H, start)
     const far = start + 60 * H
     cache.seek(far)
@@ -108,7 +108,7 @@ describe('BarCache', () => {
   })
 
   test('dump forgets the anchor; ensure without one is an error', async () => {
-    const cache = new BarCache(new RecordingSource(data), 'oanda:EURUSD', '1h')
+    const cache = new BarCache(new RecordingSource(data), 'oanda:EURUSD', '1h', FX_GRID)
     cache.dump()
     await expect(cache.ensure(start + H)).rejects.toThrow('no anchor')
   })
@@ -118,7 +118,7 @@ describe('composeForming', () => {
   test('folds finer bars into the bucket with the wire date and both sides', () => {
     const start = ny('2024-03-04 09:00')
     const minutes = series('1m', start, 37)
-    const bar = composeForming('1h', start, minutes)
+    const bar = composeForming('1h', start, minutes, FX_GRID)
     expect(bar).not.toBeNull()
     expect(bar?.open).toBe(start)
     expect(bar?.end).toBe(start + H)
@@ -133,12 +133,12 @@ describe('composeForming', () => {
   test('a daily bucket is wire-dated by its session', () => {
     const open = ny('2024-03-03 17:00')
     const hours = series('1h', open, 3)
-    const bar = composeForming('1D', open, hours)
+    const bar = composeForming('1D', open, hours, FX_GRID)
     expect(bar?.date).toBe(open + 7 * H)
     expect(bar?.end).toBe(ny('2024-03-04 17:00'))
   })
   test('nothing closed yet is null', () => {
-    expect(composeForming('1h', 0, [])).toBeNull()
+    expect(composeForming('1h', 0, [], FX_GRID)).toBeNull()
   })
 })
 
@@ -150,6 +150,6 @@ describe('nonWeekendGaps', () => {
       { open: ny('2024-03-10 17:00'), end: ny('2024-03-10 18:00'), date: ny('2024-03-10 17:00'), o: 1, h: 1, l: 1, c: 1, v: 1 },
       { open: ny('2024-03-10 19:00'), end: ny('2024-03-10 20:00'), date: ny('2024-03-10 19:00'), o: 1, h: 1, l: 1, c: 1, v: 1 }
     ]
-    expect(nonWeekendGaps('1h', bars)).toEqual([{ after: ny('2024-03-10 17:00'), before: ny('2024-03-10 19:00') }])
+    expect(nonWeekendGaps('1h', bars, FX_GRID)).toEqual([{ after: ny('2024-03-10 17:00'), before: ny('2024-03-10 19:00') }])
   })
 })

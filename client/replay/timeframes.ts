@@ -787,3 +787,86 @@ export function scheduleIsMarketOpen(ms: number, tz: string, day: DayGeometry): 
 export function scheduleWireShift(code: string, day: DayGeometry): number {
   return sessionDated(code) ? -day.openOffset * HOUR : 0
 }
+
+// --- an instrument's grid ---------------------------------------------------------------------
+//
+// The replay asks every boundary question of ONE instrument at a time, so it carries that
+// instrument's schedule as an object rather than a pair of loose arguments: a `CandleGrid` is the
+// `schedule*` family above bound to one zone and one day geometry. Everything in client/replay
+// that labels, floors, steps or dates a bar goes through one -- the session's for the instrument
+// it walks, a pane's own for the instrument that pane shows. The unparameterised functions above
+// are the forex week, and a coinbase replay walked on them would close its days at 17:00 New
+// York and skip its weekends.
+
+/** An instrument's candle schedule as `SymbolInfo` carries it (client/symbols.ts): its own zone
+ * and the day geometry of its grid, resolved by the server from Postgres. */
+export interface Schedule {
+  timezone: string
+  day: DayGeometry
+}
+
+/** The FX week on New York -- what every OANDA instrument resolves to. A value for tests and
+ * parity checks, never a stand-in for an instrument whose schedule is unknown. */
+export const FX_SCHEDULE: Schedule = { timezone: MARKET_TZ, day: FX_DAY }
+
+/** The schedule a `SymbolInfo` carries, or null when the server resolved none for it. */
+export function scheduleOf(symbol: { timezone?: string; dayGeometry?: DayGeometry } | null | undefined): Schedule | null {
+  return symbol?.timezone && symbol.dayGeometry ? { timezone: symbol.timezone, day: symbol.dayGeometry } : null
+}
+
+/** Every boundary question the replay asks, on one instrument's schedule. */
+export interface CandleGrid {
+  readonly schedule: Schedule
+  /** Open of the candle containing `ms` (a floor). */
+  start(code: string, ms: number): number
+  /** Close of the candle containing `ms`: exclusive, and not the next open across a gap. */
+  end(code: string, ms: number): number
+  /** Open of the candle after the one containing `ms`, skipping the closed window. */
+  nextStart(code: string, ms: number): number
+  /** The BOUNDARY notion of open: may a candle open here. */
+  isOpen(ms: number): boolean
+  /** A bar's wire label from its open (daily-and-coarser are dated by session). */
+  toWire(code: string, openMs: number): number
+  /** A bar's open from its wire label. */
+  fromWire(code: string, wireMs: number): number
+  /** Where `count` whole `code` candles after `cursor` have completed (see `advanceTarget`). */
+  advanceTarget(code: string, cursor: number, count: number): number
+}
+
+export function gridOf(schedule: Schedule): CandleGrid {
+  const { timezone: tz, day } = schedule
+  const start = (code: string, ms: number): number => scheduleIntervalStart(code, ms, tz, day)
+  const end = (code: string, ms: number): number => scheduleIntervalEnd(code, ms, tz, day)
+  const nextStart = (code: string, ms: number): number => scheduleNextIntervalStart(code, ms, tz, day)
+  const isOpen = (ms: number): boolean => scheduleIsMarketOpen(ms, tz, day)
+  return {
+    schedule,
+    start,
+    end,
+    nextStart,
+    isOpen,
+    toWire: (code, openMs) => openMs + scheduleWireShift(code, day),
+    fromWire: (code, wireMs) => wireMs - scheduleWireShift(code, day),
+    // `advanceTarget`'s rule on this schedule: from inside an open candle the first step is its
+    // close; from a close, a gap or the closed window, the close of the next candle to open.
+    advanceTarget(code, cursor, count) {
+      let t = cursor
+      for (let i = 0; i < count; i++) {
+        const close = end(code, t)
+        if (close > t && start(code, t) <= t && isOpen(t)) t = close
+        else t = end(code, nextStart(code, t))
+      }
+      return t
+    }
+  }
+}
+
+/** The FX week's grid: the forex instruments' answer, and the parity reference. */
+export const FX_GRID: CandleGrid = gridOf(FX_SCHEDULE)
+
+/** The grid of the instrument a `SymbolInfo` describes -- a pane's, say -- or null when the
+ * server resolved no market hours for it. */
+export function gridFor(symbol: { timezone?: string; dayGeometry?: DayGeometry } | null | undefined): CandleGrid | null {
+  const schedule = scheduleOf(symbol)
+  return schedule ? gridOf(schedule) : null
+}

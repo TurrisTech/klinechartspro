@@ -1,4 +1,4 @@
-import { intervalEnd, isMarketOpen, nextIntervalStart, nominalMs, toWireDate } from './timeframes'
+import { type CandleGrid, nominalMs } from './timeframes'
 
 // BarCache: one per (instrument, timeframe), over an injected `BarSource`. Holds a
 // CONTIGUOUS run of bars at and ahead of an anchor, prefetched so a step consumes cache
@@ -29,8 +29,9 @@ export type Columns = 'core' | 'all'
 
 export interface BarSource {
   /** Bars of `[from, to)` on the store clock, ascending, unclamped (the cache hides them from
-   * the chart until they are consumed). Must page internally past the server's cap. */
-  fetch(symbol: string, interval: string, from: number, to: number, columns: Columns): Promise<ReplayBar[]>
+   * the chart until they are consumed). Must page internally past the server's cap. `grid` is
+   * the instrument's schedule: it turns a wire label into a candle's open and close. */
+  fetch(symbol: string, interval: string, from: number, to: number, columns: Columns, grid: CandleGrid): Promise<ReplayBar[]>
 }
 
 /** How far ahead of the anchor a cache keeps bars, in bars of its own interval. */
@@ -48,6 +49,8 @@ export class BarCache {
     readonly source: BarSource,
     readonly symbol: string,
     readonly interval: string,
+    /** The instrument's schedule: the cache's bars are opened, closed and dated on it. */
+    readonly grid: CandleGrid,
     readonly columns: Columns = 'all'
   ) {}
 
@@ -103,7 +106,7 @@ export class BarCache {
     const margin = PREFETCH_BARS * nominalMs(this.interval)
     const to = Math.max(until, start + margin)
     this.inflight = this.source
-      .fetch(this.symbol, this.interval, start, to, this.columns)
+      .fetch(this.symbol, this.interval, start, to, this.columns, this.grid)
       .then((fetched) => {
         // Only bars strictly after what we hold: the source answers [start, to) but a bar
         // opening exactly at `start` may already be the run's tail.
@@ -158,15 +161,16 @@ export class BarCache {
 }
 
 /** Compose the forming `interval` bar from finer bars inside its bucket (`bucketOpen` on
- * the store clock). Null when no finer bar has closed inside it. */
-export function composeForming(interval: string, bucketOpen: number, parts: readonly ReplayBar[]): ReplayBar | null {
+ * the store clock), closed and labelled on the instrument's schedule. Null when no finer bar
+ * has closed inside it. */
+export function composeForming(interval: string, bucketOpen: number, parts: readonly ReplayBar[], grid: CandleGrid): ReplayBar | null {
   if (parts.length === 0) return null
   const first = parts[0]
   const last = parts[parts.length - 1]
   const bar: ReplayBar = {
     open: bucketOpen,
-    end: intervalEnd(interval, bucketOpen),
-    date: toWireDate(interval, bucketOpen),
+    end: grid.end(interval, bucketOpen),
+    date: grid.toWire(interval, bucketOpen),
     o: first.o,
     h: Math.max(...parts.map((p) => p.h)),
     l: Math.min(...parts.map((p) => p.l)),
@@ -199,11 +203,11 @@ export interface Gap {
  * candle on the grid opened while the market was open, yet the next held bar is later.
  * Stored data legitimately skips candles with no ticks, so a gap is reported, not fatal --
  * the caller decides (a chart append asserts none against what it pushed). */
-export function nonWeekendGaps(interval: string, bars: readonly ReplayBar[]): Gap[] {
+export function nonWeekendGaps(interval: string, bars: readonly ReplayBar[], grid: CandleGrid): Gap[] {
   const gaps: Gap[] = []
   for (let i = 1; i < bars.length; i++) {
-    const expected = nextIntervalStart(interval, bars[i - 1].open)
-    if (bars[i].open > expected && isMarketOpen(expected)) gaps.push({ after: bars[i - 1].open, before: bars[i].open })
+    const expected = grid.nextStart(interval, bars[i - 1].open)
+    if (bars[i].open > expected && grid.isOpen(expected)) gaps.push({ after: bars[i - 1].open, before: bars[i].open })
   }
   return gaps
 }

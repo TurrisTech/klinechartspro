@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimOrder, SimTrade } from '../trading/api'
 import { canFill, intersectsWorking, planAdvance, targetOf } from './clock'
-import { fromWall } from './timeframes'
+import { FX_GRID, fromWall } from './timeframes'
 
 function ny(text: string): number {
   const [d, t] = text.split(' ')
@@ -49,14 +49,14 @@ const trade = (over: Partial<SimTrade>): SimTrade => ({
 describe('planAdvance', () => {
   const cursor = ny('2024-03-04 10:00')
   test('the target is N whole candles on the boundary rules', () => {
-    expect(targetOf(cursor, { interval: '1h', multiple: 3 })).toBe(ny('2024-03-04 13:00'))
-    expect(targetOf(cursor, { toEnd: true, end: 123 })).toBe(123)
+    expect(targetOf(cursor, { interval: '1h', multiple: 3 }, FX_GRID)).toBe(ny('2024-03-04 13:00'))
+    expect(targetOf(cursor, { toEnd: true, end: 123 }, FX_GRID)).toBe(123)
   })
   test('an armed signal before the target wins', () => {
     const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, [
       { ref: 'arev:arev21:long', resolution: '1h', effective: ny('2024-03-04 12:00'), date: ny('2024-03-04 11:00') },
       { ref: 'krev:krev01:top', resolution: '1h', effective: ny('2024-03-04 15:00'), date: 0 }
-    ])
+    ], FX_GRID)
     // The 4h grid is anchored at 17:00: 09:00-13:00 then 13:00-17:00.
     expect(plan.target).toBe(ny('2024-03-04 17:00'))
     expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
@@ -67,17 +67,17 @@ describe('planAdvance', () => {
     const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, [
       { ref: 'a', resolution: '1h', effective: cursor, date: 0 },
       { ref: 'b', resolution: '1h', effective: ny('2024-03-04 12:01'), date: 0 }
-    ])
+    ], FX_GRID)
     expect(plan.reason).toBe('target')
     expect(plan.stopAt).toBe(ny('2024-03-04 12:00'))
   })
   test('a signal exactly at the target stops with reason signal', () => {
-    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, [{ ref: 'a', resolution: '1h', effective: ny('2024-03-04 12:00'), date: 0 }])
+    const plan = planAdvance(cursor, { interval: '1h', multiple: 2 }, [{ ref: 'a', resolution: '1h', effective: ny('2024-03-04 12:00'), date: 0 }], FX_GRID)
     expect(plan.reason).toBe('signal')
     expect(plan.stopAt).toBe(plan.target)
   })
   test('next-signal is an advance to the end of the data', () => {
-    const plan = planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, [{ ref: 'a', resolution: '1h', effective: ny('2024-03-06 12:00'), date: 0 }])
+    const plan = planAdvance(cursor, { toEnd: true, end: ny('2024-12-31 17:00') }, [{ ref: 'a', resolution: '1h', effective: ny('2024-03-06 12:00'), date: 0 }], FX_GRID)
     expect(plan.stopAt).toBe(ny('2024-03-06 12:00'))
   })
 })

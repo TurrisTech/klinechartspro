@@ -1,10 +1,11 @@
 import type { SignalCatalogueEntry } from '../plugins/types'
-import { Arming } from '../trading/kit'
-import { formatClock } from './format'
+import { Arming, FigureList } from '../trading/kit'
+import { formatClock, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
+import { replayResults, resultHeadline, resultRows } from './results'
 import type { AdvanceResult, ReplayController } from './session'
-import { type BaseCheck, defaultBase, intervalStart, isMarketOpen, sortByLength, validateBase } from './timeframes'
+import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
 import { dragByHandle } from '../chrome/drag'
 import { createDockableWindow } from '../chrome/window'
 
@@ -19,8 +20,8 @@ import { createDockableWindow } from '../chrome/window'
 //               with nothing in it that acts on the replay
 //   transport   Play and Step, each beside the setting it uses (timeframe x multiple, the pace)
 //   next        Next signal, and how far a running walk has got or why the last advance stopped
-//   footer      Signals / Base, one panel open at a time; Account and Trade, the two windows;
-//               Exit replay, set apart at the far end
+//   footer      Signals / Base / Results, one panel open at a time; Account and Trade, the two
+//               windows; Exit replay, set apart at the far end
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
 // permanently on screen, and the account window and the trade box are opened from here rather
@@ -48,7 +49,7 @@ const EXIT = 'exit'
  * its progress, or a Stop already pressed, shows at once. */
 const BUSY_REVEAL_MS = 300
 
-type PanelId = 'signals' | 'settings' | null
+type PanelId = 'signals' | 'settings' | 'results' | null
 
 export interface ReplayControlsOptions {
   controller: ReplayController
@@ -146,6 +147,13 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     sleep: options.sleep,
     delayMs: readDelay()
   })
+  // The Results panel's figures: one list for the controls' life, so a re-render updates its
+  // values in place rather than rebuilding what is being read.
+  const figures = new FigureList('wd-replay-results-figures')
+  // A trade placed or closed between advances changes the score with no control change.
+  const unsubscribeSnapshot = controller.subscribe(() => {
+    if (panel === 'results') renderBody()
+  })
   const unsubscribe = controller.onControlChange((change) => {
     // A progress report moves one date, several times a second: patch that line. Rebuilding
     // the window instead would replace the Stop button under a pointer pressing it, and a
@@ -219,8 +227,11 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     // reach as if the chart were there.
     const at = controller.advanceFrom ?? controller.cursor
     const clock = el('span', 'wd-replay-clock-value')
-    clock.textContent = formatClock(at)
-    clock.title = `${new Date(at).toISOString()} — the replay's clock, New York time. Every pane shows the bars that had closed by then.`
+    // On the instrument's own clock, the zone its chart is drawn in: New York for the FX week,
+    // UTC for a coinbase pair.
+    const zone = controller.grid.schedule.timezone
+    clock.textContent = formatClock(at, zone)
+    clock.title = `${new Date(at).toISOString()} — the replay's clock, ${zoneName(zone)}. Every pane shows the bars that had closed by then.`
     win.titleSlot.append(symbol, clock)
   }
 
@@ -228,7 +239,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   //
   //   [▶] [Step]  [1h v] × [1]  every [1 s v]      transport: each button beside what it uses
   //   [Next signal]  Stepped 1h                     the other way to move, and why it stopped
-  //   Signals 1  Base 1h  Account  Trade    Exit replay   panels and windows; Exit set apart
+  //   Signals 1  Base 1h  Results  Account  Trade   Exit replay   panels, windows; Exit set apart
 
   function renderBody(): void {
     const body = win.body
@@ -237,11 +248,12 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     body.append(renderTransport(), renderNext(), renderToggles())
     if (panel === 'signals') body.appendChild(renderSignals())
     if (panel === 'settings') body.appendChild(renderSettings())
+    if (panel === 'results') body.appendChild(renderResults())
     win.reflow()
   }
 
   function showWalk(line: HTMLElement, walked: number): void {
-    line.textContent = `Walking… reached ${formatClock(walked)}`
+    line.textContent = `Walking… reached ${formatClock(walked, controller.grid.schedule.timezone)}`
     line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
   }
 
@@ -365,7 +377,9 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const settings = toggleButton(`Base ${controller.base}`, '', panel === 'settings', () => showPanel('settings'))
     settings.classList.toggle('is-invalid', !baseCheck.ok)
     settings.title = baseCheck.ok ? 'Base timeframe and pause on fill' : (baseCheck.reason ?? '')
-    row.append(signals, settings)
+    const results = toggleButton('Results', '', panel === 'results', () => showPanel('results'))
+    results.title = 'How the session is going: P&L, win rate, drawdown'
+    row.append(signals, settings, results)
 
     if (options.account) {
       const account = options.account
@@ -436,6 +450,35 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       const warn = el('div', 'wd-replay-warning')
       warn.textContent = baseCheck.reason ?? ''
       box.appendChild(warn)
+    }
+    return box
+  }
+
+  /** The session's score (results.ts), in the trading kit's figures. */
+  function renderResults(): HTMLElement {
+    // `wd-tk`: the kit's own scope, so the figures read exactly as they do in the trade box.
+    const box = el('div', 'wd-replay-panel wd-tk wd-replay-results')
+    const r = replayResults(controller.snapshot, controller.startedAt, controller.cursor)
+    const headline = resultHeadline(r)
+    const head = el('div', 'wd-replay-results-head')
+    const label = el('span', 'wd-replay-label')
+    label.textContent = 'Net P&L'
+    const value = el('span', `wd-replay-results-net${headline.tone ? ` is-${headline.tone}` : ''}`)
+    value.textContent = headline.text
+    head.append(label, value)
+    box.appendChild(head)
+    if (r.closed === 0 && r.open === 0) {
+      const none = el('div', 'wd-replay-muted')
+      none.textContent = 'No trades yet. Trade from the Trade box or the chart, and the score builds here.'
+      box.appendChild(none)
+      return box
+    }
+    figures.update(resultRows(r))
+    box.appendChild(figures.element)
+    if (r.closed === 0) {
+      const note = el('div', 'wd-replay-muted wd-replay-results-note')
+      note.textContent = 'Win rate, profit factor and drawdown follow the first closed trade.'
+      box.appendChild(note)
     }
     return box
   }
@@ -518,6 +561,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       player.dispose()
       arming.disarm()
       unsubscribe()
+      unsubscribeSnapshot()
       win.dispose()
     }
   }
@@ -638,6 +682,9 @@ export interface StartDialogOptions {
   stored: string[]
   /** Newest instant the store has for the instrument (the latest a replay can start). */
   latest: number
+  /** The instrument's candle schedule: the default start and Random land on its candle opens,
+   * and every date in the dialog is read and written on its clock. */
+  grid: CandleGrid
   /** Choose the start by clicking a bar on the chart (./pickbar.ts): the dialog steps aside
    * while it runs and gets the bar's close back, or null when the pick was cancelled. Absent,
    * there is no "On chart" button. */
@@ -670,8 +717,14 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   const suggested = defaultBase(options.intervalsInUse, options.stored)
   const initialBase = suggested ?? options.stored[0] ?? '1m'
 
-  const defaultStart = defaultStartAt(initialBase, options.latest)
-  const startField = field('Start (New York time)')
+  const grid = options.grid
+  const zone = grid.schedule.timezone
+  const toLocalInputValue = (ms: number): string => localInputValue(ms, zone)
+  const fromLocalInputValue = (value: string): number | null => instantOfInput(value, zone)
+  const toDayInputValue = (ms: number): string => localInputValue(ms, zone).slice(0, 10)
+  const defaultStart = defaultStartAt(initialBase, options.latest, grid)
+  // The instrument's own clock, named: a coinbase replay is chosen in UTC, as its chart reads.
+  const startField = field(`Start (${zoneName(zone)})`)
   const startRow = el('div', 'wd-replay-dialog-row')
   const startInput = dateInput(toLocalInputValue(defaultStart))
   startInput.max = toLocalInputValue(options.latest)
@@ -750,7 +803,7 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
     const range = drawRange()
     if (!range) return
     rangeError.textContent = ''
-    startInput.value = toLocalInputValue(randomStart(range, basePicker.value))
+    startInput.value = toLocalInputValue(randomStart(range, basePicker.value, grid))
     baseError.textContent = ''
   }
 
@@ -845,47 +898,30 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
  * replay opened there shows Friday's close and makes the first Step cross two days of nothing;
  * this backs off, an hour at a time, to the last candle that opened while the market traded.
  * (Random is deliberately NOT treated like this: see pick.ts.) */
-export function defaultStartAt(base: string, latest: number): number {
-  let at = intervalStart(base, latest - 7 * DAY_MS)
-  for (let i = 0; i < 24 * 7 && !isMarketOpen(at); i++) at = intervalStart(base, at - HOUR_MS)
+export function defaultStartAt(base: string, latest: number, grid: CandleGrid): number {
+  let at = grid.start(base, latest - 7 * DAY_MS)
+  for (let i = 0; i < 24 * 7 && !grid.isOpen(at); i++) at = grid.start(base, at - HOUR_MS)
   return at
 }
 
 const HOUR_MS = 3_600_000
 const DAY_MS = 24 * HOUR_MS
 
-// New York wall clock <-> the datetime-local input, which is timezone-less text.
-const nyParts = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'America/New_York',
-  hourCycle: 'h23',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit'
-})
+// The instrument's wall clock <-> the datetime-local input, which is timezone-less text. Through
+// the replay's own wall-clock conversion (timeframes.ts), which resolves a DST gap and a repeated
+// hour the way wmarkettypes does.
 
-/** The New York calendar date of an instant, for a `type=date` input. */
-function toDayInputValue(ms: number): string {
-  return toLocalInputValue(ms).slice(0, 10)
+/** `YYYY-MM-DDTHH:MM` of an instant on `zone`'s wall clock. */
+function localInputValue(ms: number, zone: string): string {
+  return new Date(toWall(ms, zone)).toISOString().slice(0, 16)
 }
 
-function toLocalInputValue(ms: number): string {
-  const p = Object.fromEntries(nyParts.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
-  return `${p.year}-${p.month}-${p.day}T${p.hour}:${p.minute}`
-}
-
-function fromLocalInputValue(value: string): number | null {
+/** The instant a `YYYY-MM-DDTHH:MM` reading names on `zone`'s wall clock; null when unreadable. */
+function instantOfInput(value: string, zone: string): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value)
   if (!m) return null
   const [y, mo, d, h, mi] = m.slice(1).map(Number)
-  // Resolve the New York wall time to an instant (timeframes.fromWall semantics, inlined
-  // to keep this module DOM-only): try both offsets around the date.
-  const naive = Date.UTC(y, mo - 1, d, h, mi)
-  for (const guess of [naive + 4 * 3_600_000, naive + 5 * 3_600_000]) {
-    if (toLocalInputValue(guess) === value.slice(0, 16)) return guess
-  }
-  return naive + 5 * 3_600_000
+  return fromWall(Date.UTC(y, mo - 1, d, h, mi), zone)
 }
 
 // -- small DOM helpers -------------------------------------------------------------------------
