@@ -475,11 +475,12 @@ function writeDelay(ms: number): void {
   }
 }
 
-/** A key typed into a field is the field's, not a shortcut. */
+/** A key typed into a field is the field's, not a shortcut -- and so is an arrow pressed on a
+ * focused pane grip, which moves its pane through the wall with any arrow, Shift or not. */
 function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false
   const tag = target.tagName.toLowerCase()
-  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable || target.closest('.klinecharts-pro-pane-grip') !== null
 }
 
 /** "AREV arev21 · long": the plugin, its variant and the label, for a row out of its group. */

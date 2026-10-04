@@ -770,6 +770,11 @@ describe('keys', () => {
     const m = mount()
     const input = m.q('.wd-replay-number') as HTMLInputElement
     key({ key: 'ArrowRight', shiftKey: true }, input)
+    // A pane grip moves its pane with the arrows, Shift or not.
+    const grip = document.createElement('button')
+    grip.className = 'klinecharts-pro-pane-grip'
+    document.body.appendChild(grip)
+    key({ key: 'ArrowRight', shiftKey: true }, grip)
     await flush()
     expect(m.calls.step).toBe(0)
     m.dispose()
