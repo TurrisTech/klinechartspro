@@ -190,7 +190,7 @@ export interface LayerController<TConfig extends object = object> {
   /** Replace one pane's settings (normalised here) and redraw that pane -- from what it
    * already holds when only the styling changed. */
   setConfig(paneIndex: number, config: unknown): void
-  /** The wall document's per-pane settings, as `snapshot` wrote them. */
+  /** Replace every pane's settings with the wall document's, as `snapshot` wrote them. */
   hydrate(stored: Record<number, unknown>): void
   /** Each configured pane's settings that differ from the defaults; an untouched pane is
    * absent, so it adds nothing to the wall document. */
@@ -469,6 +469,10 @@ export function createLayerController<TDatum, TConfig extends object>(
       for (const entry of wired.values()) if (entry.paneIndex === paneIndex) restyle(entry)
     },
     hydrate(stored: Record<number, unknown>): void {
+      // Replaces, as every plugin's paneState.hydrate does: it is also how panes changing
+      // places on the wall re-key these (PluginHost.reorderPanes), and the sync that follows
+      // restyles each moved pane from the config now under its new index.
+      for (const index of Object.keys(configs)) delete configs[Number(index)]
       for (const [index, value] of Object.entries(stored)) {
         const config = codec.fromStored(value)
         if (config) configs[Number(index)] = config

@@ -1081,6 +1081,80 @@
 	height: 0.875rem;
 }
 
+/* The pane's handle for rearranging the wall (ChartPane's grip, ChartPro's paneDrag): over the
+   top of the right-hand axis, which draws nothing in its first few pixels. Shown while the pointer is
+   over the pane -- and, where there is no hover, on the active pane, so a finger can find it. */
+.klinecharts-pro-pane-grip {
+	position: absolute;
+	top: 0.25rem;
+	right: 0.25rem;
+	z-index: 4;
+	display: grid;
+	place-items: center;
+	width: 1.25rem;
+	height: 1.25rem;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
+	color: var(--muted-foreground);
+	cursor: grab;
+	opacity: 0;
+	/* The drag is the grip's own gesture: no page pan on touch, no text selection. */
+	touch-action: none;
+	user-select: none;
+	transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.klinecharts-pro-pane:hover > .klinecharts-pro-pane-grip,
+.klinecharts-pro-pane-grip:focus-visible,
+.klinecharts-pro-pane[data-drag-role='source'] > .klinecharts-pro-pane-grip {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.klinecharts-pro-pane[data-active='true'] > .klinecharts-pro-pane-grip {
+		opacity: 1;
+	}
+}
+
+.klinecharts-pro-pane-grip:hover,
+.klinecharts-pro-pane[data-drag-role='source'] > .klinecharts-pro-pane-grip {
+	border-color: var(--kc-active-pane);
+	color: var(--foreground);
+}
+
+.klinecharts-pro-pane[data-drag-role='source'] > .klinecharts-pro-pane-grip {
+	cursor: grabbing;
+}
+
+.klinecharts-pro-pane-grip svg {
+	width: 0.75rem;
+	height: 0.75rem;
+}
+
+/* While a grip is dragged: the pane being moved dims, and the pane it would swap with if
+   released now is outlined and tinted. Above the active-pane ring (z-index 3) but not the
+   grip, and like the ring it never takes the pointer -- the drag hit-tests the panes under it. */
+.klinecharts-pro-pane[data-drag-role]::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	pointer-events: none;
+}
+
+.klinecharts-pro-pane[data-drag-role='source']::before {
+	background: color-mix(in oklab, var(--background) 45%, transparent);
+}
+
+.klinecharts-pro-pane[data-drag-role='target']::before {
+	box-shadow: inset 0 0 0 2px var(--kc-active-pane);
+	background: color-mix(in oklab, var(--kc-active-pane) 14%, transparent);
+	outline: 2px dashed var(--kc-active-pane);
+	outline-offset: -6px;
+}
+
 .klinecharts-pro-loading {
 	position: absolute;
 	inset: 0;
@@ -1136,6 +1210,13 @@
 .kc-pane-tab[aria-selected='true'] {
 	border-color: var(--kc-active-pane);
 	background: color-mix(in oklab, var(--kc-active-pane) 14%, transparent);
+	color: var(--foreground);
+}
+
+.kc-pane-tab[data-drop-target] {
+	border-color: var(--kc-active-pane);
+	border-style: dashed;
+	background: color-mix(in oklab, var(--kc-active-pane) 24%, transparent);
 	color: var(--foreground);
 }
 

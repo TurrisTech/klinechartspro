@@ -430,6 +430,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       replay?.sync(panes)
       watches?.sync(panes)
     },
+    // Panes changed places: the plugins keep their per-pane settings by position, so those
+    // move first; onPaneLayoutChange then persists the wall in its new order.
+    onPaneOrderChange: (order) => pluginHost.reorderPanes(order),
     onPaneLayoutChange: persist,
     onActivePaneChange: persist,
     // Everything else a pane can change on its own: an indicator added, removed or

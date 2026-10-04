@@ -92,6 +92,7 @@ export default class KLineChartPro implements ChartPro {
         syncPeriod: options.syncPeriod ?? false,
         onPaneLayoutChange: options.onPaneLayoutChange ?? (() => {}),
         onActivePaneChange: options.onActivePaneChange ?? (() => {}),
+        onPaneOrderChange: options.onPaneOrderChange ?? (() => {}),
         onPaneStateChange: options.onPaneStateChange ?? (() => {}),
         onPanesChange: options.onPanesChange ?? (() => {}),
         onSymbolChange: options.onSymbolChange ?? (() => {}),
@@ -189,6 +190,10 @@ export default class KLineChartPro implements ChartPro {
 
   setPaneLayout(id: string): void {
     this.component.setPaneLayout(id)
+  }
+
+  swapPanes(firstId: string, secondId: string): void {
+    this.component.swapPanes(firstId, secondId)
   }
 
   getPaneLayout(): string {

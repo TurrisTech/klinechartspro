@@ -1,5 +1,6 @@
 import type { IndicatorGroup } from '../../src'
 import { setByPath } from '../chartlayers/settings'
+import { replacePaneConfigs } from '../plugins/panestate'
 import type {
   BindContext,
   BindingSpec,
@@ -130,9 +131,7 @@ export function createArev21DivergencePlugin(load: () => Promise<RegistryIndicat
     settings: (templateName) => (isDivergenceIndicator(templateName) ? settings : null),
     paneState: {
       hydrate(initial) {
-        for (const [index, config] of Object.entries(initial)) {
-          if (config) configs[Number(index)] = normaliseDivConfig(config)
-        }
+        replacePaneConfigs(configs, configRevs, initial, normaliseDivConfig)
       },
       snapshot: () => ({ ...configs })
     },

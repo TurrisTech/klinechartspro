@@ -38,7 +38,10 @@ interface PersistedPane {
   v?: string // vendor; omitted when 'oanda' (client/symbols.ts symbolVendor's own default)
   p: string // Period.text -- which IS the server's resolution code ('1h', '1D')
   mi?: string[] // main indicator names, omitted when empty
-  si?: string[] // sub indicator names, omitted when empty
+  si?: string[] // sub indicator names, top to bottom, omitted when empty
+  // How many of `si` (the first ones) sit above the price pane; omitted when none do. A client
+  // that predates it draws the same sub-panes in the same order, all below the price.
+  sa?: number
   ip?: Record<string, number[]> // indicator template name -> calcParams, omitted when empty
   vw?: PersistedView // where this pane was looking, omitted for a pane never read back
   // The AREV21 multi-timeframe overlay's settings for THIS pane -- which timeframes it
@@ -105,6 +108,8 @@ export interface HydratedPane {
   period: Period
   mainIndicators: string[]
   subIndicators: string[]
+  /** How many of `subIndicators` sit above the price pane (PaneOptions.subIndicatorsAbove). */
+  subIndicatorsAbove?: number
   indicatorParams: Record<string, number[]>
   /** Undefined for a pane never configured; the overlay seeds those itself. */
   mtfConfig?: MtfConfig
@@ -140,6 +145,7 @@ function isPersistedPane(value: unknown): value is PersistedPane {
   if (pane.v !== undefined && typeof pane.v !== 'string') return false
   if (pane.mi !== undefined && !isStringArray(pane.mi)) return false
   if (pane.si !== undefined && !isStringArray(pane.si)) return false
+  // `sa` is checked on the way out (hydrateSubIndicatorsAbove), like `ip` and `vw` below.
   // `ip` and `vw` are checked on the way OUT instead (see hydrateView / hydrateIndicatorParams):
   // a malformed view is worth losing on its own, whereas failing the whole pane here would
   // cost the user their symbol, timeframe and indicators over a bad number.
@@ -285,6 +291,15 @@ function hydrateView(pane: PersistedPane): PaneViewState | null {
   }
 }
 
+// How many of the pane's (surviving) sub-indicators sit above its price pane. Counted over the
+// stored names that `live` keeps, so a retired template that sat above the price does not push
+// the next one up after it. Anything but a positive whole number is the default: none.
+function hydrateSubIndicatorsAbove(pane: PersistedPane, subIndicators: string[]): number {
+  const stored = pane.sa
+  if (typeof stored !== 'number' || !Number.isInteger(stored) || stored <= 0) return 0
+  return Math.min(live((pane.si ?? []).slice(0, stored)).length, subIndicators.length)
+}
+
 // Resolves a persisted layout's tickers into full SymbolInfo (pricePrecision and the rest are
 // vendor-sourced, never persisted -- see client/symbols.ts's own note on why). Deduplicated by
 // `vendor:ticker` and resolved in parallel: a 12-pane layout typically names far fewer
@@ -312,6 +327,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     const vpConfig = fromStoredVpConfig(pane.vp)
     const layerConfigs = hydrateLayerConfigs(pane.ly)
     const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
+    const subIndicators = live(pane.si ?? ['VOL'])
     return {
       symbol: symbols[index],
       // Restored through the same rule the picker applies: a saved 5s pane on an instrument
@@ -322,7 +338,8 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
         symbols[index]
       ),
       mainIndicators: live(pane.mi ?? ['MA']),
-      subIndicators: live(pane.si ?? ['VOL']),
+      subIndicators,
+      subIndicatorsAbove: hydrateSubIndicatorsAbove(pane, subIndicators),
       indicatorParams: hydrateIndicatorParams(pane),
       // Merged onto the defaults and validated field by field: this is a stored document, so
       // a malformed one must read as "never configured" rather than reach the drawing code
@@ -356,6 +373,7 @@ export function toPaneOptions(pane: HydratedPane): PaneOptions {
     period: pane.period,
     mainIndicators: pane.mainIndicators,
     subIndicators: pane.subIndicators,
+    subIndicatorsAbove: pane.subIndicatorsAbove ?? 0,
     indicatorParams: pane.indicatorParams,
     ...(pane.view ? { view: pane.view } : {})
   }
@@ -404,6 +422,7 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
     p: pane.period.text,
     ...(pane.mainIndicators.length > 0 ? { mi: pane.mainIndicators } : {}),
     ...(pane.subIndicators.length > 0 ? { si: pane.subIndicators } : {}),
+    ...((pane.subIndicatorsAbove ?? 0) > 0 ? { sa: pane.subIndicatorsAbove } : {}),
     ...(indicatorParams ? { ip: indicatorParams } : {}),
     ...(view ? { vw: view } : {})
   }

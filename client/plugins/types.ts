@@ -291,6 +291,9 @@ export interface IndicatorPlugin {
   validateParams?(request: ValidateRequest): Promise<IndicatorParamsCheck>
   /** Per-pane document state, keyed by pane index -- what the wall document persists. */
   paneState?: {
+    /** REPLACES every pane's state (an index absent here has none afterwards): called once
+     * with the wall document's, and again with the plugin's own snapshot re-keyed whenever
+     * panes change places on the wall (PluginHost.reorderPanes). */
     hydrate(initial: Record<number, unknown>): void
     snapshot(): Record<number, unknown>
   }

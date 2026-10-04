@@ -1,6 +1,7 @@
 import type { IndicatorGroup } from '../../src'
 import { baseIntervalsFor } from '../capabilities'
 import { setByPath } from '../chartlayers/settings'
+import { replacePaneConfigs } from '../plugins/panestate'
 import type {
   BindContext,
   BindingSpec,
@@ -205,9 +206,7 @@ export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = 
     settings: (templateName) => (isVolumeProfileIndicator(templateName) ? settings : null),
     paneState: {
       hydrate(initial) {
-        for (const [index, config] of Object.entries(initial)) {
-          if (config) configs[Number(index)] = normaliseVpConfig(config)
-        }
+        replacePaneConfigs(configs, configRevs, initial, normaliseVpConfig)
       },
       snapshot: () => ({ ...configs })
     },

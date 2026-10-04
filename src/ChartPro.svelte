@@ -135,6 +135,7 @@
     syncPeriod,
     onPaneLayoutChange,
     onActivePaneChange,
+    onPaneOrderChange,
     onPaneStateChange,
     onPanesChange,
     onSymbolChange,
@@ -454,7 +455,8 @@
       datafeedFactory,
       seeds,
       onPaneLayoutChange,
-      onActivePaneChange
+      onActivePaneChange,
+      onPaneOrderChange
     })
     if (typeof datafeed !== 'function' && built.layout.paneCount > 1) {
       console.warn(
@@ -679,6 +681,7 @@
   export function getActivePaneId() { return wall.activeId }
   export function setActivePane(id: string) { wall.activate(id) }
   export function setPaneLayout(id: string) { wall.setLayout(id) }
+  export function swapPanes(firstId: string, secondId: string) { wall.swapPanes(firstId, secondId) }
   export function getPaneLayout() { return wall.layoutId }
   export function getPaneLayouts() { return [...wall.layouts] }
 
@@ -745,6 +748,84 @@
     void railPeriods.length
     untrack(() => { void fitToolbar(true) })
   })
+
+  // Rearranging the wall: a pane's grip (ChartPane) dragged onto another pane, or onto a tab of
+  // the one-pane-at-a-time strip, swaps the two. The gesture is held here rather than in the
+  // pane because its target is any pane. The grip captures the pointer, so the charts under the
+  // drag see none of it -- no crosshair, no pan -- and the target is found by hit-testing the
+  // point instead. A concealed pane is `visibility: hidden` and cannot be hit, so on the strip
+  // wall only the tabs are targets. Escape, or a release anywhere that is not another pane,
+  // leaves the wall as it was.
+  let paneDrag = $state<{ sourceId: string; targetId: string | null } | null>(null)
+  // Ends the drag in flight without swapping; null when there is none. Also run at teardown,
+  // so a chart removed mid-drag leaves no window listeners behind.
+  let cancelPaneDrag: (() => void) | null = null
+  $effect(() => () => cancelPaneDrag?.())
+
+  function paneDropTargetAt(x: number, y: number, sourceId: string): string | null {
+    const element = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-pane-id], [data-pane-tab]')
+    if (!element || !rootElement?.contains(element)) return null
+    const id = element.dataset.paneId ?? element.dataset.paneTab ?? null
+    if (id === sourceId || !wall.visiblePanes.some((pane) => pane.id === id)) return null
+    return id
+  }
+
+  function startPaneDrag(event: PointerEvent, paneId: string): void {
+    if (event.button !== 0 || paneDrag) return
+    const grip = event.currentTarget as HTMLElement
+    try {
+      grip.setPointerCapture(event.pointerId)
+    } catch {
+      // A pointer no longer active (released before this ran) cannot be captured. The drag
+      // still works without it -- every listener below is on the window -- the charts it
+      // crosses merely see the moves too.
+    }
+    paneDrag = { sourceId: paneId, targetId: null }
+    const finish = (commit: boolean): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      window.removeEventListener('keydown', onKey, true)
+      cancelPaneDrag = null
+      const drag = paneDrag
+      paneDrag = null
+      if (commit && drag?.targetId) wall.swapPanes(drag.sourceId, drag.targetId)
+    }
+    const onMove = (move: PointerEvent): void => {
+      if (move.pointerId !== event.pointerId || !paneDrag) return
+      const targetId = paneDropTargetAt(move.clientX, move.clientY, paneId)
+      if (targetId !== paneDrag.targetId) paneDrag = { sourceId: paneId, targetId }
+    }
+    const onUp = (up: PointerEvent): void => {
+      if (up.pointerId !== event.pointerId) return
+      // Read at the release itself, not only from the last move: a quick flick can end on a
+      // pane that no pointermove reported.
+      if (paneDrag) paneDrag = { sourceId: paneId, targetId: paneDropTargetAt(up.clientX, up.clientY, paneId) }
+      finish(true)
+    }
+    const onCancel = (cancel: PointerEvent): void => {
+      if (cancel.pointerId === event.pointerId) finish(false)
+    }
+    const onKey = (key: KeyboardEvent): void => {
+      if (key.key !== 'Escape') return
+      key.preventDefault()
+      key.stopPropagation()
+      finish(false)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    window.addEventListener('keydown', onKey, true)
+    cancelPaneDrag = () => finish(false)
+  }
+
+  // The grip's keyboard path: one place earlier or later in the wall's reading order.
+  function stepPane(paneId: string, step: -1 | 1): void {
+    const panes = wall.visiblePanes
+    const index = panes.findIndex((pane) => pane.id === paneId)
+    const neighbour = panes[index + step]
+    if (index >= 0 && neighbour) wall.swapPanes(paneId, neighbour.id)
+  }
 
   // On a one-pane-at-a-time wall the strip scrolls sideways; keep the active tab in view,
   // including after the active pane changed from somewhere else (a restored wall).
@@ -1192,6 +1273,7 @@
               role="tab"
               class="kc-pane-tab"
               data-pane-tab={pane.id}
+              data-drop-target={paneDrag?.targetId === pane.id || undefined}
               aria-selected={pane.id === wall.activeId}
               onclick={() => wall.activate(pane.id)}
             >
@@ -1212,8 +1294,12 @@
           <ChartPane
             {pane}
             active={pane.id === wall.activeId}
-            placement={fit.mode === 'preset' ? undefined : panePlacement(fit, index, wall.visiblePanes.length, pane.id)}
+            placement={panePlacement(fit, index, wall.visiblePanes.length, wall.layout.paneAreas[index])}
             concealed={fit.mode === 'single' && pane.id !== wall.activeId}
+            reorderable={wall.visiblePanes.length > 1}
+            dragRole={paneDrag?.sourceId === pane.id ? 'source' : paneDrag?.targetId === pane.id ? 'target' : undefined}
+            onGripPointerDown={startPaneDrag}
+            onGripStep={stepPane}
             {theme}
             {styles}
             {locale}

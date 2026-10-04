@@ -39,6 +39,7 @@ new KLineChartPro(
     syncPeriod?: boolean;
     onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void;
     onActivePaneChange?: (paneId: string) => void;
+    onPaneOrderChange?: (order: number[]) => void;
     onPaneStateChange?: (paneId: string) => void;
     onPanesChange?: (panes: ChartProPane[]) => void;
     onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void;
@@ -129,7 +130,7 @@ interface IndicatorSettingsModel {
 1 到 12 个子图（"pane"）组成可配置的网格，共用一套工具栏，作用于当前**激活**的子图（带彩色边框），支持十字光标联动和点击跳转日期。完全向后兼容：不传入以下任何选项时，行为与单图表完全一致。
 
 + `paneLayout` 布局预设 id，默认 `'1'`（单图表）。完整预设列表见 `getPaneLayouts()`（`'1'`、`'2h'`、`'2v'`、`'3h'`、`'3v'`、`'3-left'`、`'3-top'`、`'4'`、`'4h'`、`'4v'`、`'6'`、`'6v'`、`'8'`、`'9'`、`'12'`），也可打开工具栏的布局选择器查看
-+ `panes` 各子图的初始配置（`{ symbol, period?, mainIndicators?, subIndicators? }[]`）。缺省时，`paneLayout` 隐含的每个子图都会克隆顶层的 `symbol`/`period`/`mainIndicators`/`subIndicators`，之后可分别改标
++ `panes` 各子图的初始配置（`{ symbol, period?, mainIndicators?, subIndicators?, subIndicatorsAbove? }[]`）。缺省时，`paneLayout` 隐含的每个子图都会克隆顶层的 `symbol`/`period`/`mainIndicators`/`subIndicators`，之后可分别改标。`subIndicators` 按自上而下的顺序排列，每个占一个副图窗格；`subIndicatorsAbove` 表示其中前几个位于主图（价格窗格）之上，默认 `0` 即主图在最上方
 + `maxPanes` 子图数量上限，默认 `12`
 + `activePane` 初始激活的子图（`'p1'`..`'pN'`），默认 `'p1'`
 + `syncCrosshair` / `syncTime` 两个联动开关（工具栏的 Sync 弹出面板）的初始状态，均默认 `true`
@@ -137,12 +138,19 @@ interface IndicatorSettingsModel {
 + `syncSymbol` / `syncPeriod` 工具栏中标的联动与周期联动按钮的初始状态，均默认 `false`。开启时每个可见子图都显示**激活子图**的标的/周期：开启的瞬间即对齐整面墙，布局增加的新子图同样对齐，被改动的每个子图都会通过 `onSymbolChange`/`onPeriodChange` 上报；关闭后子图停留在原处，不会恢复此前显示的内容
 + `onPaneLayoutChange` 布局预设改变时触发，携带当前可见的每个子图的标的/周期/指标——如需让多图布局在刷新后保留，持久化的就是这份数据
 + `onActivePaneChange` 激活子图改变时触发
++ `onPaneOrderChange` 子图在墙上交换位置时触发（见下文"调整顺序"），先于 `onPanesChange` 与 `onPaneLayoutChange` 上报新顺序：`order[newIndex]` 是现位于 `newIndex` 的子图此前所在的位置。子图的 id、图表及其自身状态都随之移动；此回调用于应用按子图**位置**保存的数据，必须在此重新映射，否则会被移入该位置的子图读取
 + `onPaneStateChange` 其它回调都不覆盖的子图变化时触发：指标的增加、删除或参数修改，以及（在手势结束后去抖触发的）平移、缩放和手动缩放价格轴。参数只有子图 id，请重新读取 `getPaneSnapshots()`——其中的 `indicatorParams`（指标模板名 -> `calcParams`）与 `view`（`barSpace`、是否跟随最新K线、定位用的时间锚点与屏幕比例、y 轴类型/反转及手动价格区间）足以完整还原一个子图，回填到 `panes[].indicatorParams` / `panes[].view` 即可
 + `onPanesChange` 当前存活的子图集合发生变化时触发——某个子图的图表刚创建或刚销毁（包括每一次布局的增减）。任何依赖单个子图的外部逻辑（如价格关键位叠加层）都应完全依据此回调的参数重新绑定
 + `onSymbolChange` / `onPeriodChange` 某个具体子图的标的/周期改变时触发，不一定是当前激活的子图（例如通过 `ChartProPane.setSymbol` 触发）
 + `onSyncChange` 任一联动开关改变时触发，参数是五个开关的完整状态（`{ crosshair, time, auto, symbol, period }`）
 
 工具栏中的标的搜索、周期选择、指标选择与画线工具，始终作用于**激活**的子图——按设计不提供跨子图的标的/周期联动。
+
+### 调整顺序
++ **墙上的子图。** 多图布局中每个子图的右上角都有一个拖动手柄，指针悬停在该子图上时显示（无悬停的设备上在激活子图上显示）。将其拖到另一个子图上——或在一次只显示一个子图的墙上拖到另一个子图的标签上——两者即交换位置；按 Esc 或在其它地方松开则取消。手柄获得焦点时，方向键可与前一个/后一个子图交换。两个图表都不会重建，各自保留标的、周期、指标与视图。代码中可调用 `swapPanes(a, b)` 达到同样效果
++ **子图内的窗格。** 每个副图指标的图例在眼睛、齿轮、关闭图标旁带有上移/下移箭头，只在可移动的方向上显示。将最上方的副图再上移即可移到主图之上。该顺序属于子图快照的一部分（`subIndicators` 的顺序加上 `subIndicatorsAbove`），通过 `onPaneStateChange` 上报
+
+子图 id 标识的是子图本身而非网格位置：初始为按阅读顺序排列的 `'p1'`..`'pN'`，交换后便不再与位置对应。`getPanes()` 与 `getPaneSnapshots()` 始终按墙上的（阅读）顺序排列。
 
 ## 图表API
 除特别说明外，以下方法均作用于**激活的子图**——即带彩色边框的那一个，这也是"工具栏作用于当前子图"在多图布局下的含义。
@@ -273,6 +281,12 @@ interface IndicatorSettingsModel {
 () => LayoutPreset[]
 ```
 所有可用的布局预设，顺序与工具栏选择器中一致
+
+### swapPanes(firstId, secondId)
+```typescript
+(firstId: string, secondId: string) => void
+```
+按 id 交换两个可见子图的位置。依次触发 `onPaneOrderChange` 与 `onPaneLayoutChange`；两个子图须均可见且不同，否则忽略
 
 ### remove()
 ```typescript

@@ -2,6 +2,7 @@ import type { IndicatorGroup } from '../../src'
 import { AREV_GENERATIONS, type ArevGeneration } from '../arev/api'
 import { fetchBars } from '../history'
 import { setByPath } from '../chartlayers/settings'
+import { replacePaneConfigs } from '../plugins/panestate'
 import type {
   BindContext,
   BindingSpec,
@@ -233,9 +234,7 @@ export function createArevLabPlugin(): IndicatorPlugin {
     settings: (templateName) => (templateName === LAB_TEMPLATE_NAME ? settings : null),
     paneState: {
       hydrate(initial) {
-        for (const [index, config] of Object.entries(initial)) {
-          if (config) configs[Number(index)] = normaliseLabConfig(config as LabConfig)
-        }
+        replacePaneConfigs(configs, configRevs, initial, (stored) => normaliseLabConfig(stored as LabConfig))
       },
       snapshot: () => ({ ...configs })
     },

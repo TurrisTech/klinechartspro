@@ -14,6 +14,7 @@
   "sync_period": "同步周期",
   "sync_time_auto_hint": "自动同步已跟随图表拖动，点击滚动已关闭。",
   "jump_to_live": "跳转至最新K线",
+  "move_pane": "移动窗格：拖到另一个窗格上即可交换位置",
   "save": "保存",
   "confirm": "确定",
   "cancel": "取消",

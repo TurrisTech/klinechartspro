@@ -6,6 +6,7 @@ installWindow()
 const { createPluginHost } = await import('./host')
 const { peekStore, WindowStore } = await import('./store')
 const { fakeChart, fakeIndicator, fakePane, flush } = await import('./testing')
+const { replacePaneConfigs } = await import('./panestate')
 
 import type { HostFacilities } from './host'
 import type { BindContext, IndicatorPlugin, Page, PluginFacilities, Range, SourceSpec } from './types'
@@ -414,5 +415,50 @@ describe('createPluginHost', () => {
     model?.write('p9', 'size', 5)
     expect(writes).toEqual([[1, 'p1', 'size', 4]])
     expect(host.settingsModel('MA')).toBeNull()
+  })
+
+  test('panes changing places take their settings with them, and leave none behind', async () => {
+    const configs: Record<number, { size: number }> = {}
+    const revs: Record<number, number> = {}
+    const plugin: IndicatorPlugin = {
+      id: 'cfg',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'CFG',
+      bind: () => null,
+      settings: (name) =>
+        name === 'CFG'
+          ? {
+              fields: [{ kind: 'number', key: 'size', label: 'Size', min: 1, max: 9, step: 1 }],
+              read: (paneIndex) => configs[paneIndex] ?? null,
+              write: () => {}
+            }
+          : null,
+      paneState: {
+        hydrate: (initial) => replacePaneConfigs(configs, revs, initial, (stored) => stored as { size: number }),
+        snapshot: () => ({ ...configs })
+      }
+    }
+    const host = await createPluginHost({
+      plugins: [plugin],
+      facilities: facilities(),
+      paneState: { cfg: { 0: { size: 3 }, 4: { size: 9 } } }
+    })
+    hosts.push(host)
+    const p1 = fakePane('p1', fakeChart().chart)
+    const p2 = fakePane('p2', fakeChart().chart)
+    host.sync([p1, p2])
+    const before = { ...revs }
+    // What the wall reports for a swap of its first two panes, before it reports the panes.
+    host.reorderPanes([1, 0])
+    host.sync([p2, p1])
+    const model = host.settingsModel('CFG')
+    expect(model?.read('p1')).toEqual({ size: 3 })
+    expect(model?.read('p2')).toBeNull()
+    // A position the swap did not reach (a pane the layout hides) keeps what it had.
+    expect(host.paneState()).toEqual({ cfg: { 1: { size: 3 }, 4: { size: 9 } } })
+    // Both positions whose config changed are bumped, so a binding there is rebuilt.
+    expect(revs[0]).toBeGreaterThan(before[0] ?? 0)
+    expect(revs[1]).toBeGreaterThan(before[1] ?? 0)
   })
 })

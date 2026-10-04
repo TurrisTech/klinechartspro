@@ -37,6 +37,7 @@ new KLineChartPro(
     syncPeriod?: boolean;
     onPaneLayoutChange?: (layoutId: string, panes: PaneSnapshot[]) => void;
     onActivePaneChange?: (paneId: string) => void;
+    onPaneOrderChange?: (order: number[]) => void;
     onPaneStateChange?: (paneId: string) => void;
     onPanesChange?: (panes: ChartProPane[]) => void;
     onSymbolChange?: (paneId: string, symbol: SymbolInfo) => void;
@@ -145,9 +146,12 @@ compatible: omitting every option below still yields the original single chart.
   `getPaneLayouts()`/`KLineChartPro.getPaneLayouts()` for the full preset list (`'1'`, `'2h'`,
   `'2v'`, `'3h'`, `'3v'`, `'3-left'`, `'3-top'`, `'4'`, `'4h'`, `'4v'`, `'6'`, `'6v'`, `'8'`,
   `'9'`, `'12'`), or open the toolbar's layout picker.
-+ `panes` Per-pane seeds (`{ symbol, period?, mainIndicators?, subIndicators? }[]`). When
-  omitted, every pane implied by `paneLayout` is cloned from the top-level `symbol`/`period`/
-  `mainIndicators`/`subIndicators`, ready to be retargeted individually.
++ `panes` Per-pane seeds (`{ symbol, period?, mainIndicators?, subIndicators?,
+  subIndicatorsAbove? }[]`). When omitted, every pane implied by `paneLayout` is cloned from the
+  top-level `symbol`/`period`/`mainIndicators`/`subIndicators`, ready to be retargeted
+  individually. `subIndicators` is top to bottom, one chart pane each, and
+  `subIndicatorsAbove` says how many of them (the first ones) sit above the price pane --
+  `0`, the default, is the price pane on top.
 + `maxPanes` Upper bound on wall size. Default `12`.
 + `activePane` Which pane (`'p1'`..`'pN'`) starts active. Defaults to `'p1'`.
 + `syncCrosshair` / `syncTime` Initial state of the two sync toggles (toolbar's Sync popover).
@@ -164,6 +168,11 @@ compatible: omitting every option below still yields the original single chart.
   pane's symbol/period/indicators -- the payload to persist if you want the wall to survive a
   reload.
 + `onActivePaneChange` Fired when the active pane changes.
++ `onPaneOrderChange` Fired when panes change places on the wall (see "Rearranging" below),
+  BEFORE `onPanesChange` and `onPaneLayoutChange` report the new order: `order[newIndex]` is
+  the position the pane now at `newIndex` held before. A pane keeps its id, its chart and all
+  of its own state; this is for anything the app keeps by pane POSITION, which has to be
+  re-keyed here or it will be read by whichever pane moved into that position.
 + `onPaneStateChange` Fired when a pane changes in a way none of the other callbacks report:
   an indicator added, removed or re-parameterised, and -- debounced to the end of the gesture
   -- a pan, a zoom or a hand-scaled price axis. Carries only the pane id; re-read
@@ -182,6 +191,22 @@ compatible: omitting every option below still yields the original single chart.
 Symbol search, interval selection, indicator selection and the drawing tools in the shared
 toolbar always act on the **active** pane -- there is no cross-pane symbol/interval sync by
 design.
+
+### Rearranging
++ **Panes on the wall.** Every pane on a multi-pane wall has a grip in its top-right corner,
+  shown while the pointer is over the pane (and on the active pane where there is no hover).
+  Drag it onto another pane -- or, on a wall shown one pane at a time, onto another pane's tab
+  -- and the two swap cells; Escape or a release anywhere else cancels. With the grip focused,
+  the arrow keys swap with the previous / next pane. Neither chart is rebuilt: each keeps its
+  symbol, period, indicators and view. `swapPanes(a, b)` does the same from code.
++ **Chart panes inside a pane.** Each sub-indicator's legend carries up / down arrows beside
+  its eye, gear and close icons, offered only where the pane can move. Moving the top
+  sub-pane up takes it above the price pane. The order is part of the pane's snapshot
+  (`subIndicators` order plus `subIndicatorsAbove`), reported through `onPaneStateChange`.
+
+Pane ids name panes, not cells: they start out `'p1'`..`'pN'` in reading order and stop
+matching positions once panes are swapped. `getPanes()` and `getPaneSnapshots()` are always in
+wall (reading) order.
 
 ## Chart API
 Unless noted, every method below acts on the **active pane** -- the one with the coloured
@@ -319,6 +344,13 @@ Get/set the current layout preset id.
 () => LayoutPreset[]
 ```
 Every available layout preset, in the order shown by the toolbar's picker.
+
+### swapPanes(firstId, secondId)
+```typescript
+(firstId: string, secondId: string) => void
+```
+Exchange the cells of two visible panes, by id. Fires `onPaneOrderChange`, then
+`onPaneLayoutChange`. Ignored unless both panes are visible and differ.
 
 ### remove()
 ```typescript
