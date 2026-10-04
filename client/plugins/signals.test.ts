@@ -11,6 +11,7 @@ const { arevSignal } = await import('../arev/api')
 const { krevSignal } = await import('../krev/api')
 const { matches } = await import('../tsregistry/api')
 const { shiftSignals } = await import('../mtf/shift')
+const { FX_GRID } = await import('../replay/timeframes')
 
 import type { ArevPoint } from '../arev/api'
 
@@ -75,6 +76,7 @@ describe('the label is read, not re-derived', () => {
     const grid = [0, 4 * H, 8 * H, 12 * H]
     const chartBars = Array.from({ length: 13 }, (_, i) => ({ timestamp: i * H }) as never)
     const placed = shiftSignals({
+      clock: FX_GRID,
       sourceInterval: '4h',
       chartInterval: '1h',
       points: [point({ date: 0, p: 0.4, signal: 'short' }), point({ date: 4 * H, p: 0.6, signal: null })],
