@@ -5,7 +5,6 @@ import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import type { AdvanceResult, ReplayController } from './session'
 import { type BaseCheck, defaultBase, intervalStart, isMarketOpen, sortByLength, validateBase } from './timeframes'
-import { placeOverFocus } from '../chrome/focus'
 import { createDockableWindow } from '../chrome/window'
 
 // GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
@@ -733,8 +732,10 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close()
   })
+  // Centred on the APP, not over the active pane (chrome/focus.ts's rule for a very wide page):
+  // a replay is the whole wall's mode -- it rebuilds every pane on one clock -- so the dialog
+  // that starts one belongs to no single pane (user, 2026-10-04).
   document.body.appendChild(overlay)
-  placeOverFocus(overlay, dialog)
   startInput.focus()
 
   function close(): void {

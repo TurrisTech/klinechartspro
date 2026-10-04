@@ -4,7 +4,9 @@
 // does every dialog and floating window that opens "in the middle". Past WIDE_SHELL_WIDTH
 // (src/config/responsive.ts, the same threshold the chart uses for its own dialogs) the app's
 // body-level cards open over the ACTIVE pane instead -- the pane last touched is the display
-// the user is looking at. Below it, nothing here changes anything.
+// the user is looking at. Below it, nothing here changes anything. A card about the whole wall
+// rather than one pane stays centred on the app: the bar replay's start dialog does (user,
+// 2026-10-04), because a replay rebuilds every pane.
 //
 // A module-level source, like `currentDockHost()` in ./window.ts: the cards that want it are
 // built deep inside feature modules that were never handed the chart, and there is one wall

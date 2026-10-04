@@ -19,6 +19,7 @@ const { createReplayControls, openStartDialog, defaultStartAt } = await import('
 const { SignalBook } = await import('./signals')
 const { formatClock } = await import('./format')
 const { validateBase, nominalMs } = await import('./timeframes')
+const { setFocusSource } = await import('../chrome/focus')
 
 const SYM = 'oanda:EURUSD'
 const H = 3_600_000
@@ -879,6 +880,25 @@ describe('the start dialog', () => {
     finish(null)
     expect(backdrop.hidden).toBe(false)
     expect(d.start.value).toBe('2024-03-11T10:00')
+  })
+
+  test('is centred on the app, not over the active pane, however wide the page', () => {
+    // A three-monitor window, with the pane last touched on the left-hand display: the rule that
+    // moves a body-level card over that pane (chrome/focus.ts) must not move this one -- a replay
+    // is the whole wall's mode.
+    const width = Object.getOwnPropertyDescriptor(window, 'innerWidth')
+    Object.defineProperty(window, 'innerWidth', { value: 5760, configurable: true })
+    setFocusSource(() => new DOMRect(0, 0, 1920, 1080))
+    try {
+      const d = open(JULY)
+      const backdrop = document.querySelector('.wd-replay-dialog-backdrop') as HTMLElement
+      expect(backdrop.style.justifyContent).toBe('')
+      expect(d.root.style.marginLeft).toBe('')
+    } finally {
+      setFocusSource(null)
+      if (width) Object.defineProperty(window, 'innerWidth', width)
+      else delete (window as { innerWidth?: number }).innerWidth
+    }
   })
 
   test('without a chart to pick on there is no On chart button', () => {
