@@ -1,6 +1,7 @@
 import type {
   PaneOptions,
   PaneSnapshot,
+  PaneStyleOverrides,
   PaneViewState,
   PaneYAxisRange,
   Period,
@@ -71,6 +72,12 @@ interface PersistedPane {
   // omitted for a pane never configured. The layer validates them as it reads them back
   // (chartlayers/persist.ts), so this file only checks their shape.
   ly?: Record<string, StoredLayerConfig>
+  // What the pane's own SETTINGS dialog says -- candle type, the three price marks, the
+  // indicator last-value mark, the grid -- flat by klinecharts style path, and only where the
+  // pane differs from what the app draws by. Omitted for a pane never styled, which is almost
+  // all of them. The dialog's two price-axis fields are not here: they ride in `vw.y`, because
+  // klinecharts takes them through overrideYAxis rather than setStyles.
+  st?: PaneStyleOverrides
 }
 
 // One pane's view -- the library's PaneViewState, minus what is not worth storing. Kept
@@ -125,6 +132,10 @@ export interface HydratedPane {
    * undefined for a pane none was configured on. */
   layerConfigs?: Record<string, StoredLayerConfig>
   view: PaneViewState | null
+  /** The pane's settings-dialog styles, still as stored: the library judges each entry against
+   * the dialog's own options as it seeds the pane (`settingStyleValue`). Undefined for a pane
+   * that draws the way the app says. */
+  styleOverrides?: PaneStyleOverrides
 }
 
 export interface HydratedLayout {
@@ -291,6 +302,19 @@ function hydrateView(pane: PersistedPane): PaneViewState | null {
   }
 }
 
+/** A pane's stored `st`: the entries that are the shape a style field can have at all. Only the
+ * shape -- which paths exist and what each may be set to is the library's to judge, and it does
+ * so as it seeds the pane, so a field retired from the dialog cannot linger here. Undefined when
+ * nothing survives, which reads as "never styled". */
+function hydrateStyleOverrides(stored: unknown): PaneStyleOverrides | undefined {
+  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
+  const out: PaneStyleOverrides = {}
+  for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
+    if (typeof value === 'string' || typeof value === 'boolean') out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
 // How many of the pane's (surviving) sub-indicators sit above its price pane. Counted over the
 // stored names that `live` keeps, so a retired template that sat above the price does not push
 // the next one up after it. Anything but a positive whole number is the default: none.
@@ -327,6 +351,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
     const vpConfig = fromStoredVpConfig(pane.vp)
     const layerConfigs = hydrateLayerConfigs(pane.ly)
     const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
+    const styleOverrides = hydrateStyleOverrides(pane.st)
     const subIndicators = live(pane.si ?? ['VOL'])
     return {
       symbol: symbols[index],
@@ -350,6 +375,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
       ...(vpConfig ? { vpConfig } : {}),
       ...(layerConfigs ? { layerConfigs } : {}),
       ...(mtfOverlayConfigs ? { mtfOverlayConfigs } : {}),
+      ...(styleOverrides ? { styleOverrides } : {}),
       view: hydrateView(pane)
     }
   })
@@ -375,7 +401,8 @@ export function toPaneOptions(pane: HydratedPane): PaneOptions {
     subIndicators: pane.subIndicators,
     subIndicatorsAbove: pane.subIndicatorsAbove ?? 0,
     indicatorParams: pane.indicatorParams,
-    ...(pane.view ? { view: pane.view } : {})
+    ...(pane.view ? { view: pane.view } : {}),
+    ...(pane.styleOverrides ? { styleOverrides: pane.styleOverrides } : {})
   }
 }
 
@@ -416,6 +443,9 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
   const vendor = symbolVendor(pane.symbol)
   const indicatorParams = toPersistedIndicatorParams(pane)
   const view = toPersistedView(pane.view)
+  // Already a diff from the app's defaults, and already validated: the pane only records a
+  // style the dialog wrote and only while it differs (src/ChartPane.svelte).
+  const styles = Object.keys(pane.styleOverrides ?? {}).length > 0 ? pane.styleOverrides : undefined
   return {
     s: pane.symbol.ticker,
     ...(vendor === 'oanda' ? {} : { v: vendor }),
@@ -424,7 +454,8 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
     ...(pane.subIndicators.length > 0 ? { si: pane.subIndicators } : {}),
     ...((pane.subIndicatorsAbove ?? 0) > 0 ? { sa: pane.subIndicatorsAbove } : {}),
     ...(indicatorParams ? { ip: indicatorParams } : {}),
-    ...(view ? { vw: view } : {})
+    ...(view ? { vw: view } : {}),
+    ...(styles ? { st: styles } : {})
   }
 }
 

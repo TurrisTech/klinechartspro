@@ -26,7 +26,7 @@
   import i18n from './i18n'
 
   import type { PaneViewState, PaneYAxisRange, Period, SymbolInfo } from './types'
-  import { getOptions } from './config/settings'
+  import { STYLE_SETTING_KEYS, settingStyleValue } from './config/settings'
   import type { PaneApi, PaneState } from './state/wall.svelte'
   import { chartPaneStack, moveSubPane, subPaneMoves, withoutSubPane } from './state/paneOrder'
   import { clone, setByPath } from './utils/object'
@@ -142,8 +142,6 @@
   // once this chart is disposed, unlike `pane.subIndicatorNames` (the durable name list),
   // which is why this stays local component state rather than living on PaneState.
   let subIndicatorMap = $state<Record<string, string>>({})
-
-  const settingOptions = $derived(getOptions(locale))
 
   function createIndicator(
     indicatorName: string,
@@ -933,6 +931,39 @@
     }
   }
 
+  // This pane's own styles from the settings dialog, over whatever the app's theme and `styles`
+  // prop have just said. Called at mount AFTER defaultStyles is captured -- "Restore defaults"
+  // restores the app's defaults, not this pane's -- and again whenever either of those is
+  // re-applied, because klinecharts merges each setStyles in arrival order and the pane's own
+  // answer has to be the last one in.
+  function applyStyleOverrides(): void {
+    const entries = Object.entries(pane.styleOverrides)
+    if (!widget || entries.length === 0) return
+    const patch = {}
+    for (const [key, value] of entries) setByPath(patch, key, value)
+    widget.setStyles(patch)
+  }
+
+  // A style the dialog writes is recorded on PaneState as well as on the chart, so it survives
+  // this chart being disposed. Only a DIFFERENCE is kept: a field put back to what the app
+  // draws by is dropped rather than stored, which keeps the wall document small, lets a later
+  // change of that default through, and -- because the document is what "unsaved" is measured
+  // against -- stops a there-and-back toggle reading as unsaved work.
+  function recordStyleOverride(key: string, value: unknown): void {
+    const settled = settingStyleValue(key, value)
+    if (settled === undefined) return
+    const next = { ...pane.styleOverrides }
+    if (defaultStyles && settled === settingStyleValue(key, utils.formatValue(defaultStyles, key))) {
+      if (!(key in next)) return
+      delete next[key]
+    } else {
+      if (next[key] === settled) return
+      next[key] = settled
+    }
+    pane.styleOverrides = next
+    onStateChange(pane.id)
+  }
+
   function setStyleValue(key: string, value: unknown): Styles {
     if (key === 'yAxis.type') {
       pane.yAxisType = String(value)
@@ -949,22 +980,27 @@
     const patch = {}
     setByPath(patch, key, value)
     widget?.setStyles(patch)
+    recordStyleOverride(key, value)
     return widget?.getStyles() as Styles
   }
 
   function restoreStyles(): Styles {
     if (defaultStyles) {
       const patch = {}
-      for (const option of settingOptions) {
-        if (option.key.startsWith('yAxis.')) continue
-        setByPath(patch, option.key, utils.formatValue(defaultStyles, option.key))
+      for (const key of STYLE_SETTING_KEYS) {
+        setByPath(patch, key, utils.formatValue(defaultStyles, key))
       }
       widget?.setStyles(patch)
     }
     pane.yAxisType = 'normal'
     pane.yAxisReverse = false
+    // Cleared rather than filled with the defaults: an empty record IS "draws as the app says",
+    // and one spelling out today's defaults would pin this pane to them forever.
+    const hadOverrides = Object.keys(pane.styleOverrides).length > 0
+    pane.styleOverrides = {}
     applyYAxisSettings()
     captureView()
+    if (hadOverrides) onStateChange(pane.id)
     return clone(widget?.getStyles() ?? (defaultStyles as Styles))
   }
 
@@ -1019,6 +1055,17 @@
   $effect(() => {
     if (!mounted || !widget) return
     widget.setStyles(styles)
+  })
+
+  // Declared after those two on purpose: effects run in creation order within a flush, so a
+  // theme switch or an app-level setStyles that touches a field this pane has its own answer
+  // for is followed by the pane's answer rather than ending on top of it. `theme` and `styles`
+  // are read for that dependency alone.
+  $effect(() => {
+    void theme
+    void styles
+    if (!mounted || !widget) return
+    applyStyleOverrides()
   })
 
   $effect(() => {
@@ -1243,6 +1290,7 @@
     applyIndicatorIcons()
     applyCandleLegend()
     defaultStyles = clone(widget.getStyles())
+    applyStyleOverrides()
     mounted = true
     // Sizes the axis gutters the jump-to-live control is inset by, before any range change has
     // happened -- a pane that mounts already scrolled off the tail (it cannot yet, but nothing
