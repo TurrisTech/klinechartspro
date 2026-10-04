@@ -2,10 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import {
   chartPaneStack,
   clampAbove,
+  moveOrder,
   moveSubPane,
   permuteByIndex,
   subPaneMoves,
-  swapOrder,
   withoutSubPane
 } from './paneOrder'
 
@@ -86,10 +86,30 @@ describe('withoutSubPane', () => {
   })
 })
 
-describe('swapOrder', () => {
-  test('the identity with two positions exchanged', () => {
-    expect(swapOrder(4, 0, 2)).toEqual([2, 1, 0, 3])
-    expect(swapOrder(2, 1, 1)).toEqual([0, 1])
+describe('moveOrder', () => {
+  test('a pane moved later takes that place and the ones it passed close up', () => {
+    // Six panes, the second moved last: 1, 3, 4, 5, 6, 2.
+    expect(moveOrder(6, 1, 5)).toEqual([0, 2, 3, 4, 5, 1])
+  })
+
+  test('a pane moved earlier pushes the ones it passed back', () => {
+    expect(moveOrder(6, 4, 1)).toEqual([0, 4, 1, 2, 3, 5])
+    expect(moveOrder(6, 5, 0)).toEqual([5, 0, 1, 2, 3, 4])
+  })
+
+  test('one place either way is the same as trading places with the neighbour', () => {
+    expect(moveOrder(4, 1, 2)).toEqual([0, 2, 1, 3])
+    expect(moveOrder(4, 2, 1)).toEqual([0, 2, 1, 3])
+  })
+
+  test('moving a pane onto its own position changes nothing', () => {
+    expect(moveOrder(2, 1, 1)).toEqual([0, 1])
+  })
+
+  test('re-keys by-position settings so each follows its pane', () => {
+    // What the plugins hold for panes 1..6, before and after the second is moved last.
+    const before = { 0: 'a', 1: 'b', 2: 'c', 3: 'd', 4: 'e', 5: 'f' }
+    expect(permuteByIndex(before, moveOrder(6, 1, 5))).toEqual({ 0: 'a', 1: 'c', 2: 'd', 3: 'e', 4: 'f', 5: 'b' })
   })
 })
 

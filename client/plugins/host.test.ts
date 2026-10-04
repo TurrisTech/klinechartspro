@@ -449,13 +449,13 @@ describe('createPluginHost', () => {
     const p2 = fakePane('p2', fakeChart().chart)
     host.sync([p1, p2])
     const before = { ...revs }
-    // What the wall reports for a swap of its first two panes, before it reports the panes.
+    // What the wall reports when its second pane is moved first, before it reports the panes.
     host.reorderPanes([1, 0])
     host.sync([p2, p1])
     const model = host.settingsModel('CFG')
     expect(model?.read('p1')).toEqual({ size: 3 })
     expect(model?.read('p2')).toBeNull()
-    // A position the swap did not reach (a pane the layout hides) keeps what it had.
+    // A position the move did not reach (a pane the layout hides) keeps what it had.
     expect(host.paneState()).toEqual({ cfg: { 1: { size: 3 }, 4: { size: 9 } } })
     // Both positions whose config changed are bumped, so a binding there is rebuilt.
     expect(revs[0]).toBeGreaterThan(before[0] ?? 0)

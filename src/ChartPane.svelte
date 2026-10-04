@@ -77,20 +77,20 @@
     pane: PaneState
     active: boolean
     /** Inline grid placement -- the cell of the pane's POSITION on the wall, which is not its
-     *  id once panes have been swapped (src/config/fit.ts's panePlacement). */
+     *  id once panes have been moved (src/config/fit.ts's panePlacement). */
     placement: string
     /** Mounted and live, but behind the active pane on a one-pane-at-a-time wall: invisible,
      *  and `inert` so neither a pointer nor keyboard focus can reach -- or activate -- it. Its
      *  chart keeps the size of the cell it shares, so showing it again costs no resize. */
     concealed?: boolean
-    /** Whether the wall has another pane to swap with, which is when the grip is drawn. */
+    /** Whether the wall has another pane to move past, which is when the grip is drawn. */
     reorderable?: boolean
-    /** This pane's part in a swap being dragged (ChartPro's paneDrag): the pane under the grip,
-     *  or the one it would be swapped with if released now. */
+    /** This pane's part in a move being dragged (ChartPro's paneDrag): the pane under the grip,
+     *  or the one whose position it would take if released now. */
     dragRole?: 'source' | 'target'
     /** The grip was pressed: the wall takes the gesture from here. */
     onGripPointerDown?: (event: PointerEvent, paneId: string) => void
-    /** An arrow key on the focused grip: swap with the previous (-1) or next (+1) pane. */
+    /** An arrow key on the focused grip: move one place earlier (-1) or later (+1). */
     onGripStep?: (paneId: string, step: -1 | 1) => void
     theme: string
     styles: DeepPartial<Styles>
@@ -1322,8 +1322,9 @@
   <div bind:this={widgetElement} class="klinecharts-pro-widget"></div>
   {#if reorderable}
     <!-- The pane's handle for rearranging the wall: drag it onto another pane (or a tab of the
-         one-pane-at-a-time strip) to swap the two; with it focused, the arrow keys swap with the
-         previous or next pane. Over the top of the right-hand axis, which draws nothing there. -->
+         one-pane-at-a-time strip) to move it to that pane's position, the panes in between
+         closing up; with it focused, the arrow keys move it one place earlier or later. Over
+         the top of the right-hand axis, which draws nothing there. -->
     <button
       bind:this={gripElement}
       type="button"
@@ -1337,7 +1338,7 @@
         if (step === 0) return
         event.preventDefault()
         onGripStep(pane.id, step)
-        // The swap moves this pane's element within the grid, and an element moved in the
+        // The move shifts this pane's element within the grid, and an element moved in the
         // DOM loses focus -- give it back so the keys can keep going.
         void tick().then(() => gripElement?.focus())
       }}

@@ -196,16 +196,18 @@ design.
 + **Panes on the wall.** Every pane on a multi-pane wall has a grip in its top-right corner,
   shown while the pointer is over the pane (and on the active pane where there is no hover).
   Drag it onto another pane -- or, on a wall shown one pane at a time, onto another pane's tab
-  -- and the two swap cells; Escape or a release anywhere else cancels. With the grip focused,
-  the arrow keys swap with the previous / next pane. Neither chart is rebuilt: each keeps its
-  symbol, period, indicators and view. `swapPanes(a, b)` does the same from code.
+  -- and it moves to that pane's position, the panes in between closing up behind it (move the
+  second of six onto the last and the wall reads 1, 3, 4, 5, 6, 2); Escape or a release
+  anywhere else cancels. With the grip focused, the arrow keys move it one place earlier /
+  later. No chart is rebuilt: each keeps its symbol, period, indicators and view.
+  `movePane(id, index)` does the same from code.
 + **Chart panes inside a pane.** Each sub-indicator's legend carries up / down arrows beside
   its eye, gear and close icons, offered only where the pane can move. Moving the top
   sub-pane up takes it above the price pane. The order is part of the pane's snapshot
   (`subIndicators` order plus `subIndicatorsAbove`), reported through `onPaneStateChange`.
 
 Pane ids name panes, not cells: they start out `'p1'`..`'pN'` in reading order and stop
-matching positions once panes are swapped. `getPanes()` and `getPaneSnapshots()` are always in
+matching positions once panes are moved. `getPanes()` and `getPaneSnapshots()` are always in
 wall (reading) order.
 
 ## Chart API
@@ -345,12 +347,14 @@ Get/set the current layout preset id.
 ```
 Every available layout preset, in the order shown by the toolbar's picker.
 
-### swapPanes(firstId, secondId)
+### movePane(paneId, toIndex)
 ```typescript
-(firstId: string, secondId: string) => void
+(paneId: string, toIndex: number) => void
 ```
-Exchange the cells of two visible panes, by id. Fires `onPaneOrderChange`, then
-`onPaneLayoutChange`. Ignored unless both panes are visible and differ.
+Move a visible pane, by id, to position `toIndex` (0-based, reading order); the panes in between
+close up behind it, so `movePane('p2', 5)` on six panes gives `p1, p3, p4, p5, p6, p2`. An index
+past either end is clamped to it. Fires `onPaneOrderChange`, then `onPaneLayoutChange`. Ignored
+for a pane that is not visible, or one already at that position.
 
 ### remove()
 ```typescript
