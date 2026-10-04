@@ -1,4 +1,4 @@
-import { fromWireDate, intervalEnd, intervalStart, nextSessionAnchor } from '../replay/timeframes'
+import type { CandleGrid } from '../replay/timeframes'
 
 // PURE. When to look at a level book again.
 //
@@ -13,6 +13,12 @@ import { fromWireDate, intervalEnd, intervalStart, nextSessionAnchor } from '../
 //
 // So the horizon is derived from what the server says it has actually computed
 // (`X-Levels-Computed-Through`, one watermark per interval) and not from the calendar alone.
+//
+// Every close and every calendar horizon below is on the INSTRUMENT'S schedule, handed in as its
+// `CandleGrid` (replay/timeframes.ts). Until 2026-10-04 it was the forex week for every
+// instrument, while prod computes levels for five coinbase pairs and ten schwab instruments: a
+// coinbase book recomputed at a 00:00 UTC close was not looked at until 17:00 New York, and its
+// watermark (dated by its open) was read through forex's 7h and judged against forex closes.
 //
 // The hard part is not the late case, it is the **never** case. A bar that is not written
 // today is indistinguishable, at the moment of asking, from one that is thirty seconds away:
@@ -40,6 +46,10 @@ export const SETTLE_WINDOW_MS = 6 * 3_600_000
 export const MIN_RECHECK_MS = 30_000
 export const MAX_RECHECK_MS = 30 * 60_000
 
+/** How soon a book for an instrument with no schedule is looked at again: no close can be
+ * computed, so the horizon is a plain bounded interval rather than a calendar guess. */
+export const NO_SCHEDULE_RECHECK_MS = 60 * 60_000
+
 /** The most recent close of `code` at or before `at`.
  *
  * `intervalEnd` gives the close of the candle `at` sits in, which is normally in the future;
@@ -47,10 +57,10 @@ export const MAX_RECHECK_MS = 30 * 60_000
  * exactly ON a close returns that close and not the previous one — that instant is precisely
  * when a client refreshes, and being off by one there would report a feed as caught up at the
  * only moment it cannot be. */
-export function lastClose(code: string, at: number): number {
-  const close = intervalEnd(code, at)
+export function lastClose(code: string, at: number, grid: CandleGrid): number {
+  const close = grid.end(code, at)
   if (close <= at) return close
-  return intervalEnd(code, intervalStart(code, at) - 1)
+  return grid.end(code, grid.start(code, at) - 1)
 }
 
 /** How long to wait before asking again, given how long the close has already gone
@@ -61,11 +71,11 @@ export function recheckDelay(lateBy: number): number {
 }
 
 /** Whether `code`'s watermark covers every bar of `code` that had closed by `at`. */
-export function caughtUp(code: string, throughWire: number, at: number): boolean {
+export function caughtUp(code: string, throughWire: number, at: number, grid: CandleGrid): boolean {
   // <= 0 is the "declared, nothing consumed yet" sentinel; there is no bar to take the
   // close of, and doing the interval arithmetic on the epoch would be meaningless.
   if (throughWire <= 0) return false
-  return intervalEnd(code, fromWireDate(code, throughWire)) >= lastClose(code, at)
+  return grid.end(code, grid.fromWire(code, throughWire)) >= lastClose(code, at, grid)
 }
 
 /**
@@ -75,20 +85,27 @@ export function caughtUp(code: string, throughWire: number, at: number): boolean
  *
  * | state | next check-in |
  * |---|---|
- * | every interval caught up | the next 17:00 — the earliest a book can change |
- * | an interval behind, within `SETTLE_WINDOW_MS` of its close | `recheckDelay` from now, never past that 17:00 |
- * | an interval behind for longer than that, or not declared, or the server said nothing | the next 17:00 |
+ * | every interval caught up | the next day anchor — the earliest a book can change |
+ * | an interval behind, within `SETTLE_WINDOW_MS` of its close | `recheckDelay` from now, never past that anchor |
+ * | an interval behind for longer than that, or not declared, or the server said nothing | the next day anchor |
+ *
+ * The day anchor is the instrument's own (`CandleGrid.nextDayAnchor`): 17:00 New York for the
+ * FX week, 00:00 UTC for crypto, 16:00 New York for US equities, every calendar day.
  *
  * `watermark` of `null` is what an older server (or a header the browser could not read)
  * looks like, and it degrades to the calendar horizon — the behaviour before any of this.
+ * `grid` of `null` is an instrument with no resolved market hours: no close can be worked out
+ * at all, so the book is looked at again in `NO_SCHEDULE_RECHECK_MS` -- bounded and cheap (a
+ * conditional request answers 304), and never a guess about which week it trades.
  */
-export function levelsStaleAt(fetchedAt: number, watermark: Watermark | null): number {
-  const calendar = nextSessionAnchor(fetchedAt)
+export function levelsStaleAt(fetchedAt: number, watermark: Watermark | null, grid: CandleGrid | null): number {
+  if (!grid) return fetchedAt + NO_SCHEDULE_RECHECK_MS
+  const calendar = grid.nextDayAnchor(fetchedAt)
   if (watermark === null) return calendar
   let horizon = calendar
   for (const [code, through] of Object.entries(watermark)) {
-    if (caughtUp(code, through, fetchedAt)) continue
-    const lateBy = fetchedAt - lastClose(code, fetchedAt)
+    if (caughtUp(code, through, fetchedAt, grid)) continue
+    const lateBy = fetchedAt - lastClose(code, fetchedAt, grid)
     // Long past due: this is not a bar on its way, it is a bar that is not coming.
     if (lateBy >= SETTLE_WINDOW_MS) continue
     horizon = Math.min(horizon, fetchedAt + recheckDelay(lateBy))
