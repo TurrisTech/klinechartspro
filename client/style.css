@@ -2254,7 +2254,7 @@ body.wd-has-dock > #app {
 
 .wd-replay-row,
 .wd-replay-toggles,
-.wd-replay-status {
+.wd-replay-group {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -2278,6 +2278,54 @@ body.wd-has-dock > #app {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
   font-size: 0.8125rem;
+}
+
+/* The instrument the replay walks, ahead of its clock in the title bar. */
+.wd-replay-symbol {
+  color: var(--muted-foreground);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+
+/* Play and Step lead their row; each setting group keeps to itself when the row wraps. */
+.wd-replay-transport {
+  gap: 0.375rem 0.5rem;
+}
+
+.wd-replay-group {
+  gap: 0.25rem;
+}
+
+/* Wide enough for "Stopping…", so the row does not shift as Step becomes Stop. */
+.wd-replay-window .wd-replay-step {
+  min-width: 4.75rem;
+}
+
+.wd-replay-every {
+  color: var(--muted-foreground);
+}
+
+/* Next signal and the status beside it: the status gives way (ellipsis, full text on hover)
+   rather than wrapping onto a row of its own. */
+.wd-replay-next-row {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+/* The footer: panels and windows, ruled off from the transport above. */
+.wd-replay-window[data-mode='float'] .wd-replay-toggles {
+  padding-top: 0.375rem;
+  border-top: 1px solid var(--border);
+}
+
+/* Exit, at the far end and quiet until it is pointed at: it ends the session. */
+.wd-replay-window .wd-replay-exit {
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
+.wd-replay-window .wd-replay-exit:hover {
+  color: #ef5350;
 }
 
 .wd-replay-select,
@@ -2342,6 +2390,8 @@ body.wd-has-dock > #app {
 
 .wd-replay-stop-reason,
 .wd-replay-walk {
+  /* Shrinks beside Next signal (with an ellipsis) instead of pushing the row wider. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2353,6 +2403,11 @@ body.wd-has-dock > #app {
 
 .wd-replay-stop-reason.is-signal {
   background: color-mix(in oklab, var(--primary) 18%, transparent);
+  color: var(--foreground);
+}
+
+.wd-replay-stop-reason.is-playing {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
   color: var(--foreground);
 }
 
@@ -2386,7 +2441,7 @@ body.wd-has-dock > #app {
 }
 
 /* Exit waiting for its second press: it is about to throw the replay away. */
-.wd-replay-exit.is-armed {
+.wd-replay-window .wd-replay-exit.is-armed {
   background: color-mix(in oklab, #ef5350 80%, var(--background));
   color: #ffffff;
 }
@@ -2511,6 +2566,11 @@ body.wd-has-dock > #app {
 
 .wd-replay-muted {
   color: var(--muted-foreground);
+}
+
+/* Docked, the footer takes the rest of the line, so Exit ends up at its far right. */
+.wd-replay-window[data-mode='dock'] .wd-replay-toggles {
+  flex: 1 1 auto;
 }
 
 /* Docked, an open panel wraps onto its own line under the controls, and the signal list

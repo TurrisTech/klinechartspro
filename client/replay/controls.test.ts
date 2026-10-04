@@ -136,7 +136,10 @@ interface Mounted extends Fake {
 
 let mounted: Mounted[] = []
 
-function mount(f: Fake = fake(), opts: { account?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void> } = {}): Mounted {
+function mount(
+  f: Fake = fake(),
+  opts: { account?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void>; busyRevealMs?: number } = {}
+): Mounted {
   const bounds = document.createElement('div')
   document.body.appendChild(bounds)
   const stops: AdvanceResult[] = []
@@ -153,6 +156,8 @@ function mount(f: Fake = fake(), opts: { account?: boolean; sleep?: (ms: number)
     onStop: (r) => stops.push(r),
     sleep: opts.sleep,
     settled: opts.settled,
+    // Shown at once unless a test is about the delay itself.
+    busyRevealMs: opts.busyRevealMs ?? 0,
     account:
       opts.account === false
         ? undefined
@@ -222,7 +227,23 @@ function check(el: HTMLInputElement, on: boolean): void {
   el.dispatchEvent(new Event('change'))
 }
 
-describe('the title bar', () => {
+describe('the title bar and the transport', () => {
+  test('the title bar names the instrument and the clock; Play, Step and Exit are in the body', () => {
+    const m = mount()
+    const header = m.q('.wd-window-header') as HTMLElement
+    expect((header.querySelector('.wd-replay-symbol') as HTMLElement).textContent).toBe('EURUSD')
+    expect(header.querySelector('.wd-replay-clock-value')).not.toBeNull()
+    // Nothing in the drag handle acts on the replay: only the window's own controls remain.
+    expect(header.querySelector('.wd-replay-play, .wd-replay-step, .wd-replay-exit')).toBeNull()
+    const body = m.q('.wd-window-body') as HTMLElement
+    const transport = body.querySelector('.wd-replay-transport') as HTMLElement
+    expect(transport.querySelector('.wd-replay-play')).not.toBeNull()
+    expect(transport.querySelector('.wd-replay-step')?.textContent).toBe('Step')
+    // Exit ends the footer, away from the transport.
+    const footer = body.querySelector('.wd-replay-toggles') as HTMLElement
+    expect((footer.lastElementChild as HTMLElement).textContent).toBe('Exit replay')
+  })
+
   test('shows the cursor and a Step that advances by the current setting', async () => {
     const m = mount()
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
@@ -250,7 +271,7 @@ describe('the title bar', () => {
     expect(stop.disabled).toBe(false)
     expect(stop.title).toBe('Stop at the next bar (Shift+→)')
     // Leaving mid-advance is not offered.
-    expect(m.button('Exit').disabled).toBe(true)
+    expect(m.button('Exit replay').disabled).toBe(true)
 
     stop.click()
     expect(m.calls.cancel).toBe(1)
@@ -263,7 +284,7 @@ describe('the title bar', () => {
     m.controller.cancelling = false
     m.emit()
     expect(m.button('Step').classList.contains('is-stop')).toBe(false)
-    expect(m.button('Exit').disabled).toBe(false)
+    expect(m.button('Exit replay').disabled).toBe(false)
   })
 
   test('while an advance runs, the clock shows where it started, never where the walk has got', () => {
@@ -292,11 +313,47 @@ describe('the title bar', () => {
     expect(clock().textContent).toBe(formatClock(walked))
   })
 
+  test('a quick advance never shows: no red Stop, nothing greyed, and a second click is not a cancel', async () => {
+    const m = mount(fake(), { busyRevealMs: 40 })
+    m.controller.busy = true
+    m.emit()
+    const step = m.button('Step')
+    expect(step.classList.contains('is-stop')).toBe(false)
+    expect(m.button('Exit replay').disabled).toBe(false)
+    expect((m.q('.wd-replay-transport select') as HTMLSelectElement).disabled).toBe(false)
+    // A double click: the second press lands mid-step and must not cancel it.
+    step.click()
+    expect(m.calls.cancel).toBe(0)
+    expect(m.calls.step).toBe(0)
+    // Landed inside the window: it never showed at all.
+    m.controller.busy = false
+    m.emit()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(m.maybeButton('Stop')).toBeNull()
+  })
+
+  test('an advance still running after the delay shows Stop; a walk report or a cancel shows it at once', async () => {
+    const m = mount(fake(), { busyRevealMs: 40 })
+    m.controller.busy = true
+    m.emit()
+    expect(m.maybeButton('Stop')).toBeNull()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(m.button('Stop').classList.contains('is-stop')).toBe(true)
+    expect(m.button('Exit replay').disabled).toBe(true)
+
+    const w = mount(fake(), { busyRevealMs: 10_000 })
+    w.controller.busy = true
+    w.emit()
+    w.controller.walkedTo = w.controller.cursor + H
+    w.emitWalk()
+    expect(w.button('Stop')).not.toBeNull()
+  })
+
   test('Exit takes two presses: the first only asks, because a replay cannot be reopened', () => {
     const m = mount()
-    m.button('Exit').click()
+    m.button('Exit replay').click()
     expect(m.exits).toBe(0)
-    const armed = m.button('Exit?')
+    const armed = m.button('Confirm exit')
     expect(armed.classList.contains('is-armed')).toBe(true)
     expect(armed.title).toContain('cannot be reopened')
     armed.click()
@@ -635,6 +692,26 @@ describe('play', () => {
     expect(play(m).getAttribute('aria-label')).toBe('Play')
     await clock.release()
     expect(m.calls.step).toBe(2)
+  })
+
+  test('while playing the status says so, and gives way to why the play stopped', async () => {
+    const clock = manualSleep()
+    const f = fake()
+    let n = 0
+    f.controller.step = async () => {
+      n++
+      const r = result({ reason: n === 2 ? 'end' : 'target' })
+      f.controller.lastStop = r
+      return r
+    }
+    const m = mount(f, { sleep: clock.sleep })
+    play(m).click()
+    await flush()
+    const chip = (): HTMLElement => m.q('.wd-replay-stop-reason') as HTMLElement
+    expect(chip().textContent).toBe('Playing every 1 s')
+    expect(chip().classList.contains('is-playing')).toBe(true)
+    await clock.release()
+    expect(chip().textContent).toBe('End of data')
   })
 
   test('the pace is chosen beside the step and remembered per browser', async () => {

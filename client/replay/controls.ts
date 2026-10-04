@@ -15,11 +15,12 @@ import { createDockableWindow } from '../chrome/window'
 // default, docked below it on request — not in a strip nailed inside the trading panel. Only
 // what is used on every step is on screen:
 //
-//   title bar   the cursor, Play/Pause, Step, Exit, collapse, dock/float -- and the drag handle
-//   step        the timeframe picker x a multiple, the play pace, and Next signal
-//   status      how far a running walk has got; else why the last advance stopped (absent
-//               until one has)
-//   toggles     Signals / Base, one panel open at a time; Account and Trade, the two windows
+//   title bar   the instrument and the replay's clock, roll up, dock/float -- the drag handle,
+//               with nothing in it that acts on the replay
+//   transport   Play and Step, each beside the setting it uses (timeframe x multiple, the pace)
+//   next        Next signal, and how far a running walk has got or why the last advance stopped
+//   footer      Signals / Base, one panel open at a time; Account and Trade, the two windows;
+//               Exit replay, set apart at the far end
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
 // permanently on screen, and the account window and the trade box are opened from here rather
@@ -40,6 +41,12 @@ const PLAY_DELAY_KEY = 'wd.replay.playDelay'
 
 /** The Exit button's key in its two-press arming. */
 const EXIT = 'exit'
+
+/** How long an advance runs before the controls show that it is running. A one-candle step
+ * lands well inside this, and the controls flipping to a red Stop and greying out on every Step
+ * -- twice a second while playing -- was noise, not information. A walk long enough to report
+ * its progress, or a Stop already pressed, shows at once. */
+const BUSY_REVEAL_MS = 300
 
 type PanelId = 'signals' | 'settings' | null
 
@@ -62,6 +69,8 @@ export interface ReplayControlsOptions {
   trade?: { isOpen: () => boolean; toggle: () => boolean }
   /** Injected by the tests: the wait between two played steps. */
   sleep?: (ms: number) => Promise<void>
+  /** How long an advance runs before the controls show it (BUSY_REVEAL_MS). The tests pass 0. */
+  busyRevealMs?: number
 }
 
 export interface ReplayControls {
@@ -92,10 +101,40 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   let signalScroll = 0
   // The status row's walk line while a walk is in progress, so a progress report can patch it.
   let walkLine: HTMLElement | null = null
+  // Whether the running advance has gone on long enough to show (BUSY_REVEAL_MS).
+  const revealAfter = options.busyRevealMs ?? BUSY_REVEAL_MS
+  let revealed = false
+  let revealTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Follow the controller's busy flag into `revealed`, arming the timer that shows it. */
+  function trackBusy(): void {
+    if (!controller.busy) {
+      if (revealTimer) clearTimeout(revealTimer)
+      revealTimer = null
+      revealed = false
+      return
+    }
+    if (revealed || revealTimer) return
+    if (revealAfter <= 0) {
+      revealed = true
+      return
+    }
+    revealTimer = setTimeout(() => {
+      revealTimer = null
+      if (!controller.busy) return
+      revealed = true
+      render()
+    }, revealAfter)
+  }
+
+  /** The advance running, as the controls show it: not for its first BUSY_REVEAL_MS. */
+  function busyShown(): boolean {
+    return controller.busy && (revealed || controller.cancelling || controller.walkedTo !== null)
+  }
   // Exit throws the replay away -- nothing lists a replay to reopen -- and it sits beside Step,
   // the button pressed most. So it takes two presses, the trading kit's rule for anything that
   // cannot be taken back.
-  const arming = new Arming(() => renderHeader())
+  const arming = new Arming(() => renderBody())
   const player = new ReplayPlayer({
     step: () => controller.step(),
     settled: options.settled,
@@ -121,9 +160,17 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   /** Step, or Stop while an advance runs. Either way a play in progress ends: a Step pressed
    * by hand means "I'll take it from here". */
   function pressStep(): void {
+    if (controller.busy) {
+      // Stop -- but only once the button SAYS Stop. In an advance's first moments it still reads
+      // Step, and a quick second click (a double click, a repeat) must not cancel the step it
+      // is waiting on.
+      if (!busyShown()) return
+      player.pause()
+      controller.cancel()
+      return
+    }
     player.pause()
-    if (controller.busy) controller.cancel()
-    else void controller.step().then((r) => r && options.onStop?.(r))
+    void controller.step().then((r) => r && options.onStop?.(r))
   }
 
   function pressPlay(): void {
@@ -148,6 +195,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   window.addEventListener('keydown', onKey, true)
 
   function render(): void {
+    trackBusy()
     renderHeader()
     renderBody()
   }
@@ -155,8 +203,16 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // -- the title bar (visible collapsed, and the drag handle) -----------------------------
 
   function renderHeader(): void {
-    const busy = controller.busy
+    // The title bar is the window's identity and its state -- which instrument, what time it is
+    // in the replay -- and the window's own controls (roll up, dock). Nothing in it acts on the
+    // replay: Play, Step and Exit are in the body, where a press on them is never a press on the
+    // drag handle and the transport reads as one group (user, 2026-10-04: "move the Step and
+    // play button out of the title area"). Rolled up, the keys still play and step.
     win.titleSlot.innerHTML = ''
+    win.actions.innerHTML = ''
+    const symbol = el('span', 'wd-replay-symbol')
+    symbol.textContent = controller.symbol.split(':')[1] ?? controller.symbol
+    symbol.title = `The replay walks ${controller.symbol}`
     // The chart's position, which is where the running advance STARTED until it lands: a walk
     // moves `cursor` bar by bar far ahead of the panes, and this re-renders mid-walk (a Stop
     // click, the walk's first progress report), so reading `cursor` here would show the walk's
@@ -165,72 +221,20 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const clock = el('span', 'wd-replay-clock-value')
     clock.textContent = formatClock(at)
     clock.title = `${new Date(at).toISOString()} — the replay's clock, New York time. Every pane shows the bars that had closed by then.`
-    win.titleSlot.appendChild(clock)
-
-    // Play and Step live in the title bar, not the body: they are the controls used on every
-    // single interaction, so they stay reachable with the window rolled up to that bar.
-    win.actions.innerHTML = ''
-    const playing = player.playing
-    const play = iconButton(`kc-button wd-replay-play${playing ? ' is-on' : ''}`, playing ? PAUSE_ICON : PLAY_ICON, pressPlay)
-    play.setAttribute('aria-label', playing ? 'Pause' : 'Play')
-    play.setAttribute('aria-pressed', String(playing))
-    play.disabled = busy && !playing
-    play.title = playing
-      ? 'Pause after this step (Shift+↓)'
-      : `Play: step ${describeAdvance(controller.advance)} every ${delayLabel(player.delayMs)} until a fill, a signal or a watch stops it (Shift+↓)`
-
-    // While an advance runs -- a Step or Next signal -- the same button stops it, at the next
-    // base bar. It is the one control reachable with the window rolled up, which is exactly
-    // when a long run is most likely to need stopping.
-    const cancelling = busy && controller.cancelling
-    const label = !busy ? 'Step' : cancelling ? 'Stopping…' : 'Stop'
-    const step = button('kc-button kc-button-primary wd-replay-step', label, pressStep)
-    step.classList.toggle('is-stop', busy)
-    step.disabled = cancelling
-    step.title = busy ? 'Stop at the next bar (Shift+→)' : `Advance ${describeAdvance(controller.advance)} (Shift+→)`
-
-    const armed = arming.key === EXIT
-    const exit = button(`kc-button wd-replay-exit${armed ? ' is-armed' : ''}`, armed ? 'Exit?' : 'Exit', () => {
-      if (!arming.press(EXIT, false)) return
-      player.pause()
-      options.onExit()
-    })
-    exit.disabled = busy
-    exit.title = armed
-      ? 'Press again to leave. This replay, its account and its orders cannot be reopened.'
-      : 'Leave replay and return to the live wall'
-
-    win.actions.append(play, step, exit)
+    win.titleSlot.append(symbol, clock)
   }
 
   // -- the body ----------------------------------------------------------------------------
+  //
+  //   [▶] [Step]  [1h v] × [1]  every [1 s v]      transport: each button beside what it uses
+  //   [Next signal]  Stepped 1h                     the other way to move, and why it stopped
+  //   Signals 1  Base 1h  Account  Trade    Exit replay   panels and windows; Exit set apart
 
   function renderBody(): void {
     const body = win.body
     body.innerHTML = ''
-    body.appendChild(renderAdvance())
-    const walked = controller.walkedTo
-    const last = controller.lastStop
     walkLine = null
-    if (walked !== null) {
-      // A walk in progress replaces the last stop's reason, which is stale by now anyway. Its
-      // own words, in the body and not the title bar: the date is the walk's reach, ahead of
-      // everything drawn, and must not read as the replay's clock.
-      const status = el('div', 'wd-replay-status')
-      walkLine = el('span', 'wd-replay-walk')
-      showWalk(walkLine, walked)
-      status.appendChild(walkLine)
-      body.appendChild(status)
-    } else if (last) {
-      // Absent until an advance has stopped: an empty row is a row of height for nothing.
-      const stop = el('div', 'wd-replay-status')
-      const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
-      reason.textContent = describeStop(last, controller.signals.catalogue)
-      reason.title = reason.textContent
-      stop.appendChild(reason)
-      body.appendChild(stop)
-    }
-    body.appendChild(renderToggles())
+    body.append(renderTransport(), renderNext(), renderToggles())
     if (panel === 'signals') body.appendChild(renderSignals())
     if (panel === 'settings') body.appendChild(renderSettings())
     win.reflow()
@@ -241,12 +245,30 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
   }
 
-  function renderAdvance(): HTMLElement {
-    const row = el('div', 'wd-replay-row')
-    const busy = controller.busy
-    // "Step", the button's own word: this row says what one press of it does.
-    const label = el('span', 'wd-replay-label')
-    label.textContent = 'Step'
+  /** Play and Step, each beside the setting it uses: "Step 1h × 1", "play every 1 s". */
+  function renderTransport(): HTMLElement {
+    const row = el('div', 'wd-replay-row wd-replay-transport')
+    const busy = busyShown()
+    const playing = player.playing
+    const play = iconButton(`kc-button wd-replay-play${playing ? ' is-on' : ''}`, playing ? PAUSE_ICON : PLAY_ICON, pressPlay)
+    play.setAttribute('aria-label', playing ? 'Pause' : 'Play')
+    play.setAttribute('aria-pressed', String(playing))
+    play.disabled = busy && !playing
+    play.title = playing
+      ? 'Pause after this step (Shift+↓)'
+      : `Play: step ${describeAdvance(controller.advance)} every ${delayLabel(player.delayMs)} until a fill, a signal or a watch stops it (Shift+↓)`
+
+    // While an advance runs -- a Step or Next signal -- the same button stops it, at the next
+    // base bar.
+    const cancelling = controller.busy && controller.cancelling
+    const label = !busy ? 'Step' : cancelling ? 'Stopping…' : 'Stop'
+    const step = button('kc-button kc-button-primary wd-replay-step', label, pressStep)
+    step.classList.toggle('is-stop', busy)
+    step.disabled = cancelling
+    step.title = busy ? 'Stop at the next bar (Shift+→)' : `Advance ${describeAdvance(controller.advance)} (Shift+→)`
+
+    // How far one Step goes. The Step button is this group's label: it reads "Step 1h × 1".
+    const size = el('span', 'wd-replay-group')
     const choices = advanceChoices(controller, options.intervalsInUse())
     const picker = select(
       choices.map((c) => ({ value: c, label: c })),
@@ -254,6 +276,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       (value) => controller.setAdvance({ interval: value, multiple: controller.advance.multiple })
     )
     picker.title = 'How far one Step goes: this timeframe…'
+    picker.setAttribute('aria-label', 'Step timeframe')
     picker.disabled = busy
     const times = el('span', 'wd-replay-times')
     times.textContent = '×'
@@ -262,9 +285,13 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       controller.setAdvance({ interval: controller.advance.interval, multiple: n })
     })
     multiple.title = '…times this many candles'
+    multiple.setAttribute('aria-label', 'Candles per step')
     multiple.disabled = busy
+    size.append(picker, times, multiple)
+
     // The pace Play steps at. Never disabled: slowing down is most wanted while playing.
-    const every = el('span', 'wd-replay-label wd-replay-every')
+    const paceGroup = el('span', 'wd-replay-group')
+    const every = el('span', 'wd-replay-every')
     every.textContent = 'every'
     const pace = select(
       PLAY_DELAYS_MS.map((ms) => ({ value: String(ms), label: delayLabel(ms) })),
@@ -273,7 +300,19 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     )
     pace.classList.add('wd-replay-pace')
     pace.title = 'Play: the time between two steps (it also waits for the chart to load)'
+    pace.setAttribute('aria-label', 'Play speed')
+    paceGroup.append(every, pace)
+
+    row.append(play, step, size, paceGroup)
+    return row
+  }
+
+  /** Next signal, and beside it what the replay is doing or why it last stopped. */
+  function renderNext(): HTMLElement {
+    const row = el('div', 'wd-replay-row wd-replay-next-row')
+    const busy = busyShown()
     const next = button('kc-button kc-button-outline wd-replay-next', 'Next signal', () => {
+      if (controller.busy) return
       player.pause()
       void controller.nextSignal().then((r) => r && options.onStop?.(r))
     })
@@ -282,7 +321,31 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const stops = controller.signals.armed.length + controller.armedStops
     next.disabled = busy || stops === 0
     next.title = stops === 0 ? 'Arm a signal or place a price watch first' : 'Advance to the next armed signal or price watch'
-    row.append(label, picker, times, multiple, every, pace, next)
+    row.appendChild(next)
+
+    const walked = controller.walkedTo
+    const last = controller.lastStop
+    if (walked !== null) {
+      // A walk in progress replaces the last stop's reason, which is stale by now anyway. In the
+      // body and not the title bar: the date is the walk's reach, ahead of everything drawn, and
+      // must not read as the replay's clock.
+      walkLine = el('span', 'wd-replay-walk')
+      showWalk(walkLine, walked)
+      row.appendChild(walkLine)
+    } else if (player.playing) {
+      // Playing: every step's "Stepped 1h" would say the same thing twice a second. When the play
+      // stops by itself this gives way to why it stopped, which is the line worth reading.
+      const playingLine = el('span', 'wd-replay-stop-reason is-playing')
+      playingLine.textContent = `Playing every ${delayLabel(player.delayMs)}`
+      playingLine.title = 'Stops by itself at a fill pause, an armed signal, a price watch or the end of the data (Shift+↓ pauses)'
+      row.appendChild(playingLine)
+    } else if (last) {
+      // Absent until an advance has stopped.
+      const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
+      reason.textContent = describeStop(last, controller.signals.catalogue)
+      reason.title = reason.textContent
+      row.appendChild(reason)
+    }
     return row
   }
 
@@ -324,6 +387,22 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       toggle.title = open ? 'Hide the order ticket' : 'Buy or sell: show the order ticket'
       row.appendChild(toggle)
     }
+
+    // Exit, at the far end of the footer: the one control here that ends the session, as far
+    // from Play and Step as the window allows, and two presses besides.
+    const armedExit = arming.key === EXIT
+    const exit = button(`kc-button wd-replay-exit${armedExit ? ' is-armed' : ''}`, armedExit ? 'Confirm exit' : 'Exit replay', () => {
+      // Never mid-advance: leaving rebuilds the wall under a session still walking.
+      if (controller.busy) return
+      if (!arming.press(EXIT, false)) return
+      player.pause()
+      options.onExit()
+    })
+    exit.disabled = busyShown()
+    exit.title = armedExit
+      ? 'Press again to leave. This replay, its account and its orders cannot be reopened.'
+      : 'Leave replay and return to the live wall'
+    row.appendChild(exit)
     return row
   }
 
@@ -346,7 +425,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         if (!check.ok) flash(win.element, check.reason ?? 'Invalid base')
       }
     )
-    basePicker.disabled = controller.busy
+    basePicker.disabled = busyShown()
     basePicker.title = baseCheck.ok
       ? 'The interval the engine walks; finer = more accurate fills, more bars'
       : (baseCheck.reason ?? '')
@@ -434,6 +513,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     element: win.element,
     refresh: render,
     dispose(): void {
+      if (revealTimer) clearTimeout(revealTimer)
       window.removeEventListener('keydown', onKey, true)
       player.dispose()
       arming.disarm()
