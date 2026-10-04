@@ -37,18 +37,31 @@ nailed inside the account panel cost the wall ~90px it never gave back, and the 
 thing being replayed. On screen there is only what every step uses:
 
 ```
-+------------------------------------------------------------+
-| ::  REPLAY  Thu, Aug 20, 19:00  [▶] [Step] [Exit]   ^ ⇲    |   the title bar is the drag handle
-+------------------------------------------------------------+
-| STEP [1h v] x [1]  EVERY [1 s v]  [Next signal]            |
-| Stepped 1h                                                 |   only once an advance has stopped
-| [Signals 2] [Base 1h] [Account] [Trade]                    |   one panel open at a time
-+------------------------------------------------------------+
++--------------------------------------------------------------+
+| ::  REPLAY  EURUSD  Thu, Aug 20, 19:00                 ^ ⇲   |   the title bar: the drag handle
++--------------------------------------------------------------+
+| [▶] [ Step ]  [1h v] × [1]  every [1 s v]                    |   transport
+| [Next signal]  Stepped 1h                                    |   the status, once there is one
+|--------------------------------------------------------------|
+| [Signals 2] [Base 1h] [Account] [Trade]        Exit replay   |   one panel open at a time
++--------------------------------------------------------------+
 ```
 
-Play and Step are in the TITLE BAR, so the window rolled up to that bar alone (36px tall)
-still plays and steps. The clock carries the **weekday**: a cursor lands in the FX weekend as
-readily as anywhere, and "Sep 26, 20:00" does not say nothing trades then.
+**The title bar acts on nothing** (user, 2026-10-04: "move the Step and play button out of the
+title area"): it names the instrument and the replay's clock and carries the window's own roll-up
+and dock controls, so a press on the drag handle is only ever a drag. Play and Step lead the body,
+**each beside the setting it uses** — the Step button reads as the label of "1h × 1", the pace
+belongs to Play — and Exit ends the footer, as far from them as the card allows. Rolled up, the
+window shows the clock and the keys still play and step. The clock carries the **weekday**: a
+cursor lands in the FX weekend as readily as anywhere, and "Sep 26, 20:00" does not say nothing
+trades then.
+
+**An advance shows only once it has run for 300 ms** (`BUSY_REVEAL_MS`), or reports walk
+progress, or a Stop is pressed. A one-candle step lands well inside that, and flipping Step to a
+red Stop and greying the rest out on every press — twice a second while playing — was noise. In
+that first moment a press on Step is ignored rather than taken as a Stop, so a double click
+cannot cancel the step it is waiting on. While playing, the status reads **"Playing every ½ s"**,
+which gives way to why the play stopped.
 
 **Keys** (TradingView's, so the hands already know them): **Shift+→** is Step — Stop while an
 advance runs, but a held key's *repeat* never cancels the step it is waiting on — and
@@ -86,7 +99,7 @@ shows and hides the account window, which starts **closed** — an advance that 
 (a fill, a close) opens it itself, on the tab the event landed in.
 
 **Docked** (the ⇲ control, or dragged onto the bottom of the chart) the rows lay out along one
-line instead of stacking, and the controls sit *above* the account window in the column
+line instead of stacking, with Exit at the far right, and the controls sit *above* the account window in the column
 (`order` 10 against 20). Everything else about the two modes — the drag, the roll-up, the
 persistence — belongs to the window, not here.
 
