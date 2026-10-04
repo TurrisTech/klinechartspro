@@ -1,6 +1,5 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { SignalCatalogueEntry } from '../plugins/types'
 import type { SimSnapshot, SimTrade } from '../trading/api'
 import type { SessionListener } from '../trading/session'
 import type { AdvanceResult, ReplayController } from './session'
@@ -18,7 +17,6 @@ GlobalRegistrator.register({ url: 'http://test/' })
 afterAll(() => GlobalRegistrator.unregister())
 
 const { createReplayControls, openStartDialog, defaultStartAt } = await import('./controls')
-const { SignalBook } = await import('./signals')
 const { formatClock } = await import('./format')
 const { validateBase, nominalMs, FX_GRID, CONTINUOUS_DAY, gridOf } = await import('./timeframes')
 const { setFocusSource } = await import('../chrome/focus')
@@ -27,19 +25,13 @@ const SYM = 'oanda:EURUSD'
 const NY_TZ = 'America/New_York'
 const H = 3_600_000
 
-const catalogue: SignalCatalogueEntry[] = [
-  { plugin: 'arev', title: 'AREV', variant: 'arev21', available: true, id: 'long', label: 'Long', side: 'long', description: 'longs', ref: 'arev:arev21:long' },
-  { plugin: 'krev', title: 'krev', variant: '', available: true, id: 'short', label: 'Short', side: 'short', description: '', ref: 'krev:short' },
-  { plugin: 'mtf', title: 'MTF', variant: '', available: false, id: 'x', label: 'X', side: null, description: '', ref: 'mtf:x' }
-] as SignalCatalogueEntry[]
-
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
 interface Fake {
   controller: Mutable<ReplayController>
   calls: {
     step: number
-    nextSignal: number
+    nextAlert: number
     cancel: number
     persist: number
     setAdvance: Array<{ interval: string; multiple: number }>
@@ -90,13 +82,13 @@ function closedTrade(id: string, pnl: number, closedAt: number): SimTrade {
 }
 
 function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
-  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', signal: null, events: [], bars: [], walked: false, observed: [], ...over }
+  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', alert: null, events: [], bars: [], walked: false, observed: [], ...over }
 }
 
-function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
+function fake(): Fake {
   const listeners = new Set<(change?: 'walk') => void>()
   const snapshotListeners = new Set<SessionListener>()
-  const calls: Fake['calls'] = { step: 0, nextSignal: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
+  const calls: Fake['calls'] = { step: 0, nextAlert: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
   const emit = (): void => {
     for (const l of [...listeners]) l()
   }
@@ -112,8 +104,9 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
     cancelling: false,
     advanceFrom: null,
     walkedTo: null,
+    searchedTo: null,
     lastStop: null,
-    signals: new SignalBook(entries, { points: async () => [] }),
+    alertCount: 0,
     armedStops: 0,
     storedIntervals: ['1m', '1h', '1D'],
     intervalsInUse: ['5m', '1h'],
@@ -148,9 +141,9 @@ function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
     async advanceBy() {
       return null
     },
-    async nextSignal() {
-      calls.nextSignal++
-      return result({ reason: 'end' })
+    async nextAlert() {
+      calls.nextAlert++
+      return result({ reason: 'none' })
     },
     cancel() {
       calls.cancel++
@@ -179,6 +172,7 @@ interface Mounted extends Fake {
   exits: number
   account: { open: boolean; toggles: number }
   trade: { open: boolean; toggles: number }
+  alerts: { open: boolean; toggles: number }
   dispose(): void
   /** A button in the window by its visible label (badge excluded). */
   button(label: string): HTMLButtonElement
@@ -190,7 +184,7 @@ let mounted: Mounted[] = []
 
 function mount(
   f: Fake = fake(),
-  opts: { account?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void>; busyRevealMs?: number } = {}
+  opts: { account?: boolean; alerts?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void>; busyRevealMs?: number } = {}
 ): Mounted {
   const bounds = document.createElement('div')
   document.body.appendChild(bounds)
@@ -198,6 +192,7 @@ function mount(
   const state = { exits: 0 }
   const account = { open: false, toggles: 0 }
   const trade = { open: false, toggles: 0 }
+  const alerts = { open: false, toggles: 0 }
   const controls = createReplayControls({
     controller: f.controller,
     intervalsInUse: () => [...f.controller.intervalsInUse],
@@ -228,7 +223,17 @@ function mount(
         trade.open = !trade.open
         return trade.open
       }
-    }
+    },
+    alerts:
+      opts.alerts === false
+        ? undefined
+        : {
+            isOpen: () => alerts.open,
+            toggle: () => {
+              alerts.toggles++
+              alerts.open = !alerts.open
+            }
+          }
   })
   const root = controls.element
   const label = (b: Element): string => {
@@ -247,6 +252,7 @@ function mount(
     },
     account,
     trade,
+    alerts,
     dispose: () => controls.dispose(),
     maybeButton,
     button(text) {
@@ -424,30 +430,35 @@ describe('the title bar and the transport', () => {
 })
 
 describe('the advance row', () => {
-  test('Next signal needs something to stop at: an armed signal or an armed watch', async () => {
+  test('Next alert needs something to stop at: an alert on the instrument, or an armed watch', async () => {
     const m = mount()
-    const next = (): HTMLButtonElement => m.button('Next signal')
+    const next = (): HTMLButtonElement => m.button('Next alert')
     expect(next().disabled).toBe(true)
-    expect(next().title).toBe('Arm a signal or place a price watch first')
+    expect(next().title).toBe('Add an alert on EURUSD (Alerts) or place a price watch first')
 
     m.controller.armedStops = 1
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to the next armed signal or price watch')
+    expect(next().title).toBe('Advance to where the next of 0 alerts on EURUSD triggers, or a price watch fires')
 
     m.controller.armedStops = 0
-    m.controller.signals.arm('arev:arev21:long', '1h')
+    m.controller.alertCount = 2
     m.emit()
     expect(next().disabled).toBe(false)
+    expect(next().title).toBe('Advance to where the next of 2 alerts on EURUSD triggers')
 
     next().click()
     await flush()
-    expect(m.calls.nextSignal).toBe(1)
-    expect(m.stops.map((r) => r.reason)).toEqual(['end'])
+    expect(m.calls.nextAlert).toBe(1)
+    expect(m.stops.map((r) => r.reason)).toEqual(['none'])
 
     m.controller.busy = true
     m.emit()
     expect(next().disabled).toBe(true)
+  })
+
+  test('there is no Next signal any more', () => {
+    expect(mount().maybeButton('Next signal')).toBeNull()
   })
 
   test('the timeframe picker offers the base, the stored ladder and the panes, shortest first', () => {
@@ -486,8 +497,8 @@ describe('the advance row', () => {
 
 describe('the status line', () => {
   const reasons: Array<[string, Partial<AdvanceResult>, string]> = [
-    ['a signal, named from the catalogue', { reason: 'signal', signal: { ref: 'arev:arev21:long', resolution: '1h', effective: 0, date: 0 } }, 'Stopped at AREV arev21 · Long @1h'],
-    ['a signal the catalogue no longer lists', { reason: 'signal', signal: { ref: 'gone:ref', resolution: '4h', effective: 0, date: 0 } }, 'Stopped at gone:ref @4h'],
+    ['an alert, by its name', { reason: 'alert', alert: { alertId: 'a1', name: 'RSI oversold', effective: 0, readings: '' } }, 'Alert: RSI oversold'],
+    ['nothing ahead', { reason: 'none' }, 'No alert triggers before the end of the data'],
     ['a fill pause', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Paused on a fill'],
     ['a close pause', { reason: 'fill', events: [{ kind: 'close' } as never] }, 'Paused on a close'],
     ['a watch', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }] }, 'Stopped at watch EURUSD 1.10000'],
@@ -559,100 +570,72 @@ describe('the status line', () => {
       m.emit()
       const line = m.q('.wd-replay-stop-reason') as HTMLElement
       expect(line.textContent).toBe(text)
-      // The class is the reason itself: the stylesheet colours signal, fill and watch stops.
+      // The class is the reason itself: the stylesheet colours alert, fill and watch stops.
       expect(line.classList.contains(`is-${stop.reason}`)).toBe(true)
       expect(line.title).toBe(text)
     })
   }
+
+  test('an alert stop carries what the rule read, on hover', () => {
+    const m = mount()
+    m.controller.lastStop = result({ reason: 'alert', alert: { alertId: 'a1', name: 'oversold', effective: 0, readings: 'RSI(14) 1h 28.1' } })
+    m.emit()
+    expect((m.q('.wd-replay-stop-reason') as HTMLElement).title).toBe('Alert: oversold — RSI(14) 1h 28.1')
+  })
+
+  test('while Next alert searches, says how far ahead it has looked -- and then how far it has walked', () => {
+    const m = mount()
+    const from = m.controller.cursor
+    m.controller.busy = true
+    m.controller.advanceFrom = from
+    m.controller.searchedTo = from + 30 * 24 * H
+    m.emitWalk()
+    const line = m.q('.wd-replay-walk') as HTMLElement
+    expect(line.textContent).toBe(`Looking for the next alert… reached ${formatClock(from + 30 * 24 * H, NY_TZ)}`)
+    expect(line.title).toContain('Nothing moves until one triggers')
+    // The Stop button is up during the search: it is how a long look is abandoned.
+    const stop = m.button('Stop')
+    m.controller.searchedTo = null
+    m.controller.walkedTo = from + 2 * H
+    m.emitWalk()
+    expect(m.q('.wd-replay-walk')).toBe(line)
+    expect(line.textContent).toBe(`Walking… reached ${formatClock(from + 2 * H, NY_TZ)}`)
+    expect(m.button('Stop')).toBe(stop)
+  })
 })
 
 describe('the panels', () => {
-  test('one at a time: Signals, then Base replaces it, and a second press closes', () => {
+  test('Base opens its panel and a second press closes it', () => {
     const m = mount()
     expect(m.q('.wd-replay-panel')).toBeNull()
-    m.button('Signals').click()
-    expect(m.q('.wd-replay-signal-list')).not.toBeNull()
-    expect(m.button('Signals').getAttribute('aria-pressed')).toBe('true')
-
     m.button('Base 1m').click()
-    expect(m.q('.wd-replay-signal-list')).toBeNull()
     expect(m.root.querySelectorAll('.wd-replay-panel').length).toBe(1)
     expect(m.button('Base 1m').classList.contains('is-on')).toBe(true)
-
     m.button('Base 1m').click()
     expect(m.q('.wd-replay-panel')).toBeNull()
   })
 
   test('an open panel survives a re-render from the controller', () => {
     const m = mount()
-    m.button('Signals').click()
+    m.button('Base 1m').click()
     m.emit()
-    expect(m.q('.wd-replay-signal-list')).not.toBeNull()
+    expect(m.q('.wd-replay-panel')).not.toBeNull()
   })
 
-  test('Signals is disabled when nothing on the wall publishes one, and badges the armed count', () => {
-    const none = mount(fake([]))
-    expect(none.button('Signals').disabled).toBe(true)
-    expect(none.button('Signals').title).toBe('No signal plugin publishes on this wall')
-
+  test('Alerts opens the alert manager and badges the alerts Next alert can stop at', () => {
     const m = mount()
     expect(m.q('.wd-replay-badge')).toBeNull()
-    m.controller.signals.arm('arev:arev21:long', '1h')
-    m.controller.signals.arm('arev:arev21:long', '5m')
+    expect(m.button('Alerts').title).toBe('The alert manager: 0 enabled on EURUSD, which is where Next alert stops')
+    m.controller.alertCount = 3
     m.emit()
-    expect((m.q('.wd-replay-badge') as HTMLElement).textContent).toBe('2')
-    // Only the AVAILABLE entries count as published.
-    expect(m.button('Signals').title).toBe('2 available, 2 armed')
-  })
-
-  test('the signal list: available only, grouped by plugin, every row armable; the starred first', () => {
-    const m = mount()
-    m.button('Signals').click()
-    const names = (): string[] => [...m.root.querySelectorAll('.wd-replay-signal-name')].map((n) => n.textContent ?? '')
-    const groups = (): string[] => [...m.root.querySelectorAll('.wd-replay-signal-group')].map((n) => n.textContent ?? '')
-    expect(groups()).toEqual(['AREV', 'krev'])
-    // Named by what tells it apart in its group; the full name is on hover.
-    expect(names()).toEqual(['arev21 · Long', 'Short'])
-    expect((m.q('.wd-replay-signal-name') as HTMLElement).title).toBe('AREV arev21 · Long: longs')
-    // Arming needs no star first: one arm button per pane interval on EVERY row.
-    const arms = (): HTMLButtonElement[] => [...m.root.querySelectorAll('.wd-replay-arm')] as HTMLButtonElement[]
-    expect(arms().map((a) => a.textContent)).toEqual(['5m', '1h', '5m', '1h'])
-    expect(arms()[3].title).toBe('Arm on 1h: Next signal stops at it')
-
-    // Arming the second stars it (the book's rule): it moves up under its own heading.
-    arms()[3].click()
-    expect(m.controller.signals.isArmed('krev:short', '1h')).toBe(true)
-    expect(m.controller.signals.isStarred('krev:short')).toBe(true)
-    expect(m.calls.persist).toBe(1)
-    expect(groups()).toEqual(['Starred', 'AREV'])
-    expect(names()).toEqual(['krev Short', 'arev21 · Long'])
-    const armed = arms()[1]
-    expect(armed.classList.contains('is-on')).toBe(true)
-    expect(armed.getAttribute('aria-pressed')).toBe('true')
-    expect(armed.title).toBe('Armed on 1h: Next signal stops here. Click to disarm')
-
-    // A star alone shortlists without arming.
-    ;(m.root.querySelectorAll('.wd-replay-star')[1] as HTMLButtonElement).click()
-    expect(m.controller.signals.isStarred('arev:arev21:long')).toBe(true)
-    expect(m.controller.signals.isArmed('arev:arev21:long')).toBe(false)
-    expect(groups()).toEqual(['Starred'])
-    expect(m.calls.persist).toBe(2)
-
-    // Unstarring disarms it too (the book's rule), and persists.
-    const krevRow = [...m.root.querySelectorAll('.wd-replay-signal')].find((r) => r.textContent?.includes('krev Short')) as HTMLElement
-    ;(krevRow.querySelector('.wd-replay-star') as HTMLButtonElement).click()
-    expect(m.controller.signals.isArmed('krev:short')).toBe(false)
-    expect(m.calls.persist).toBe(3)
-  })
-
-  test('a plugin named in its variants is not named twice', () => {
-    const outlier = [
-      { plugin: 'arev21_outlier', title: 'AREV21 outlier', variant: 'arev21_outlier_rank', available: true, id: 'long', label: 'long', side: 'long', description: '', ref: 'arev21_outlier:arev21_outlier_rank:long' },
-      { plugin: 'krev', title: 'KREV', variant: 'krev01', available: true, id: 'top', label: 'krev top', side: 'short', description: '', ref: 'krev:krev01:top' }
-    ] as SignalCatalogueEntry[]
-    const m = mount(fake(outlier))
-    m.button('Signals').click()
-    expect([...m.root.querySelectorAll('.wd-replay-signal-name')].map((n) => n.textContent)).toEqual(['rank · long', 'krev01 · top'])
+    expect((m.q('.wd-replay-badge') as HTMLElement).textContent).toBe('3')
+    m.button('Alerts').click()
+    expect(m.alerts.toggles).toBe(1)
+    expect(m.button('Alerts').getAttribute('aria-pressed')).toBe('true')
+    // No panel of its own: the manager is a window.
+    expect(m.q('.wd-replay-panel')).toBeNull()
+    // Without a manager there is no toggle.
+    expect(mount(fake(), { alerts: false }).maybeButton('Alerts')).toBeNull()
   })
 
   test('settings: the base picker writes through the controller and a refusal is shown', () => {
@@ -825,7 +808,7 @@ describe('play', () => {
   })
 
   test('play stops by itself on anything but reaching the target: the stop is the point', async () => {
-    for (const reason of ['fill', 'signal', 'watch', 'end', 'cancel'] as const) {
+    for (const reason of ['fill', 'alert', 'watch', 'end', 'cancel', 'none'] as const) {
       const clock = manualSleep()
       const f = fake()
       let n = 0
@@ -860,7 +843,7 @@ describe('play', () => {
     expect(m.calls.step).toBe(2)
   })
 
-  test('a Step, Next signal or Exit pressed while playing ends the play', async () => {
+  test('a Step, Next alert or Exit pressed while playing ends the play', async () => {
     const clock = manualSleep()
     const m = mount(fake(), { sleep: clock.sleep })
     play(m).click()
@@ -876,10 +859,10 @@ describe('play', () => {
     m.emit()
     play(m).click()
     await flush()
-    m.button('Next signal').click()
+    m.button('Next alert').click()
     await flush()
     expect(play(m).getAttribute('aria-label')).toBe('Play')
-    expect(m.calls.nextSignal).toBe(1)
+    expect(m.calls.nextAlert).toBe(1)
   })
 
   test('busy with an advance it did not start, Play waits; started by it, it is the Pause', () => {

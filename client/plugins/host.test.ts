@@ -321,7 +321,7 @@ describe('createPluginHost', () => {
     host.sync([fakePane('p1', fc.chart)])
     await flush()
 
-    // Two "next signal" stops, each on a 15m boundary and so mid-hour for this source.
+    // Two replay stops, each on a 15m boundary and so mid-hour for this source.
     for (const stop of [NY(6, 11, 15), NY(6, 14, 30)]) {
       const before = clock
       clock = stop

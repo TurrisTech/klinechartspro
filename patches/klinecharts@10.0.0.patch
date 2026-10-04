@@ -1,5 +1,5 @@
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index d3fd656bd65efdafebecf1760877d4b5b96a82b6..62f0e0fbe7195ad94198dee7c162c59a977ca8b4 100644
+index d3fd656bd65efdafebecf1760877d4b5b96a82b6..7d773d25a7f27a0cb8ff96504a27a911e773436e 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
 @@ -142,6 +142,12 @@ export type TooltipLegendStyle = TooltipTextStyle & {
@@ -15,8 +15,20 @@ index d3fd656bd65efdafebecf1760877d4b5b96a82b6..62f0e0fbe7195ad94198dee7c162c59a
  }
  export interface TooltipLegend {
  	title: string | TooltipLegendChild;
+@@ -1201,6 +1207,11 @@ export declare function registerFigure<A = unknown, S = unknown>(figure: FigureT
+ export declare function getFigureClass<A = unknown, S = unknown>(name: string): Nullable<FigureConstructor<A, S>>;
+ export declare function registerIndicator<D = unknown, C = unknown, E = unknown>(indicator: IndicatorTemplate<D, C, E>): void;
+ export declare function getSupportedIndicators(): string[];
++/**
++ * PATCH (klinechartspro): the class of a registered indicator template, or null. Exported so a
++ * built-in indicator can be computed over bars that are on no chart (client/alerts).
++ */
++export declare function getIndicatorClass(name: string): Nullable<new () => Indicator>;
+ export declare function registerLocale(locale: string, ls: Locales): void;
+ export declare function getSupportedLocales(): string[];
+ export declare function registerOverlay<E = unknown>(template: OverlayTemplate<E>): void;
 diff --git a/dist/index.esm.js b/dist/index.esm.js
-index 7b7d9f2157b5010f138f77a72f652955270c4d34..3b68898c9698ad73d5c61e5087fae9fb50a2ad02 100644
+index 7b7d9f2157b5010f138f77a72f652955270c4d34..457d3522d6a0e80e98391cbf197974aa7bbed0dd 100644
 --- a/dist/index.esm.js
 +++ b/dist/index.esm.js
 @@ -8372,10 +8372,68 @@ var CrosshairLineView = /** @class */ (function (_super) {
@@ -330,3 +342,12 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..3b68898c9698ad73d5c61e5087fae9fb
      return CandleTooltipView;
  }(IndicatorTooltipView));
  
+@@ -15680,4 +15892,7 @@ var utils = {
+     checkCoordinateOnText: checkCoordinateOnText
+ };
+ 
+-export { dispose, getFigureClass, getHotkey, getOverlayClass, getSupportedFigures, getSupportedHotkeys, getSupportedIndicators, getSupportedLocales, getSupportedOverlays, init, registerFigure, registerHotkey, registerIndicator, registerLocale, registerOverlay, registerStyles, registerXAxis, registerYAxis, utils, version };
++// PATCH (klinechartspro): getIndicatorClass is exported so client/alerts can compute a built-in
++// indicator (RSI, MA, MACD...) over bars that are on no chart -- an alert reads the same template
++// the chart draws, rather than a second implementation of it.
++export { dispose, getFigureClass, getHotkey, getIndicatorClass, getOverlayClass, getSupportedFigures, getSupportedHotkeys, getSupportedIndicators, getSupportedLocales, getSupportedOverlays, init, registerFigure, registerHotkey, registerIndicator, registerLocale, registerOverlay, registerStyles, registerXAxis, registerYAxis, utils, version };

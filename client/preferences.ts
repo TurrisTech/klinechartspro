@@ -51,6 +51,14 @@ export async function loadPreferences(): Promise<Record<string, unknown>> {
   return inflight
 }
 
+/** Whether the document has been read. False after a failed read, when `loadPreferences`
+ * answers `{}`: a caller that is about to write a whole list back under one key must tell
+ * "nothing stored" from "could not read what is stored", or it overwrites the list
+ * (client/alerts/store.ts). */
+export function preferencesLoaded(): boolean {
+  return known !== undefined
+}
+
 // One unconditional GET. Separate from loadPreferences() because a conflict resolution must
 // never be served the memoized document (that is the revision it just lost to) nor a GET that
 // was already in flight before the conflict happened — both would replay the same stale

@@ -1,7 +1,7 @@
 import type { NotificationSink } from '../notifications'
 import { formatInstant } from '../trading/format'
 import { type LocalWatchSource, type LocalWatchState, type WatchFiring, LocalWatchRegistry } from '../watch/local'
-import type { Observation, Sample } from '../watch/evaluate'
+import type { Observation, Sample } from '../alerts/conditions'
 import { type WatchApi, WatchStore } from '../watch/store'
 import { PRICE_SOURCE } from '../watch/types'
 import type { SourceField } from '../watch/types'
@@ -180,7 +180,7 @@ export class ReplayWatches implements ReplayObserver {
    * nothing else saves it: a reload before the next step used to find the watch gone. Reads
    * (`list`, `sources`) do not save -- the store re-reads after every advance and every
    * firing, and a save per re-read would double the writes a step makes. The session's
-   * `persist` also re-renders the controls, which is what re-enables "Next signal" when a
+   * `persist` also re-renders the controls, which is what enables Next alert when a
    * watch appears. */
   private persisting(registry: LocalWatchRegistry): WatchApi {
     const saved = async <T>(write: Promise<T>): Promise<T> => {
@@ -219,7 +219,7 @@ export class ReplayWatches implements ReplayObserver {
     return this.registry.armedTargets().length > 0
   }
 
-  /** Every armed watch is a place "next signal" can stop. */
+  /** Every armed watch is a place Next alert can stop. */
   armedStops(): number {
     return this.registry.armedTargets().length
   }

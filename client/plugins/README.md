@@ -106,7 +106,8 @@ became knowable and what any multi-timeframe consumer keys off.
 
 The client draws the label and never re-derives one: the AREV pane's arrows are the `long`
 (green, up) and `short` (red, down) labels, the same events the AREV21 MTF overlay places and
-a replay's "next signal" jumps to. A plugin (or a script) consumes another's signals through
+an alert can read (`client/alerts`, a `signal` operand -- which is how a replay's Next alert
+jumps to one). A plugin (or a script) consumes another's signals through
 the facilities:
 
 ```ts

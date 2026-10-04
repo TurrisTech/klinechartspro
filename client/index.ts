@@ -1,4 +1,5 @@
 import { KLineChartPro, type ChartProPane } from '../src'
+import { mountAlertManager, startAlerts } from './alerts'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot } from './chartlayers/controller'
@@ -17,7 +18,7 @@ import { createLevelsIndicators } from './levels/indicator'
 import { mountNotificationCenter, notifications } from './notifications'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
-import { availablePeriods } from './periods'
+import { availablePeriods, periodToResolution } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
 import { stream, type StreamStatus } from './stream'
 import {
@@ -32,6 +33,7 @@ import {
 } from './replay'
 import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
+import { symbolKey } from './trading/format'
 import { Arming } from './trading/kit'
 import { mountPriceWatches, type PriceWatchesController } from './watch'
 import { createRemoteNotifications } from './watch/notifications'
@@ -458,6 +460,24 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     if (mountedLayout) store.adoptMountedLayout(mountedLayout)
   }
 
+  // THE ALERT MANAGER (client/alerts): this account's client alerts, watched by the page from
+  // the first wall on (`startAlerts` is once per page), and the Alerts button + window for
+  // this one. Mounted before the bell, so the two sit side by side in that order. A new alert
+  // starts on the active pane's instrument and timeframe.
+  const alertsRuntime = await startAlerts(notifications)
+  const alertManager = mountAlertManager(chartPro, alertsRuntime, {
+    bounds: container,
+    context: () => {
+      const panes = chartPro?.getPanes() ?? []
+      const active = chartPro?.getPane(chartPro.getActivePaneId()) ?? panes[0]
+      return {
+        symbol: active ? symbolKey(active.getSymbol()) : '',
+        interval: active ? periodToResolution(active.getPeriod()) : '1h',
+        symbols: [...new Set(panes.map((p) => symbolKey(p.getSymbol())))]
+      }
+    }
+  })
+
   // The paper-trading account: the panel dock below the chart and the per-pane overlays.
   // Gated on the server's `sim` capability (returns null otherwise); its rail button is added
   // in mountChartExtras beside the stream status.
@@ -470,6 +490,14 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // The replay raises its watch alerts into the same centre a live wall's server-side
       // ones arrive in; this is the only place that hands it over.
       notify: notifications,
+      // Next alert: the same alerts, searched through the replay's own history.
+      alerts: {
+        enabledOn: (symbol) => alertsRuntime.store.enabledOn(symbol),
+        subscribe: (listener) => alertManager.subscribe(listener),
+        search: alertsRuntime.search,
+        catalogue: alertsRuntime.catalogue,
+        manager: { isOpen: () => alertManager.manager.isOpen(), toggle: () => alertManager.manager.toggle() }
+      },
       rebuild: options.rebuild
     })
   } else {
@@ -541,6 +569,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // component (and its panes) is unmounted below.
       paper?.teardown()
       replay?.teardown()
+      alertManager.teardown()
       watches?.teardown()
       watches = null
       notificationCenter.teardown()

@@ -91,8 +91,8 @@ export interface PluginHost {
    * `clock` made incomplete and re-cover every binding. */
   invalidateFrom(clock: number): void
   /** Resolves once no binding has a fetch in flight, or when `timeoutMs` is up -- for a caller
-   * that must read what the panes drew AFTER a step, rather than what they drew before it
-   * (the replay's "next signal"). A timeout is not an error here: the caller reads whatever
+   * that must wait for what the panes draw AFTER a step, rather than what they drew before it
+   * (the replay's Play). A timeout is not an error here: the caller reads whatever
    * the panes have, and the read itself says how far they have got. */
   settled(timeoutMs?: number): Promise<void>
   teardown(): void

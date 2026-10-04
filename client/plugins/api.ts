@@ -175,7 +175,8 @@ export function pointsUrl(request: PointsRequest): URL {
       to: request.to,
       limit: request.limit,
       variant: request.variant,
-      params: request.params ? JSON.stringify(request.params) : undefined
+      params: request.params ? JSON.stringify(request.params) : undefined,
+      ...(request.asof !== undefined ? { asof: request.asof } : {})
     })
   }
   return apiUrl(request.legacyPath as string, {

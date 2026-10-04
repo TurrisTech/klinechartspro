@@ -2,10 +2,9 @@ import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineDa
 import type { IndicatorGroup } from '../../src'
 import type { MtfInterval } from './api'
 import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, graphLineStyle, type MtfConfig, type MtfTimeframeStyle } from './config'
-import { publishDrawn, signalKey } from './drawn'
 import { buildRootGraphs, type GraphSide, type GraphSignal, isEntry, storeGraphSignals } from './graph'
 import type { MtfOverlay } from './overlays'
-import { chartBarAt, chartOpens, shiftSignals, toAbsolute, type ShiftedSignal } from './shift'
+import { chartBarAt, chartOpens, shiftSignals, type ShiftedSignal } from './shift'
 import { resolutionDurationMs } from '../periods'
 import { peekStore } from '../plugins/store'
 import type { ArevPoint } from '../arev/api'
@@ -57,9 +56,6 @@ export interface ExtendData {
    * controller decides them (plugin.ts `graphRootsFor`): only on an overlay that offers a
    * graph, and only roots switched on and among the timeframes drawn. */
   graphRoots?: MtfInterval[]
-  /** `vendor:ticker` of the pane, for what the overlay publishes about what it drew
-   * (drawn.ts). Only the graph overlay publishes, so only it needs this. */
-  symbol?: string
 }
 
 /** One placed signal, plus which timeframe placed it — the template draws several at once
@@ -117,16 +113,16 @@ function laneHeight(style: MtfTimeframeStyle): number {
   return style.arrowSize * 1.4 + (style.textSize > 0 ? style.textSize + 2 : 0) + LANE_GAP
 }
 
-function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>, overlay: MtfOverlay): Value[] {
+function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
   const extend = indicator.extendData
   if (!extend) return dataList.map(() => ({}))
-  return computeValues(dataList, extend, overlay)
+  return computeValues(dataList, extend)
 }
 
-/** Everything `calc` decides, from the bars and the pane's settings: the markers, the graphs,
- * the "hide signals outside the graph" filter, and what the pane then publishes about what it
- * drew. Exported for its own test -- it reads the stores and nothing else. */
-export function computeValues(dataList: KLineData[], extend: ExtendData, overlay: MtfOverlay): Value[] {
+/** Everything `calc` decides, from the bars and the pane's settings: the markers, the graphs and
+ * the "hide signals outside the graph" filter. Exported for its own test -- it reads the stores
+ * and nothing else. */
+export function computeValues(dataList: KLineData[], extend: ExtendData): Value[] {
   // No schedule, no placement: a wire date cannot be turned into an open without knowing how
   // the instrument dates its days (shift.ts).
   if (!extend.schedule) return dataList.map(() => ({}))
@@ -169,36 +165,12 @@ export function computeValues(dataList: KLineData[], extend: ExtendData, overlay
       else value.marks = undefined
     }
   }
-  if (overlay.graph && overlay.signals) publish(overlay, extend, dataList, values, byBar, clock)
   return values
 }
 
-/** What this pane draws, for the replay's "next signal" (drawn.ts). Published from `calc`, so
- * it is the placement itself that is published rather than a second derivation of it. */
-function publish(
-  overlay: MtfOverlay,
-  extend: ExtendData,
-  dataList: KLineData[],
-  values: Value[],
-  byBar: Map<number, Marked[]>,
-  clock: CandleGrid
-): void {
-  const signals = overlay.signals
-  if (!signals || !extend.symbol) return
-  const drawn = new Set<string>()
-  for (const value of values) for (const mark of value.marks ?? []) drawn.add(signalKey(mark.interval, mark.sourceDate))
-  const known = new Set<string>()
-  for (const marks of byBar.values()) for (const mark of marks) known.add(signalKey(mark.interval, mark.sourceDate))
-  const lastOpen = dataList.length > 0 ? toAbsolute(extend.chartInterval, dataList[dataList.length - 1].timestamp, clock) : 0
-  publishDrawn(`${extend.symbol}|${extend.chartInterval}|${overlay.id}`, {
-    symbol: extend.symbol,
-    plugin: signals.plugin,
-    variant: signals.variant,
-    intervals: Object.keys(extend.seriesKeys) as MtfInterval[],
-    drawn,
-    known,
-    coversTo: lastOpen + resolutionDurationMs(extend.chartInterval)
-  })
+/** A placed signal's identity: its timeframe and the bar it was cast on. */
+function signalKey(interval: string, sourceDate: number): string {
+  return `${interval}|${sourceDate}`
 }
 
 /**
@@ -446,7 +418,7 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
       maxValue: null,
       styles: null,
       shouldUpdate,
-      calc: (dataList, indicator) => calc(dataList, indicator, overlay),
+      calc,
       regenerateFigures: null,
       // Never reaches the screen: ChartPane.svelte's createIndicator wrapper replaces every
       // template's tooltip source with its own icons-only one. The `p` a reader wants is

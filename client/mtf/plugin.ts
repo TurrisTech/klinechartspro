@@ -318,7 +318,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
         return {
           sources: [],
           label: () => `${title} · no market hours for this instrument`,
-          extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: [], symbol: `${ctx.vendor}:${ctx.ticker}` })
+          extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: [] })
         }
       }
       const shown = drawable(config, ctx.interval)
@@ -338,8 +338,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
           // is compared and may be copied, which a bag of closures does not survive.
           schedule: clock.schedule,
           config,
-          graphRoots: roots,
-          symbol: `${ctx.vendor}:${ctx.ticker}`
+          graphRoots: roots
         })
       }
     },

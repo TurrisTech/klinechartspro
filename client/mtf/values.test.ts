@@ -6,11 +6,9 @@ import { installWindow } from '../plugins/testing'
 // end to end rather than through its pieces.
 installWindow()
 const { computeValues } = await import('./templates')
-const { AREV21_OUTLIER_RANK_85_MTF } = await import('./overlays')
 const { MTF_DEFAULTS } = await import('./config')
 const { GRID_ARRAY, RegistryStore } = await import('../tsregistry/store')
 const { storeFor } = await import('../plugins/store')
-const { drawsSignal, resetDrawn } = await import('./drawn')
 const { FX_SCHEDULE } = await import('../replay/timeframes')
 
 import type { ArevPoint } from '../arev/api'
@@ -55,7 +53,6 @@ describe('one calc, from the stores to the markers', () => {
     const { dropStore } = await import('../plugins/store')
     dropStore(key4h)
     dropStore(key1h)
-    resetDrawn()
   })
 
   // A 4h root top at bar 0 (body top 1.10), one 1h top ABOVE it (1.12, in the graph) and one
@@ -69,8 +66,7 @@ describe('one calc, from the stores to the markers', () => {
     chartInterval: '1h',
     schedule: FX_SCHEDULE,
     config: c,
-    graphRoots: ['4h' as const],
-    symbol: SYM
+    graphRoots: ['4h' as const]
   })
 
   const seed = (): void => {
@@ -95,7 +91,7 @@ describe('one calc, from the stores to the markers', () => {
 
   test('both signals are drawn, and the graph holds only the one that went further', () => {
     seed()
-    const values = computeValues(chartBars(12), extend(config(() => {})), AREV21_OUTLIER_RANK_85_MTF)
+    const values = computeValues(chartBars(12), extend(config(() => {})))
     const marks = values.flatMap((v, i) => (v.marks ?? []).map((m) => `${m.interval}@bar${i}`))
     expect(marks).toEqual(['4h@bar4', '1h@bar6', '1h@bar8'])
     // The 4h root and the 1h signal above it; the 1h signal at 1.09 is not beyond the root.
@@ -111,33 +107,10 @@ describe('one calc, from the stores to the markers', () => {
         config((c) => {
           c.graph.onlyGraph = true
         })
-      ),
-      AREV21_OUTLIER_RANK_85_MTF
+      )
     )
     const marks = values.flatMap((v, i) => (v.marks ?? []).map((m) => `${m.interval}@bar${i}`))
     expect(marks).toEqual(['4h@bar4', '1h@bar6'])
-  })
-
-  test('what it publishes is what it drew, so the replay can ask', () => {
-    resetDrawn()
-    seed()
-    const ref = 'arev21_outlier:arev21_outlier_rank:long'
-    computeValues(
-      chartBars(12),
-      extend(
-        config((c) => {
-          c.graph.onlyGraph = true
-        })
-      ),
-      AREV21_OUTLIER_RANK_85_MTF
-    )
-    // Drawn: the 4h root and the 1h signal in the graph. Hidden: the 1h signal outside it.
-    expect(drawsSignal(SYM, ref, '4h', 0, 5 * H)).toBe(true)
-    expect(drawsSignal(SYM, ref, '1h', 5 * H, 7 * H)).toBe(true)
-    expect(drawsSignal(SYM, ref, '1h', 7 * H, 9 * H)).toBe(false)
-    // A timeframe this pane does not draw, and a bar it has never placed.
-    expect(drawsSignal(SYM, ref, '1D', 0, 5 * H)).toBe(false)
-    expect(drawsSignal(SYM, ref, '1h', 99 * H, 5 * H)).toBeNull()
   })
 })
 
@@ -150,7 +123,6 @@ describe('entries: a graph that reaches 5m draws a star there', () => {
   afterAll(async () => {
     const { dropStore } = await import('../plugins/store')
     for (const k of Object.values(keys)) dropStore(k)
-    resetDrawn()
   })
 
   /** `n` bars of `step` from 0, each body flat at 1.09 except the ones `tops` raises. */
@@ -175,8 +147,7 @@ describe('entries: a graph that reaches 5m draws a star there', () => {
     )
     const values = computeValues(
       bars,
-      { seriesKeys: keys, rev: 1, chartInterval: '5m', schedule: FX_SCHEDULE, config: c, graphRoots: ['1h'], symbol: ESYM },
-      AREV21_OUTLIER_RANK_85_MTF
+      { seriesKeys: keys, rev: 1, chartInterval: '5m', schedule: FX_SCHEDULE, config: c, graphRoots: ['1h'] },
     )
     const dots = values.flatMap((v, i) =>
       (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}${d.entry ? ' entry' : ''}`)

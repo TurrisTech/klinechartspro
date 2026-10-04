@@ -1,4 +1,3 @@
-import type { SignalCatalogueEntry } from '../plugins/types'
 import { Arming, FigureList } from '../trading/kit'
 import { formatClock, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
@@ -19,13 +18,16 @@ import { createDockableWindow } from '../chrome/window'
 //   title bar   the instrument and the replay's clock, roll up, dock/float -- the drag handle,
 //               with nothing in it that acts on the replay
 //   transport   Play and Step, each beside the setting it uses (timeframe x multiple, the pace)
-//   next        Next signal, and how far a running walk has got or why the last advance stopped
-//   footer      Signals / Base / Results, one panel open at a time; Account and Trade, the two
+//   next        Next alert, and how far a running search or walk has got or why the last
+//               advance stopped
+//   footer      Alerts (the alert manager), and Base / Results, one panel open at a time;
+//               Account and Trade, the two windows; Exit replay, set apart at the far end
 //               windows; Exit replay, set apart at the far end
 //
-// The signal list, the base timeframe and pause-on-fill are all one click away instead of
-// permanently on screen, and the account window and the trade box are opened from here rather
-// than taking half the wall from the moment replay starts.
+// The base timeframe and pause-on-fill are one click away instead of permanently on screen;
+// the alerts Next alert runs to are the alert manager's (client/alerts), opened from here; and
+// the account window and the trade box are opened from here rather than taking half the wall
+// from the moment replay starts.
 //
 // KEYS (TradingView's, so the hands already know them): Shift+→ is Step (Stop while an advance
 // runs) and Shift+↓ is Play/Pause. Shift+→ is klinecharts' own "scroll right"; on a replay wall
@@ -49,7 +51,7 @@ const EXIT = 'exit'
  * its progress, or a Stop already pressed, shows at once. */
 const BUSY_REVEAL_MS = 300
 
-type PanelId = 'signals' | 'settings' | 'results' | null
+type PanelId = 'settings' | 'results' | null
 
 export interface ReplayControlsOptions {
   controller: ReplayController
@@ -68,6 +70,9 @@ export interface ReplayControlsOptions {
   account?: { isOpen: () => boolean; toggle: () => boolean }
   /** The trade box (the order ticket's floating window) the Trade toggle shows and hides. */
   trade?: { isOpen: () => boolean; toggle: () => boolean }
+  /** The alert manager the Alerts toggle opens -- where the alerts Next alert stops at are
+   * written. Absent, there is no toggle. */
+  alerts?: { isOpen: () => boolean; toggle: () => void }
   /** Injected by the tests: the wait between two played steps. */
   sleep?: (ms: number) => Promise<void>
   /** How long an advance runs before the controls show it (BUSY_REVEAL_MS). The tests pass 0. */
@@ -97,10 +102,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     onModeChange: () => render()
   })
   let panel: PanelId = null
-  // The signal list is the only scrollable thing here and every step re-renders the body,
-  // so its scroll position is carried across a render rather than snapping back to the top.
-  let signalScroll = 0
-  // The status row's walk line while a walk is in progress, so a progress report can patch it.
+  // The status row's walk line while a walk or a search is in progress, so a progress report
+  // can patch it.
   let walkLine: HTMLElement | null = null
   // Whether the running advance has gone on long enough to show (BUSY_REVEAL_MS).
   const revealAfter = options.busyRevealMs ?? BUSY_REVEAL_MS
@@ -130,7 +133,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
 
   /** The advance running, as the controls show it: not for its first BUSY_REVEAL_MS. */
   function busyShown(): boolean {
-    return controller.busy && (revealed || controller.cancelling || controller.walkedTo !== null)
+    return controller.busy && (revealed || controller.cancelling || controller.walkedTo !== null || controller.searchedTo !== null)
   }
   // Exit throws the replay away -- nothing lists a replay to reopen -- and it sits beside Step,
   // the button pressed most. So it takes two presses, the trading kit's rule for anything that
@@ -158,9 +161,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     // A progress report moves one date, several times a second: patch that line. Rebuilding
     // the window instead would replace the Stop button under a pointer pressing it, and a
     // press released on the new button is no click at all.
-    const walked = controller.walkedTo
-    if (change === 'walk' && walked !== null && walkLine) showWalk(walkLine, walked)
-    else render()
+    if (change === 'walk' && walkLine && showProgress(walkLine)) return
+    render()
   })
 
   // -- what the buttons (and their keys) do -------------------------------------------------
@@ -182,7 +184,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   }
 
   function pressPlay(): void {
-    // Busy with an advance the player did not start (a Next signal run): Play waits for it.
+    // Busy with an advance the player did not start (a Next alert run): Play waits for it.
     if (!player.playing && controller.busy) return
     player.toggle()
   }
@@ -238,23 +240,36 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // -- the body ----------------------------------------------------------------------------
   //
   //   [▶] [Step]  [1h v] × [1]  every [1 s v]      transport: each button beside what it uses
-  //   [Next signal]  Stepped 1h                     the other way to move, and why it stopped
-  //   Signals 1  Base 1h  Results  Account  Trade   Exit replay   panels, windows; Exit set apart
+  //   [Next alert]  Stepped 1h                      the other way to move, and why it stopped
+  //   Alerts 2  Base 1h  Results  Account  Trade   Exit replay   the manager, panels, windows
 
   function renderBody(): void {
     const body = win.body
     body.innerHTML = ''
     walkLine = null
     body.append(renderTransport(), renderNext(), renderToggles())
-    if (panel === 'signals') body.appendChild(renderSignals())
     if (panel === 'settings') body.appendChild(renderSettings())
     if (panel === 'results') body.appendChild(renderResults())
     win.reflow()
   }
 
-  function showWalk(line: HTMLElement, walked: number): void {
-    line.textContent = `Walking… reached ${formatClock(walked, controller.grid.schedule.timezone)}`
-    line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
+  /** Write how far a running search or walk has got into `line`; false when neither runs. A
+   * search comes first (it decides where the walk goes), then the walk to what it found. */
+  function showProgress(line: HTMLElement): boolean {
+    const searched = controller.searchedTo
+    const walked = controller.walkedTo
+    const zone = controller.grid.schedule.timezone
+    if (searched !== null) {
+      line.textContent = `Looking for the next alert… reached ${formatClock(searched, zone)}`
+      line.title = `How far ahead the alerts have been checked (${new Date(searched).toISOString()}). Nothing moves until one triggers.`
+      return true
+    }
+    if (walked !== null) {
+      line.textContent = `Walking… reached ${formatClock(walked, zone)}`
+      line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
+      return true
+    }
+    return false
   }
 
   /** Play and Step, each beside the setting it uses: "Step 1h × 1", "play every 1 s". */
@@ -268,10 +283,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     play.disabled = busy && !playing
     play.title = playing
       ? 'Pause after this step (Shift+↓)'
-      : `Play: step ${describeAdvance(controller.advance)} every ${delayLabel(player.delayMs)} until a fill, a signal or a watch stops it (Shift+↓)`
+      : `Play: step ${describeAdvance(controller.advance)} every ${delayLabel(player.delayMs)} until a fill or a price watch stops it (Shift+↓)`
 
-    // While an advance runs -- a Step or Next signal -- the same button stops it, at the next
-    // base bar.
+    // While an advance runs -- a Step or Next alert -- the same button stops it, at the next
+    // base bar (or, while Next alert is still searching, before anything moves).
     const cancelling = controller.busy && controller.cancelling
     const label = !busy ? 'Step' : cancelling ? 'Stopping…' : 'Stop'
     const step = button('kc-button kc-button-primary wd-replay-step', label, pressStep)
@@ -319,43 +334,47 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     return row
   }
 
-  /** Next signal, and beside it what the replay is doing or why it last stopped. */
+  /** Next alert, and beside it what the replay is doing or why it last stopped. */
   function renderNext(): HTMLElement {
     const row = el('div', 'wd-replay-row wd-replay-next-row')
     const busy = busyShown()
-    const next = button('kc-button kc-button-outline wd-replay-next', 'Next signal', () => {
+    const next = button('kc-button kc-button-outline wd-replay-next', 'Next alert', () => {
       if (controller.busy) return
       player.pause()
-      void controller.nextSignal().then((r) => r && options.onStop?.(r))
+      void controller.nextAlert().then((r) => r && options.onStop?.(r))
     })
-    // An armed price watch is a stop too, so a wall with watches and no signals can still run
-    // to the next one.
-    const stops = controller.signals.armed.length + controller.armedStops
+    // A price watch is a stop too, so a wall with watches and no alert can still run to the
+    // next one.
+    const alerts = controller.alertCount
+    const stops = alerts + controller.armedStops
+    const ticker = controller.symbol.split(':')[1] ?? controller.symbol
     next.disabled = busy || stops === 0
-    next.title = stops === 0 ? 'Arm a signal or place a price watch first' : 'Advance to the next armed signal or price watch'
+    next.title =
+      stops === 0
+        ? `Add an alert on ${ticker} (Alerts) or place a price watch first`
+        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} on ${ticker} triggers${controller.armedStops > 0 ? ', or a price watch fires' : ''}`
     row.appendChild(next)
 
-    const walked = controller.walkedTo
     const last = controller.lastStop
-    if (walked !== null) {
-      // A walk in progress replaces the last stop's reason, which is stale by now anyway. In the
-      // body and not the title bar: the date is the walk's reach, ahead of everything drawn, and
-      // must not read as the replay's clock.
-      walkLine = el('span', 'wd-replay-walk')
-      showWalk(walkLine, walked)
-      row.appendChild(walkLine)
+    const progress = el('span', 'wd-replay-walk')
+    if (showProgress(progress)) {
+      // A search or walk in progress replaces the last stop's reason, which is stale by now
+      // anyway. In the body and not the title bar: the date is how far it has looked, ahead of
+      // everything drawn, and must not read as the replay's clock.
+      walkLine = progress
+      row.appendChild(progress)
     } else if (player.playing) {
       // Playing: every step's "Stepped 1h" would say the same thing twice a second. When the play
       // stops by itself this gives way to why it stopped, which is the line worth reading.
       const playingLine = el('span', 'wd-replay-stop-reason is-playing')
       playingLine.textContent = `Playing every ${delayLabel(player.delayMs)}`
-      playingLine.title = 'Stops by itself at a fill pause, an armed signal, a price watch or the end of the data (Shift+↓ pauses)'
+      playingLine.title = 'Stops by itself at a fill pause, a price watch or the end of the data (Shift+↓ pauses)'
       row.appendChild(playingLine)
     } else if (last) {
       // Absent until an advance has stopped.
       const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
-      reason.textContent = describeStop(last, controller.signals.catalogue)
-      reason.title = reason.textContent
+      reason.textContent = describeStop(last)
+      reason.title = last.alert?.readings ? `${reason.textContent} — ${last.alert.readings}` : reason.textContent
       row.appendChild(reason)
     }
     return row
@@ -363,13 +382,16 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
 
   function renderToggles(): HTMLElement {
     const row = el('div', 'wd-replay-toggles')
-    const book = controller.signals
-    const published = book.catalogue.filter((e) => e.available).length
-    const armed = book.armed.length
-
-    const signals = toggleButton('Signals', armed > 0 ? String(armed) : '', panel === 'signals', () => showPanel('signals'))
-    signals.disabled = published === 0
-    signals.title = published === 0 ? 'No signal plugin publishes on this wall' : `${published} available, ${armed} armed`
+    if (options.alerts) {
+      const manager = options.alerts
+      const count = controller.alertCount
+      const toggle = toggleButton('Alerts', count > 0 ? String(count) : '', manager.isOpen(), () => {
+        manager.toggle()
+        renderBody()
+      })
+      toggle.title = `The alert manager: ${count} enabled on ${controller.symbol.split(':')[1] ?? controller.symbol}, which is where Next alert stops`
+      row.appendChild(toggle)
+    }
 
     // The base is on the toggle itself: it decides how accurately every fill is priced, so
     // it should be legible without opening anything.
@@ -379,7 +401,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     settings.title = baseCheck.ok ? 'Base timeframe and pause on fill' : (baseCheck.reason ?? '')
     const results = toggleButton('Results', '', panel === 'results', () => showPanel('results'))
     results.title = 'How the session is going: P&L, win rate, drawdown'
-    row.append(signals, settings, results)
+    row.append(settings, results)
 
     if (options.account) {
       const account = options.account
@@ -483,74 +505,6 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     return box
   }
 
-  function renderSignals(): HTMLElement {
-    const box = el('div', 'wd-replay-panel')
-    const book = controller.signals
-    const available = book.catalogue.filter((e) => e.available)
-    if (available.length === 0) {
-      const none = el('span', 'wd-replay-muted')
-      none.textContent = 'none published'
-      box.appendChild(none)
-      return box
-    }
-    // What arming is FOR, said once: the list is otherwise a wall of names and timeframes.
-    const help = el('div', 'wd-replay-muted wd-replay-signal-help')
-    help.textContent = 'Arm a signal on a timeframe and Next signal stops at it. ☆ keeps it at the top.'
-    box.appendChild(help)
-    const list = el('div', 'wd-replay-signal-list')
-    list.addEventListener('scroll', () => {
-      signalScroll = list.scrollTop
-    })
-    const resolutions = sortByLength([...new Set(options.intervalsInUse())])
-
-    const row = (entry: SignalCatalogueEntry, name: string): HTMLElement => {
-      const node = el('div', 'wd-replay-signal')
-      const starred = book.isStarred(entry.ref)
-      const star = button(`wd-replay-star ${starred ? 'is-on' : ''}`, starred ? '★' : '☆', () => {
-        book.star(entry.ref, !starred)
-        controller.persist()
-        renderBody()
-      })
-      star.title = starred ? 'Unstar (also disarms it)' : 'Star: keep it at the top of the list'
-      const text = el('span', `wd-replay-signal-name is-${entry.side ?? 'none'}`)
-      text.textContent = name
-      text.title = entry.description ? `${fullName(entry)}: ${entry.description}` : fullName(entry)
-      // The arm buttons are on EVERY row: arming is the point of the list, and hiding it behind
-      // the star left a first-time user with nothing to press. Arming stars (the book's rule).
-      const arms = el('span', 'wd-replay-arms')
-      for (const res of resolutions) {
-        const armed = book.isArmed(entry.ref, res)
-        const arm = button(`wd-replay-arm ${armed ? 'is-on' : ''}`, res, () => {
-          book.arm(entry.ref, res, !armed)
-          controller.persist()
-          renderBody()
-        })
-        arm.title = armed ? `Armed on ${res}: Next signal stops here. Click to disarm` : `Arm on ${res}: Next signal stops at it`
-        arm.setAttribute('aria-pressed', String(armed))
-        arms.appendChild(arm)
-      }
-      node.append(star, text, arms)
-      return node
-    }
-
-    // The shortlist first, under its own heading and by its full name (it mixes plugins); then
-    // the rest of the catalogue grouped by plugin, each row named by what tells it apart there.
-    const starred = available.filter((e) => book.isStarred(e.ref))
-    if (starred.length > 0) {
-      list.appendChild(groupHeading('Starred'))
-      for (const entry of starred) list.appendChild(row(entry, fullName(entry)))
-    }
-    for (const [title, entries] of groupByTitle(available.filter((e) => !book.isStarred(e.ref)))) {
-      list.appendChild(groupHeading(title))
-      for (const entry of entries) list.appendChild(row(entry, shortName(entry)))
-    }
-    box.appendChild(list)
-    // Assigned after the list is built but before it is on screen; the browser applies it on
-    // the first layout, so re-rendering under the pointer does not jump the list.
-    list.scrollTop = signalScroll
-    return box
-  }
-
   render()
   return {
     element: win.element,
@@ -607,46 +561,12 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable || target.closest('.klinecharts-pro-pane-grip') !== null
 }
 
-/** "AREV arev21 · long": the plugin, its variant and the label, for a row out of its group. */
-function fullName(entry: SignalCatalogueEntry): string {
-  return `${entry.title} ${shortName(entry)}`.trim()
-}
-
-/** What tells a signal apart INSIDE its plugin's group: the catalogue repeats the plugin in the
- * variant ("arev21_outlier_rank" under "AREV21 outlier") and in the label ("AREV long" under
- * "AREV"), and three AREVs per row is how the list read before. */
-function shortName(entry: SignalCatalogueEntry): string {
-  const slug = `${entry.title.toLowerCase().replace(/\s+/g, '_')}_`
-  const variant = entry.variant?.toLowerCase().startsWith(slug) ? entry.variant.slice(slug.length) : (entry.variant ?? '')
-  const titled = `${entry.title.toLowerCase()} `
-  const label = entry.label.toLowerCase().startsWith(titled) ? entry.label.slice(titled.length) : entry.label
-  return [variant, label].filter((part) => part.length > 0).join(' · ')
-}
-
-/** Catalogue order kept, both for the groups and inside them. */
-function groupByTitle(entries: SignalCatalogueEntry[]): Map<string, SignalCatalogueEntry[]> {
-  const groups = new Map<string, SignalCatalogueEntry[]>()
-  for (const entry of entries) {
-    const group = groups.get(entry.title)
-    if (group) group.push(entry)
-    else groups.set(entry.title, [entry])
-  }
-  return groups
-}
-
-function groupHeading(text: string): HTMLElement {
-  const heading = el('div', 'wd-replay-signal-group')
-  heading.textContent = text
-  return heading
-}
-
-function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogueEntry[]): string {
+function describeStop(result: AdvanceResult): string {
   switch (result.reason) {
-    case 'signal': {
-      const entry = catalogue.find((e) => e.ref === result.signal?.ref)
-      const name = entry ? fullName(entry) : (result.signal?.ref ?? 'signal')
-      return `Stopped at ${name} @${result.signal?.resolution ?? ''}`
-    }
+    case 'alert':
+      return `Alert: ${result.alert?.name ?? ''}`
+    case 'none':
+      return 'No alert triggers before the end of the data'
     case 'fill':
       return `Paused on ${result.events.some((e) => e.kind === 'fill') ? 'a fill' : 'a close'}`
     case 'watch': {

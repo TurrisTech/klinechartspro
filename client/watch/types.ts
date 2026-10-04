@@ -7,17 +7,17 @@
 // browser is a view onto watches, not the thing evaluating them, so a client-side copy of
 // the crossing rule would be a second definition that could disagree.
 
-export type WatchStatus = 'armed' | 'fired' | 'disabled'
-export type WatchTrigger = 'edge' | 'level'
-export type WatchRepeat = 'once' | 'always'
+import type { Condition } from '../alerts/conditions'
+import type { Repeat, Trigger } from '../alerts/policy'
 
-/** A leaf of the server's condition language, or a combinator over leaves. Opaque to most of
- * this module: only `priceLevel`/`priceCondition` below look inside one. */
-export type Condition =
-  | { field: string; op: string; value?: number | string | number[] }
-  | { all: Condition[] }
-  | { any: Condition[] }
-  | { not: Condition }
+export type WatchStatus = 'armed' | 'fired' | 'disabled'
+export type WatchTrigger = Trigger
+export type WatchRepeat = Repeat
+
+/** A leaf of the condition language, or a combinator over leaves -- the alert manager's
+ * (client/alerts/conditions.ts). Opaque to most of this module: only
+ * `priceLevel`/`priceCondition` below look inside one. */
+export type { Condition }
 
 export interface Watch {
   id: string

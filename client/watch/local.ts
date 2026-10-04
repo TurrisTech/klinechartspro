@@ -9,7 +9,8 @@ import {
   needsPrevious,
   OPS,
   parse
-} from './evaluate'
+} from '../alerts/conditions'
+import { decide, rearm } from '../alerts/policy'
 import type { Condition, SourceField, Watch, WatchDraft, WatchSource } from './types'
 
 // A WATCH REGISTRY THAT RUNS HERE, for the one case the server's cannot serve: a BAR REPLAY.
@@ -29,7 +30,10 @@ import type { Condition, SourceField, Watch, WatchDraft, WatchSource } from './t
 // axis tag in this module) drives it with no idea it is not the server. That is the whole
 // modularity claim: ONE view, two backends.
 //
-// Parity with the server is DATA, not review -- see `evaluate.ts` and `local.test.ts`.
+// The condition language and the firing policy are the alert manager's
+// (client/alerts/conditions.ts, client/alerts/policy.ts); this adds what a REGISTRY adds --
+// sources, arming and its seed, persistence. Parity with the server is DATA, not review -- see
+// `local.test.ts`.
 
 /** Ceiling per replay, mirroring the server's per-owner limit. */
 export const MAX_WATCHES = 200
@@ -247,23 +251,14 @@ export class LocalWatchRegistry implements WatchApi {
     // Recorded whatever the answer: the next crossing compares against THIS reading, and an
     // unknowable answer is still an observation.
     record.previous = observation
-    if (result === null) return null
-    if (!result) {
-      record.wasTrue = false
-      return null
-    }
-    const already = record.wasTrue
-    record.wasTrue = true
-    if (record.wire.trigger === 'edge' && already) return null
-    if (cooling(record, at)) return null
+    if (!decide(record, record.wire, result, at)) return null
     return this.fire(record, at, observation)
   }
 
+  /** The firing's history fields and its wire form; `decide` has already moved the policy. */
   private fire(record: Record_, at: number, observation: Observation): WatchFiring {
     record.wire.lastFiredAt = at
-    record.firedSinceArm = at
     record.wire.fireCount += 1
-    if (record.wire.repeat === 'once') record.status = 'fired'
     const watch = toWire(record)
     return {
       watch,
@@ -388,9 +383,7 @@ export class LocalWatchRegistry implements WatchApi {
    * *reach it from where the market is now*. Without it a crossing armed above the market
    * fires on its first event, on a move nobody asked about. */
   private async arm_(record: Record_): Promise<void> {
-    record.status = 'armed'
-    record.wasTrue = false
-    record.firedSinceArm = null
+    rearm(record)
     record.wire.armedAt = this.now()
     // Only a crossing has anything to cross FROM; for a plain comparison a stored baseline
     // would be nothing but a misleading field.
@@ -428,15 +421,6 @@ function toWire(record: Record_): Watch {
     // One word for what a client shows: a disabled watch is not "armed but off".
     status: !record.wire.enabled ? 'disabled' : record.status
   }
-}
-
-/** Whether a firing is too soon after the last one. Only for a REPEATING watch (a one-shot
- * fires once, so a cooldown could only ever suppress the one firing it exists for) and only
- * for a firing since the current arm. */
-function cooling(record: Record_, at: number): boolean {
-  if (record.wire.repeat !== 'always' || record.wire.cooldownMs <= 0) return false
-  if (record.firedSinceArm === null) return false
-  return at - record.firedSinceArm < record.wire.cooldownMs
 }
 
 /** `target · readings · note`, as the server builds it. A rendering, not a rule: the number

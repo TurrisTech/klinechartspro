@@ -5,8 +5,8 @@ import type { AdvanceResult } from './session'
 //
 // A step is the user's own Step -- the current advance setting, walked or seeked exactly as a
 // click would -- so playing changes nothing about what a step does, only who presses it. The
-// play stops by itself on ANY stop that is not "reached the target": a fill pause, an armed
-// signal, a firing price watch, a cancel, the end of the data. Each of those is the replay
+// play stops by itself on ANY stop that is not "reached the target": a fill pause, a firing
+// price watch, a cancel, the end of the data. Each of those is the replay
 // saying "look at this", and stepping on past it would hide it.
 //
 // Pacing is a floor, not a metronome. The next step waits for the delay AND for the wall to

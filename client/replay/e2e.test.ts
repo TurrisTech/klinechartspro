@@ -7,7 +7,7 @@ import type { ChartProPane, Period, SymbolInfo } from '../../src'
 // klinecharts' updateData does (replace the bar at the same timestamp, append a newer one,
 // ignore an older one) and whose init load runs ChartPane's own window arithmetic through
 // the replay datafeed. Everything else -- the hub, the session, the caches, the engine, the
-// signal book, the /sim persistence -- is the shipped code.
+// alert search behind Next alert, the /sim persistence -- is the shipped code.
 //
 // Skipped unless REPLAY_E2E names the server (e.g. REPLAY_E2E=http://127.0.0.1:20002).
 
@@ -45,18 +45,19 @@ class FakeChart {
 }
 
 describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () => {
-  test('step, jump to a signal, refine a fill, persist and restore', async () => {
+  test('step, jump to the next alert, refine a fill, persist and restore', async () => {
     const { loadCapabilities, capabilities } = await import('../capabilities')
     const { setReadClock, getReadClock } = await import('../config')
     const { resolutionToPeriod } = await import('../periods')
-    const { loadSignalCatalogue } = await import('../plugins/api')
+    const { AlertSearch } = await import('../alerts/search')
+    const { HttpAlertData } = await import('../alerts/data')
+    const { ReplayAlerts } = await import('./alerts')
     const { simApi } = await import('../trading/api')
     const { Engine } = await import('./engine')
     const { ReplayFeedHub, HISTORY_WINDOW_BARS } = await import('./feed')
     const { restore } = await import('./persist')
     const { ReplayTradingSession } = await import('./session')
-    const { SignalBook } = await import('./signals')
-    const { HttpBarSource, HttpSignalSource } = await import('./source')
+    const { HttpBarSource } = await import('./source')
     const { FX_GRID, FX_SCHEDULE, fromWall, intervalStart, nominalMs, nonWeekendGaps, toWireDate } = await import('./timeframes').then(async (tf) => ({
       ...tf,
       nonWeekendGaps: (await import('./cache')).nonWeekendGaps
@@ -111,9 +112,19 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     }
 
     // -- the session ---------------------------------------------------------------------------
-    const catalogue = await loadSignalCatalogue()
-    const arev = catalogue.find((e) => e.ref === 'arev:arev21:long' && e.available)
-    const signals = new SignalBook(catalogue, new HttpSignalSource())
+    // One client alert, computed in the browser from the stored bars: the 1h close crossing
+    // above its 20-bar average, which a few weeks of EURUSD does many times.
+    const alert = {
+      id: 'e2e', kind: 'client' as const, name: 'close over MA20', note: '', enabled: true, symbol: SYMBOL,
+      rule: {
+        left: { kind: 'bar' as const, interval: '1h', field: 'close' as const },
+        op: 'crosses_above',
+        right: { operand: { kind: 'indicator' as const, interval: '1h', name: 'MA', params: [20], output: 'ma1' } }
+      },
+      trigger: 'level' as const, repeat: 'always' as const, cooldownMs: 0,
+      createdAt: 0, updatedAt: 0, armedAt: 0, status: 'armed' as const, lastFiredAt: null, fireCount: 0
+    }
+    const alerts = new ReplayAlerts(SYMBOL, () => [alert], new AlertSearch(new HttpAlertData(), async () => ({ stored: [], signals: [] })))
     const created = await simApi.create({ mode: 'replay', balance: 10_000, symbol: SYMBOL })
     let rev = created.session.rev
     const saves: number[] = []
@@ -138,7 +149,7 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
       pauseOnFill: false,
       storedIntervals: ['5s', '1m', '1h', '1D'],
       engine: new Engine(10_000),
-      signals,
+      alerts,
       barSource,
       dataEnd: () => start + 30 * 24 * H,
       save: async (state) => {
@@ -207,22 +218,17 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     const limitOrder = session.snapshot.orders.find((o) => o.type === 'limit')
     expect(limitOrder?.fillPrice as number).toBeLessThanOrEqual(limitPx)
 
-    // -- 3. jump to the next armed signal: every pane grows by the full intermediate count ---------
+    // -- 3. jump to the next alert, then a long advance: every pane grows by the full count --------
     const jumpFrom = session.cursor
-    let target: number
-    if (arev) {
-      signals.arm(arev.ref, '1h')
-      const jump = await session.nextSignal()
-      expect(['signal', 'end']).toContain(jump?.reason ?? '')
-      target = session.cursor
-      console.info('[e2e] next signal:', jump?.reason, jump?.signal, 'bars:', jump?.bars.length)
-      if (jump?.reason === 'signal') expect(jump.signal?.effective).toBe(target)
-    } else {
-      // No published arev on this store: a long plain advance exercises the same path.
-      const jump = await session.advanceBy({ interval: '4h', multiple: 30 })
-      expect(jump?.reason).toBe('target')
-      target = session.cursor
-    }
+    const jump = await session.nextAlert()
+    console.info('[e2e] next alert:', jump?.reason, jump?.alert, 'bars:', jump?.bars.length)
+    expect(jump?.reason).toBe('alert')
+    expect(jump?.alert?.effective).toBe(session.cursor)
+    expect(session.cursor).toBeGreaterThan(jumpFrom)
+    // An alert triggers at a bar's close: on the 1h grid.
+    expect(intervalStart('1h', session.cursor)).toBe(session.cursor)
+    await session.advanceBy({ interval: '4h', multiple: 30 })
+    const target = session.cursor
     expect(target).toBeGreaterThan(jumpFrom + 4 * H)
     for (const interval of intervals) {
       const chart = charts.get(interval) as FakeChart
@@ -251,7 +257,6 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
     expect(stored?.cursor).toBe(session.cursor)
     expect(stored?.engine.orders.length).toBe(session.snapshot.orders.length)
     expect(stored?.engine.trades.length).toBe(session.snapshot.trades.length)
-    expect(stored?.armed.length).toBe(arev ? 1 : 0)
     const again = Engine.fromState((stored as NonNullable<typeof stored>).engine)
     expect(again.balance).toBe(session.snapshot.account.balance)
     await simApi.remove(created.session.id)

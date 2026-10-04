@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
-import type { SignalCatalogueEntry } from '../plugins/types'
+import type { ReplayAlertBook, SearchProgress } from './alerts'
 import type { BarSource, ReplayBar } from './cache'
+import type { AlertOccurrence } from './clock'
 import type { ReplayObserver } from './session'
 import { Engine } from './engine'
-import { SignalBook, type SignalHit, type SignalSource } from './signals'
 import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from './timeframes'
 
 // session.ts imports ../trading/api -> ../auth -> ../config, which read `window` at import.
@@ -99,12 +99,24 @@ function bucketLen(interval: string): number {
   return interval === '1h' ? H : interval === '4h' ? 4 * H : M
 }
 
-const catalogue: SignalCatalogueEntry[] = [{ plugin: 'arev', title: 'AREV', variant: 'arev21', available: true, id: 'long', label: 'Long', side: 'long', description: '', ref: 'arev:arev21:long' }]
-
-class FakeSignals implements SignalSource {
-  constructor(private hits: SignalHit[]) {}
-  async points(_r: string, _s: string, _res: string, from: number, to: number): Promise<SignalHit[]> {
-    return this.hits.filter((h) => h.date >= from && h.date < to)
+/** Alerts that trigger at fixed instants: the search is client/alerts' business (and tested
+ * there); the session's is what it does with the answer. */
+class FakeAlerts implements ReplayAlertBook {
+  asked: Array<{ after: number; until: number }> = []
+  constructor(
+    private readonly at: number[],
+    private readonly enabled = 1,
+    private readonly during?: (progress: SearchProgress) => void
+  ) {}
+  count(): number {
+    return this.enabled
+  }
+  async next(after: number, until: number, progress: SearchProgress): Promise<AlertOccurrence | null> {
+    this.asked.push({ after, until })
+    this.during?.(progress)
+    if (progress.shouldStop()) return null
+    const effective = this.at.find((t) => t > after && t <= until)
+    return effective === undefined ? null : { alertId: 'a1', name: 'oversold', effective, readings: 'RSI(14) 1h 28.1' }
   }
 }
 
@@ -119,18 +131,15 @@ function make(
   opts: {
     base?: string
     cursor?: number
-    hits?: SignalHit[]
     stored?: string[]
-    signals?: SignalSource
+    alerts?: ReplayAlertBook
     observer?: ReplayObserver
-    signalVisible?: (signal: { date: number }) => boolean | null
   } = {}
 ): Made {
   const start = ny('2024-03-04 09:00')
   const source = new SyntheticSource(start, 8 * 60)
   const saved: unknown[] = []
   const advanced: Array<{ from: number; to: number; reason: string }> = []
-  const signals = new SignalBook(catalogue, opts.signals ?? new FakeSignals(opts.hits ?? []))
   const session = new ReplayTradingSession({
     id: 's1',
     name: 'Replay',
@@ -145,7 +154,6 @@ function make(
     pauseOnFill: false,
     storedIntervals: opts.stored ?? ['1m', '1h', '1D'],
     engine: new Engine(10_000),
-    signals,
     barSource: source,
     dataEnd: () => start + 8 * H,
     save: async (state) => {
@@ -154,7 +162,7 @@ function make(
     onAdvanced: (r) => {
       advanced.push({ from: r.from, to: r.to, reason: r.reason })
     },
-    signalVisible: opts.signalVisible,
+    alerts: opts.alerts,
     observer: opts.observer
   })
   session.setIntervalsInUse(['1h'])
@@ -199,71 +207,72 @@ describe('ReplayTradingSession', () => {
     expect(r3?.walked).toBe(true)
   })
 
-  test('an armed signal before the target stops the advance at its effective instant', async () => {
+  test('Next alert stops where the alert triggers, and seeks there when nothing is working', async () => {
     const start = ny('2024-03-04 09:00')
-    const { session } = make({ hits: [{ date: start + 2 * H, effective: start + 3 * H }] })
-    session.signals.arm('arev:arev21:long', '1h')
-    const r = await session.advanceBy({ interval: '1h', multiple: 6 })
-    expect(r?.reason).toBe('signal')
-    expect(r?.signal?.ref).toBe('arev:arev21:long')
+    const alerts = new FakeAlerts([start + 3 * H, start + 5 * H])
+    const { session, advanced } = make({ alerts })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(r?.alert).toMatchObject({ alertId: 'a1', effective: start + 3 * H })
     expect(session.cursor).toBe(start + 3 * H)
     expect(r?.walked).toBe(false)
-    // Next signal from here: none armed ahead -> the end of the data.
-    const n = await session.nextSignal()
-    expect(n?.reason).toBe('end')
-    expect(session.cursor).toBe(start + 8 * H)
+    // Searched from the cursor to the end of the data.
+    expect(alerts.asked[0]).toEqual({ after: start, until: start + 8 * H })
+    const again = await session.nextAlert()
+    expect(again?.alert?.effective).toBe(start + 5 * H)
+    expect(advanced.map((a) => a.reason)).toEqual(['alert', 'alert'])
   })
 
-  test('next signal steps over the stops the chart does not draw, and stops at the first it does', async () => {
+  test('with nothing ahead, Next alert stays put rather than spend the replay', async () => {
     const start = ny('2024-03-04 09:00')
-    const asked: number[] = []
-    const { session, advanced } = make({
-      hits: [
-        { date: start, effective: start + 1 * H },
-        { date: start + 1 * H, effective: start + 2 * H },
-        { date: start + 2 * H, effective: start + 3 * H }
-      ],
-      // The first two are not drawn; the third is.
-      signalVisible: (signal) => {
-        asked.push(signal.date)
-        return signal.date === start + 2 * H
-      }
-    })
-    session.signals.arm('arev:arev21:long', '1h')
-    const r = await session.nextSignal()
-    expect(r?.reason).toBe('signal')
-    expect(session.cursor).toBe(start + 3 * H)
-    // Asked about each stop in turn, and never about anything else.
-    expect(asked).toEqual([start, start + 1 * H, start + 2 * H])
-    // Each hop is an ordinary advance, so the account walked all three.
-    expect(advanced.map((a) => a.reason)).toEqual(['signal', 'signal', 'signal'])
+    const { session, advanced } = make({ alerts: new FakeAlerts([]) })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('none')
+    expect(session.cursor).toBe(start)
+    // Nothing moved, so the chart is not told the clock did.
+    expect(advanced).toEqual([])
   })
 
-  test('with every stop hidden it runs to the end rather than stopping at one', async () => {
+  test('with nothing ahead but a price watch armed, it runs on for the watch', async () => {
     const start = ny('2024-03-04 09:00')
-    const { session } = make({
-      hits: [
-        { date: start, effective: start + 1 * H },
-        { date: start + 1 * H, effective: start + 2 * H }
-      ],
-      signalVisible: () => false
-    })
-    session.signals.arm('arev:arev21:long', '1h')
-    const r = await session.nextSignal()
+    const { session } = make({ alerts: new FakeAlerts([]), observer: { ...observer(), armedStops: () => 1 } })
+    const r = await session.nextAlert()
     expect(r?.reason).toBe('end')
+    expect(r?.walked).toBe(true)
     expect(session.cursor).toBe(start + 8 * H)
   })
 
-  test('a stop nothing can answer for is kept: null does not skip', async () => {
+  test('an alert finer than the base stops at the close of the base bar it falls in', async () => {
     const start = ny('2024-03-04 09:00')
-    const { session } = make({
-      hits: [{ date: start, effective: start + 1 * H }],
-      signalVisible: () => null
-    })
-    session.signals.arm('arev:arev21:long', '1h')
-    const r = await session.nextSignal()
-    expect(r?.reason).toBe('signal')
-    expect(session.cursor).toBe(start + 1 * H)
+    // A 1m alert triggering at 10:31 on a 1h base: the walk moves in whole hours.
+    const { session } = make({ alerts: new FakeAlerts([start + H + 31 * M]) })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(session.cursor).toBe(start + 2 * H)
+    // The alert itself is still reported at its own instant.
+    expect(r?.alert?.effective).toBe(start + H + 31 * M)
+  })
+
+  test('leaving the replay mid-search is a cancel, not a run to the end for a watch', async () => {
+    const start = ny('2024-03-04 09:00')
+    let session: Made['session'] | null = null
+    const alerts = new FakeAlerts([start + 3 * H], 1, () => session?.dispose())
+    const made = make({ alerts, observer: { ...observer(), armedStops: () => 1 } })
+    session = made.session
+    const r = await made.session.nextAlert()
+    expect(r?.reason).toBe('cancel')
+    expect(made.session.cursor).toBe(start)
+    expect(made.advanced).toEqual([])
+  })
+
+  test('a Step does not look for alerts: only Next alert stops at one', async () => {
+    const start = ny('2024-03-04 09:00')
+    const alerts = new FakeAlerts([start + H])
+    const { session } = make({ alerts })
+    const r = await session.advanceBy({ interval: '1h', multiple: 3 })
+    expect(r?.reason).toBe('target')
+    expect(session.cursor).toBe(start + 3 * H)
+    expect(alerts.asked).toEqual([])
   })
 
   test('a limit inside a coarse candle makes the engine descend to the finer stored bars', async () => {
@@ -409,17 +418,15 @@ describe('cancelling an advance', () => {
 
   test('asked while the advance is still planning, it stops before moving at all', async () => {
     let session: Made['session'] | null = null
-    const slowSignals: SignalSource = {
-      async points() {
-        session?.cancel()
-        return []
-      }
-    }
-    const made = make({ base: '1m', observer: observer(), signals: slowSignals })
+    // Stop pressed while Next alert is still searching ahead.
+    const alerts = new FakeAlerts([start + 3 * H], 1, (progress) => {
+      session?.cancel()
+      progress.onProgress(start + H)
+    })
+    const made = make({ base: '1m', observer: observer(), alerts })
     session = made.session
     made.session.setIntervalsInUse(['1m'])
-    made.session.signals.arm('arev:arev21:long', '1h')
-    const r = await made.session.advanceBy({ interval: '1h', multiple: 1 })
+    const r = await made.session.nextAlert()
     expect(r?.reason).toBe('cancel')
     expect(r?.bars).toEqual([])
     expect(made.session.cursor).toBe(start)
@@ -498,7 +505,6 @@ describe('cancelling an advance', () => {
         pauseOnFill: false,
         storedIntervals: ['1m'],
         engine: new Engine(10_000),
-        signals: new SignalBook([], new FakeSignals([])),
         barSource: source,
         dataEnd: () => start + 30 * 24 * H,
         save: async () => {},
@@ -667,7 +673,6 @@ describe('a session on another market\'s schedule', () => {
       pauseOnFill: false,
       storedIntervals: ['1h', '1D'],
       engine: new Engine(10_000),
-      signals: new SignalBook([], new FakeSignals([])),
       barSource: new EveryHour(),
       dataEnd: () => UTC(20),
       save: async () => {},
