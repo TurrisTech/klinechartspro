@@ -51,14 +51,19 @@ class FakeStream {
 
 class FakeData implements AlertData {
   points_: Point[] = []
+  /** Per-interval history; anything else reads `history`. */
+  byInterval = new Map<string, AlertBar[]>()
+  /** Set to hold every points read until it resolves -- a slow server. */
+  gate: Promise<void> | null = null
   constructor(public history: AlertBar[]) {}
   async grid() {
     return FX_GRID
   }
-  async bars(): Promise<AlertBar[]> {
-    return this.history
+  async bars(_symbol: string, interval: string): Promise<AlertBar[]> {
+    return this.byInterval.get(interval) ?? this.history
   }
   async points(_s: unknown, _sym: string, _i: string, from: number, to: number): Promise<Point[]> {
+    if (this.gate) await this.gate
     return this.points_.filter((p) => p.date >= from && p.date < to)
   }
 }
@@ -157,6 +162,61 @@ describe('AlertMonitor', () => {
     await env.store.setEnabled(once.id, true)
     await settle()
     expect(env.monitor.running()).toEqual([once.id])
+  })
+
+  test('switched off while the server is being read, it says nothing', async () => {
+    const p: Operand = { kind: 'series', interval: '1h', indicator: 'arev21', key: 'p' }
+    const env = setup(history, T0 + 50 * H)
+    env.data.points_ = history.map((b) => ({ date: b.date, p: 0.4 }))
+    const alert = await env.store.create(definition({ left: p, op: 'crosses_above', right: { value: 0.6 } }))
+    await settle()
+    let release: () => void = () => {}
+    env.data.gate = new Promise((resolve) => (release = resolve))
+    env.data.points_.push({ date: T0 + 50 * H, p: 0.7 })
+    env.setClock(T0 + 51 * H)
+    env.stream.push('1h', frame(50, 1.1))
+    await settle()
+    // The read is in flight; the user switches the alert off.
+    await env.store.setEnabled(alert.id, false)
+    release()
+    await settle()
+    expect(env.raised).toEqual([])
+    expect(env.store.get(alert.id)?.fireCount).toBe(0)
+  })
+
+  test('a 4h bar a moment behind the 1h one is waited for, not read as the previous 4h bar', async () => {
+    const env = setup(history, T0 + 50 * H)
+    // FX 4h candles open at 22:00Z in winter (17:00 New York); the last closed one ends at
+    // 02:00Z on the 11th, which is T0 + 50h.
+    const first4h = Date.UTC(2024, 0, 8, 22)
+    const fourHourly = Array.from({ length: 13 }, (_, k) => {
+      const open = first4h + k * 4 * H
+      return { open, end: open + 4 * H, date: open, o: 1.15, h: 1.15, l: 1.15, c: 1.15, v: 1 }
+    })
+    expect(fourHourly.at(-1)?.end).toBe(T0 + 50 * H)
+    env.data.byInterval.set('4h', fourHourly)
+    const close4h: Operand = { kind: 'bar', interval: '4h', field: 'close' }
+    await env.store.create(definition({ left: close, op: '>', right: { operand: close4h } }))
+    await settle()
+    for (const i of [50, 51, 52]) {
+      env.setClock(T0 + (i + 1) * H)
+      env.stream.push('1h', frame(i, 1.12))
+      await settle()
+    }
+    // 06:00Z: the 1h close is above the OLD 4h close, but the new 4h bar closes at 06:00 too.
+    env.setClock(T0 + 54 * H)
+    env.stream.push('1h', frame(53, 1.2))
+    await settle()
+    expect(env.raised).toEqual([])
+    // ...and it closed higher still: 1.2 is not above 1.25, so nothing was ever true.
+    env.stream.push('4h', { date: first4h + 13 * 4 * H, open: 1.25, high: 1.25, low: 1.25, close: 1.25, volume: 1 })
+    await settle()
+    expect(env.raised).toEqual([])
+    // A close above it does fire, once the next 1h bar shows one.
+    env.setClock(T0 + 55 * H)
+    env.stream.push('1h', frame(54, 1.3))
+    await settle()
+    expect(env.raised.length).toBe(1)
   })
 
   test('waits for a server value that is late for the newest bar, then evaluates it', async () => {

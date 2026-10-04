@@ -9,7 +9,7 @@
 // refused when it is written instead of being an alert that silently never fires.
 
 import { hasFeature } from '../capabilities'
-import { loadPreferences, savePreference } from '../preferences'
+import { loadPreferences, preferencesLoaded, savePreference } from '../preferences'
 import { compile, describeRule, type Labeller, RuleError } from './rules'
 import { type Alert, type AlertDefinition, type AlertSource, DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
 
@@ -26,7 +26,13 @@ export interface AlertPersistence {
 
 export function preferencesPersistence(): AlertPersistence {
   return {
-    load: async () => (await loadPreferences())[PREFERENCE_KEY],
+    load: async () => {
+      const data = await loadPreferences()
+      // A failed read answers `{}`, which would read as "no alerts" -- and the next save would
+      // write that list over the stored one.
+      if (!preferencesLoaded()) throw new Error('the preferences store could not be read')
+      return data[PREFERENCE_KEY]
+    },
     save: (document) => savePreference(PREFERENCE_KEY, document)
   }
 }
@@ -80,6 +86,9 @@ export class ClientAlertStore implements AlertSource {
   private rows = new Map<string, Row>()
   private readonly listeners = new Set<() => void>()
   private loaded = false
+  /** Set when the stored list could not be read. Nothing is written then: a save would replace
+   * the list that is still stored with whatever this tab holds. */
+  loadError = ''
 
   constructor(
     private readonly persistence: AlertPersistence,
@@ -93,7 +102,15 @@ export class ClientAlertStore implements AlertSource {
   /** Read the stored list. A row whose rule no longer compiles is dropped with a warning
    * rather than kept as an alert that cannot be evaluated. */
   async load(): Promise<void> {
-    const document = await this.persistence.load().catch(() => undefined)
+    let document: unknown
+    try {
+      document = await this.persistence.load()
+      this.loadError = ''
+    } catch (err) {
+      console.warn('[alerts] could not read the stored alerts', err)
+      this.loadError = 'Your saved alerts could not be read, so nothing is saved until they are. Reload the page to try again.'
+      document = undefined
+    }
     this.rows.clear()
     const list = isRecord(document) && Array.isArray(document.alerts) ? document.alerts : []
     for (const raw of list) {
@@ -124,6 +141,7 @@ export class ClientAlertStore implements AlertSource {
   }
 
   async create(definition: AlertDefinition): Promise<Alert> {
+    this.writable()
     if (this.rows.size >= MAX_ALERTS) throw new RuleError(`at the limit of ${MAX_ALERTS} alerts`)
     const at = this.now()
     const row: Row = {
@@ -145,6 +163,7 @@ export class ClientAlertStore implements AlertSource {
   /** Replace what an alert watches. A change to what it watches or how it fires re-arms it:
    * a `once` alert that fired on the old rule has said nothing yet about the new one. */
   async update(id: string, definition: AlertDefinition): Promise<Alert> {
+    this.writable()
     const row = this.require(id)
     const next = this.validated(definition)
     const rearm = signature(row) !== signature(next) || (next.enabled && !row.enabled)
@@ -155,6 +174,7 @@ export class ClientAlertStore implements AlertSource {
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<void> {
+    this.writable()
     const row = this.require(id)
     if (row.enabled === enabled) return
     row.enabled = enabled
@@ -164,6 +184,7 @@ export class ClientAlertStore implements AlertSource {
   }
 
   async rearm(id: string): Promise<void> {
+    this.writable()
     const row = this.require(id)
     row.enabled = true
     this.arm(row)
@@ -172,6 +193,7 @@ export class ClientAlertStore implements AlertSource {
   }
 
   async remove(id: string): Promise<void> {
+    this.writable()
     if (this.rows.delete(id)) this.commit()
   }
 
@@ -213,6 +235,10 @@ export class ClientAlertStore implements AlertSource {
       repeat,
       cooldownMs
     }
+  }
+
+  private writable(): void {
+    if (this.loadError) throw new RuleError(this.loadError)
   }
 
   private arm(row: Row): void {

@@ -66,7 +66,9 @@ const HISTORY_PAD_MS = 4 * 86_400_000
 /** One instrument at one timeframe: its closed bars, kept current by the stream. */
 class Feed {
   bars: AlertBar[] = []
-  ready = false
+  /** How many bars of lead-in the history read has covered so far -- a runner needing more
+   * waits for the deeper read rather than seeding on indicators that are not warm yet. */
+  private loaded = 0
   /** The instrument's schedule, once read: what turns a streamed bar's label into its open and
    * close. Frames that arrive before it are held, not dropped. */
   private grid: CandleGrid | null = null
@@ -87,6 +89,20 @@ class Feed {
         if (closed) this.merge([bar])
       }
     }
+  }
+
+  /** Whether the history covers `depth` bars of lead-in. */
+  readyFor(depth: number): boolean {
+    return this.loaded >= depth
+  }
+
+  /** When the bar after the newest one held will close, on the instrument's schedule; null
+   * with nothing held. What lets an instant wait for a timeframe whose bar is due by then but
+   * not here yet, instead of reading its previous bar. */
+  nextClose(): number | null {
+    const last = this.bars[this.bars.length - 1]
+    if (!last || !this.grid) return null
+    return this.grid.end(this.interval, this.grid.nextStart(this.interval, last.open))
   }
 
   get vendor(): string {
@@ -121,26 +137,27 @@ class Feed {
     const run = async (): Promise<void> => {
       const now = this.owner.now()
       const length = resolutionDurationMs(this.interval)
+      const depth = this.depth
       try {
         this.grid ??= await this.owner.data.grid(this.symbol)
         if (!this.grid) {
           // No market hours: no bar here has a close, so nothing can be evaluated. Ready, empty.
           console.warn(`[alerts] no market hours for ${this.symbol}: its alerts cannot be evaluated`)
-          this.ready = true
+          this.loaded = Math.max(this.loaded, depth)
           this.changed()
           return
         }
         const grid = this.grid
         this.mergeBars(this.early.map((b) => toReplayBar(this.interval, b as OHLCVBar & Record<string, unknown>, grid)))
         this.early = []
-        const bars = await this.owner.data.bars(this.symbol, this.interval, now - 2 * this.depth * length - HISTORY_PAD_MS, now + length)
+        const bars = await this.owner.data.bars(this.symbol, this.interval, now - 2 * depth * length - HISTORY_PAD_MS, now + length)
         // Only CLOSED bars: a history read ends with the forming one.
         this.mergeBars(bars.filter((b) => b.end <= this.owner.now()))
-        this.ready = true
       } catch (err) {
         console.warn(`[alerts] no history for ${this.symbol} ${this.interval}`, err)
-        this.ready = true
       }
+      // Covered, or as covered as it will get: a failed read must not stall its alerts forever.
+      this.loaded = Math.max(this.loaded, depth)
       this.changed()
     }
     this.loading = (this.loading ?? Promise.resolve()).then(run)
@@ -219,11 +236,18 @@ class Runner {
   readonly key: string
   private readonly compiled: CompiledRule
   private readonly feeds = new Map<string, Feed>()
+  /** The lead-in this alert needs on each feed. */
+  private readonly depths = new Map<string, number>()
   private readonly pointKeys = new Map<string, string>()
+  /** How far each server operand's source has served, as of the last read: a missing value on a
+   * bar at or before it is final, after it not written yet. */
+  private served = new Map<string, number | null>()
   private watermark: number | null = null
   private state: RunState = freshRun()
   private timer: ReturnType<typeof setTimeout> | null = null
   private busy = false
+  /** A change arrived while an evaluation was running: evaluate again when it ends. */
+  private dirty = false
   private disposed = false
   private readonly onChange = (): void => this.schedule(this.owner.settleMs)
 
@@ -236,8 +260,10 @@ class Runner {
     const operands = [...this.compiled.operands.values()]
     for (const interval of byInterval(operands).keys()) {
       const feed = owner.feed(alert.symbol, interval)
+      const depth = leadInFor(operands, interval)
       this.feeds.set(interval, feed)
-      feed.watch(this.onChange, leadInFor(operands, interval))
+      this.depths.set(interval, depth)
+      feed.watch(this.onChange, depth)
     }
     // A feed another alert already loaded says nothing new until its next bar: look now.
     this.schedule(0)
@@ -261,11 +287,17 @@ class Runner {
 
   /** Bring the alert up to date: every instant past the watermark, in order. */
   async evaluate(): Promise<void> {
-    if (this.busy || this.disposed) return
-    if ([...this.feeds.values()].some((f) => !f.ready)) return
+    if (this.disposed) return
+    if (this.busy) {
+      this.dirty = true
+      return
+    }
+    if ([...this.feeds].some(([interval, feed]) => !feed.readyFor(this.depths.get(interval) ?? 0))) return
     this.busy = true
     try {
       const tracks = await this.tracks()
+      // Switched off, edited or deleted while the server was being read: say nothing.
+      if (this.disposed) return
       const timeline = instants(tracks, this.compiled.fields)
       if (timeline.length === 0) return
       if (this.watermark === null) {
@@ -276,7 +308,8 @@ class Runner {
       for (const instant of timeline) {
         if (instant.at <= this.watermark) continue
         if (this.waiting(instant, tracks) && now - instant.at < this.owner.graceMs) {
-          // A server value for this close has not been written yet: read again later.
+          // Something this close needs has not arrived yet: look again later, bounded by the
+          // grace (`MonitorOptions.graceMs`).
           this.schedule(this.owner.pollMs)
           return
         }
@@ -286,6 +319,10 @@ class Runner {
       }
     } finally {
       this.busy = false
+      if (this.dirty && !this.disposed) {
+        this.dirty = false
+        this.schedule(this.owner.settleMs)
+      }
     }
   }
 
@@ -299,14 +336,26 @@ class Runner {
     this.watermark = last.at
   }
 
-  /** Whether a server operand has no value yet on a bar that closes at this instant. */
+  /** Whether this instant cannot be decided yet: a timeframe's bar due by then has not arrived
+   * (its frame is a second or two behind another's), or a server value on a bar closing then has
+   * not been written. Evaluating anyway would read the previous bar's value -- the stale read
+   * the timeline exists to refuse. */
   private waiting(instant: Instant, tracks: Track[]): boolean {
+    for (const feed of this.feeds.values()) {
+      const due = feed.nextClose()
+      if (due !== null && due <= instant.at) return true
+    }
     for (const track of tracks) {
       const index = track.at.indexOf(instant.at)
       if (index < 0) continue
+      const date = track.dates?.[index]
       for (const [key, values] of track.values) {
         const operand = this.compiled.operands.get(key)
-        if ((operand?.kind === 'series' || operand?.kind === 'signal') && values[index] === undefined) return true
+        if ((operand?.kind !== 'series' && operand?.kind !== 'signal') || values[index] !== undefined) continue
+        // Missing where the source has already served past this bar is final: it wrote nothing
+        // here (krev writes only on a fresh extreme). Only a bar after that may still be written.
+        const through = this.served.get(key) ?? null
+        if (through === null || date === undefined || date > through) return true
       }
     }
     return false
@@ -328,7 +377,10 @@ class Runner {
           // where a late write lands.
           const newest = feed.newest()
           await feed.refresh(newest === null ? bars[0].date : Math.max(bars[0].date, newest), bars[bars.length - 1].date + 1)
-          indexes.set(operandKey(operand), indexPoints(feed.list(), source.foldBy))
+          if (this.disposed) return out
+          const index = indexPoints(feed.list(), source.foldBy)
+          indexes.set(operandKey(operand), index)
+          this.served.set(operandKey(operand), index.through)
         }
       }
       out.push(await buildTrack(interval, bars, group.values(), (o) => indexes.get(operandKey(o))))
@@ -338,13 +390,15 @@ class Runner {
 
   private points(operand: Operand, source: PointSource): PointFeed {
     const key = `${source.plugin}|${source.variant}|${this.alert.symbol}|${operand.interval}`
-    // Held once per runner, however many evaluations ask: `dispose` releases what it holds.
-    const held = this.pointKeys.has(key)
-    if (!held) this.pointKeys.set(key, key)
-    return this.owner.pointFeed(key, source, this.alert.symbol, operand.interval, !held)
+    // Held once per runner, however many evaluations ask: `dispose` releases what it holds --
+    // and a runner already disposed takes nothing it would never give back.
+    const hold = !this.pointKeys.has(key) && !this.disposed
+    if (hold) this.pointKeys.set(key, key)
+    return this.owner.pointFeed(key, source, this.alert.symbol, operand.interval, hold)
   }
 
   private fire(instant: Instant): void {
+    if (this.disposed) return
     const fired = this.owner.store.recordFiring(this.alert.id, instant.at)
     const alert = fired ?? this.alert
     this.owner.notify.notify({

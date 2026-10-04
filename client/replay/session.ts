@@ -489,13 +489,19 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const alert = options.alerts ? await this.findAlert(from, end) : null
       const plan = planAdvance(from, { toEnd: true, end }, this.grid, alert)
       let reason: StopReason = plan.reason === 'alert' ? 'alert' : 'toEnd' in request || end < target ? 'end' : 'target'
-      const stopAt = plan.stopAt
+      // An alert on a timeframe finer than the base triggers inside a base bar, and the walk moves
+      // in whole base bars: stopping mid-bar would leave the rest of that bar -- with the price
+      // action before the cursor in it -- for the next advance to fill against. So the stop is the
+      // close of the base bar it falls in: later, never earlier, so nothing is seen ahead of time.
+      const stopAt = plan.reason === 'alert' ? Math.min(end, Math.max(plan.stopAt, this.grid.end(this.base, plan.stopAt - 1))) : plan.stopAt
       const events: SimEvent[] = []
       const consumed: ReplayBar[] = []
       let observed: ObserverStop[] = []
       let paused = false
-      // Asked while the alerts were being searched: stop before moving at all.
-      let cancelled = this.cancelRequested
+      // Asked while the alerts were being searched -- or the replay was left -- stop before moving
+      // at all. A search abandoned for either reason answered "nothing found", which must not
+      // read as a run to the end of the data.
+      let cancelled: boolean = this.cancelRequested || this.disposed
       // Next alert found nothing, and no price watch could stop the run either: nowhere to go.
       const nowhere = options.alerts === true && plan.reason !== 'alert' && !cancelled && this.armedStops === 0
       // Walk the base bars only when one of them could actually do something. With nothing

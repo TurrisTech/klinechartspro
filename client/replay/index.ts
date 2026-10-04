@@ -285,6 +285,9 @@ export async function mountBarReplay(
   const watches = new ReplayWatches({ symbol: stored.symbol, notify: ctx.notify })
   watches.restore(stored.watches)
 
+  // A fresh look-ahead per replay: the search caches what it read, and near the end of the data
+  // a server value written since an earlier replay on this page would otherwise read as missing.
+  ctx.alerts?.search.reset()
   const session = new ReplayTradingSession({
     id: answer.session.id,
     name: answer.session.name,

@@ -29,6 +29,8 @@ export interface Track {
   interval: string
   /** Bar closes (effective instants), ascending. */
   at: readonly number[]
+  /** Each bar's wire date -- what a plugin's points are filed under. */
+  dates?: readonly number[]
   /** Operand key -> its value on each bar, aligned with `at`. */
   values: ReadonlyMap<string, readonly Value[]>
 }

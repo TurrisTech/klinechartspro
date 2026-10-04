@@ -30,6 +30,12 @@ const MAX_HELD_ROWS = 60_000
  * holidays that hold no bars, so it is padded rather than trusted. */
 const LEAD_PAD_MS = 4 * 86_400_000
 
+/** Bar closes at or before the cursor that are evaluated to seed the edge and the crossings. */
+const BASELINE_BARS = 3
+
+/** How many times the fetch behind the cursor doubles looking for enough bars. */
+const BACKFILL_ATTEMPTS = 5
+
 export interface AlertHit {
   alert: Alert
   /** The bar close it triggers at: the effective instant. */
@@ -90,13 +96,29 @@ export class AlertSearch {
     const catalogue = operands.some((o) => o.kind === 'series' || o.kind === 'signal') ? await this.catalogue() : null
     const lengths = intervals.map(resolutionDurationMs)
     const chunk = SEARCH_CHUNK_BARS * Math.min(...lengths)
-    // Where evaluation starts: a few of the coarsest bars before `after`, which is enough to
-    // know what the cursor's own instant answered (the edge) and read (the crossings) -- and
-    // each of those instants gets a full lead-in of its own below.
-    const evalFrom = after - 3 * Math.max(...lengths)
-    const fetchFrom = new Map(
-      intervals.map((i) => [i, evalFrom - 2 * leadInFor(operands, i) * resolutionDurationMs(i) - LEAD_PAD_MS])
-    )
+    // Where evaluation starts, counted in BARS, not in time: the last few bar closes at or
+    // before `after` of every timeframe, which is what the cursor's own instant answered (the
+    // edge) and read (the crossings). A span of time would find none after a weekend, a session
+    // gap or a hole in the store, and the edge and the crossings would then start from nothing.
+    // Each timeframe is fetched back until it holds those bars plus its lead-in (doubling, a
+    // few times at most), so each of those instants is evaluated warm.
+    const fetchFrom = new Map<string, number>()
+    let evalFrom = after
+    for (const interval of intervals) {
+      const length = resolutionDurationMs(interval)
+      const need = leadInFor(operands, interval) + BASELINE_BARS
+      const bars = this.barCache(alert.symbol, interval)
+      let back = 2 * need * length + LEAD_PAD_MS
+      let closed: AlertBar[] = []
+      for (let attempt = 0; attempt < BACKFILL_ATTEMPTS; attempt++, back *= 2) {
+        await bars.ensure(after - back, after)
+        closed = bars.slice(after - back, after).filter((b) => b.end <= after)
+        if (closed.length >= need) break
+      }
+      fetchFrom.set(interval, after - back)
+      const baseline = closed[Math.max(0, closed.length - BASELINE_BARS)]
+      if (baseline) evalFrom = Math.min(evalFrom, baseline.end - 1)
+    }
 
     const state = freshRun()
     let processed = evalFrom
@@ -115,7 +137,7 @@ export class AlertSearch {
         const lead = leadInFor(operands, interval)
         const first = held.findIndex((b) => b.end > processed)
         const window = held.slice(Math.max(0, (first < 0 ? held.length : first) - 1 - lead))
-        const index = await this.pointIndexes(alert.symbol, interval, group.values(), window, catalogue)
+        const index = await this.pointIndexes(alert.symbol, interval, group.values(), window, catalogue, Math.min(until, chunkEnd + chunk))
         tracks.push(await buildTrack(interval, window, group.values(), (o) => index.get(operandKey(o))))
         if (bars.size > MAX_HELD_ROWS && window.length > 0) {
           // Walked past: drop it, and stop asking for it -- `ensure` from the old start would
@@ -142,18 +164,22 @@ export class AlertSearch {
     return cache
   }
 
-  /** The points every server operand on `interval` reads, over the dates of `window`. */
+  /** The points every server operand on `interval` reads, over the dates of `window` -- and on
+   * to `ahead`, so a sparse source (krev writes only on a fresh extreme) has usually served a
+   * row past the window's last bar, which is what makes a bar it left empty read as final
+   * rather than as not-yet-written (compute.ts `PointIndex.through`). */
   private async pointIndexes(
     symbol: string,
     interval: string,
     operands: Iterable<Operand>,
     window: readonly AlertBar[],
-    catalogue: ServerCatalogue | null
+    catalogue: ServerCatalogue | null,
+    ahead: number
   ): Promise<Map<string, PointIndex>> {
     const out = new Map<string, PointIndex>()
     if (!catalogue || window.length === 0) return out
     const from = window[0].date
-    const to = window[window.length - 1].date + 1
+    const to = Math.max(window[window.length - 1].date + 1, ahead)
     for (const operand of operands) {
       const source = pointSource(operand, catalogue)
       if (!source) continue

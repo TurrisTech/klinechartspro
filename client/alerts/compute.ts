@@ -29,12 +29,21 @@ export interface PointRows {
   folded: Record<string, unknown>
 }
 
-export type PointIndex = ReadonlyMap<number, PointRows>
+/** A plugin's rows by bar date, and how far it has served: the newest date it answered with a
+ * row. A bar at or before `through` that has no row is FINAL -- the plugin evaluated past it
+ * and wrote nothing there (krev writes only on a fresh extreme). A bar after it may simply not
+ * be written yet. The two are different answers: the first is "no signal", the second unknown. */
+export interface PointIndex {
+  rows: ReadonlyMap<number, PointRows>
+  through: number | null
+}
 
 /** Index a plugin's points by bar date, folding several rows on one bar under `foldBy`. */
-export function indexPoints(points: ReadonlyArray<{ date: number }>, foldBy: string | null): Map<number, PointRows> {
+export function indexPoints(points: ReadonlyArray<{ date: number }>, foldBy: string | null): PointIndex {
   const out = new Map<number, PointRows>()
+  let through: number | null = null
   for (const point of points) {
+    if (through === null || point.date > through) through = point.date
     const row = point as Record<string, unknown>
     let entry = out.get(point.date)
     if (!entry) {
@@ -47,7 +56,7 @@ export function indexPoints(points: ReadonlyArray<{ date: number }>, foldBy: str
       if (typeof side === 'string') entry.folded[side] = row
     } else entry.folded = row
   }
-  return out
+  return { rows: out, through }
 }
 
 /** Where a server operand's points come from: its plugin, variant and fold. Resolved by the
@@ -82,17 +91,17 @@ export async function buildTrack(
         break
       case 'series': {
         const index = points(operand)
-        values.set(key, bars.map((bar) => seriesValue(index?.get(bar.date), operand.key)))
+        values.set(key, bars.map((bar) => seriesValue(index?.rows.get(bar.date), operand.key)))
         break
       }
       case 'signal': {
         const index = points(operand)
-        values.set(key, bars.map((bar) => signalValue(index?.get(bar.date))))
+        values.set(key, bars.map((bar) => signalValue(index?.rows.get(bar.date), index !== undefined && index.through !== null && bar.date <= index.through)))
         break
       }
     }
   }
-  return { interval, at: bars.map((bar) => bar.end), values }
+  return { interval, at: bars.map((bar) => bar.end), dates: bars.map((bar) => bar.date), values }
 }
 
 function barValue(bar: AlertBar, field: 'open' | 'high' | 'low' | 'close' | 'volume'): number {
@@ -152,11 +161,11 @@ function seriesValue(rows: PointRows | undefined, key: string): Value {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-/** The label on a bar, '' on a bar the plugin served with no label, and undefined on a bar it
- * has not served at all -- "no signal" and "not computed yet" are different answers, and only
- * the first may compare false. */
-function signalValue(rows: PointRows | undefined): Value {
-  if (!rows) return undefined
+/** The label on a bar; '' on a bar the plugin served with no label, or evaluated past without a
+ * row (`final`); undefined on a bar it has not reached -- "no signal" and "not computed yet" are
+ * different answers, and only the first may compare false. */
+function signalValue(rows: PointRows | undefined, final: boolean): Value {
+  if (!rows) return final ? '' : undefined
   for (const row of rows.rows) if (typeof row.signal === 'string' && row.signal) return row.signal
   return ''
 }

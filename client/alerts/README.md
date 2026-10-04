@@ -31,9 +31,19 @@ An **operand** is a value per bar of its timeframe, on the alert's instrument:
 | kind | what | from |
 |---|---|---|
 | `bar` | open / high / low / close / volume | `/getbars` |
-| `indicator` | a klinecharts built-in — MA, EMA, RSI, MACD, BOLL, KDJ… (26 of them) — with its params and the line (`rsi1`, `dif`) | computed **in the browser** from the bars by the chart's own template (`getIndicatorClass`, which `patches/klinecharts@10.0.0.patch` exports for this) |
+| `indicator` | a klinecharts built-in — MA, EMA, RSI, MACD, BOLL, KDJ… (24 of them) — with its params and the line (`rsi1`, `dif`) | computed **in the browser** from the bars by the chart's own template (`getIndicatorClass`, which `patches/klinecharts@10.0.0.patch` exports for this) |
 | `series` | a stored registry row's series — AREV19…23 `p`, arev21_outlier, krev01 | `/plugins/{id}/values` |
 | `signal` | a plugin's published label on a bar — `long`, `top` — or '' for none | `/plugins/{id}/values`' `signal` field |
+
+OBV and PVT are not offered: they are running sums from the first bar loaded, so their value
+depends on where a window starts and never converges -- every alert reads a window, and a
+review measured four OBV crossings landing on four different bars from the chart's. AVP needs
+turnover, which these bars do not carry.
+
+A **sparse** source -- krev writes a row only on a fresh extreme -- is read through how far it
+has served (`compute.ts` `PointIndex.through`): a bar it evaluated past with no row is final
+("no signal", which resets an edge), and only a bar after its newest row may still be written.
+The search reads points a chunk ahead so a sparse source has usually served past the window.
 
 The registry's computed `S:` rows are not offered: each needs the server to resolve a node
 document per instance, and the built-ins cover the same indicators. A plugin's chart template
@@ -85,12 +95,18 @@ and through a bar replay. Per instrument and timeframe a running alert reads, on
 forming bar is never evaluated. An instant is evaluated once, in order, and **never on
 history**: what is there when an alert starts is its baseline, as arming a watch seeds one.
 
-A server series is written by another process some time after its bar closes, so an instant
-whose server value is still missing is **waited for** (re-read every 30 s) and evaluated anyway
-after 10 minutes, with the value missing — late and never cannot be told apart from one
+An instant is **waited for** when something it needs has not arrived: a bar of another
+timeframe due by then (its frame a second or two behind -- reading the previous bar instead is
+the stale read the timeline refuses), or a server value on a bar closing then that the source
+has not written yet. It is re-read every 30 s and evaluated anyway after 10 minutes, with the
+value missing — late and never cannot be told apart from one
 observation, so the wait is bounded (`notes/architecture/freshness-horizons.md`). A firing is
 raised into the Notification Center tagged **`alert`**, and recorded on the alert (count, last
 firing, `once` → fired).
+
+A change that arrives during an evaluation re-runs it when it ends; an alert switched off,
+edited or deleted while the server is being read says nothing; a runner needing more lead-in
+than a shared feed has loaded waits for the deeper read before it seeds its baseline.
 
 Known limits: **only while a tab is open** (that is what server alerts are for); **every open
 tab evaluates and notifies on its own**; a firing while no tab was open is never caught up.
@@ -104,7 +120,10 @@ indicators need, carrying the policy from chunk to chunk so the answer does not 
 where a chunk began (tested against one whole-series evaluation). The instants at or before
 the cursor are evaluated too — they are what an edge and a crossing compare against — but
 cannot be the answer. Only the trigger counts: `once` and the cooldown are about not repeating
-a notification and do not apply to "where next". `client/replay/alerts.ts` asks it for every
+a notification and do not apply to "where next". The instants it seeds from are the last few
+**bar closes** at or before the cursor, counted in bars (fetching further back when a weekend or
+a hole leaves too few), never a span of time that a gap could leave empty.
+`client/replay/alerts.ts` asks it for every
 enabled alert on the replay's instrument and takes the earliest (each later search is bounded
 by the best so far). Rows fetched stay in a `SpanCache` per series, so the next press refetches
 nothing it already holds. A Stop is heard between chunks.
@@ -120,7 +139,9 @@ at before its retention edge — the deployed servers read those from the tiles.
 Account-wide, like the starred timeframes — not part of a workspace, so an edit is written at
 once, not on the workspace's Save: the `alerts` key of `/preferences`, or this browser's
 localStorage where the server has no preferences store. A stored row whose rule no longer
-compiles is dropped with a warning. The replay never writes an alert: Next alert only reads
+compiles is dropped with a warning. If the stored list **cannot be read** (a failed
+`/preferences` read answers `{}`), nothing is written until it can -- the manager says so --
+because a save would replace the stored list with what this tab holds. The replay never writes an alert: Next alert only reads
 them, and a replay's own price watches stay in its state blob.
 
 ## Pieces

@@ -97,6 +97,20 @@ describe('ClientAlertStore', () => {
     expect(reloaded.list()[0].rule).toEqual(definition().rule)
   })
 
+  test('a store that could not be read refuses to write, so it cannot overwrite what is stored', async () => {
+    const saved: unknown[] = []
+    const store = new ClientAlertStore({
+      load: async () => {
+        throw new Error('503')
+      },
+      save: (document) => saved.push(document)
+    })
+    await store.load()
+    expect(store.loadError).toContain('could not be read')
+    await expect(store.create(definition())).rejects.toThrow(RuleError)
+    expect(saved).toEqual([])
+  })
+
   test('remove, and listeners hear every change', async () => {
     const store = new ClientAlertStore(memory())
     let heard = 0

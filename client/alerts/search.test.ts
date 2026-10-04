@@ -147,6 +147,39 @@ describe('AlertSearch', () => {
     expect(await search.next(alert(rule), bars[300].end, bars[399].end)).toBeNull()
   })
 
+  test('across a gap the cursor\'s baseline is the bars before the gap, not nothing', async () => {
+    // Hourly bars, then 48 hours of nothing, then hourly again; the cursor at the end of the gap.
+    const gapped = hourly(400).map((b, i) => (i < 200 ? b : { ...b, open: b.open + 48 * H, end: b.end + 48 * H, date: b.date + 48 * H }))
+    const flat = gapped.map((b, i) => ({ ...b, c: i < 199 ? 1.0 : 1.2, o: 1.0, h: 1.2, l: 1.0 }))
+    const search = new AlertSearch(new FakeData(new Map([['1h', flat]])), async () => NO_CATALOGUE)
+    const cursor = flat[199].end + 47 * H
+    // The close crossed above 1.1 on the last bar BEFORE the gap: nothing after it is a new
+    // crossing, and an edge that started holding there is not new either.
+    expect(await search.next(alert({ left: close, op: 'crosses_above', right: { value: 1.1 } }), cursor, flat[399].end)).toBeNull()
+    expect(await search.next(alert({ left: close, op: '>', right: { value: 1.1 } }, 'edge'), cursor, flat[399].end)).toBeNull()
+    // ...while one placed before that bar does see it.
+    expect((await search.next(alert({ left: close, op: 'crosses_above', right: { value: 1.1 } }), flat[197].end, flat[399].end))?.at).toBe(flat[199].end)
+  })
+
+  test('a sparse source: a bar it evaluated past with no row is "no signal", so each signal is new', async () => {
+    const signal: Operand = { kind: 'signal', interval: '1h', plugin: 'krev', variant: 'krev01' }
+    // Rows only on the extremes, as krev writes them -- nothing on the bars between.
+    const points: Point[] = [120, 160, 161, 230].map((i) => ({ date: bars[i].date, side: 'bottom', signal: 'bottom' }))
+    const search = new AlertSearch(new FakeData(new Map([['1h', bars]]), points), async () => NO_CATALOGUE)
+    const rule: Rule = { left: signal, op: '==', right: { label: 'bottom' } }
+    const hits: number[] = []
+    let cursor = bars[100].end
+    for (let i = 0; i < 4; i++) {
+      const hit = await search.next(alert(rule, 'edge'), cursor, until)
+      if (!hit) break
+      hits.push(hit.at)
+      cursor = hit.at
+    }
+    // Two in a row (160, 161) are one episode to an edge trigger; the empty bars between the
+    // others reset it.
+    expect(hits).toEqual([bars[120].end, bars[160].end, bars[230].end])
+  })
+
   test('earliestHit takes the soonest of several', async () => {
     const search = new AlertSearch(data(), async () => NO_CATALOGUE)
     const a = { ...alert({ left: close, op: '>', right: { value: 5 } }), id: 'never' }
@@ -174,7 +207,7 @@ describe('indexPoints', () => {
       ] as Point[],
       'side'
     )
-    expect(index.get(1)?.folded).toEqual({ top: { date: 1, side: 'top', p: 0.7 }, bottom: { date: 1, side: 'bottom', p: 0.2 } })
-    expect(index.get(1)?.rows.length).toBe(2)
+    expect(index.rows.get(1)?.folded).toEqual({ top: { date: 1, side: 'top', p: 0.7 }, bottom: { date: 1, side: 'bottom', p: 0.2 } })
+    expect(index.rows.get(1)?.rows.length).toBe(2)
   })
 })

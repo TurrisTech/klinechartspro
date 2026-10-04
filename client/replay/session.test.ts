@@ -242,6 +242,29 @@ describe('ReplayTradingSession', () => {
     expect(session.cursor).toBe(start + 8 * H)
   })
 
+  test('an alert finer than the base stops at the close of the base bar it falls in', async () => {
+    const start = ny('2024-03-04 09:00')
+    // A 1m alert triggering at 10:31 on a 1h base: the walk moves in whole hours.
+    const { session } = make({ alerts: new FakeAlerts([start + H + 31 * M]) })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(session.cursor).toBe(start + 2 * H)
+    // The alert itself is still reported at its own instant.
+    expect(r?.alert?.effective).toBe(start + H + 31 * M)
+  })
+
+  test('leaving the replay mid-search is a cancel, not a run to the end for a watch', async () => {
+    const start = ny('2024-03-04 09:00')
+    let session: Made['session'] | null = null
+    const alerts = new FakeAlerts([start + 3 * H], 1, () => session?.dispose())
+    const made = make({ alerts, observer: { ...observer(), armedStops: () => 1 } })
+    session = made.session
+    const r = await made.session.nextAlert()
+    expect(r?.reason).toBe('cancel')
+    expect(made.session.cursor).toBe(start)
+    expect(made.advanced).toEqual([])
+  })
+
   test('a Step does not look for alerts: only Next alert stops at one', async () => {
     const start = ny('2024-03-04 09:00')
     const alerts = new FakeAlerts([start + H])

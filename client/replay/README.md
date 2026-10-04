@@ -225,7 +225,10 @@ floored to the coarsest stored interval dividing it (`defaultBase`): 3m+5m → 1
 timedelta) and stop there; then **walk or seek**. `nextAlert()` is the same advance to the
 end of the data, planned to stop at the alert the search found first
 (`client/alerts/search.ts`: ahead of the cursor, a chunk of bars at a time, every rule with
-its indicators' lead-in), which is effective strictly after the cursor. Only Next alert
+its indicators' lead-in), which is effective strictly after the cursor. An alert on a
+timeframe finer than the base triggers inside a base bar; the stop is that **base bar's close**
+-- later, never earlier -- because the walk moves in whole base bars and a cursor left mid-bar
+would let the next advance fill against price action from before it. Only Next alert
 searches: a Step is not stopped by an alert, only by a fill pause or a firing watch.
 
 **Walk vs seek.** `canFill` (clock.ts) asks whether any bar could produce an event — a

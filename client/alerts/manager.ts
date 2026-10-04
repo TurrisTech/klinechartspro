@@ -151,6 +151,11 @@ export function createAlertManager(options: AlertManagerOptions): AlertManager {
 
   function renderClient(): HTMLElement {
     const box = el('div', 'wd-alerts-list')
+    if (store.loadError) {
+      const problem = el('div', 'wd-alert-problem wd-alerts-load-error')
+      problem.textContent = store.loadError
+      box.appendChild(problem)
+    }
     const alerts = store.list()
     if (alerts.length === 0) {
       const empty = el('div', 'wd-alerts-empty')

@@ -31,12 +31,17 @@ export const BAR_FIELDS: ReadonlyArray<{ field: BarField; label: string }> = [
   { field: 'volume', label: 'Volume' }
 ]
 
-/** The built-ins an alert may compute, in the order the picker lists them. AVP is left out:
- * it divides turnover by volume, and these bars carry no turnover. */
+/** The built-ins an alert may compute, in the order the picker lists them. Left out:
+ *
+ *  - AVP, which divides turnover by volume, and these bars carry no turnover;
+ *  - OBV and PVT, which are running SUMS from the first bar loaded: their value depends on where
+ *    the window starts and never converges, so a windowed read -- every alert's -- would cross
+ *    a level at a different bar from the chart (measured: four crossings, none on the same bar).
+ */
 export const BUILTIN_INDICATORS: readonly string[] = [
   'MA', 'EMA', 'SMA', 'BOLL', 'SAR', 'BBI',
   'RSI', 'MACD', 'KDJ', 'CCI', 'WR', 'DMI', 'BIAS', 'ROC', 'MTM', 'TRIX', 'AO', 'BRAR', 'CR', 'DMA', 'EMV', 'PSY',
-  'VOL', 'OBV', 'PVT', 'VR'
+  'VOL', 'VR'
 ]
 
 /** Where the template's default draws several lines -- one per period, which reads as noise in
