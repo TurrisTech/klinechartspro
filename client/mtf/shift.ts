@@ -1,6 +1,6 @@
 import type { KLineData } from 'klinecharts'
-import { resolutionDurationMs, resolutionToPeriod } from '../periods'
-import { SESSION_DATE_OFFSET_MS as FX_SESSION_DATE_OFFSET_MS } from '../replay/timeframes'
+import { resolutionDurationMs } from '../periods'
+import type { CandleGrid } from '../replay/timeframes'
 import { arevSignal, type ArevPoint } from '../arev/api'
 
 // Where a higher-timeframe vote belongs on a lower-timeframe chart.
@@ -20,50 +20,32 @@ import { arevSignal, type ArevPoint } from '../arev/api'
 // owns the candle boundaries — see the workspace CLAUDE.md's "Candle boundary rules".
 //
 // The second thing this module does is reconcile two different bar CLOCKS. The wire
-// dates intraday bars by their open, but daily-and-coarser bars by their canonical date
-// — 00:00 New York of the session, which is `open + 7h`, because a daily candle opens at
-// 17:00 the evening BEFORE the session it belongs to (wdashboard-server's
-// services/wiredate.py). Those two clocks cannot be compared directly: the 1D bar
-// labelled 2026-08-21 opens at 17:00 on 2026-08-20, so an hourly chart's 17:00 bar and
-// that daily bar's open are the SAME instant while their wire dates are seven hours
-// apart. Every comparison below is therefore made on absolute opens, converting each
-// side out of its own interval's wire clock first, and the marker's chart bar is then
-// read back off the chart's own array. Comparing wire dates directly is the bug this
-// exists to make impossible; it would put every daily signal seven hours late.
-
-/** The FX week's wire offset, imported rather than re-declared: this file held a second
- * copy of the same 7h, which is one more place for it to disagree.
- *
- * **It is the forex default, and the MTF overlay has no schedule to consult.** A crypto
- * instrument's daily candle opens at 00:00 of its own session, so its offset is 0, and a US
- * equity's is -9h -- both wrong here. The overlay runs on the chart's current instrument
- * without being told which market that is, so making this schedule-aware means threading the
- * instrument's `DayGeometry` through it (`timeframes.ts`'s `scheduleWireShift` is the
- * schedule-aware form, used by the tile fold). Until then this is right for forex, which is
- * every instrument the overlay is used on, and wrong by seven hours for the others. */
-const SESSION_DATE_OFFSET_MS = FX_SESSION_DATE_OFFSET_MS
-
-/** Whether this interval's bars are dated by canonical date on the wire. Mirrors
- * `wiredate.session_dated`: the `D`/`W`/`M`/`Y` units, never the intraday ones. */
-export function sessionDated(interval: string): boolean {
-  const period = resolutionToPeriod(interval)
-  if (!period) return false
-  return (
-    period.timespan === 'day' ||
-    period.timespan === 'week' ||
-    period.timespan === 'month' ||
-    period.timespan === 'year'
-  )
-}
+// dates intraday bars by their open, but daily-and-coarser bars by their canonical date --
+// the midnight that dates the session in the instrument's own zone (wdashboard-server's
+// services/wiredate.py). For the FX week that is `open + 7h`, because a daily candle opens
+// at 17:00 the evening BEFORE the session it belongs to; for crypto it is the open itself
+// (a day runs midnight to midnight UTC), and for US equities `open - 9h`. Those clocks
+// cannot be compared directly: an FX 1D bar labelled 2026-08-21 opens at 17:00 on 2026-08-20,
+// so an hourly chart's 17:00 bar and that daily bar's open are the SAME instant while their
+// wire dates are seven hours apart. Every comparison below is therefore made on absolute
+// opens, converting each side out of its own interval's wire clock first, and the marker's
+// chart bar is then read back off the chart's own array.
+//
+// The conversion is the PANE'S INSTRUMENT'S, handed in as its `CandleGrid`
+// (replay/timeframes.ts). Until 2026-10-04 it was the forex 7h for every instrument, and on
+// prod's coinbase BTCUSD that drew every 1D vote on the hourly bar seven hours BEFORE the
+// vote existed -- measured on five votes, 2026-08-21 to 09-03, each placed at 17:00 UTC on
+// the day it was cast instead of at the next midnight: lookahead, the one thing this module
+// exists to make impossible.
 
 /** A bar-axis timestamp as it appears on the wire -> the instant that bar actually opens. */
-export function toAbsolute(interval: string, wireMs: number): number {
-  return sessionDated(interval) ? wireMs - SESSION_DATE_OFFSET_MS : wireMs
+export function toAbsolute(interval: string, wireMs: number, clock: CandleGrid): number {
+  return clock.fromWire(interval, wireMs)
 }
 
 /** The inverse of `toAbsolute`, for stating a window back to the server in its own clock. */
-export function fromAbsolute(interval: string, absMs: number): number {
-  return sessionDated(interval) ? absMs + SESSION_DATE_OFFSET_MS : absMs
+export function fromAbsolute(interval: string, absMs: number, clock: CandleGrid): number {
+  return clock.toWire(interval, absMs)
 }
 
 /** Whether `source` is a strictly finer timeframe than `chart`.
@@ -104,6 +86,8 @@ function upperBound(sorted: number[], x: number): number {
 export interface ShiftInput {
   sourceInterval: string
   chartInterval: string
+  /** The pane's instrument's candle grid: how each interval's wire dates map to opens. */
+  clock: CandleGrid
   /** Every arev21 point fetched for the source timeframe; non-signals are ignored here. */
   points: Iterable<ArevPoint>
   /** The source timeframe's bar opens as the wire states them, ascending. */
@@ -133,15 +117,15 @@ export interface ShiftInput {
  * NOT the successor's open -- into a weekend -- `chartBarAt` takes the first chart bar to open
  * after it, which is where the successor's open would have put it.
  */
-export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoint>, grid: number[]): ShiftedSignal[] {
+export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoint>, grid: number[], clock: CandleGrid): ShiftedSignal[] {
   const out: ShiftedSignal[] = []
   if (grid.length === 0) return out
-  const gridAbs = grid.map((ms) => toAbsolute(sourceInterval, ms))
+  const gridAbs = grid.map((ms) => toAbsolute(sourceInterval, ms, clock))
   const durationMs = resolutionDurationMs(sourceInterval)
   for (const point of points) {
     const label = arevSignal(point)
     if (!label) continue
-    const castAbs = toAbsolute(sourceInterval, point.date)
+    const castAbs = toAbsolute(sourceInterval, point.date, clock)
     // The successor bar: the first grid open strictly after the one the vote was cast on.
     // Strictly, so a vote is never placed back on its own bar.
     const next = upperBound(gridAbs, castAbs)
@@ -152,8 +136,8 @@ export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoi
 }
 
 /** The chart's bar opens in absolute time, for `chartBarAt`. */
-export function chartOpens(chartInterval: string, chartBars: KLineData[]): number[] {
-  return chartBars.map((bar) => toAbsolute(chartInterval, bar.timestamp))
+export function chartOpens(chartInterval: string, chartBars: KLineData[], clock: CandleGrid): number[] {
+  return chartBars.map((bar) => toAbsolute(chartInterval, bar.timestamp, clock))
 }
 
 /**
@@ -207,7 +191,7 @@ export function chartBarAt(knownAt: number, chartAbs: number[], chartInterval: s
  *     candle is not a reading of anything, and the caller says so in the legend instead.
  */
 export function shiftSignals(input: ShiftInput): Map<number, ShiftedSignal[]> {
-  const { sourceInterval, chartInterval, points, grid, chartBars } = input
+  const { sourceInterval, chartInterval, clock, points, grid, chartBars } = input
   const placed = new Map<number, ShiftedSignal[]>()
   if (chartBars.length === 0 || grid.length === 0) return placed
   if (isFinerThan(sourceInterval, chartInterval)) return placed
@@ -215,9 +199,9 @@ export function shiftSignals(input: ShiftInput): Map<number, ShiftedSignal[]> {
   // Both sides onto one clock before anything is compared. See the module note: the wire
   // dates these two intervals on different clocks whenever exactly one of them is
   // daily-or-coarser, which is the common case for this overlay.
-  const chartAbs = chartOpens(chartInterval, chartBars)
+  const chartAbs = chartOpens(chartInterval, chartBars, clock)
 
-  for (const signal of knowableSignals(sourceInterval, points, grid)) {
+  for (const signal of knowableSignals(sourceInterval, points, grid, clock)) {
     const at = chartBarAt(signal.knownAt, chartAbs, chartInterval)
     if (at < 0) continue
     const key = chartBars[at].timestamp

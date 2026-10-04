@@ -101,6 +101,18 @@ describe('staleAt', () => {
     expect(levelsLayer.staleAt?.(at, ctx)).toBe(Date.parse('2026-08-25T17:00:00.000-04:00'))
   })
 
+  test('and on the pane\'s OWN schedule: a coinbase pane looks again at the next UTC midnight', () => {
+    // Sunday 22:00 UTC, nothing heard from the server: the calendar horizon. On the forex week
+    // that was 17:00 New York -- Monday 21:00 UTC, 21 hours after the coinbase week has closed.
+    const at = Date.parse('2026-08-30T22:00:00.000Z')
+    const ctx: LayerContext = {
+      ...context({ priceMin: 1, priceMax: 2, from: 1, to: 2 }, 'BTCUSD'),
+      vendor: 'coinbase',
+      symbol: { ticker: 'BTCUSD', shortName: 'BTCUSD', timezone: 'UTC', dayGeometry: { openOffset: 0, closeOffset: 24, everyDayTrades: true } } as SymbolInfo
+    }
+    expect(levelsLayer.staleAt?.(at, ctx)).toBe(Date.parse('2026-08-31T00:00:00.000Z'))
+  })
+
   test('it reads the watermark of the pane\'s OWN instrument', async () => {
     // Two panes on different symbols whose feeds are at different points must get different
     // horizons; a watermark keyed globally would hand one of them the other's answer.
@@ -381,7 +393,9 @@ function context(
   return {
     ...window,
     chart: null as unknown as Chart,
-    symbol: { ticker, shortName: ticker } as SymbolInfo,
+    // The forex schedule, as client/symbols.ts resolves it for an OANDA pair: the layer's
+    // horizons are worked out on it (freshness.ts).
+    symbol: { ticker, shortName: ticker, timezone: 'America/New_York', dayGeometry: { openOffset: -7, closeOffset: 17, everyDayTrades: false } } as SymbolInfo,
     vendor: 'oanda'
   }
 }

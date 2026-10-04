@@ -9,6 +9,7 @@ const { computeValues } = await import('./templates')
 const { MTF_DEFAULTS } = await import('./config')
 const { GRID_ARRAY, RegistryStore } = await import('../tsregistry/store')
 const { storeFor } = await import('../plugins/store')
+const { FX_SCHEDULE } = await import('../replay/timeframes')
 
 import type { ArevPoint } from '../arev/api'
 import type { KLineData } from 'klinecharts'
@@ -63,6 +64,7 @@ describe('one calc, from the stores to the markers', () => {
     seriesKeys: { '4h': key4h, '1h': key1h },
     rev: 1,
     chartInterval: '1h',
+    schedule: FX_SCHEDULE,
     config: c,
     graphRoots: ['4h' as const]
   })
@@ -145,7 +147,7 @@ describe('entries: a graph that reaches 5m draws a star there', () => {
     )
     const values = computeValues(
       bars,
-      { seriesKeys: keys, rev: 1, chartInterval: '5m', config: c, graphRoots: ['1h'] },
+      { seriesKeys: keys, rev: 1, chartInterval: '5m', schedule: FX_SCHEDULE, config: c, graphRoots: ['1h'] },
     )
     const dots = values.flatMap((v, i) =>
       (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}${d.entry ? ' entry' : ''}`)

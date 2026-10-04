@@ -5,11 +5,12 @@ import {
   levelsStaleAt,
   MAX_RECHECK_MS,
   MIN_RECHECK_MS,
+  NO_SCHEDULE_RECHECK_MS,
   parseWatermark,
   recheckDelay,
   SETTLE_WINDOW_MS
 } from './freshness'
-import { nextSessionAnchor } from '../replay/timeframes'
+import { CONTINUOUS_DAY, FX_GRID, gridOf, nextSessionAnchor } from '../replay/timeframes'
 
 // When to look at a level book again. The rule has to answer three questions and it must
 // answer all of them definitely: is the book current, is a late one worth waiting for, and
@@ -41,28 +42,28 @@ function wire(openText: string, offset = EDT): number {
 
 describe('lastClose', () => {
   test('mid-week, the week that closed last Friday', () => {
-    expect(lastClose('1W', ny('2026-08-25 09:30', EDT))).toBe(FRIDAY_CLOSE)
+    expect(lastClose('1W', ny('2026-08-25 09:30', EDT), FX_GRID)).toBe(FRIDAY_CLOSE)
   })
 
   test('exactly ON a close, that close -- not the one before it', () => {
     // The instant a client refreshes at. Reporting the previous close here would declare the
     // feed caught up at the only moment it cannot possibly be.
-    expect(lastClose('1W', FRIDAY_CLOSE)).toBe(FRIDAY_CLOSE)
-    expect(lastClose('1M', MONDAY_MONTH_CLOSE)).toBe(MONDAY_MONTH_CLOSE)
+    expect(lastClose('1W', FRIDAY_CLOSE, FX_GRID)).toBe(FRIDAY_CLOSE)
+    expect(lastClose('1M', MONDAY_MONTH_CLOSE, FX_GRID)).toBe(MONDAY_MONTH_CLOSE)
   })
 
   test('a millisecond before a close, the one before it', () => {
-    expect(lastClose('1W', FRIDAY_CLOSE - 1)).toBe(ny('2026-08-14 17:00', EDT))
+    expect(lastClose('1W', FRIDAY_CLOSE - 1, FX_GRID)).toBe(ny('2026-08-14 17:00', EDT))
   })
 
   test('over the weekend, still Friday -- no candle closes in the closed window', () => {
-    expect(lastClose('1W', ny('2026-08-22 12:00', EDT))).toBe(FRIDAY_CLOSE)
-    expect(lastClose('1W', ny('2026-08-23 16:00', EDT))).toBe(FRIDAY_CLOSE)
+    expect(lastClose('1W', ny('2026-08-22 12:00', EDT), FX_GRID)).toBe(FRIDAY_CLOSE)
+    expect(lastClose('1W', ny('2026-08-23 16:00', EDT), FX_GRID)).toBe(FRIDAY_CLOSE)
   })
 
   test('monthly closes on the last MARKET day, not the last calendar day', () => {
     // August 2026 ends on a Monday, so the month's candle closes then and not on the 30th.
-    expect(lastClose('1M', ny('2026-09-02 10:00', EDT))).toBe(MONDAY_MONTH_CLOSE)
+    expect(lastClose('1M', ny('2026-09-02 10:00', EDT), FX_GRID)).toBe(MONDAY_MONTH_CLOSE)
   })
 
   test('it is never in the future', () => {
@@ -73,7 +74,7 @@ describe('lastClose', () => {
       ny('2026-11-01 12:00', EST),
       ny('2026-03-08 12:00', EDT)
     ]) {
-      for (const code of ['1W', '1M']) expect(lastClose(code, at)).toBeLessThanOrEqual(at)
+      for (const code of ['1W', '1M']) expect(lastClose(code, at, FX_GRID)).toBeLessThanOrEqual(at)
     }
   })
 })
@@ -81,18 +82,18 @@ describe('lastClose', () => {
 describe('caughtUp', () => {
   test('a feed that consumed the week that just closed is caught up', () => {
     // The bar opening Sunday 2026-08-16 17:00 is the one that closed Friday 17:00.
-    expect(caughtUp('1W', wire('2026-08-16 17:00'), ny('2026-08-25 09:30', EDT))).toBe(true)
+    expect(caughtUp('1W', wire('2026-08-16 17:00'), ny('2026-08-25 09:30', EDT), FX_GRID)).toBe(true)
   })
 
   test('a feed one bar behind is not', () => {
-    expect(caughtUp('1W', wire('2026-08-09 17:00'), ny('2026-08-25 09:30', EDT))).toBe(false)
+    expect(caughtUp('1W', wire('2026-08-09 17:00'), ny('2026-08-25 09:30', EDT), FX_GRID)).toBe(false)
   })
 
   test('"declared, nothing consumed yet" is never caught up', () => {
     // 0 is the server's sentinel for a series with no values. Taking the close of "the bar
     // at the epoch" would be meaningless, so it is answered directly.
-    expect(caughtUp('1W', 0, ny('2026-08-25 09:30', EDT))).toBe(false)
-    expect(caughtUp('1W', -1, ny('2026-08-25 09:30', EDT))).toBe(false)
+    expect(caughtUp('1W', 0, ny('2026-08-25 09:30', EDT), FX_GRID)).toBe(false)
+    expect(caughtUp('1W', -1, ny('2026-08-25 09:30', EDT), FX_GRID)).toBe(false)
   })
 })
 
@@ -121,12 +122,12 @@ describe('levelsStaleAt -- caught up', () => {
 
   test('the horizon is the next 17:00, the earliest a book can change', () => {
     const at = ny('2026-08-25 09:30', EDT)
-    expect(levelsStaleAt(at, caught)).toBe(ny('2026-08-25 17:00', EDT))
+    expect(levelsStaleAt(at, caught, FX_GRID)).toBe(ny('2026-08-25 17:00', EDT))
   })
 
   test('a live tick stream does not move it -- no candle closed', () => {
     const first = ny('2026-08-25 09:30', EDT)
-    expect(levelsStaleAt(first + 1000, caught)).toBe(levelsStaleAt(first, caught))
+    expect(levelsStaleAt(first + 1000, caught, FX_GRID)).toBe(levelsStaleAt(first, caught, FX_GRID))
   })
 })
 
@@ -138,24 +139,24 @@ describe('levelsStaleAt -- behind, and worth waiting for', () => {
 
   test('seconds after the close, look again in the floor delay', () => {
     const at = FRIDAY_CLOSE + 5_000
-    expect(levelsStaleAt(at, behind)).toBe(at + MIN_RECHECK_MS)
+    expect(levelsStaleAt(at, behind, FX_GRID)).toBe(at + MIN_RECHECK_MS)
   })
 
   test('minutes after, back off proportionally', () => {
     const at = FRIDAY_CLOSE + 20 * MINUTE
-    expect(levelsStaleAt(at, behind)).toBe(at + 10 * MINUTE)
+    expect(levelsStaleAt(at, behind, FX_GRID)).toBe(at + 10 * MINUTE)
   })
 
   test('the delay is capped, so a long wait does not become a long silence', () => {
     const at = MONDAY_MONTH_CLOSE + 5 * HOUR
-    expect(levelsStaleAt(at, { '1M': wire('2026-06-30 17:00') })).toBe(at + MAX_RECHECK_MS)
+    expect(levelsStaleAt(at, { '1M': wire('2026-06-30 17:00') }, FX_GRID)).toBe(at + MAX_RECHECK_MS)
   })
 
   test('the SOONEST interval wins when only one is behind', () => {
     const at = MONDAY_MONTH_CLOSE + 2 * HOUR
     const both = { '1W': wire('2026-08-16 17:00'), '1M': wire('2026-06-30 17:00') }
     // 1W closed the previous Friday and is caught up; 1M closed two hours ago and is not.
-    expect(levelsStaleAt(at, both)).toBe(at + MAX_RECHECK_MS)
+    expect(levelsStaleAt(at, both, FX_GRID)).toBe(at + MAX_RECHECK_MS)
   })
 
   test('the horizon is never past the calendar one, whatever the constants are tuned to', () => {
@@ -166,7 +167,7 @@ describe('levelsStaleAt -- behind, and worth waiting for', () => {
     const stuck = { '1W': wire('2026-08-09 17:00'), '1M': wire('2026-06-30 17:00') }
     for (let minutes = 0; minutes < 60 * 26; minutes += 7) {
       const at = FRIDAY_CLOSE + minutes * MINUTE
-      const horizon = levelsStaleAt(at, stuck)
+      const horizon = levelsStaleAt(at, stuck, FX_GRID)
       expect(horizon).toBeGreaterThan(at)
       expect(horizon).toBeLessThanOrEqual(nextSessionAnchor(at))
     }
@@ -181,7 +182,7 @@ describe('levelsStaleAt -- behind, and NOT coming', () => {
 
   test('past the settle window, stop asking and take the calendar horizon', () => {
     const at = FRIDAY_CLOSE + SETTLE_WINDOW_MS
-    expect(levelsStaleAt(at, { '1W': wire('2026-08-09 17:00') })).toBe(
+    expect(levelsStaleAt(at, { '1W': wire('2026-08-09 17:00') }, FX_GRID)).toBe(
       ny('2026-08-22 17:00', EDT)
     )
   })
@@ -190,19 +191,19 @@ describe('levelsStaleAt -- behind, and NOT coming', () => {
     // 1M at the epoch, asked mid-month: the last monthly close was weeks ago, so this is not
     // a bar on its way. One horizon, at the next 17:00, for as long as it stays that way.
     const at = ny('2026-08-18 11:00', EDT)
-    expect(levelsStaleAt(at, { '1M': 0 })).toBe(ny('2026-08-18 17:00', EDT))
+    expect(levelsStaleAt(at, { '1M': 0 }, FX_GRID)).toBe(ny('2026-08-18 17:00', EDT))
   })
 
   test('an interval the server did not name is nothing to wait for', () => {
     // The server omits an interval it has no series for. An empty header is a definite "this
     // server computes none of what you asked for" -- not "computed through the epoch".
     const at = FRIDAY_CLOSE + MINUTE
-    expect(levelsStaleAt(at, {})).toBe(ny('2026-08-22 17:00', EDT))
+    expect(levelsStaleAt(at, {}, FX_GRID)).toBe(ny('2026-08-22 17:00', EDT))
   })
 
   test('a server that says nothing at all degrades to the calendar horizon', () => {
     const at = FRIDAY_CLOSE + MINUTE
-    expect(levelsStaleAt(at, null)).toBe(ny('2026-08-22 17:00', EDT))
+    expect(levelsStaleAt(at, null, FX_GRID)).toBe(ny('2026-08-22 17:00', EDT))
   })
 
   test('however long the outage, there is always a next check-in and it is bounded', () => {
@@ -214,7 +215,7 @@ describe('levelsStaleAt -- behind, and NOT coming', () => {
     const gaps: number[] = []
     const deadline = FRIDAY_CLOSE + 30 * 24 * HOUR
     while (at < deadline && gaps.length < 10_000) {
-      const next = levelsStaleAt(at, stuck)
+      const next = levelsStaleAt(at, stuck, FX_GRID)
       expect(next).toBeGreaterThan(at) // always forward: a horizon at or before now spins
       gaps.push(next - at)
       at = next
@@ -233,9 +234,9 @@ describe('levelsStaleAt -- DST', () => {
   test('the calendar horizon is a wall-clock 17:00 through both transitions', () => {
     const caught = { '1W': wire('2026-10-25 17:00', EDT) }
     const autumn = ny('2026-10-31 18:00', EDT) // fall-back is 2026-11-01
-    expect(levelsStaleAt(autumn, caught)).toBe(ny('2026-11-01 17:00', EST))
+    expect(levelsStaleAt(autumn, caught, FX_GRID)).toBe(ny('2026-11-01 17:00', EST))
     const spring = ny('2026-03-07 18:00', EST) // spring-forward is 2026-03-08
-    expect(levelsStaleAt(spring, { '1W': wire('2026-03-01 17:00', EST) })).toBe(
+    expect(levelsStaleAt(spring, { '1W': wire('2026-03-01 17:00', EST) }, FX_GRID)).toBe(
       ny('2026-03-08 17:00', EDT)
     )
   })
@@ -262,5 +263,49 @@ describe('parseWatermark', () => {
     expect(parseWatermark('garbage')).toEqual({})
     expect(parseWatermark('1W=,=5,,1M=7')).toEqual({ '1M': 7 })
     expect(parseWatermark('1W=notanumber')).toEqual({})
+  })
+})
+
+describe('on the instrument\'s own schedule', () => {
+  const crypto = gridOf({ timezone: 'UTC', day: CONTINUOUS_DAY })
+  const equities = gridOf({ timezone: 'America/New_York', day: { openOffset: 9, closeOffset: 16, everyDayTrades: false } })
+  const utc = (text: string): number => Date.parse(`${text.replace(' ', 'T')}:00.000Z`)
+
+  test('the forex day anchor is exactly the old 17:00 New York, every hour of a fortnight', () => {
+    const from = ny('2026-10-26 00:00', EDT) // spans the New York fall-back on 11-01
+    for (let t = from; t < from + 14 * 24 * HOUR; t += HOUR + 7 * MINUTE) expect(FX_GRID.nextDayAnchor(t)).toBe(nextSessionAnchor(t))
+  })
+
+  test('a coinbase book is looked at again at the next UTC midnight, not 17:00 New York', () => {
+    // Sunday 22:00 UTC, caught up through the week that opened Monday 08-24. The week closes at
+    // Monday 00:00 UTC; the forex reading asked at 17:00 New York -- Monday 21:00 UTC, 21 hours on.
+    const at = utc('2026-08-30 22:00')
+    const caught = { '1W': utc('2026-08-17 00:00') }
+    expect(levelsStaleAt(at, caught, crypto)).toBe(utc('2026-08-31 00:00'))
+    expect(levelsStaleAt(at, caught, FX_GRID)).toBe(utc('2026-08-31 21:00'))
+  })
+
+  test('a coinbase watermark is read on its own clock: dated by its open, closed at the next Monday', () => {
+    const at = utc('2026-08-31 00:10')
+    // The week that opened 08-24 closed ten minutes ago: consumed, it is caught up...
+    expect(caughtUp('1W', utc('2026-08-24 00:00'), at, crypto)).toBe(true)
+    // ...and a feed still on the week before is behind, and worth a look in five minutes.
+    expect(caughtUp('1W', utc('2026-08-17 00:00'), at, crypto)).toBe(false)
+    expect(levelsStaleAt(at, { '1W': utc('2026-08-17 00:00') }, crypto)).toBe(at + 5 * MINUTE)
+  })
+
+  test('a schwab week closes at Friday 16:00 New York, and its day anchor is 16:00', () => {
+    // Equity bars are dated 9h before their 09:00 open: the week opening Monday 08-17 09:00 is
+    // stated as Monday 08-17 00:00 New York.
+    const at = ny('2026-08-21 16:05', EDT)
+    expect(lastClose('1W', at, equities)).toBe(ny('2026-08-21 16:00', EDT))
+    expect(caughtUp('1W', ny('2026-08-17 00:00', EDT), at, equities)).toBe(true)
+    expect(levelsStaleAt(at, { '1W': ny('2026-08-17 00:00', EDT) }, equities)).toBe(ny('2026-08-22 16:00', EDT))
+    expect(levelsStaleAt(at, { '1W': ny('2026-08-10 00:00', EDT) }, equities)).toBe(at + MIN_RECHECK_MS * 5)
+  })
+
+  test('no schedule: a bounded recheck, never a guess about which week it trades', () => {
+    const at = utc('2026-08-30 22:00')
+    expect(levelsStaleAt(at, { '1W': 1 }, null)).toBe(at + NO_SCHEDULE_RECHECK_MS)
   })
 })

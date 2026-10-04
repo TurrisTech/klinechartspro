@@ -9,6 +9,7 @@ import { resolutionDurationMs } from '../periods'
 import { peekStore } from '../plugins/store'
 import type { ArevPoint } from '../arev/api'
 import type { RegistryStore } from '../tsregistry/store'
+import { type CandleGrid, gridOf, type Schedule } from '../replay/timeframes'
 
 // ONE klinecharts indicator template per overlay (overlays.ts), on the price pane, drawing
 // that overlay's signals from as many timeframes as the user has switched on.
@@ -45,6 +46,10 @@ export interface ExtendData {
    * template bars and nothing about the period they were sampled at — and it is half of
    * every clock conversion the shift makes, so the controller supplies it. */
   chartInterval: string
+  /** The pane's instrument's candle schedule (plugin.ts, from its resolved market hours):
+   * every conversion between a wire date and an open is on it. Absent -- an unbound template,
+   * or an instrument with no market hours -- nothing is placed. */
+  schedule?: Schedule
   /** The live settings, so a colour or size change repaints without refetching anything. */
   config: MtfConfig
   /** The timeframes this pane's signal graphs start from, longest first; empty for none. The
@@ -118,6 +123,10 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
  * the "hide signals outside the graph" filter. Exported for its own test -- it reads the stores
  * and nothing else. */
 export function computeValues(dataList: KLineData[], extend: ExtendData): Value[] {
+  // No schedule, no placement: a wire date cannot be turned into an open without knowing how
+  // the instrument dates its days (shift.ts).
+  if (!extend.schedule) return dataList.map(() => ({}))
+  const clock = gridOf(extend.schedule)
   const intervals = enabledIntervals(extend.config)
   // Per bar, the marks from every enabled timeframe, each tagged with its lane. Built once
   // here rather than in `draw` because `draw` runs every frame and this walks every vote.
@@ -129,6 +138,7 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
     const placed = shiftSignals({
       sourceInterval: interval,
       chartInterval: extend.chartInterval,
+      clock,
       points: store.values.values(),
       grid: store.grid(),
       chartBars: dataList
@@ -143,7 +153,7 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
     const marks = byBar.get(bar.timestamp)
     return marks ? { marks } : {}
   })
-  const inGraph = extend.graphRoots?.length ? placeGraphs(values, dataList, extend, extend.graphRoots) : null
+  const inGraph = extend.graphRoots?.length ? placeGraphs(values, dataList, extend, extend.graphRoots, clock) : null
   // "Hide signals outside the graph": every arrow the graphs did not take comes off the pane.
   // Only with a graph drawn -- with no root on there is nothing to judge by, and emptying the
   // pane of its markers would read as a broken overlay rather than as a filter.
@@ -180,15 +190,15 @@ function signalKey(interval: string, sourceDate: number): string {
  * loads the parent's bar. An edge's child is never newer than the loaded bars (that would be
  * lookahead, and `chartBarAt` refuses it), so nothing is extrapolated to the right.
  */
-function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, roots: MtfInterval[]): Set<string> {
+function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, roots: MtfInterval[], clock: CandleGrid): Set<string> {
   const inGraph = new Set<string>()
   if (dataList.length === 0) return inGraph
   const signals: GraphSignal[] = []
   for (const [interval, key] of Object.entries(extend.seriesKeys)) {
     const store = peekStore<RegistryStore<ArevPoint>>(key)
-    if (store) signals.push(...storeGraphSignals(interval, store))
+    if (store) signals.push(...storeGraphSignals(interval, store, clock))
   }
-  const chartAbs = chartOpens(extend.chartInterval, dataList)
+  const chartAbs = chartOpens(extend.chartInterval, dataList, clock)
   // The settings panel commits every keystroke, so a half-typed number reaches here.
   const maxStep = Math.max(2, graphConfig(extend.config).maxStep)
   const graphs = buildRootGraphs(signals, roots, maxStep, chartAbs[0])
@@ -234,6 +244,7 @@ function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator
   const dataChanged =
     a?.rev !== b?.rev ||
     a?.chartInterval !== b?.chartInterval ||
+    JSON.stringify(a?.schedule) !== JSON.stringify(b?.schedule) ||
     JSON.stringify(a?.graphRoots) !== JSON.stringify(b?.graphRoots) ||
     JSON.stringify(a?.seriesKeys) !== JSON.stringify(b?.seriesKeys) ||
     // A style-only edit still has to recalc, because which timeframes are ENABLED decides

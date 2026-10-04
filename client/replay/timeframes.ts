@@ -831,6 +831,12 @@ export interface CandleGrid {
   fromWire(code: string, wireMs: number): number
   /** Where `count` whole `code` candles after `cursor` have completed (see `advanceTarget`). */
   advanceTarget(code: string, cursor: number, count: number): number
+  /** The next instant strictly after `ms` at which the wall clock reads the hour this
+   * schedule's day closes at -- on EVERY calendar day, weekends included. `nextSessionAnchor`
+   * generalised: 17:00 New York for the FX week, 00:00 UTC for crypto, 16:00 New York for US
+   * equities. The coarsest true statement about when anything daily-or-coarser can change, and
+   * it errs towards asking again (not every such instant is a close), never towards missing one. */
+  nextDayAnchor(ms: number): number
 }
 
 export function gridOf(schedule: Schedule): CandleGrid {
@@ -845,6 +851,11 @@ export function gridOf(schedule: Schedule): CandleGrid {
     end,
     nextStart,
     isOpen,
+    nextDayAnchor(ms) {
+      const wall = toWall(ms, tz)
+      const anchor = floorDay(wall) + ((((day.closeOffset % 24) + 24) % 24) * HOUR)
+      return fromWall(anchor > wall ? anchor : anchor + DAY, tz)
+    },
     toWire: (code, openMs) => openMs + scheduleWireShift(code, day),
     fromWire: (code, wireMs) => wireMs - scheduleWireShift(code, day),
     // `advanceTarget`'s rule on this schedule: from inside an open candle the first step is its

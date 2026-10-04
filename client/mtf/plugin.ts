@@ -18,6 +18,7 @@ import type {
 import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
 import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphConfig, graphRoots, type MtfConfig } from './config'
 import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
+import { type CandleGrid, gridFor } from '../replay/timeframes'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
 import { registerMtfIndicators } from './templates'
@@ -126,7 +127,8 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
     f: PluginFacilities,
     ctx: BindContext,
     interval: MtfInterval,
-    roots: readonly MtfInterval[]
+    roots: readonly MtfInterval[],
+    clock: CandleGrid
   ): SourceSpec<ArevPoint> => {
     const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
     const durationMs = f.resolutionDurationMs(interval)
@@ -147,7 +149,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
         if (!(durationMs < f.resolutionDurationMs(root))) continue
         const rootStore = peekStore<RegistryStore<ArevPoint>>(storeKey(ctx, root))
         if (!rootStore) continue
-        const start = graphStart(storeGraphSignals(root, rootStore), loadedFrom, rootLookbackMs(root))
+        const start = graphStart(storeGraphSignals(root, rootStore, clock), loadedFrom, rootLookbackMs(root))
         reach = Math.max(reach, Math.min(Math.max(0, loadedFrom - start), GRAPH_LOOKBACK_MAX_BARS * durationMs))
       }
       return reach
@@ -165,10 +167,10 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
        * differ whenever exactly one of the two intervals is daily-or-coarser. */
       window: (chartRange: Range): Range => {
         const pad = Math.max(WINDOW_PAD_BARS * f.resolutionDurationMs(interval), WINDOW_PAD_FLOOR_MS)
-        const loadedFrom = toAbsolute(ctx.interval, chartRange.from)
+        const loadedFrom = toAbsolute(ctx.interval, chartRange.from, clock)
         const absFrom = loadedFrom - graphReach(loadedFrom) - pad
-        const absTo = toAbsolute(ctx.interval, chartRange.to - 1) + pad
-        return { from: fromAbsolute(interval, absFrom), to: fromAbsolute(interval, absTo) }
+        const absTo = toAbsolute(ctx.interval, chartRange.to - 1, clock) + pad
+        return { from: fromAbsolute(interval, absFrom, clock), to: fromAbsolute(interval, absTo, clock) }
       },
       // Votes and grid together, over one chunk, so a single range covers both in the
       // store. Concurrently, because neither depends on the other.
@@ -307,6 +309,18 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       const f = facilities
       if (!f) return null
       const config = configFor(ctx.paneIndex)
+      // The pane's instrument's own candle grid: where a vote becomes knowable, and which
+      // chart bar was open then, both depend on how that market dates its days (shift.ts).
+      // With none resolved the overlay says so and draws nothing, rather than place votes on
+      // the forex week's clock -- which put coinbase's daily votes seven hours early.
+      const clock = gridFor(ctx.symbol)
+      if (!clock) {
+        return {
+          sources: [],
+          label: () => `${title} · no market hours for this instrument`,
+          extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: [] })
+        }
+      }
       const shown = drawable(config, ctx.interval)
       const roots = graphRootsFor(config, ctx.interval)
       // Longest first when graphs are on: a timeframe's window is sized from the stores of
@@ -316,10 +330,13 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       return {
         // Stores are created only for timeframes switched on: switching all eight on and
         // off again should not leave eight populated caches behind.
-        sources: ordered.map((interval) => source(f, ctx, interval, roots)),
+        sources: ordered.map((interval) => source(f, ctx, interval, roots, clock)),
         label: (state) => label(config, state),
         extendData: () => ({
           chartInterval: ctx.interval,
+          // The schedule as plain data: the template rebuilds the grid from it, and extendData
+          // is compared and may be copied, which a bag of closures does not survive.
+          schedule: clock.schedule,
           config,
           graphRoots: roots
         })
