@@ -381,10 +381,13 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     container,
     locale: 'en-US',
     theme: params.get('theme') ?? 'dark',
-    // wdashboard-server states every bar timestamp on the market's clock: intraday bars
-    // open on the America/New_York session grid, and daily-and-coarser ones are dated by
-    // their canonical date, 00:00 New York of the session. Any other display timezone
-    // splits those days mid-bar and shifts the date a daily candle reads as.
+    // The FALLBACK clock, for an instrument the server holds no configuration for -- every
+    // configured one carries its own market timezone and a pane reads that instead
+    // (client/symbols.ts, `marketHours.timezone`). New York because wdashboard-server states
+    // every bar timestamp on the market's clock: intraday bars open on the America/New_York
+    // session grid, and daily-and-coarser ones are dated by their canonical date, 00:00 New
+    // York of the session. Any other display timezone splits those days mid-bar and shifts
+    // the date a daily candle reads as.
     timezone: 'America/New_York',
     symbol: hydrated.panes[0].symbol,
     period: hydrated.panes[0].period,

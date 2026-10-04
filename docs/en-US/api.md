@@ -57,7 +57,7 @@ new KLineChartPro(
 + `periods` All periods, shared by every pane
 + `starredPeriods` `Period.text` values shown as chips on the top-rail timeframe rail; the rest live behind the dropdown
 + `onStarredPeriodsChange` Fired on every star/unstar so the caller can persist the new set
-+ `timezone` Timezone
++ `timezone` Fallback clock for an instrument whose own `SymbolInfo.timezone` is absent; a pane always prefers the instrument's. Construction-time only
 + `mainIndicators` Main indicators for the first pane (or every pane implied by `paneLayout` when `panes` is omitted)
 + `subIndicators` Sub indicators, same seeding rule as `mainIndicators`
 + `datafeed` Data access API implementation. Pass a factory `(paneId) => Datafeed` when a wall
@@ -256,18 +256,6 @@ Set language.
 () => string
 ```
 Get language.
-
-### setTimezone(timezone)
-```typescript
-(timezone: string) => void
-```
-Set timezone.
-
-### getTimezone()
-```typescript
-() => string
-```
-Get timezone.
 
 ### setSymbol(symbol)
 ```typescript

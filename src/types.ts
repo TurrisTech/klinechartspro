@@ -26,9 +26,10 @@ export interface SymbolInfo {
   priceCurrency?: string
   type?: string
   logo?: string
-  // The instrument's own market timezone (IANA name). A pane displays on this clock
-  // when it is stated -- a crypto instrument reads UTC -- and falls back to the
-  // app-level timezone otherwise. Daily-and-coarser session-date labels read on it too.
+  // The instrument's own market timezone (IANA name), resolved from its schedule. A pane
+  // displays on this clock whenever it is stated -- a crypto instrument reads UTC -- and
+  // only an instrument without one falls back to ChartProOptions.timezone. Daily-and-coarser
+  // session-date labels read on it too.
   timezone?: string
   // The instrument's day on that clock, derived from its schedule's candle grid (the
   // client ports wmarkettypes' `day_geometry`). Absent when the instrument has no schedule,
@@ -334,6 +335,11 @@ export interface ChartProOptions {
   starredPeriods?: string[]
   /** Fired on every star/unstar so the caller can persist the new set. */
   onStarredPeriodsChange?: (starredPeriods: string[]) => void
+  /** The clock a pane displays on when its INSTRUMENT states none of its own
+   * (`SymbolInfo.timezone`, which is the market's, resolved from its schedule). That is the
+   * only case this is reached: every configured instrument carries its own zone, so this is
+   * a fallback and not a preference. Construction-time only -- there is no setter and no UI
+   * for it; a chart whose instruments are all configured never reads it. */
   timezone?: string
   mainIndicators?: string[]
   subIndicators?: string[]
@@ -433,8 +439,6 @@ export interface ChartPro {
   getStyles(): Styles
   setLocale(locale: string): void
   getLocale(): string
-  setTimezone(timezone: string): void
-  getTimezone(): string
   /** The ACTIVE pane's symbol/period. For a specific pane, use getPane(id). */
   setSymbol(symbol: SymbolInfo): void
   getSymbol(): SymbolInfo

@@ -10,7 +10,6 @@
   import MenuIcon from '@lucide/svelte/icons/menu'
   import SearchIcon from '@lucide/svelte/icons/search'
   import ChartIcon from '@lucide/svelte/icons/chart-no-axes-combined'
-  import GlobeIcon from '@lucide/svelte/icons/globe-2'
   import SettingsIcon from '@lucide/svelte/icons/settings-2'
   import CameraIcon from '@lucide/svelte/icons/camera'
   import MaximizeIcon from '@lucide/svelte/icons/maximize-2'
@@ -72,10 +71,6 @@
   import { fitWall, panePlacement } from './config/fit'
   import { NARROW_SHELL_WIDTH, shellSize } from './config/responsive'
   import { getOptions } from './config/settings'
-  import {
-    createTimezoneSelectOptions,
-    translateTimezone
-  } from './config/timezones'
   import ChartPane from './ChartPane.svelte'
   import IndicatorManager from './IndicatorManager.svelte'
   import LayoutPicker from './LayoutPicker.svelte'
@@ -164,7 +159,6 @@
   let symbolDialogOpen = $state(false)
   let indicatorDialogOpen = $state(false)
   let indicatorManagerOpen = $state(false)
-  let timezoneDialogOpen = $state(false)
   let settingsDialogOpen = $state(false)
   let screenshotDialogOpen = $state(false)
   let indicatorSettingsOpen = $state(false)
@@ -303,7 +297,7 @@
   const narrow = $derived(shellWidth > 0 && shellWidth < NARROW_SHELL_WIDTH)
 
   // How much of the toolbar is folded: 0 everything inline; 1 the icon actions (layout, the
-  // sync switches, indicators, timezone, settings, screenshot, fullscreen) move into one
+  // sync switches, indicators, settings, screenshot, fullscreen) move into one
   // "more" menu; 2 the starred period chips go too -- the timeframe dropdown beside them
   // still shows and picks the period -- and the symbol button shows only its ticker. Chosen
   // as the least folding under which nothing overflows, by trying each in turn: the width
@@ -541,12 +535,10 @@
   }
 
   const portalProps = $derived(rootElement ? { to: rootElement } : undefined)
-  const timezoneOptions = $derived(createTimezoneSelectOptions(locale))
   const settingOptions = $derived(getOptions(locale))
 
   const toolbarActions = $derived([
     { label: i18n('indicator', locale), icon: ChartIcon, action: () => { indicatorDialogOpen = true } },
-    { label: i18n('timezone', locale), icon: GlobeIcon, action: () => { timezoneDialogOpen = true } },
     { label: i18n('setting', locale), icon: SettingsIcon, action: openSettings },
     { label: i18n('screenshot', locale), icon: CameraIcon, action: takeScreenshot }
   ])
@@ -650,8 +642,6 @@
   export function getStyles() { return wall.active.api?.getStyles() as Styles }
   export function setLocale(value: string) { locale = value }
   export function getLocale() { return locale }
-  export function setTimezone(value: string) { timezone = value }
-  export function getTimezone() { return timezone }
   export function setSymbol(value: SymbolInfo) {
     assignSymbol(wall.active, value)
   }
@@ -843,7 +833,7 @@
 
   $effect(() => {
     // Not the indicator manager: it is about the whole wall, and centres on the shell.
-    const open = symbolDialogOpen || indicatorDialogOpen || timezoneDialogOpen ||
+    const open = symbolDialogOpen || indicatorDialogOpen ||
       settingsDialogOpen || screenshotDialogOpen || indicatorSettingsOpen
     if (!open || size !== 'wide') {
       dialogAnchorX = null
@@ -1440,29 +1430,6 @@
       settingsModel={indicatorSettingsModel}
       openSettings={openManagedIndicatorSettings}
     />
-
-    <Dialog.Root bind:open={timezoneDialogOpen}>
-      <Dialog.Portal {...portalProps}>
-        <Dialog.Overlay class="kc-dialog-overlay" />
-        <Dialog.Content class="kc-dialog-content kc-dialog-sm">
-          <div class="kc-dialog-header">
-          <Dialog.Title>{i18n('timezone', locale)}</Dialog.Title>
-          <Dialog.Description>{translateTimezone(timezone, locale)}</Dialog.Description>
-          </div>
-          <Dialog.Close class="kc-button kc-icon-button kc-dialog-close" aria-label="Close"><XIcon /></Dialog.Close>
-        <div class="kc-field-group">
-          <div class="kc-field">
-            <label for="chart-timezone">{i18n('timezone', locale)}</label>
-            <select class="kc-select-trigger" id="chart-timezone" bind:value={timezone}>
-              {#each timezoneOptions as item (item.key)}
-                <option value={item.key}>{item.text}</option>
-              {/each}
-            </select>
-          </div>
-        </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
 
     <Dialog.Root bind:open={settingsDialogOpen}>
       <Dialog.Portal {...portalProps}>

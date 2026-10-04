@@ -59,7 +59,7 @@ new KLineChartPro(
 + `periods` 所有周期，所有子图共用
 + `starredPeriods` 顶部周期条上常驻显示的 `Period.text` 集合，其余的收纳在下拉菜单中
 + `onStarredPeriodsChange` 每次收藏/取消收藏周期时触发，供调用方持久化
-+ `timezone` 时区
++ `timezone` 回退时区，仅用于自身未声明 `SymbolInfo.timezone` 的品种；子图始终优先使用品种自己的时区。仅构造时生效
 + `mainIndicators` 第一个子图（或 `panes` 缺省时 `paneLayout` 隐含的所有子图）的主图指标
 + `subIndicators` 副图指标，取值规则同 `mainIndicators`
 + `datafeed` 数据接入api实现。当多图布局中子图数大于一、且该实现保有任何按订阅维度的状态时（绝大多数真实实现都是如此），应传入工厂函数 `(paneId) => Datafeed`——共享同一实例仅在该实现完全无状态时才安全，库会在检测到潜在风险时于构造阶段打印一次警告
@@ -196,18 +196,6 @@ interface IndicatorSettingsModel {
 () => string
 ```
 获取语言
-
-### setTimezone(timezone)
-```typescript
-(timezone: string) => void
-```
-设置时区
-
-### getTimezone()
-```typescript
-() => string
-```
-获取时区
 
 ### setSymbol(symbol)
 ```typescript

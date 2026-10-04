@@ -132,14 +132,6 @@ export default class KLineChartPro implements ChartPro {
     return this.component.getLocale()
   }
 
-  setTimezone(timezone: string): void {
-    this.component.setTimezone(timezone)
-  }
-
-  getTimezone(): string {
-    return this.component.getTimezone()
-  }
-
   setSymbol(symbol: SymbolInfo): void {
     this.component.setSymbol(symbol)
   }
