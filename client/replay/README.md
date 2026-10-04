@@ -94,7 +94,10 @@ persistence — belongs to the window, not here.
 
 The start dialog opens **centred on the app**, even on a page wide enough that other body-level
 cards open over the active pane (`../chrome/focus.ts`): a replay rebuilds the whole wall on one
-clock, so the dialog that starts it belongs to no single pane (user, 2026-10-04).
+clock, so the dialog that starts it belongs to no single pane (user, 2026-10-04). It **drags by
+its title** (`../chrome/drag.ts`) and keeps that place through an On chart pick; only a click that
+starts *and* ends on the backdrop closes it, because a drag released over the backdrop arrives as
+a click there.
 
 The start dialog takes a date, a balance and a base. Next to the date are **On chart** and
 **Random**, and under them an optional **date range** Random draws from — unchecked, that is
