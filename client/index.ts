@@ -32,6 +32,7 @@ import {
 } from './replay'
 import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
+import { Arming } from './trading/kit'
 import { mountPriceWatches, type PriceWatchesController } from './watch'
 import { createRemoteNotifications } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
@@ -563,6 +564,20 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 // like a quiet market.
 //
 // Returns a disposer, because a workspace switch replaces the chart these are attached to.
+/** A few words beside a rail button for a few seconds: the rail is 3rem wide, too narrow to
+ * say why a press did nothing, and a press that silently does nothing reads as a broken one. */
+function railNote(anchor: HTMLElement, text: string): void {
+  const note = document.createElement('div')
+  note.className = 'wd-rail-note'
+  note.setAttribute('role', 'status')
+  note.textContent = text
+  const box = anchor.getBoundingClientRect()
+  note.style.left = `${box.right + 8}px`
+  note.style.top = `${box.top + box.height / 2}px`
+  document.body.appendChild(note)
+  setTimeout(() => note.remove(), 4000)
+}
+
 function mountChartExtras(
   chartPro: KLineChartPro,
   switcher: ReturnType<typeof createWorkspaceSwitcher>,
@@ -606,15 +621,46 @@ function mountChartExtras(
     const replayButton = document.createElement('button')
     replayButton.type = 'button'
     replayButton.className = `wd-rail-button${replay.inReplay ? ' is-on' : ''}`
-    replayButton.textContent = 'Replay'
-    replayButton.title = replay.inReplay ? 'Exit bar replay' : 'Bar replay'
+    const idleTitle = replay.inReplay ? 'Exit bar replay' : 'Bar replay: step through history from a date you choose'
+    const showIdle = (): void => {
+      replayButton.textContent = 'Replay'
+      replayButton.title = idleTitle
+      replayButton.classList.remove('is-armed')
+    }
+    showIdle()
+    // Leaving discards the replay -- nothing lists one to reopen -- so, like the controls' own
+    // Exit, it takes a second press within the trading kit's confirm window.
+    const exitArming = new Arming(() => {
+      if (exitArming.key === null) showIdle()
+      else {
+        replayButton.textContent = 'Exit?'
+        replayButton.title = 'Press again to leave replay. It cannot be reopened.'
+        replayButton.classList.add('is-armed')
+      }
+    })
     replayButton.addEventListener('click', () => {
       if (replay.inReplay) {
+        if (!exitArming.press('exit', false)) return
         clearReplay()
         replay.rebuild()
         return
       }
+      // The start dialog needs the store probed first; say so while it is, and say why when
+      // the instrument has nothing to replay rather than doing nothing at all.
+      replayButton.disabled = true
+      replayButton.textContent = 'Replay…'
       void startReplayFlow(chartPro, replayButton, replay.rebuild)
+        .then((refusal) => {
+          if (refusal) railNote(replayButton, refusal)
+        })
+        .catch((err) => {
+          console.error('[replay] could not open the start dialog', err)
+          railNote(replayButton, "Couldn't open replay")
+        })
+        .finally(() => {
+          replayButton.disabled = false
+          showIdle()
+        })
     })
     footer.appendChild(replayButton)
   }
@@ -654,6 +700,14 @@ function mountChartExtras(
   // Disposed on teardown: `stream` is a page-lifetime singleton, so a listener left behind by
   // each workspace switch would accumulate, each writing into a detached footer.
   const unsubscribeStatus = stream.onStatus((value: StreamStatus) => {
+    // A replay wall is not live, whatever the socket is doing (it still carries notifications):
+    // a green "live" under a chart frozen in 2024 was the one thing on screen that lied.
+    if (replay.inReplay) {
+      status.dataset.stream = 'replay'
+      statusText.textContent = 'replay'
+      statusText.title = 'Bar replay: the chart shows stored history up to the replay clock, not the live market'
+      return
+    }
     status.dataset.stream = value
     statusText.textContent = STATUS_LABELS[value]
     statusText.title = value

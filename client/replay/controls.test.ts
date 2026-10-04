@@ -15,9 +15,9 @@ import type { AdvanceResult, ReplayController } from './session'
 GlobalRegistrator.register({ url: 'http://test/' })
 afterAll(() => GlobalRegistrator.unregister())
 
-const { createReplayControls, openStartDialog } = await import('./controls')
+const { createReplayControls, openStartDialog, defaultStartAt } = await import('./controls')
 const { SignalBook } = await import('./signals')
-const { formatInstant } = await import('../trading/format')
+const { formatClock } = await import('./format')
 const { validateBase, nominalMs } = await import('./timeframes')
 
 const SYM = 'oanda:EURUSD'
@@ -50,7 +50,7 @@ interface Fake {
 }
 
 function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
-  return { from: 0, to: H, reason: 'target', signal: null, events: [], bars: [], walked: false, observed: [], ...over }
+  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', signal: null, events: [], bars: [], walked: false, observed: [], ...over }
 }
 
 function fake(entries: SignalCatalogueEntry[] = catalogue): Fake {
@@ -135,7 +135,7 @@ interface Mounted extends Fake {
 
 let mounted: Mounted[] = []
 
-function mount(f: Fake = fake(), opts: { account?: boolean } = {}): Mounted {
+function mount(f: Fake = fake(), opts: { account?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void> } = {}): Mounted {
   const bounds = document.createElement('div')
   document.body.appendChild(bounds)
   const stops: AdvanceResult[] = []
@@ -150,6 +150,8 @@ function mount(f: Fake = fake(), opts: { account?: boolean } = {}): Mounted {
       state.exits++
     },
     onStop: (r) => stops.push(r),
+    sleep: opts.sleep,
+    settled: opts.settled,
     account:
       opts.account === false
         ? undefined
@@ -223,12 +225,14 @@ describe('the title bar', () => {
   test('shows the cursor and a Step that advances by the current setting', async () => {
     const m = mount()
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
-    expect(clock.textContent).toBe(formatInstant(m.controller.cursor))
-    expect(clock.title).toBe(new Date(m.controller.cursor).toISOString())
+    // With the weekday: a cursor in the weekend has to read as one.
+    expect(clock.textContent).toBe('Mon, Mar 04, 09:00')
+    expect(clock.textContent).toBe(formatClock(m.controller.cursor))
+    expect(clock.title).toStartWith(new Date(m.controller.cursor).toISOString())
 
     const step = m.button('Step')
     expect(step.disabled).toBe(false)
-    expect(step.title).toBe('Advance 1 × 5m')
+    expect(step.title).toBe('Advance 5m (Shift+→)')
     step.click()
     await flush()
     expect(m.calls.step).toBe(1)
@@ -243,7 +247,7 @@ describe('the title bar', () => {
     const stop = m.button('Stop')
     expect(stop.classList.contains('is-stop')).toBe(true)
     expect(stop.disabled).toBe(false)
-    expect(stop.title).toBe('Stop at the next bar')
+    expect(stop.title).toBe('Stop at the next bar (Shift+→)')
     // Leaving mid-advance is not offered.
     expect(m.button('Exit').disabled).toBe(true)
 
@@ -274,9 +278,9 @@ describe('the title bar', () => {
     m.controller.cursor = walked
     m.controller.walkedTo = walked
     m.button('Stop').click()
-    expect(clock().textContent).toBe(formatInstant(from))
-    expect(clock().title).toBe(new Date(from).toISOString())
-    expect(clock().textContent).not.toBe(formatInstant(walked))
+    expect(clock().textContent).toBe(formatClock(from))
+    expect(clock().title).toStartWith(new Date(from).toISOString())
+    expect(clock().textContent).not.toBe(formatClock(walked))
 
     // Landed: the chart is at the cursor now, and so is the clock.
     m.controller.busy = false
@@ -284,12 +288,17 @@ describe('the title bar', () => {
     m.controller.advanceFrom = null
     m.controller.walkedTo = null
     m.emit()
-    expect(clock().textContent).toBe(formatInstant(walked))
+    expect(clock().textContent).toBe(formatClock(walked))
   })
 
-  test('Exit leaves', () => {
+  test('Exit takes two presses: the first only asks, because a replay cannot be reopened', () => {
     const m = mount()
     m.button('Exit').click()
+    expect(m.exits).toBe(0)
+    const armed = m.button('Exit?')
+    expect(armed.classList.contains('is-armed')).toBe(true)
+    expect(armed.title).toContain('cannot be reopened')
+    armed.click()
     expect(m.exits).toBe(1)
   })
 })
@@ -357,7 +366,7 @@ describe('the advance row', () => {
 
 describe('the status line', () => {
   const reasons: Array<[string, Partial<AdvanceResult>, string]> = [
-    ['a signal, named from the catalogue', { reason: 'signal', signal: { ref: 'arev:arev21:long', resolution: '1h', effective: 0, date: 0 } }, 'Stopped at AREV arev21 Long @1h'],
+    ['a signal, named from the catalogue', { reason: 'signal', signal: { ref: 'arev:arev21:long', resolution: '1h', effective: 0, date: 0 } }, 'Stopped at AREV arev21 · Long @1h'],
     ['a signal the catalogue no longer lists', { reason: 'signal', signal: { ref: 'gone:ref', resolution: '4h', effective: 0, date: 0 } }, 'Stopped at gone:ref @4h'],
     ['a fill pause', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Paused on a fill'],
     ['a close pause', { reason: 'fill', events: [{ kind: 'close' } as never] }, 'Paused on a close'],
@@ -367,9 +376,10 @@ describe('the status line', () => {
     ['a cancel after one bar', { reason: 'cancel', walked: true, bars: [{}] as never }, 'Stopped by you after 1 bar'],
     ['a cancel before any bar', { reason: 'cancel', walked: false, bars: [] }, 'Stopped by you before the first bar'],
     ['the end of the data', { reason: 'end' }, 'End of data'],
-    ['a walked target', { reason: 'target', walked: true, bars: [{}, {}] as never }, 'Advanced 2 bars'],
-    ['a walked target of one bar', { reason: 'target', walked: true, bars: [{}] as never }, 'Advanced 1 bar'],
-    ['a seek', { reason: 'target', walked: false }, 'Jumped — nothing working']
+    // What was asked for -- never "0 bars" or "nothing working" for a step that seeked.
+    ['a walked step', { reason: 'target', walked: true, bars: [{}, {}] as never }, 'Stepped 5m'],
+    ['a seeked step', { reason: 'target', walked: false }, 'Stepped 5m'],
+    ['a step of several candles', { reason: 'target', request: { interval: '15m', multiple: 3 } }, 'Stepped 3 × 15m']
   ]
 
   test('is absent until an advance has stopped', () => {
@@ -388,19 +398,19 @@ describe('the status line', () => {
     m.emit()
     // Busy but not walking yet (still planning, or a seek): the last stop stays.
     expect(m.q('.wd-replay-walk')).toBeNull()
-    expect((m.q('.wd-replay-stop-reason') as HTMLElement).textContent).toBe('Advanced 1 bar')
+    expect((m.q('.wd-replay-stop-reason') as HTMLElement).textContent).toBe('Stepped 5m')
 
     // The first report: there is no line to patch yet, so the window renders it.
     const first = from + 26 * H
     m.controller.walkedTo = first
     m.emitWalk()
     const line = m.q('.wd-replay-walk') as HTMLElement
-    expect(line.textContent).toBe(`Walking… reached ${formatInstant(first)}`)
+    expect(line.textContent).toBe(`Walking… reached ${formatClock(first)}`)
     expect(line.title).toContain(new Date(first).toISOString())
     expect(line.title).toContain('The chart and the clock move when it stops')
     // The stale reason is gone, and the clock still reads the start.
     expect(m.q('.wd-replay-stop-reason')).toBeNull()
-    expect((m.q('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatInstant(from))
+    expect((m.q('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatClock(from))
 
     // Later reports patch the one line: the Stop button is the SAME element, so a press on it
     // is not released onto a replacement (which would be no click at all).
@@ -409,7 +419,7 @@ describe('the status line', () => {
     m.controller.walkedTo = later
     m.emitWalk()
     expect(m.q('.wd-replay-walk')).toBe(line)
-    expect(line.textContent).toBe(`Walking… reached ${formatInstant(later)}`)
+    expect(line.textContent).toBe(`Walking… reached ${formatClock(later)}`)
     expect(m.button('Stop')).toBe(stop)
 
     // Ended: the reach goes and why it stopped comes back.
@@ -475,34 +485,54 @@ describe('the panels', () => {
     expect(m.button('Signals').title).toBe('2 available, 2 armed')
   })
 
-  test('the signal list: available only, starred first; star and arm persist', () => {
+  test('the signal list: available only, grouped by plugin, every row armable; the starred first', () => {
     const m = mount()
     m.button('Signals').click()
     const names = (): string[] => [...m.root.querySelectorAll('.wd-replay-signal-name')].map((n) => n.textContent ?? '')
-    expect(names()).toEqual(['AREV arev21 · Long', 'krev · Short'])
-    expect(m.q('.wd-replay-arm')).toBeNull()
+    const groups = (): string[] => [...m.root.querySelectorAll('.wd-replay-signal-group')].map((n) => n.textContent ?? '')
+    expect(groups()).toEqual(['AREV', 'krev'])
+    // Named by what tells it apart in its group; the full name is on hover.
+    expect(names()).toEqual(['arev21 · Long', 'Short'])
+    expect((m.q('.wd-replay-signal-name') as HTMLElement).title).toBe('AREV arev21 · Long: longs')
+    // Arming needs no star first: one arm button per pane interval on EVERY row.
+    const arms = (): HTMLButtonElement[] => [...m.root.querySelectorAll('.wd-replay-arm')] as HTMLButtonElement[]
+    expect(arms().map((a) => a.textContent)).toEqual(['5m', '1h', '5m', '1h'])
+    expect(arms()[3].title).toBe('Arm on 1h: Next signal stops at it')
 
-    // Star the second: it moves to the top and grows one arm button per pane interval.
-    const stars = [...m.root.querySelectorAll('.wd-replay-star')] as HTMLButtonElement[]
-    stars[1].click()
+    // Arming the second stars it (the book's rule): it moves up under its own heading.
+    arms()[3].click()
+    expect(m.controller.signals.isArmed('krev:short', '1h')).toBe(true)
     expect(m.controller.signals.isStarred('krev:short')).toBe(true)
     expect(m.calls.persist).toBe(1)
-    expect(names()).toEqual(['krev · Short', 'AREV arev21 · Long'])
-    const arms = [...m.root.querySelectorAll('.wd-replay-arm')] as HTMLButtonElement[]
-    expect(arms.map((a) => a.textContent)).toEqual(['5m', '1h'])
-    expect(arms[1].title).toBe('Arm as a pause point on 1h')
-
-    arms[1].click()
-    expect(m.controller.signals.isArmed('krev:short', '1h')).toBe(true)
-    expect(m.calls.persist).toBe(2)
-    const armed = m.root.querySelectorAll('.wd-replay-arm')[1] as HTMLButtonElement
+    expect(groups()).toEqual(['Starred', 'AREV'])
+    expect(names()).toEqual(['krev Short', 'arev21 · Long'])
+    const armed = arms()[1]
     expect(armed.classList.contains('is-on')).toBe(true)
-    expect(armed.title).toBe('Armed on 1h: click to disarm')
+    expect(armed.getAttribute('aria-pressed')).toBe('true')
+    expect(armed.title).toBe('Armed on 1h: Next signal stops here. Click to disarm')
+
+    // A star alone shortlists without arming.
+    ;(m.root.querySelectorAll('.wd-replay-star')[1] as HTMLButtonElement).click()
+    expect(m.controller.signals.isStarred('arev:arev21:long')).toBe(true)
+    expect(m.controller.signals.isArmed('arev:arev21:long')).toBe(false)
+    expect(groups()).toEqual(['Starred'])
+    expect(m.calls.persist).toBe(2)
 
     // Unstarring disarms it too (the book's rule), and persists.
-    ;(m.root.querySelectorAll('.wd-replay-star')[0] as HTMLButtonElement).click()
+    const krevRow = [...m.root.querySelectorAll('.wd-replay-signal')].find((r) => r.textContent?.includes('krev Short')) as HTMLElement
+    ;(krevRow.querySelector('.wd-replay-star') as HTMLButtonElement).click()
     expect(m.controller.signals.isArmed('krev:short')).toBe(false)
     expect(m.calls.persist).toBe(3)
+  })
+
+  test('a plugin named in its variants is not named twice', () => {
+    const outlier = [
+      { plugin: 'arev21_outlier', title: 'AREV21 outlier', variant: 'arev21_outlier_rank', available: true, id: 'long', label: 'long', side: 'long', description: '', ref: 'arev21_outlier:arev21_outlier_rank:long' },
+      { plugin: 'krev', title: 'KREV', variant: 'krev01', available: true, id: 'top', label: 'krev top', side: 'short', description: '', ref: 'krev:krev01:top' }
+    ] as SignalCatalogueEntry[]
+    const m = mount(fake(outlier))
+    m.button('Signals').click()
+    expect([...m.root.querySelectorAll('.wd-replay-signal-name')].map((n) => n.textContent)).toEqual(['rank · long', 'krev01 · top'])
   })
 
   test('settings: the base picker writes through the controller and a refusal is shown', () => {
@@ -564,6 +594,191 @@ describe('the panels', () => {
   })
 })
 
+describe('play', () => {
+  /** A sleep the test releases by hand, so a played step happens exactly when it says. */
+  function manualSleep(): { sleep: (ms: number) => Promise<void>; waits: number[]; release(): Promise<void> } {
+    const pending: Array<() => void> = []
+    const waits: number[] = []
+    return {
+      waits,
+      sleep: (ms) => {
+        waits.push(ms)
+        return new Promise((resolve) => pending.push(resolve))
+      },
+      async release() {
+        for (const r of pending.splice(0)) r()
+        await flush()
+      }
+    }
+  }
+
+  const play = (m: Mounted): HTMLButtonElement => m.q('.wd-replay-play') as HTMLButtonElement
+
+  test('Play steps again and again at the chosen pace, and Pause stops it', async () => {
+    const clock = manualSleep()
+    const m = mount(fake(), { sleep: clock.sleep })
+    expect(play(m).getAttribute('aria-label')).toBe('Play')
+    expect(play(m).title).toContain('every 1 s')
+    play(m).click()
+    await flush()
+    expect(m.calls.step).toBe(1)
+    expect(play(m).getAttribute('aria-label')).toBe('Pause')
+    expect(play(m).classList.contains('is-on')).toBe(true)
+    expect(clock.waits).toEqual([1000])
+    await clock.release()
+    expect(m.calls.step).toBe(2)
+    // Every played step is handed on, as a clicked one is (the dock opens on a fill).
+    expect(m.stops.length).toBe(2)
+
+    play(m).click()
+    expect(play(m).getAttribute('aria-label')).toBe('Play')
+    await clock.release()
+    expect(m.calls.step).toBe(2)
+  })
+
+  test('the pace is chosen beside the step and remembered per browser', async () => {
+    const clock = manualSleep()
+    const m = mount(fake(), { sleep: clock.sleep })
+    const pace = m.q('.wd-replay-pace') as HTMLSelectElement
+    expect([...pace.options].map((o) => o.textContent)).toEqual(['¼ s', '½ s', '1 s', '2 s', '5 s'])
+    expect(pace.value).toBe('1000')
+    change(pace, '250')
+    expect(window.localStorage.getItem('wd.replay.playDelay')).toBe('250')
+    play(m).click()
+    await flush()
+    expect(clock.waits).toEqual([250])
+    m.dispose()
+
+    const again = mount(fake(), { sleep: clock.sleep })
+    expect((again.q('.wd-replay-pace') as HTMLSelectElement).value).toBe('250')
+  })
+
+  test('play stops by itself on anything but reaching the target: the stop is the point', async () => {
+    for (const reason of ['fill', 'signal', 'watch', 'end', 'cancel'] as const) {
+      const clock = manualSleep()
+      const f = fake()
+      let n = 0
+      f.controller.step = async () => {
+        f.calls.step++
+        n++
+        return result({ reason: n === 2 ? reason : 'target' })
+      }
+      const m = mount(f, { sleep: clock.sleep })
+      play(m).click()
+      await flush()
+      await clock.release()
+      expect(f.calls.step).toBe(2)
+      expect(play(m).getAttribute('aria-label')).toBe('Play')
+      await clock.release()
+      expect(f.calls.step).toBe(2)
+      m.dispose()
+    }
+  })
+
+  test('the next step waits for the wall to load as well as for the pace', async () => {
+    const clock = manualSleep()
+    let settle: () => void = () => {}
+    const settled = (): Promise<void> => new Promise((resolve) => (settle = resolve))
+    const m = mount(fake(), { sleep: clock.sleep, settled })
+    play(m).click()
+    await flush()
+    await clock.release()
+    expect(m.calls.step).toBe(1)
+    settle()
+    await flush()
+    expect(m.calls.step).toBe(2)
+  })
+
+  test('a Step, Next signal or Exit pressed while playing ends the play', async () => {
+    const clock = manualSleep()
+    const m = mount(fake(), { sleep: clock.sleep })
+    play(m).click()
+    await flush()
+    m.button('Step').click()
+    await flush()
+    expect(play(m).getAttribute('aria-label')).toBe('Play')
+    expect(m.calls.step).toBe(2)
+    await clock.release()
+    expect(m.calls.step).toBe(2)
+
+    m.controller.armedStops = 1
+    m.emit()
+    play(m).click()
+    await flush()
+    m.button('Next signal').click()
+    await flush()
+    expect(play(m).getAttribute('aria-label')).toBe('Play')
+    expect(m.calls.nextSignal).toBe(1)
+  })
+
+  test('busy with an advance it did not start, Play waits; started by it, it is the Pause', () => {
+    const m = mount()
+    m.controller.busy = true
+    m.emit()
+    expect(play(m).disabled).toBe(true)
+  })
+})
+
+describe('keys', () => {
+  function key(init: KeyboardEventInit, target: EventTarget = document.body): KeyboardEvent {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    target.dispatchEvent(event)
+    return event
+  }
+
+  test('Shift+→ is Step, and is kept from the chart (whose own Shift+→ scrolls)', async () => {
+    const m = mount()
+    const seen: string[] = []
+    const chartListener = (e: Event): void => {
+      seen.push((e as KeyboardEvent).key)
+    }
+    document.addEventListener('keydown', chartListener)
+    const event = key({ key: 'ArrowRight', shiftKey: true })
+    await flush()
+    expect(m.calls.step).toBe(1)
+    expect(event.defaultPrevented).toBe(true)
+    expect(seen).toEqual([])
+    // Without Shift, or with another modifier, it is somebody else's key.
+    key({ key: 'ArrowRight' })
+    key({ key: 'ArrowRight', shiftKey: true, ctrlKey: true })
+    await flush()
+    expect(m.calls.step).toBe(1)
+    expect(seen).toEqual(['ArrowRight', 'ArrowRight'])
+    document.removeEventListener('keydown', chartListener)
+  })
+
+  test('Shift+→ while an advance runs is Stop -- but a held key repeating never cancels', () => {
+    const m = mount()
+    m.controller.busy = true
+    m.emit()
+    key({ key: 'ArrowRight', shiftKey: true, repeat: true })
+    expect(m.calls.cancel).toBe(0)
+    key({ key: 'ArrowRight', shiftKey: true })
+    expect(m.calls.cancel).toBe(1)
+  })
+
+  test('Shift+↓ is Play/Pause', async () => {
+    const m = mount(fake(), { sleep: () => new Promise(() => {}) })
+    key({ key: 'ArrowDown', shiftKey: true })
+    await flush()
+    expect((m.q('.wd-replay-play') as HTMLButtonElement).getAttribute('aria-label')).toBe('Pause')
+    key({ key: 'ArrowDown', shiftKey: true })
+    expect((m.q('.wd-replay-play') as HTMLButtonElement).getAttribute('aria-label')).toBe('Play')
+  })
+
+  test('a key typed into a field is the field\'s, and a disposed window hears nothing', async () => {
+    const m = mount()
+    const input = m.q('.wd-replay-number') as HTMLInputElement
+    key({ key: 'ArrowRight', shiftKey: true }, input)
+    await flush()
+    expect(m.calls.step).toBe(0)
+    m.dispose()
+    key({ key: 'ArrowRight', shiftKey: true })
+    await flush()
+    expect(m.calls.step).toBe(0)
+  })
+})
+
 describe('lifetime', () => {
   test('refresh re-renders from the controller; dispose stops listening and removes the window', () => {
     const f = fake()
@@ -573,7 +788,7 @@ describe('lifetime', () => {
     expect(f.listeners.size).toBe(1)
     f.controller.cursor += H
     controls.refresh()
-    expect((controls.element.querySelector('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatInstant(f.controller.cursor))
+    expect((controls.element.querySelector('.wd-replay-clock-value') as HTMLElement).textContent).toBe(formatClock(f.controller.cursor))
 
     controls.dispose()
     expect(f.listeners.size).toBe(0)
@@ -586,7 +801,7 @@ describe('the start dialog', () => {
   const JULY = Date.UTC(2024, 6, 15, 20, 0)
   const JANUARY = Date.UTC(2024, 0, 15, 21, 0)
 
-  function open(latest = JULY, over: { intervalsInUse?: string[]; stored?: string[] } = {}) {
+  function open(latest = JULY, over: { intervalsInUse?: string[]; stored?: string[]; pickOnChart?: (done: (startAt: number | null) => void) => void } = {}) {
     const anchor = document.createElement('div')
     document.body.appendChild(anchor)
     const starts: Array<{ startAt: number; balance: number; base: string }> = []
@@ -596,6 +811,7 @@ describe('the start dialog', () => {
       intervalsInUse: over.intervalsInUse ?? ['5m', '1h'],
       stored: over.stored ?? ['1m', '1h', '1D'],
       latest,
+      pickOnChart: over.pickOnChart,
       onStart: (choice) => starts.push(choice)
     })
     const root = document.querySelector('.wd-replay-dialog') as HTMLElement
@@ -629,11 +845,58 @@ describe('the start dialog', () => {
     expect(w.start.value).toBe('2024-01-08T16:00')
   })
 
+  test('a week before a weekend is a weekend: the default backs off to the last candle that traded', () => {
+    // Saturday 20 Jul 2024, 14:00 New York: a week earlier is Saturday the 13th, market closed.
+    const saturday = Date.UTC(2024, 6, 20, 18, 0)
+    const d = open(saturday)
+    expect(d.start.value).toBe('2024-07-12T16:00')
+    // On whatever base the dialog suggests (here 1h, for 1h + 4h panes)...
+    for (const base of ['1m', '1h', '4h']) expect(formatClock(defaultStartAt(base, saturday)).startsWith('Fri, Jul 12')).toBe(true)
+    // ...and the daily base's own session floor already lands on a trading day.
+    expect(formatClock(defaultStartAt('1D', saturday))).toBe('Thu, Jul 11, 17:00')
+  })
+
+  test('On chart steps aside for a pick on the chart and takes the bar it gets back', () => {
+    let finish: (startAt: number | null) => void = () => {}
+    const d = open(JULY, { pickOnChart: (done) => (finish = done) })
+    const backdrop = document.querySelector('.wd-replay-dialog-backdrop') as HTMLElement
+    d.byText('On chart').click()
+    expect(backdrop.hidden).toBe(true)
+    // Escape belongs to the pick while it runs: the dialog must still be there afterwards.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    expect(d.isOpen()).toBe(true)
+    finish(Date.UTC(2024, 2, 11, 14, 0))
+    expect(backdrop.hidden).toBe(false)
+    expect(d.start.value).toBe('2024-03-11T10:00')
+
+    // A cancelled pick leaves the start as it was.
+    d.byText('On chart').click()
+    finish(null)
+    expect(backdrop.hidden).toBe(false)
+    expect(d.start.value).toBe('2024-03-11T10:00')
+  })
+
+  test('without a chart to pick on there is no On chart button', () => {
+    const d = open(JULY)
+    expect(d.byText('On chart')).toBeUndefined()
+  })
+
+  test('Enter starts from a field, but a focused button answers Enter itself', () => {
+    const d = open(JULY)
+    d.start.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(d.starts.length).toBe(1)
+    expect(d.isOpen()).toBe(false)
+
+    const e = open(JULY)
+    e.byText('Cancel').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(e.starts.length).toBe(0)
+  })
+
   test('Start hands over the instant, the balance and the base, and closes', () => {
     const d = open(JULY)
     // The suggested base is the finest stored interval dividing every pane, and says so.
     expect(d.base.value).toBe('1m')
-    expect(d.base.options[0].textContent).toBe('1m (highest common denominator)')
+    expect(d.base.options[0].textContent).toBe('1m (recommended)')
     change(d.start, '2024-03-11T09:30')
     d.balance.value = '25000'
     d.byText('Start').click()

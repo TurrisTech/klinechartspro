@@ -12,6 +12,7 @@ import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { symbolKey } from '../trading/format'
 import { createReplayControls, openStartDialog } from './controls'
+import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
@@ -96,11 +97,13 @@ export function clearReplay(): void {
 
 // -- entering ------------------------------------------------------------------------------------
 
+/** The longest Play waits for the wall to load between two steps. */
+const PLAY_SETTLE_MS = 5_000
+
 /** How far back the stored-ladder probe looks: a store's finest series may lag the newest
  * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
 const PROBE_WINDOW_MS = 10 * 86_400_000
 
-/** Probe which of the stored ladder the store holds for the instrument around `at`. */
 /** One repaint, so a template that recomputes on the chart's next frame has done so. Falls
  * back to a timer where there is no animation frame (a headless test). */
 function nextFrame(): Promise<void> {
@@ -110,30 +113,36 @@ function nextFrame(): Promise<void> {
   })
 }
 
+/** Probe which of the stored ladder the store holds for the instrument around `at`. */
 async function storedIntervalsFor(symbol: string, at: number): Promise<string[]> {
-  const out: string[] = []
-  for (const code of STORED_LADDER) {
-    try {
-      const shift = at - fromWireDate(code, at)
-      const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
-        symbol,
-        resolution: code,
-        from: at - Math.max(PROBE_WINDOW_MS, 30 * nominalMs(code)) + shift,
-        to: at + shift,
-        limit: 1,
-        asof: null
-      })
-      if (Array.isArray(body) && body.length > 0 && !isNoData(body)) out.push(code)
-    } catch (err) {
-      if (!(err instanceof OhlcvApiError)) throw err
-    }
-  }
-  return out
+  // All at once, not one after another: they are independent one-bar reads, and the user is
+  // waiting on the last of them (the start dialog, or the replay wall's mount).
+  const held = await Promise.all(
+    STORED_LADDER.map(async (code) => {
+      try {
+        const shift = at - fromWireDate(code, at)
+        const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
+          symbol,
+          resolution: code,
+          from: at - Math.max(PROBE_WINDOW_MS, 30 * nominalMs(code)) + shift,
+          to: at + shift,
+          limit: 1,
+          asof: null
+        })
+        return Array.isArray(body) && body.length > 0 && !isNoData(body)
+      } catch (err) {
+        if (!(err instanceof OhlcvApiError)) throw err
+        return false
+      }
+    })
+  )
+  return STORED_LADDER.filter((_, i) => held[i])
 }
 
 /** Open the start dialog on a live wall and, on confirm, create the replay session and
- * rebuild the wall in replay mode. */
-export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLElement, rebuild: () => void): Promise<void> {
+ * rebuild the wall in replay mode. Resolves once the dialog is open (or refused); a refusal
+ * comes back as the reason, for the caller to show. */
+export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLElement, rebuild: () => void): Promise<string | null> {
   const active = chartPro.getPane(chartPro.getActivePaneId()) ?? chartPro.getPanes()[0]
   const symbolInfo = active?.getSymbol() ?? chartPro.getSymbol()
   const symbol = symbolKey(symbolInfo)
@@ -142,7 +151,7 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
   const stored = await storedIntervalsFor(symbol, latest)
   if (stored.length === 0) {
     console.warn(`${REPLAY_LOG} no stored bars for ${symbol}`)
-    return
+    return `No stored bars for ${symbolInfo.ticker}`
   }
   openStartDialog({
     anchor,
@@ -150,6 +159,9 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
     intervalsInUse,
     stored,
     latest,
+    pickOnChart: (done) => {
+      pickBarOnChart(chartPro.getPanes(), (pick) => done(pick?.startAt ?? null))
+    },
     onStart: ({ startAt, balance, base }) => {
       void (async () => {
         const cursor = intervalStart(base, startAt)
@@ -183,6 +195,7 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
       })().catch((err) => console.error(`${REPLAY_LOG} could not start`, err))
     }
   })
+  return null
 }
 
 // -- the replay wall -------------------------------------------------------------------------------
@@ -339,6 +352,9 @@ export async function mountBarReplay(
       dock.setOpen(true)
       dock.panel.showTab(result.events.some((e) => e.kind === 'close') ? 'history' : 'positions')
     },
+    // Play's backpressure: the next step waits until the panes' plugins have fetched what the
+    // last one invalidated. Bounded, so a slow source slows the play rather than stalling it.
+    settled: () => ctx.pluginHost.settled(PLAY_SETTLE_MS),
     account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() },
     trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() }
   })

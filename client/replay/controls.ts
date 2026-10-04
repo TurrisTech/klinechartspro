@@ -1,8 +1,10 @@
 import type { SignalCatalogueEntry } from '../plugins/types'
-import { formatInstant } from '../trading/format'
+import { Arming } from '../trading/kit'
+import { formatClock } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
+import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import type { AdvanceResult, ReplayController } from './session'
-import { type BaseCheck, defaultBase, sortByLength, validateBase } from './timeframes'
+import { type BaseCheck, defaultBase, intervalStart, isMarketOpen, sortByLength, validateBase } from './timeframes'
 import { placeOverFocus } from '../chrome/focus'
 import { createDockableWindow } from '../chrome/window'
 
@@ -13,21 +15,31 @@ import { createDockableWindow } from '../chrome/window'
 // default, docked below it on request — not in a strip nailed inside the trading panel. Only
 // what is used on every step is on screen:
 //
-//   title bar   the cursor, Step, collapse, dock/float, Exit -- and the drag handle
-//   advance     the timeframe picker x a multiple, and Next signal
+//   title bar   the cursor, Play/Pause, Step, Exit, collapse, dock/float -- and the drag handle
+//   step        the timeframe picker x a multiple, the play pace, and Next signal
 //   status      how far a running walk has got; else why the last advance stopped (absent
 //               until one has)
 //   toggles     Signals / Base, one panel open at a time; Account and Trade, the two windows
 //
 // The signal list, the base timeframe and pause-on-fill are all one click away instead of
-// permanently on screen, and the account window and the trade box are opened from here rather than taking half
-// the wall from the moment replay starts.
+// permanently on screen, and the account window and the trade box are opened from here rather
+// than taking half the wall from the moment replay starts.
+//
+// KEYS (TradingView's, so the hands already know them): Shift+→ is Step (Stop while an advance
+// runs) and Shift+↓ is Play/Pause. Shift+→ is klinecharts' own "scroll right"; on a replay wall
+// the replay takes it, which is why the listener is on `window` in the capture phase.
 
 /** Identity of the window: its stored placement, and `data-window` on the card. */
 const WINDOW_KEY = 'replay'
 
 /** The controls sit ABOVE the account when both are docked. */
 const DOCK_ORDER = 10
+
+/** The play pace, per browser: a viewer's preference, not part of the replay. */
+const PLAY_DELAY_KEY = 'wd.replay.playDelay'
+
+/** The Exit button's key in its two-press arming. */
+const EXIT = 'exit'
 
 type PanelId = 'signals' | 'settings' | null
 
@@ -41,10 +53,15 @@ export interface ReplayControlsOptions {
   onExit: () => void
   /** The panel scrolls the stop's event into view. */
   onStop?: (result: AdvanceResult) => void
+  /** Resolves once the wall has loaded what the last step made it refetch: Play waits for it
+   * between steps as well as for its pace, so it cannot outrun the server. */
+  settled?: () => Promise<void>
   /** The trading dock the Account toggle shows and hides. */
   account?: { isOpen: () => boolean; toggle: () => boolean }
   /** The trade box (the order ticket's floating window) the Trade toggle shows and hides. */
   trade?: { isOpen: () => boolean; toggle: () => boolean }
+  /** Injected by the tests: the wait between two played steps. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export interface ReplayControls {
@@ -75,6 +92,21 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   let signalScroll = 0
   // The status row's walk line while a walk is in progress, so a progress report can patch it.
   let walkLine: HTMLElement | null = null
+  // Exit throws the replay away -- nothing lists a replay to reopen -- and it sits beside Step,
+  // the button pressed most. So it takes two presses, the trading kit's rule for anything that
+  // cannot be taken back.
+  const arming = new Arming(() => renderHeader())
+  const player = new ReplayPlayer({
+    step: () => controller.step(),
+    settled: options.settled,
+    onResult: (r) => options.onStop?.(r),
+    onChange: () => {
+      writeDelay(player.delayMs)
+      render()
+    },
+    sleep: options.sleep,
+    delayMs: readDelay()
+  })
   const unsubscribe = controller.onControlChange((change) => {
     // A progress report moves one date, several times a second: patch that line. Rebuilding
     // the window instead would replace the Stop button under a pointer pressing it, and a
@@ -83,6 +115,37 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     if (change === 'walk' && walked !== null && walkLine) showWalk(walkLine, walked)
     else render()
   })
+
+  // -- what the buttons (and their keys) do -------------------------------------------------
+
+  /** Step, or Stop while an advance runs. Either way a play in progress ends: a Step pressed
+   * by hand means "I'll take it from here". */
+  function pressStep(): void {
+    player.pause()
+    if (controller.busy) controller.cancel()
+    else void controller.step().then((r) => r && options.onStop?.(r))
+  }
+
+  function pressPlay(): void {
+    // Busy with an advance the player did not start (a Next signal run): Play waits for it.
+    if (!player.playing && controller.busy) return
+    player.toggle()
+  }
+
+  const onKey = (event: KeyboardEvent): void => {
+    if (!event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowDown') return
+    if (isEditable(event.target)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.key === 'ArrowRight') {
+      // Held down, the key repeats: each repeat is another step, but never a Stop -- a step
+      // still landing must not be cancelled by the same finger that asked for the next one.
+      if (event.repeat && controller.busy) return
+      pressStep()
+    } else if (!event.repeat) pressPlay()
+  }
+  window.addEventListener('keydown', onKey, true)
 
   function render(): void {
     renderHeader()
@@ -100,31 +163,44 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     // reach as if the chart were there.
     const at = controller.advanceFrom ?? controller.cursor
     const clock = el('span', 'wd-replay-clock-value')
-    clock.textContent = formatInstant(at)
-    clock.title = new Date(at).toISOString()
+    clock.textContent = formatClock(at)
+    clock.title = `${new Date(at).toISOString()} — the replay's clock, New York time. Every pane shows the bars that had closed by then.`
     win.titleSlot.appendChild(clock)
 
-    // Step lives in the title bar, not the body: it is the one control used on every single
-    // interaction, so it stays reachable with the window rolled up to that bar.
+    // Play and Step live in the title bar, not the body: they are the controls used on every
+    // single interaction, so they stay reachable with the window rolled up to that bar.
     win.actions.innerHTML = ''
+    const playing = player.playing
+    const play = iconButton(`kc-button wd-replay-play${playing ? ' is-on' : ''}`, playing ? PAUSE_ICON : PLAY_ICON, pressPlay)
+    play.setAttribute('aria-label', playing ? 'Pause' : 'Play')
+    play.setAttribute('aria-pressed', String(playing))
+    play.disabled = busy && !playing
+    play.title = playing
+      ? 'Pause after this step (Shift+↓)'
+      : `Play: step ${describeAdvance(controller.advance)} every ${delayLabel(player.delayMs)} until a fill, a signal or a watch stops it (Shift+↓)`
+
     // While an advance runs -- a Step or Next signal -- the same button stops it, at the next
     // base bar. It is the one control reachable with the window rolled up, which is exactly
     // when a long run is most likely to need stopping.
     const cancelling = busy && controller.cancelling
     const label = !busy ? 'Step' : cancelling ? 'Stopping…' : 'Stop'
-    const step = button('kc-button kc-button-primary wd-replay-step', label, () => {
-      if (controller.busy) controller.cancel()
-      else void controller.step().then((r) => r && options.onStop?.(r))
-    })
+    const step = button('kc-button kc-button-primary wd-replay-step', label, pressStep)
     step.classList.toggle('is-stop', busy)
     step.disabled = cancelling
-    step.title = busy ? 'Stop at the next bar' : `Advance ${controller.advance.multiple} × ${controller.advance.interval}`
+    step.title = busy ? 'Stop at the next bar (Shift+→)' : `Advance ${describeAdvance(controller.advance)} (Shift+→)`
 
-    const exit = button('kc-button wd-replay-exit', 'Exit', () => options.onExit())
+    const armed = arming.key === EXIT
+    const exit = button(`kc-button wd-replay-exit${armed ? ' is-armed' : ''}`, armed ? 'Exit?' : 'Exit', () => {
+      if (!arming.press(EXIT, false)) return
+      player.pause()
+      options.onExit()
+    })
     exit.disabled = busy
-    exit.title = 'Leave replay and return to the live wall'
+    exit.title = armed
+      ? 'Press again to leave. This replay, its account and its orders cannot be reopened.'
+      : 'Leave replay and return to the live wall'
 
-    win.actions.append(step, exit)
+    win.actions.append(play, step, exit)
   }
 
   // -- the body ----------------------------------------------------------------------------
@@ -161,22 +237,23 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   }
 
   function showWalk(line: HTMLElement, walked: number): void {
-    line.textContent = `Walking… reached ${formatInstant(walked)}`
+    line.textContent = `Walking… reached ${formatClock(walked)}`
     line.title = `How far the walk has checked the bars (${new Date(walked).toISOString()}). The chart and the clock move when it stops.`
   }
 
   function renderAdvance(): HTMLElement {
     const row = el('div', 'wd-replay-row')
     const busy = controller.busy
+    // "Step", the button's own word: this row says what one press of it does.
     const label = el('span', 'wd-replay-label')
-    label.textContent = 'Advance'
+    label.textContent = 'Step'
     const choices = advanceChoices(controller, options.intervalsInUse())
     const picker = select(
       choices.map((c) => ({ value: c, label: c })),
       controller.advance.interval,
       (value) => controller.setAdvance({ interval: value, multiple: controller.advance.multiple })
     )
-    picker.title = 'Advance timeframe'
+    picker.title = 'How far one Step goes: this timeframe…'
     picker.disabled = busy
     const times = el('span', 'wd-replay-times')
     times.textContent = '×'
@@ -184,9 +261,20 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       const n = Math.max(1, Math.floor(Number(raw) || 1))
       controller.setAdvance({ interval: controller.advance.interval, multiple: n })
     })
-    multiple.title = 'How many candles'
+    multiple.title = '…times this many candles'
     multiple.disabled = busy
+    // The pace Play steps at. Never disabled: slowing down is most wanted while playing.
+    const every = el('span', 'wd-replay-label wd-replay-every')
+    every.textContent = 'every'
+    const pace = select(
+      PLAY_DELAYS_MS.map((ms) => ({ value: String(ms), label: delayLabel(ms) })),
+      String(player.delayMs),
+      (value) => player.setDelay(Number(value))
+    )
+    pace.classList.add('wd-replay-pace')
+    pace.title = 'Play: the time between two steps (it also waits for the chart to load)'
     const next = button('kc-button kc-button-outline wd-replay-next', 'Next signal', () => {
+      player.pause()
       void controller.nextSignal().then((r) => r && options.onStop?.(r))
     })
     // An armed price watch is a stop too, so a wall with watches and no signals can still run
@@ -194,7 +282,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const stops = controller.signals.armed.length + controller.armedStops
     next.disabled = busy || stops === 0
     next.title = stops === 0 ? 'Arm a signal or place a price watch first' : 'Advance to the next armed signal or price watch'
-    row.append(label, picker, times, multiple, next)
+    row.append(label, picker, times, multiple, every, pace, next)
     return row
   }
 
@@ -283,41 +371,56 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       box.appendChild(none)
       return box
     }
+    // What arming is FOR, said once: the list is otherwise a wall of names and timeframes.
+    const help = el('div', 'wd-replay-muted wd-replay-signal-help')
+    help.textContent = 'Arm a signal on a timeframe and Next signal stops at it. ☆ keeps it at the top.'
+    box.appendChild(help)
     const list = el('div', 'wd-replay-signal-list')
     list.addEventListener('scroll', () => {
       signalScroll = list.scrollTop
     })
-    // Starred first (the working shortlist), then the rest of the catalogue.
-    const ordered = [...available].sort((a, b) => Number(book.isStarred(b.ref)) - Number(book.isStarred(a.ref)))
     const resolutions = sortByLength([...new Set(options.intervalsInUse())])
-    for (const entry of ordered) {
-      const row = el('div', 'wd-replay-signal')
+
+    const row = (entry: SignalCatalogueEntry, name: string): HTMLElement => {
+      const node = el('div', 'wd-replay-signal')
       const starred = book.isStarred(entry.ref)
       const star = button(`wd-replay-star ${starred ? 'is-on' : ''}`, starred ? '★' : '☆', () => {
         book.star(entry.ref, !starred)
         controller.persist()
         renderBody()
       })
-      star.title = starred ? 'Unstar' : 'Star (shortlist)'
-      const name = el('span', `wd-replay-signal-name is-${entry.side ?? 'none'}`)
-      name.textContent = `${entry.title}${entry.variant ? ` ${entry.variant}` : ''} · ${entry.label}`
-      name.title = entry.description || entry.ref
-      row.append(star, name)
-      if (starred) {
-        const arms = el('span', 'wd-replay-arms')
-        for (const res of resolutions) {
-          const armed = book.isArmed(entry.ref, res)
-          const arm = button(`wd-replay-arm ${armed ? 'is-on' : ''}`, res, () => {
-            book.arm(entry.ref, res, !armed)
-            controller.persist()
-            renderBody()
-          })
-          arm.title = armed ? `Armed on ${res}: click to disarm` : `Arm as a pause point on ${res}`
-          arms.appendChild(arm)
-        }
-        row.appendChild(arms)
+      star.title = starred ? 'Unstar (also disarms it)' : 'Star: keep it at the top of the list'
+      const text = el('span', `wd-replay-signal-name is-${entry.side ?? 'none'}`)
+      text.textContent = name
+      text.title = entry.description ? `${fullName(entry)}: ${entry.description}` : fullName(entry)
+      // The arm buttons are on EVERY row: arming is the point of the list, and hiding it behind
+      // the star left a first-time user with nothing to press. Arming stars (the book's rule).
+      const arms = el('span', 'wd-replay-arms')
+      for (const res of resolutions) {
+        const armed = book.isArmed(entry.ref, res)
+        const arm = button(`wd-replay-arm ${armed ? 'is-on' : ''}`, res, () => {
+          book.arm(entry.ref, res, !armed)
+          controller.persist()
+          renderBody()
+        })
+        arm.title = armed ? `Armed on ${res}: Next signal stops here. Click to disarm` : `Arm on ${res}: Next signal stops at it`
+        arm.setAttribute('aria-pressed', String(armed))
+        arms.appendChild(arm)
       }
-      list.appendChild(row)
+      node.append(star, text, arms)
+      return node
+    }
+
+    // The shortlist first, under its own heading and by its full name (it mixes plugins); then
+    // the rest of the catalogue grouped by plugin, each row named by what tells it apart there.
+    const starred = available.filter((e) => book.isStarred(e.ref))
+    if (starred.length > 0) {
+      list.appendChild(groupHeading('Starred'))
+      for (const entry of starred) list.appendChild(row(entry, fullName(entry)))
+    }
+    for (const [title, entries] of groupByTitle(available.filter((e) => !book.isStarred(e.ref)))) {
+      list.appendChild(groupHeading(title))
+      for (const entry of entries) list.appendChild(row(entry, shortName(entry)))
     }
     box.appendChild(list)
     // Assigned after the list is built but before it is on screen; the browser applies it on
@@ -331,6 +434,9 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     element: win.element,
     refresh: render,
     dispose(): void {
+      window.removeEventListener('keydown', onKey, true)
+      player.dispose()
+      arming.disarm()
       unsubscribe()
       win.dispose()
     }
@@ -341,11 +447,79 @@ function advanceChoices(controller: ReplayController, inUse: string[]): string[]
   return sortByLength([...new Set([controller.base, ...controller.storedIntervals, ...inUse, controller.advance.interval])])
 }
 
+/** "1h" for one candle, "3 × 15m" for several. */
+function describeAdvance(advance: { interval: string; multiple: number }): string {
+  return advance.multiple === 1 ? advance.interval : `${advance.multiple} × ${advance.interval}`
+}
+
+/** "¼ s", "1 s": the pace picker's labels. */
+export function delayLabel(ms: number): string {
+  const fractions: Record<number, string> = { 250: '¼ s', 500: '½ s' }
+  return fractions[ms] ?? `${ms / 1000} s`
+}
+
+function readDelay(): number {
+  try {
+    const stored = Number(window.localStorage.getItem(PLAY_DELAY_KEY))
+    return (PLAY_DELAYS_MS as readonly number[]).includes(stored) ? stored : DEFAULT_PLAY_DELAY_MS
+  } catch {
+    return DEFAULT_PLAY_DELAY_MS
+  }
+}
+
+function writeDelay(ms: number): void {
+  try {
+    window.localStorage.setItem(PLAY_DELAY_KEY, String(ms))
+  } catch {
+    // A private window or blocked storage: the pace just is not remembered.
+  }
+}
+
+/** A key typed into a field is the field's, not a shortcut. */
+function isEditable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName.toLowerCase()
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable
+}
+
+/** "AREV arev21 · long": the plugin, its variant and the label, for a row out of its group. */
+function fullName(entry: SignalCatalogueEntry): string {
+  return `${entry.title} ${shortName(entry)}`.trim()
+}
+
+/** What tells a signal apart INSIDE its plugin's group: the catalogue repeats the plugin in the
+ * variant ("arev21_outlier_rank" under "AREV21 outlier") and in the label ("AREV long" under
+ * "AREV"), and three AREVs per row is how the list read before. */
+function shortName(entry: SignalCatalogueEntry): string {
+  const slug = `${entry.title.toLowerCase().replace(/\s+/g, '_')}_`
+  const variant = entry.variant?.toLowerCase().startsWith(slug) ? entry.variant.slice(slug.length) : (entry.variant ?? '')
+  const titled = `${entry.title.toLowerCase()} `
+  const label = entry.label.toLowerCase().startsWith(titled) ? entry.label.slice(titled.length) : entry.label
+  return [variant, label].filter((part) => part.length > 0).join(' · ')
+}
+
+/** Catalogue order kept, both for the groups and inside them. */
+function groupByTitle(entries: SignalCatalogueEntry[]): Map<string, SignalCatalogueEntry[]> {
+  const groups = new Map<string, SignalCatalogueEntry[]>()
+  for (const entry of entries) {
+    const group = groups.get(entry.title)
+    if (group) group.push(entry)
+    else groups.set(entry.title, [entry])
+  }
+  return groups
+}
+
+function groupHeading(text: string): HTMLElement {
+  const heading = el('div', 'wd-replay-signal-group')
+  heading.textContent = text
+  return heading
+}
+
 function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogueEntry[]): string {
   switch (result.reason) {
     case 'signal': {
       const entry = catalogue.find((e) => e.ref === result.signal?.ref)
-      const name = entry ? `${entry.title}${entry.variant ? ` ${entry.variant}` : ''} ${entry.label}` : (result.signal?.ref ?? 'signal')
+      const name = entry ? fullName(entry) : (result.signal?.ref ?? 'signal')
       return `Stopped at ${name} @${result.signal?.resolution ?? ''}`
     }
     case 'fill':
@@ -361,13 +535,16 @@ function describeStop(result: AdvanceResult, catalogue: readonly SignalCatalogue
     case 'end':
       return 'End of data'
     default:
-      // A seek (nothing could fill) consumed no bars by design -- say so rather than
-      // reporting "0 bars", which reads as a broken step.
-      return result.walked
-        ? `Advanced ${result.bars.length} bar${result.bars.length === 1 ? '' : 's'}`
-        : 'Jumped — nothing working'
+      // What was asked for, which is what happened. Not the bars walked: whether the engine
+      // walked them or seeked over the span (nothing working could fill) is the replay's
+      // business, and "Jumped — nothing working" on a plain one-candle step read as an error.
+      return 'interval' in result.request ? `Stepped ${describeAdvance(result.request)}` : 'Advanced'
   }
 }
+
+const PLAY_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4.5 2.75v10.5L13 8z" fill="currentColor"/></svg>'
+const PAUSE_ICON =
+  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/><rect x="9.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/></svg>'
 
 // -- the start dialog ------------------------------------------------------------------------
 
@@ -380,6 +557,10 @@ export interface StartDialogOptions {
   stored: string[]
   /** Newest instant the store has for the instrument (the latest a replay can start). */
   latest: number
+  /** Choose the start by clicking a bar on the chart (./pickbar.ts): the dialog steps aside
+   * while it runs and gets the bar's close back, or null when the pick was cancelled. Absent,
+   * there is no "On chart" button. */
+  pickOnChart?: (done: (startAt: number | null) => void) => void
   onStart: (choice: { startAt: number; balance: number; base: string }) => void
 }
 
@@ -401,18 +582,40 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
   dialog.appendChild(info)
 
-  // Default start: a week before the newest bar.
-  const defaultStart = options.latest - 7 * 86_400_000
+  const suggested = defaultBase(options.intervalsInUse, options.stored)
+  const initialBase = suggested ?? options.stored[0] ?? '1m'
+
+  const defaultStart = defaultStartAt(initialBase, options.latest)
   const startField = field('Start (New York time)')
   const startRow = el('div', 'wd-replay-dialog-row')
   const startInput = dateInput(toLocalInputValue(defaultStart))
   startInput.max = toLocalInputValue(options.latest)
-  // Random draws from the range below; it is the one control here that changes the start
-  // without the user typing a date, so it sits next to the field it writes.
+  startRow.appendChild(startInput)
+  // The two ways to set the start without typing a date sit next to the field they write.
+  // "On chart" first: pointing at the bar you want is how a start is usually found.
+  if (options.pickOnChart) {
+    const pickOnChart = options.pickOnChart
+    const pick = button('kc-button kc-button-outline wd-replay-pick-button', 'On chart', () => {
+      overlay.hidden = true
+      pickOnChart((startAt) => {
+        overlay.hidden = false
+        if (startAt !== null) {
+          startInput.value = toLocalInputValue(Math.min(startAt, options.latest))
+          baseError.textContent = ''
+          start.focus()
+        } else pick.focus()
+      })
+    })
+    pick.title = 'Click a bar on the chart: the replay opens with that bar as the last one shown'
+    startRow.appendChild(pick)
+  }
   const random = button('kc-button kc-button-outline wd-replay-random', 'Random', () => roll())
   random.title = 'Pick a random start date from the range'
-  startRow.append(startInput, random)
+  startRow.appendChild(random)
   startField.appendChild(startRow)
+  const startNote = el('div', 'wd-replay-dialog-note')
+  startNote.textContent = 'The replay opens with every bar that had closed by then.'
+  startField.appendChild(startNote)
   dialog.appendChild(startField)
 
   // -- the range Random draws from (optional; hidden until asked for) ---------------------
@@ -471,11 +674,10 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   balanceField.appendChild(balanceInput)
   dialog.appendChild(balanceField)
 
-  const suggested = defaultBase(options.intervalsInUse, options.stored)
   const baseField = field('Base timeframe')
   const basePicker = select(
-    options.stored.map((s) => ({ value: s, label: s === suggested ? `${s} (highest common denominator)` : s })),
-    suggested ?? options.stored[0] ?? '1m',
+    options.stored.map((s) => ({ value: s, label: s === suggested ? `${s} (recommended)` : s })),
+    initialBase,
     () => validate()
   )
   baseField.appendChild(basePicker)
@@ -516,7 +718,15 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   validate()
 
   const onKey = (e: KeyboardEvent): void => {
+    // Stepped aside for a pick on the chart: the keys are the pick's (Escape cancels IT).
+    if (overlay.hidden) return
     if (e.key === 'Escape') close()
+    // Enter starts, from any field -- but a focused button answers Enter itself, and a select
+    // uses it to commit its list.
+    else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLSelectElement) && !start.disabled) {
+      e.preventDefault()
+      start.click()
+    }
   }
   document.addEventListener('keydown', onKey)
   overlay.addEventListener('click', (e) => {
@@ -532,6 +742,21 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   }
   return { close }
 }
+
+/** The start the dialog offers: a week before the newest bar, on a base candle open -- the
+ * instant Start will actually use, not whatever minute the dialog happened to open at -- and
+ * inside the market week. A week before a weekend afternoon is a weekend afternoon, and a
+ * replay opened there shows Friday's close and makes the first Step cross two days of nothing;
+ * this backs off, an hour at a time, to the last candle that opened while the market traded.
+ * (Random is deliberately NOT treated like this: see pick.ts.) */
+export function defaultStartAt(base: string, latest: number): number {
+  let at = intervalStart(base, latest - 7 * DAY_MS)
+  for (let i = 0; i < 24 * 7 && !isMarketOpen(at); i++) at = intervalStart(base, at - HOUR_MS)
+  return at
+}
+
+const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
 
 // New York wall clock <-> the datetime-local input, which is timezone-less text.
 const nyParts = new Intl.DateTimeFormat('en-US', {
@@ -589,6 +814,14 @@ function button(className: string, text: string, onClick: () => void): HTMLButto
   return b
 }
 
+/** A button whose face is an inline SVG (Play/Pause): text glyphs like ▶ render as emoji on
+ * some platforms. Its name is the caller's `aria-label`. */
+function iconButton(className: string, svg: string, onClick: () => void): HTMLButtonElement {
+  const b = button(className, '', onClick)
+  b.innerHTML = svg
+  return b
+}
+
 /** A toggle in the window's footer: label, optional count badge, on/off. */
 function toggleButton(label: string, badge: string, on: boolean, onClick: () => void): HTMLButtonElement {
   const b = button(`kc-button wd-replay-toggle${on ? ' is-on' : ''}`, label, onClick)
@@ -608,9 +841,11 @@ function select(options: Array<{ value: string; label: string }>, current: strin
     const opt = document.createElement('option')
     opt.value = o.value
     opt.textContent = o.label
-    opt.selected = o.value === current
     s.appendChild(opt)
   }
+  // By value once every option exists, not `option.selected` per option as it is appended:
+  // happy-dom (the controls' test DOM) loses track of which one was marked.
+  if (options.some((o) => o.value === current)) s.value = current
   s.addEventListener('change', () => onChange(s.value))
   return s
 }
