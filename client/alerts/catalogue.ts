@@ -20,6 +20,7 @@ import type { SignalCatalogueEntry } from '../plugins/types'
 import { loadRegistry, type RegistryIndicator, type RegistrySeries } from '../tsregistry/api'
 import { type Feature, hasFeature } from '../capabilities'
 import { instantiate } from './compute'
+import { graphOverlays } from './graphentry'
 import { operandKey } from './rules'
 import type { BarField, Operand } from './types'
 
@@ -197,7 +198,31 @@ export function labelOperand(operand: Operand, catalogue: ServerCatalogue | null
       const family = catalogue?.signals.find((f) => f.plugin === operand.plugin && f.variant === operand.variant)
       return `${family?.title ?? (operand.variant || operand.plugin)} signal`
     }
+    case 'graph':
+      return `${graphTitle(operand.overlay)} graph entry`
+    case 'time':
+      return `${operand.field === 'minute' ? 'Time of day' : 'Weekday'} (${zoneLabel(operand.zone)})`
   }
+}
+
+/** An overlay's name without the "MTF" every one of them carries: "AREV21 OUTLIER RANK 85". */
+export function graphTitle(overlayId: string): string {
+  const overlay = graphOverlays().find((o) => o.id === overlayId)
+  return overlay ? overlay.title.replace(/\s+MTF$/, '') : overlayId
+}
+
+/** The clocks a time condition can read, by the markets they open. */
+export const TIME_ZONES: ReadonlyArray<{ zone: string; label: string }> = [
+  { zone: 'America/New_York', label: 'New York' },
+  { zone: 'Europe/London', label: 'London' },
+  { zone: 'Europe/Berlin', label: 'Frankfurt' },
+  { zone: 'Asia/Tokyo', label: 'Tokyo' },
+  { zone: 'Australia/Sydney', label: 'Sydney' },
+  { zone: 'UTC', label: 'UTC' }
+]
+
+export function zoneLabel(zone: string): string {
+  return TIME_ZONES.find((z) => z.zone === zone)?.label ?? zone
 }
 
 /** Bars of lead-in an operand needs before its value is trustworthy: enough for a recursive

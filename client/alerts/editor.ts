@@ -1,10 +1,27 @@
+import { MTF_INTERVALS } from '../mtf/api'
+import { GRAPH_ROOTS } from '../mtf/config'
 import { offeredIntervalCodes, resolutionDurationMs } from '../periods'
-import { BAR_FIELDS, BUILTIN_INDICATORS, builtinInfo, builtinOutputs, type ServerCatalogue } from './catalogue'
+import { BAR_FIELDS, BUILTIN_INDICATORS, builtinInfo, builtinOutputs, graphTitle, type ServerCatalogue, TIME_ZONES } from './catalogue'
+import { defaultGraphSettings, entryIntervals, graphOverlays, type GraphSettings } from './graphentry'
 import { defaultLeaf, defaultRightOperand, type EditNode, fromEditable, type GroupMode, type GroupNode, group, leafCount, toEditable } from './editable'
-import { compile, describeRule, type Labeller, LABEL_OPS, NUMERIC_OPS, OP_WORDS, OPERAND_OPS, RuleError } from './rules'
+import {
+  compile,
+  describeRule,
+  formatMinute,
+  isLabelOperand,
+  type Labeller,
+  LABEL_OPS,
+  NUMERIC_OPS,
+  OP_WORDS,
+  OPERAND_OPS,
+  RuleError,
+  TIME_OP_WORDS,
+  TIME_OPS,
+  WEEKDAYS
+} from './rules'
 import { normaliseSymbol } from './store'
 import type { Alert, AlertDefinition, Operand, RuleLeaf } from './types'
-import { DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
+import { ANY_LABEL, DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
 
 // GLUE (DOM). The alert editor: a name, an instrument, a rule, and how it fires.
 //
@@ -27,6 +44,9 @@ export interface EditorContext {
   interval: string
   /** Instruments offered by the instrument field (the wall's panes). */
   symbols: string[]
+  /** An overlay's graph settings as the active pane has them -- what a graph entry condition
+   * copies when it is chosen, and on "Copy from pane". Absent: the overlay's defaults. */
+  graphSettings?: (overlayId: string) => GraphSettings
 }
 
 export interface AlertEditorOptions {
@@ -58,6 +78,10 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
   let failure = ''
 
   const element = el('div', 'wd-alert-editor')
+  /** Graph entry conditions whose settings are open, by operand. */
+  const openGraphs = new Set<string>()
+  /** Where the last "Copy from pane" took the settings from, said once beside them. */
+  let copied = ''
   // A typed number moves the model as it is typed; the sentence and the check follow it.
   element.addEventListener('wd-alert-edited', () => refreshSummary())
   let sentence: HTMLElement | null = null
@@ -262,24 +286,24 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
     const row = el('div', 'wd-alert-leaf')
     row.appendChild(
       operandPicker(leaf.left, (next) => {
-        const wasSignal = leaf.left.kind === 'signal'
+        const before = leaf.left
         leaf.left = next
-        if (next.kind === 'signal' && !wasSignal) {
-          leaf.op = '=='
-          leaf.right = { label: signalLabels(next)[0]?.id ?? '' }
-        } else if (next.kind !== 'signal' && wasSignal) {
-          leaf.op = 'crosses_above'
-          leaf.right = { value: 0 }
-        } else if (next.kind === 'signal' && leaf.right && 'label' in leaf.right && !signalLabels(next).some((l) => l.id === (leaf.right as { label: string }).label)) {
-          leaf.right = { label: signalLabels(next)[0]?.id ?? '' }
+        // A different kind of value wants a different comparison: start it afresh. The same
+        // kind keeps what was set, unless its label no longer exists on the new source.
+        if (shape(before) !== shape(next)) resetComparison(leaf, labelChoices(next))
+        else if (isLabelOperand(next) && leaf.right && 'label' in leaf.right) {
+          const label = leaf.right.label
+          if (!labelChoices(next).some((c) => c.value === label)) leaf.right = { label: labelChoices(next)[0]?.value ?? '' }
         }
         render()
       })
     )
 
-    const ops = leaf.left.kind === 'signal' ? LABEL_OPS : NUMERIC_OPS
+    const clock = isClock(leaf.left)
+    const ops = isLabelOperand(leaf.left) ? LABEL_OPS : clock ? TIME_OPS : NUMERIC_OPS
+    const words = clock ? TIME_OP_WORDS : OP_WORDS
     const op = select(
-      ops.map((o) => ({ value: o, label: OP_WORDS[o] ?? o })),
+      ops.map((o) => ({ value: o, label: words[o] ?? OP_WORDS[o] ?? o })),
       leaf.op,
       (value) => {
         setOp(leaf, value)
@@ -306,19 +330,39 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
   function renderRight(leaf: RuleLeaf): HTMLElement {
     const box = el('span', 'wd-alert-right')
     if (leaf.op === 'changed') return box
-    if (leaf.left.kind === 'signal') {
-      const labels = signalLabels(leaf.left)
+    if (isLabelOperand(leaf.left)) {
+      const choices = labelChoices(leaf.left)
       const current = leaf.right && 'label' in leaf.right ? leaf.right.label : ''
-      box.appendChild(
-        select(
-          labels.length > 0 ? labels.map((l) => ({ value: l.id, label: l.label })) : [{ value: current, label: current || '—' }],
-          current,
-          (value) => {
-            leaf.right = { label: value }
-            refreshSummary()
-          }
-        )
-      )
+      const label = select(choices.length > 0 ? choices : [{ value: current, label: current || '—' }], current, (value) => {
+        leaf.right = { label: value }
+        refreshSummary()
+      })
+      label.setAttribute('aria-label', 'Which label')
+      box.appendChild(label)
+      return box
+    }
+    if (isClock(leaf.left)) {
+      // A time of day is typed as one: HH:MM, kept as minutes past midnight.
+      if (leaf.op === 'inside' || leaf.op === 'outside') {
+        const band = leaf.right && 'band' in leaf.right ? leaf.right.band : [480, 660]
+        const low = timeInput(band[0], (value) => {
+          leaf.right = { band: [value, (leaf.right as { band: [number, number] }).band[1]] }
+        })
+        const high = timeInput(band[1], (value) => {
+          leaf.right = { band: [(leaf.right as { band: [number, number] }).band[0], value] }
+        })
+        low.setAttribute('aria-label', 'From')
+        high.setAttribute('aria-label', 'To')
+        const and = el('span', 'wd-alert-muted')
+        and.textContent = 'to'
+        box.append(low, and, high)
+        return box
+      }
+      const at = timeInput(leaf.right && 'value' in leaf.right ? leaf.right.value : 570, (value) => {
+        leaf.right = { value }
+      })
+      at.setAttribute('aria-label', 'Time')
+      box.appendChild(at)
       return box
     }
     if (leaf.op === 'inside' || leaf.op === 'outside') {
@@ -374,11 +418,12 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
     return box
   }
 
-  /** Timeframe, source, params and line for one operand. `signals` false where a signal
-   * cannot go (the right of a comparison). */
-  function operandPicker(operand: Operand, onChange: (next: Operand) => void, signals = true): HTMLElement {
+  /** Timeframe, source, params and line for one operand. `labels` false where a labelled
+   * source cannot go -- the right of a comparison, which compares numbers. */
+  function operandPicker(operand: Operand, onChange: (next: Operand) => void, labels = true): HTMLElement {
     const box = el('span', 'wd-alert-operand')
-    const codes = intervals()
+    // A graph entry is on the overlay's shortest timeframes, which are the only ones it stars.
+    const codes = operand.kind === 'graph' ? entryIntervals() : intervals()
     const tf = select(
       (codes.includes(operand.interval) ? codes : [operand.interval, ...codes]).map((c) => ({ value: c, label: c })),
       operand.interval,
@@ -406,7 +451,14 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
     optionGroup('Price', BAR_FIELDS.map((f) => ({ value: `bar:${f.field}`, label: f.label })))
     optionGroup('Indicators', BUILTIN_INDICATORS.filter((n) => builtinInfo(n)).map((n) => ({ value: `ind:${n}`, label: n })))
     optionGroup('Server indicators', (catalogue?.stored ?? []).map((s) => ({ value: `ser:${s.entry.name}`, label: s.entry.title })))
-    if (signals) optionGroup('Signals', (catalogue?.signals ?? []).map((f) => ({ value: `sig:${f.plugin}/${f.variant}`, label: f.title })))
+    if (labels) {
+      optionGroup('Signals', (catalogue?.signals ?? []).map((f) => ({ value: `sig:${f.plugin}/${f.variant}`, label: f.title })))
+      optionGroup('Graph entries', graphOverlays().map((o) => ({ value: `gph:${o.id}`, label: `${graphTitle(o.id)} graph entry` })))
+      optionGroup('Time', [
+        { value: 'tim:minute', label: 'Time of day' },
+        { value: 'tim:weekday', label: 'Weekday' }
+      ])
+    }
     const current = sourceValue(operand)
     if (![...source.options].some((o) => o.value === current)) {
       // A server row this page has no catalogue entry for: keep it, by its own spelling.
@@ -448,6 +500,18 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
         line.setAttribute('aria-label', 'Which line')
         box.appendChild(line)
       }
+    } else if (operand.kind === 'graph') {
+      box.appendChild(graphSettingsEditor(operand, onChange))
+    } else if (operand.kind === 'time') {
+      const zones = TIME_ZONES.some((z) => z.zone === operand.zone) ? TIME_ZONES : [{ zone: operand.zone, label: operand.zone }, ...TIME_ZONES]
+      const zone = select(
+        zones.map((z) => ({ value: z.zone, label: z.label })),
+        operand.zone,
+        (value) => onChange({ ...operand, zone: value })
+      )
+      zone.setAttribute('aria-label', 'Clock')
+      zone.title = 'Whose clock: the time of day and the weekday are read on it'
+      box.appendChild(zone)
     } else if (operand.kind === 'series') {
       const row = catalogue?.stored.find((s) => s.entry.name === operand.indicator)
       if (row && row.series.length > 1) {
@@ -479,12 +543,106 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
       const [plugin, variant = ''] = rest.split('/')
       return { kind: 'signal', interval, plugin, variant }
     }
+    if (kind === 'gph') {
+      const entry = entryIntervals().includes(interval) ? interval : '5m'
+      return withEntry({ kind: 'graph', interval: entry, overlay: rest, ...graphSettingsFor(rest) }, entry)
+    }
+    if (kind === 'tim') return { kind: 'time', interval, field: rest === 'weekday' ? 'weekday' : 'minute', zone: 'America/New_York' }
     return null
   }
 
-  function signalLabels(operand: Operand): Array<{ id: string; label: string }> {
-    if (operand.kind !== 'signal') return []
-    return catalogue?.signals.find((f) => f.plugin === operand.plugin && f.variant === operand.variant)?.labels ?? []
+  /** The labels a labelled source can be compared with, "any side" first where that means
+   * something (a signal, a graph entry; never a weekday). */
+  function labelChoices(operand: Operand): Array<{ value: string; label: string }> {
+    if (operand.kind === 'signal') {
+      const family = catalogue?.signals.find((f) => f.plugin === operand.plugin && f.variant === operand.variant)
+      return [{ value: ANY_LABEL, label: 'any side' }, ...(family?.labels ?? []).map((l) => ({ value: l.id, label: l.label }))]
+    }
+    if (operand.kind === 'graph') {
+      return [
+        { value: ANY_LABEL, label: 'any side' },
+        { value: 'top', label: 'top (a graph climbing above the price)' },
+        { value: 'bottom', label: 'bottom (a graph falling below it)' }
+      ]
+    }
+    if (operand.kind === 'time' && operand.field === 'weekday') return WEEKDAYS.map((d) => ({ value: d, label: d }))
+    return []
+  }
+
+  /** The graph settings a new graph entry starts from: the active pane's, else the defaults. */
+  function graphSettingsFor(overlayId: string): { timeframes: string[]; roots: string[]; maxStep: number } {
+    const settings = options.context.graphSettings?.(overlayId) ?? defaultGraphSettings()
+    return { timeframes: settings.timeframes, roots: settings.roots, maxStep: settings.maxStep }
+  }
+
+  /** Timeframes, roots and the largest step of one graph entry condition: a summary line, the
+   * copy from the active pane, and the settings themselves behind a toggle. */
+  function graphSettingsEditor(operand: Extract<Operand, { kind: 'graph' }>, onChange: (next: Operand) => void): HTMLElement {
+    const box = el('span', 'wd-alert-graph')
+    const summary = el('span', 'wd-alert-muted wd-alert-graph-summary')
+    summary.textContent = `from ${operand.roots.join(' ') || '—'} · ${operand.timeframes.join(' ')} · step ${operand.maxStep}×`
+    summary.title = 'The graph this alert builds: the timeframes it reads, the roots graphs start from, and the largest step down'
+    // Keyed by the overlay, not by the settings: an edit to them must not close the panel.
+    const key = operand.overlay
+    const open = openGraphs.has(key)
+    const toggle = button('kc-button wd-alert-link', open ? 'Done' : 'Settings', () => {
+      if (open) openGraphs.delete(key)
+      else openGraphs.add(key)
+      render()
+    })
+    const copy = button('kc-button wd-alert-link', 'Copy from pane', () => {
+      const settings = options.context.graphSettings?.(operand.overlay) ?? defaultGraphSettings()
+      copied = settings.from
+      onChange(withEntry({ ...operand, timeframes: settings.timeframes, roots: settings.roots, maxStep: settings.maxStep }, operand.interval))
+    })
+    copy.title = 'Take the active pane\'s settings for this overlay'
+    box.append(summary, toggle, copy)
+    if (copied) {
+      const from = el('span', 'wd-alert-muted')
+      from.textContent = `(copied from ${copied})`
+      box.appendChild(from)
+    }
+    if (!open) return box
+    const panel = el('div', 'wd-alert-graph-settings')
+    const checks = (title: string, all: readonly string[], on: readonly string[], set: (next: string[]) => void): HTMLElement => {
+      const row = el('div', 'wd-alert-graph-row')
+      const caption = el('span', 'wd-alert-caption')
+      caption.textContent = title
+      row.appendChild(caption)
+      for (const code of all) {
+        const label = el('label', 'wd-alert-check')
+        const box = document.createElement('input')
+        box.type = 'checkbox'
+        box.checked = on.includes(code)
+        box.addEventListener('change', () => set(box.checked ? [...on, code] : on.filter((c) => c !== code)))
+        label.append(box, code)
+        row.appendChild(label)
+      }
+      return row
+    }
+    const byLength = (codes: string[]): string[] => [...new Set(codes)].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))
+    // A root is a timeframe the graph reads, so switching one on reads it, and switching a
+    // timeframe off stops it being a root.
+    panel.append(
+      checks('Timeframes', MTF_INTERVALS, operand.timeframes, (next) =>
+        onChange({ ...operand, timeframes: byLength(next), roots: operand.roots.filter((root) => next.includes(root)) })
+      ),
+      checks('Roots', GRAPH_ROOTS, operand.roots, (next) =>
+        onChange({ ...operand, roots: byLength(next).reverse(), timeframes: byLength([...operand.timeframes, ...next]) })
+      )
+    )
+    const stepRow = el('div', 'wd-alert-graph-row')
+    const caption = el('span', 'wd-alert-caption')
+    caption.textContent = 'Largest step (×)'
+    const step = numberInput(operand.maxStep, () => {})
+    step.addEventListener('change', () => {
+      const n = Math.round(Number(step.value))
+      if (Number.isFinite(n) && n >= 2) onChange({ ...operand, maxStep: n })
+    })
+    stepRow.append(caption, step)
+    panel.appendChild(stepRow)
+    box.appendChild(panel)
+    return box
   }
 
   render()
@@ -502,7 +660,53 @@ function sourceValue(operand: Operand): string {
       return `ser:${operand.indicator}`
     case 'signal':
       return `sig:${operand.plugin}/${operand.variant}`
+    case 'graph':
+      return `gph:${operand.overlay}`
+    case 'time':
+      return `tim:${operand.field}`
   }
+}
+
+/** Whether an operand reads the clock's time of day (compared with times, not numbers). */
+function isClock(operand: Operand): boolean {
+  return operand.kind === 'time' && operand.field === 'minute'
+}
+
+/** What kind of comparison an operand takes: a label (per source), a time of day, a number. */
+function shape(operand: Operand): string {
+  if (operand.kind === 'signal') return `signal:${operand.plugin}/${operand.variant}`
+  if (operand.kind === 'graph') return 'graph'
+  if (operand.kind === 'time') return `time:${operand.field}`
+  return 'number'
+}
+
+/** A comparison started afresh for a new kind of value: "is any side" for a signal or a graph
+ * entry, Monday for a weekday, "reaches 09:30" for a time of day, "crosses above 0" otherwise. */
+function resetComparison(leaf: RuleLeaf, labels: Array<{ value: string }>): void {
+  if (isLabelOperand(leaf.left)) {
+    leaf.op = '=='
+    leaf.right = { label: labels[0]?.value ?? '' }
+  } else if (isClock(leaf.left)) {
+    leaf.op = 'crosses_above'
+    leaf.right = { value: 570 }
+  } else {
+    leaf.op = 'crosses_above'
+    leaf.right = { value: 0 }
+  }
+}
+
+/** A graph entry on `interval` needs the graph to read that timeframe, and a root among what it
+ * reads: added when missing, so a pane with 3m and 5m switched off still yields an alert that
+ * can fire (the editor's summary shows the result). */
+function withEntry(operand: Extract<Operand, { kind: 'graph' }>, interval: string): Extract<Operand, { kind: 'graph' }> {
+  const byLength = (codes: string[]): string[] => [...new Set(codes)].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))
+  const timeframes = byLength([...operand.timeframes, interval])
+  let roots = operand.roots.filter((root) => timeframes.includes(root))
+  if (roots.length === 0) {
+    roots = ['1D']
+    timeframes.push('1D')
+  }
+  return { ...operand, interval, timeframes: byLength(timeframes), roots }
 }
 
 /** Change a condition's operator, keeping what it compares with where that still makes sense. */
@@ -513,7 +717,7 @@ function setOp(leaf: RuleLeaf, op: string): void {
     leaf.right = undefined
     return
   }
-  if (leaf.left.kind === 'signal') return
+  if (isLabelOperand(leaf.left)) return
   if (op === 'inside' || op === 'outside') {
     if (!right || !('band' in right)) {
       const v = right && 'value' in right ? right.value : 0
@@ -591,6 +795,24 @@ function numberInput(value: number, onValue: (value: number) => void): HTMLInput
   const commit = (): void => {
     const n = Number(i.value)
     if (i.value.trim() !== '' && Number.isFinite(n)) onValue(n)
+  }
+  i.addEventListener('input', () => {
+    commit()
+    i.dispatchEvent(new CustomEvent('wd-alert-edited', { bubbles: true }))
+  })
+  i.addEventListener('change', commit)
+  return i
+}
+
+/** A time of day, typed HH:MM, committed as minutes past midnight. */
+function timeInput(minute: number, onValue: (minute: number) => void): HTMLInputElement {
+  const i = document.createElement('input')
+  i.type = 'time'
+  i.className = 'kc-input wd-alert-time'
+  i.value = formatMinute(minute)
+  const commit = (): void => {
+    const m = /^(\d{1,2}):(\d{2})/.exec(i.value)
+    if (m) onValue(Number(m[1]) * 60 + Number(m[2]))
   }
   i.addEventListener('input', () => {
     commit()

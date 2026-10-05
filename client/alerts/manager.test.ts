@@ -26,7 +26,13 @@ function mount() {
   const manager = createAlertManager({
     store,
     bounds,
-    context: () => ({ symbol: 'oanda:EURUSD', interval: '1h', symbols: ['oanda:EURUSD'] }),
+    context: () => ({
+      symbol: 'oanda:EURUSD',
+      interval: '1h',
+      symbols: ['oanda:EURUSD'],
+      // A pane with the overlay on 15m and up, rooted at 1D -- 3m/5m switched off, as by default.
+      graphSettings: () => ({ timeframes: ['15m', '1h', '1D'], roots: ['1D'], maxStep: 8, from: 'pane 1' })
+    }),
     catalogue: NO_SERVER
   })
   const root = manager.element
@@ -96,8 +102,12 @@ describe('the alert manager', () => {
     const nested = m.root.querySelector('.wd-alert-group.is-nested') as HTMLElement
     m.change(nested.querySelector('.wd-alert-source') as HTMLSelectElement, 'sig:arev/arev21')
     expect(m.root.querySelector('.wd-alert-sentence')?.textContent).toBe(
-      'RSI(14) 1h crosses below 30 and Close 1h crosses above MA(20) 1h and AREV arev21 signal 1h is long'
+      'RSI(14) 1h crosses below 30 and Close 1h crosses above MA(20) 1h and AREV arev21 signal 1h is any side'
     )
+    // A side, chosen.
+    const group = m.root.querySelector('.wd-alert-group.is-nested') as HTMLElement
+    m.change(group.querySelector('[aria-label="Which label"]') as HTMLSelectElement, 'long')
+    expect(m.root.querySelector('.wd-alert-sentence')?.textContent).toContain('signal 1h is long')
     m.button('Create alert').click()
     await settle()
     const rule = m.store.list()[0].rule as { all: Rule[] }
@@ -149,6 +159,65 @@ describe('the alert manager', () => {
     m.button('Confirm delete').click()
     await settle()
     expect(m.store.list()).toEqual([])
+  })
+})
+
+describe('graph entries and time conditions in the editor', () => {
+  test('a graph entry copies the pane\'s settings, adds the timeframe it is on, and saves', async () => {
+    const m = mount()
+    m.manager.create()
+    await settle()
+    m.change(m.root.querySelector('.wd-alert-source') as HTMLSelectElement, 'gph:mtf_arev21_outlier_rank_85')
+    // Only the overlay's entry timeframes, 5m by default; any side by default.
+    const tf = m.root.querySelector('[aria-label="Timeframe"]') as HTMLSelectElement
+    expect([...tf.options].map((o) => o.value)).toEqual(['3m', '5m'])
+    expect(tf.value).toBe('5m')
+    expect((m.root.querySelector('[aria-label="Which label"]') as HTMLSelectElement).value).toBe('*')
+    // The pane had 5m off: the alert reads it anyway, or it could never fire.
+    expect(m.root.querySelector('.wd-alert-graph-summary')?.textContent).toBe('from 1D · 5m 15m 1h 1D · step 8×')
+    expect(m.root.querySelector('.wd-alert-sentence')?.textContent).toBe('AREV21 OUTLIER RANK 85 graph entry 5m is any side')
+    m.button('Copy from pane').click()
+    expect(m.root.textContent).toContain('(copied from pane 1)')
+    // Its settings, behind a toggle that an edit does not close; a root switched on is read.
+    m.button('Settings').click()
+    const rootBox = (code: string): HTMLInputElement => {
+      const row = [...m.root.querySelectorAll('.wd-alert-graph-row')][1]
+      return [...row.querySelectorAll('label')].find((l) => l.textContent === code)?.querySelector('input') as HTMLInputElement
+    }
+    rootBox('4h').checked = true
+    rootBox('4h').dispatchEvent(new Event('change'))
+    expect(m.root.querySelector('.wd-alert-graph-settings')).not.toBeNull()
+    expect(m.root.querySelector('.wd-alert-graph-summary')?.textContent).toBe('from 1D 4h · 5m 15m 1h 4h 1D · step 8×')
+    rootBox('4h').checked = false
+    rootBox('4h').dispatchEvent(new Event('change'))
+    // Switching the only root off is refused with the reason.
+    const root1D = [...m.root.querySelectorAll('.wd-alert-graph-row')][1].querySelectorAll('input')[0] as HTMLInputElement
+    root1D.checked = false
+    root1D.dispatchEvent(new Event('change'))
+    expect(m.root.querySelector('.wd-alert-problem')?.textContent).toContain('root')
+    expect(m.button('Create alert').disabled).toBe(true)
+  })
+
+  test('a time of day: reaches 09:30 by default, typed as a time', async () => {
+    const m = mount()
+    m.manager.create()
+    await settle()
+    m.change(m.root.querySelector('.wd-alert-source') as HTMLSelectElement, 'tim:minute')
+    expect((m.root.querySelector('.wd-alert-op') as HTMLSelectElement).selectedOptions[0].textContent).toBe('reaches')
+    const at = m.root.querySelector('[aria-label="Time"]') as HTMLInputElement
+    expect(at.type).toBe('time')
+    expect(at.value).toBe('09:30')
+    at.value = '08:15'
+    at.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(m.root.querySelector('.wd-alert-sentence')?.textContent).toBe('Time of day (New York) at 1h closes reaches 08:15')
+    m.change(m.root.querySelector('[aria-label="Clock"]') as HTMLSelectElement, 'Europe/London')
+    m.button('Create alert').click()
+    await settle()
+    expect(m.store.list()[0].rule).toEqual({
+      left: { kind: 'time', interval: '1h', field: 'minute', zone: 'Europe/London' },
+      op: 'crosses_above',
+      right: { value: 495 }
+    })
   })
 })
 

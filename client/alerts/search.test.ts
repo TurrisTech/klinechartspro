@@ -42,6 +42,9 @@ class FakeData implements AlertData {
     this.barReads++
     return (this.series.get(interval) ?? []).filter((b) => b.open >= from && b.open < to)
   }
+  async votes() {
+    return []
+  }
   async points(_source: unknown, _symbol: string, _interval: string, from: number, to: number): Promise<Point[]> {
     this.pointReads++
     return this.pointRows.filter((p) => p.date >= from && p.date < to)
@@ -186,6 +189,42 @@ describe('AlertSearch', () => {
     const b = { ...alert({ left: close, op: 'crosses_above', right: { operand: ma } }), id: 'cross' }
     const hit = await earliestHit(search, [a, b], bars[100].end, until)
     expect(hit?.alert.id).toBe('cross')
+  })
+})
+
+describe('time conditions', () => {
+  const bars = hourly(24 * 10)
+  const data = (): FakeData => new FakeData(new Map([['1h', bars]]))
+  const until = bars[bars.length - 1].end
+  const close: Operand = { kind: 'bar', interval: '1h', field: 'close' }
+  test('the clock is read at a bar\'s close, on the zone\'s own wall clock, across DST', async () => {
+    const { clockValue } = await import('./compute')
+    // 14:30Z in March is 09:30 New York (EST); in July 13:30Z is (EDT).
+    expect(clockValue(Date.UTC(2024, 2, 4, 14, 30), 'minute', 'America/New_York')).toBe(570)
+    expect(clockValue(Date.UTC(2024, 6, 1, 13, 30), 'minute', 'America/New_York')).toBe(570)
+    expect(clockValue(Date.UTC(2024, 2, 4, 14, 30), 'weekday', 'America/New_York')).toBe('Mon')
+    expect(clockValue(Date.UTC(2024, 2, 4, 3, 0), 'weekday', 'America/New_York')).toBe('Sun')
+    expect(clockValue(Date.UTC(2024, 2, 4, 14, 30), 'minute', 'Asia/Tokyo')).toBe(23 * 60 + 30)
+  })
+
+  test('"reaches 09:30 New York" fires once a day, at the first close at or after it', async () => {
+    // The hourly bars above start 2024-01-01 00:00Z; New York is UTC-5 then, so 09:30 is
+    // 14:30Z and the first hourly close at or after it is 15:00Z.
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    const at: Operand = { kind: 'time', interval: '1h', field: 'minute', zone: 'America/New_York' }
+    const rule: Rule = { left: at, op: 'crosses_above', right: { value: 570 } }
+    const first = await search.next(alert(rule), bars[0].end, until)
+    expect(first?.at).toBe(Date.UTC(2024, 0, 1, 15))
+    const second = await search.next(alert(rule), first?.at ?? 0, until)
+    expect(second?.at).toBe(Date.UTC(2024, 0, 2, 15))
+  })
+
+  test('a window: a condition holds only between 08:00 and 11:00', async () => {
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    const minute: Operand = { kind: 'time', interval: '1h', field: 'minute', zone: 'America/New_York' }
+    const rule: Rule = { all: [{ left: close, op: '>', right: { value: 0 } }, { left: minute, op: 'inside', right: { band: [480, 660] } }] }
+    // 08:00 New York is 13:00Z: the first hourly close inside the window.
+    expect((await search.next(alert(rule), bars[0].end, until))?.at).toBe(Date.UTC(2024, 0, 1, 13))
   })
 })
 

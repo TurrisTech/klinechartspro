@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { evaluate } from './conditions'
-import { compile, describeRule, intervalsOf, operandKey, operandsOf, RuleError } from './rules'
-import type { Operand, Rule } from './types'
+import { compile, describeRule, formatMinute, intervalsOf, operandKey, operandsOf, RuleError } from './rules'
+import { ANY_LABEL, type Operand, type Rule } from './types'
 
 const rsi: Operand = { kind: 'indicator', interval: '1h', name: 'RSI', params: [14], output: 'rsi1' }
 const close: Operand = { kind: 'bar', interval: '1h', field: 'close' }
@@ -82,5 +82,49 @@ describe('reading a rule', () => {
     expect(describeRule(rule)).toBe(
       '(RSI(14) rsi1 1h crosses below 30 and close 1h > EMA(200) ema1 4h) or arev21 signal 4h is long'
     )
+  })
+})
+
+describe('graph entries and the clock', () => {
+  const entry: Operand = { kind: 'graph', interval: '5m', overlay: 'mtf_arev21_outlier_rank_85', timeframes: ['3m', '5m', '1h', '1D'], roots: ['1D'], maxStep: 8 }
+  const nyMinute: Operand = { kind: 'time', interval: '5m', field: 'minute', zone: 'America/New_York' }
+  const weekday: Operand = { kind: 'time', interval: '5m', field: 'weekday', zone: 'America/New_York' }
+
+  test('"is any side" is "is not the empty label"', () => {
+    expect(compile({ left: entry, op: '==', right: { label: ANY_LABEL } }).condition).toEqual({ field: operandKey(entry), op: '!=', value: '' })
+    expect(compile({ left: entry, op: '!=', right: { label: ANY_LABEL } }).condition).toEqual({ field: operandKey(entry), op: '==', value: '' })
+    expect(compile({ left: entry, op: '==', right: { label: 'top' } }).condition).toEqual({ field: operandKey(entry), op: '==', value: 'top' })
+  })
+
+  test('a time of day compares as minutes; a weekday as a label', () => {
+    expect(compile({ left: nyMinute, op: 'inside', right: { band: [480, 660] } }).condition).toEqual({ field: operandKey(nyMinute), op: 'inside', value: [480, 660] })
+    expect(compile({ left: weekday, op: '==', right: { label: 'Mon' } }).condition).toEqual({ field: operandKey(weekday), op: '==', value: 'Mon' })
+  })
+
+  test('refuses a graph that cannot have an entry there, and a clock that is not one', () => {
+    const refused: Rule[] = [
+      { left: { ...entry, timeframes: ['1h', '1D'] }, op: '==', right: { label: ANY_LABEL } },
+      { left: { ...entry, roots: ['4h'] }, op: '==', right: { label: ANY_LABEL } },
+      { left: { ...entry, maxStep: 1 }, op: '==', right: { label: ANY_LABEL } },
+      { left: entry, op: '>', right: { value: 1 } },
+      { left: { ...nyMinute, zone: 'Mars/Olympus' }, op: '>=', right: { value: 1 } },
+      { left: { kind: 'bar', interval: '5m', field: 'close' }, op: '>', right: { operand: weekday } }
+    ]
+    for (const rule of refused) expect(() => compile(rule)).toThrow(RuleError)
+  })
+
+  test('reads as a sentence, the clock in hours and minutes', () => {
+    const rule: Rule = {
+      all: [
+        { left: entry, op: '==', right: { label: ANY_LABEL } },
+        { left: nyMinute, op: 'inside', right: { band: [480, 660] } }
+      ]
+    }
+    expect(describeRule(rule)).toBe(
+      'mtf_arev21_outlier_rank_85 graph entry 5m is any side and time of day (America/New_York) at 5m closes is between 08:00 and 11:00'
+    )
+    expect(describeRule({ left: nyMinute, op: 'crosses_above', right: { value: 570 } })).toBe('time of day (America/New_York) at 5m closes reaches 09:30')
+    expect(formatMinute(0)).toBe('00:00')
+    expect(formatMinute(1439)).toBe('23:59')
   })
 })

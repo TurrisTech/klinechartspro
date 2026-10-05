@@ -18,7 +18,7 @@
 // so this file can be tested without klinecharts.
 
 import { type Condition, ConditionError, OPS, parse } from './conditions'
-import type { Operand, Rule, RuleLeaf, RuleRight } from './types'
+import { ANY_LABEL, type Operand, type Rule, type RuleLeaf, type RuleRight } from './types'
 
 export class RuleError extends Error {
   constructor(message: string) {
@@ -31,6 +31,19 @@ export class RuleError extends Error {
 export const NUMERIC_OPS = ['crosses_above', 'crosses_below', 'crosses', '>', '>=', '<', '<=', 'inside', 'outside', 'changed'] as const
 /** Operators against another OPERAND: the ones that read the difference's sign. */
 export const OPERAND_OPS = ['crosses_above', 'crosses_below', 'crosses', '>', '>=', '<', '<='] as const
+/** Operators a time of day is compared with: reached (once a day, at the first close at or
+ * after it), between, not between, from, before. */
+export const TIME_OPS = ['crosses_above', 'inside', 'outside', '>=', '<'] as const
+
+/** How those read for a time of day -- "reaches 09:30" where a number "crosses above". */
+export const TIME_OP_WORDS: Record<string, string> = {
+  crosses_above: 'reaches',
+  inside: 'is between',
+  outside: 'is not between',
+  '>=': 'is at or after',
+  '<': 'is before'
+}
+
 /** Operators a signal label can be compared with. */
 export const LABEL_OPS = ['==', '!=', 'changed'] as const
 
@@ -64,7 +77,26 @@ export function operandKey(operand: Operand): string {
       return `ser:${operand.indicator}.${operand.key}@${operand.interval}`
     case 'signal':
       return `sig:${operand.plugin}/${operand.variant}@${operand.interval}`
+    case 'graph':
+      return `graph:${operand.overlay}[${operand.timeframes.join(',')}|${operand.roots.join(',')}|${operand.maxStep}]@${operand.interval}`
+    case 'time':
+      return `time:${operand.field}/${operand.zone}@${operand.interval}`
   }
+}
+
+/** An operand whose values are labels (a signal's side, a graph entry's, a weekday), compared
+ * with `is` / `is not` rather than with numbers. */
+export function isLabelOperand(operand: Operand): boolean {
+  return operand.kind === 'signal' || operand.kind === 'graph' || (operand.kind === 'time' && operand.field === 'weekday')
+}
+
+/** The weekdays a `weekday` operand reads, in the order the editor offers them. */
+export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+/** `09:30` for 570 minutes past midnight. */
+export function formatMinute(minute: number): string {
+  const m = ((Math.round(minute) % 1440) + 1440) % 1440
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
 }
 
 export function isLeaf(rule: Rule): rule is RuleLeaf {
@@ -121,10 +153,13 @@ function leaf(node: RuleLeaf, use: (operand: Operand) => string, fields: Map<str
   if (!OPS.includes(op)) throw new RuleError(`unknown operator ${JSON.stringify(op)}`)
   const left = use(node.left)
 
-  if (node.left.kind === 'signal') {
-    if (!(LABEL_OPS as readonly string[]).includes(op)) throw new RuleError(`a signal is compared with ${LABEL_OPS.join(', ')}`)
+  if (isLabelOperand(node.left)) {
+    if (!(LABEL_OPS as readonly string[]).includes(op)) throw new RuleError(`a label is compared with ${LABEL_OPS.join(', ')}`)
     if (op === 'changed') return { field: left, op }
-    if (!right || !('label' in right) || !right.label) throw new RuleError('choose which signal')
+    if (!right || !('label' in right) || !right.label) throw new RuleError('choose which label')
+    // "is any side" is "is not the empty label": a bar the source served with no label reads
+    // '', and one it has not reached yet is unknowable, which neither fires nor resets.
+    if (right.label === ANY_LABEL) return { field: left, op: op === '==' ? '!=' : '==', value: '' }
     return { field: left, op, value: right.label }
   }
 
@@ -132,7 +167,7 @@ function leaf(node: RuleLeaf, use: (operand: Operand) => string, fields: Map<str
   if (!right) throw new RuleError(`'${OP_WORDS[op] ?? op}' needs something to compare with`)
   if ('operand' in right) {
     if (!(OPERAND_OPS as readonly string[]).includes(op)) throw new RuleError(`'${OP_WORDS[op] ?? op}' compares with a number, not a series`)
-    if (right.operand.kind === 'signal') throw new RuleError('a signal can only be compared with its own labels')
+    if (isLabelOperand(right.operand)) throw new RuleError('a label can only be compared with its own labels')
     const other = use(right.operand)
     if (other === left) throw new RuleError('a series compared with itself')
     const field = `${left} - ${other}`
@@ -169,6 +204,27 @@ function checkOperand(operand: Operand): void {
       return
     case 'signal':
       if (!operand.plugin) throw new RuleError('choose a signal')
+      return
+    case 'graph': {
+      if (!operand.overlay) throw new RuleError('choose an overlay')
+      const intervals = (list: unknown): list is string[] => Array.isArray(list) && list.every((i) => typeof i === 'string' && INTERVAL.test(i))
+      if (!intervals(operand.timeframes) || !intervals(operand.roots)) throw new RuleError('graph timeframes must be timeframes')
+      if (!operand.timeframes.includes(operand.interval)) {
+        throw new RuleError(`the graph does not read ${operand.interval}, so it can have no entry there`)
+      }
+      if (!operand.roots.some((root) => operand.timeframes.includes(root))) {
+        throw new RuleError('switch on a root timeframe the graph reads')
+      }
+      if (!Number.isFinite(operand.maxStep) || operand.maxStep < 2) throw new RuleError('the largest step is at least 2')
+      return
+    }
+    case 'time':
+      if (operand.field !== 'minute' && operand.field !== 'weekday') throw new RuleError(`not a time field: ${operand.field}`)
+      try {
+        new Intl.DateTimeFormat('en-US', { timeZone: operand.zone })
+      } catch {
+        throw new RuleError(`not a time zone: ${JSON.stringify(operand.zone)}`)
+      }
       return
     default:
       throw new RuleError(`unknown operand kind ${JSON.stringify((operand as { kind?: unknown }).kind)}`)
@@ -213,6 +269,10 @@ export function plainLabel(operand: Operand): string {
       return `${operand.indicator} ${operand.key}`
     case 'signal':
       return `${operand.variant || operand.plugin} signal`
+    case 'graph':
+      return `${operand.overlay} graph entry`
+    case 'time':
+      return `${operand.field === 'minute' ? 'time of day' : 'weekday'} (${operand.zone})`
   }
 }
 
@@ -232,16 +292,20 @@ export function describeRule(rule: Rule, label: Labeller = plainLabel): string {
 }
 
 export function describeLeaf(node: RuleLeaf, label: Labeller = plainLabel): string {
-  const left = `${label(node.left)} ${node.left.interval}`
-  const words = OP_WORDS[node.op] ?? node.op
+  // A clock reading is read at each bar close of its timeframe: "at 5m closes" says so where
+  // a bare "5m" after a time of day would read as a duration.
+  const left = node.left.kind === 'time' ? `${label(node.left)} at ${node.left.interval} closes` : `${label(node.left)} ${node.left.interval}`
+  const clock = node.left.kind === 'time' && node.left.field === 'minute'
+  const words = (clock ? TIME_OP_WORDS[node.op] : undefined) ?? OP_WORDS[node.op] ?? node.op
   if (node.op === 'changed') return `${left} ${words}`
-  return `${left} ${words} ${describeRight(node.right, label)}`
+  return `${left} ${words} ${describeRight(node.right, label, clock)}`
 }
 
-function describeRight(right: RuleRight | undefined, label: Labeller): string {
+function describeRight(right: RuleRight | undefined, label: Labeller, clock = false): string {
+  const number = (value: number): string => (clock ? formatMinute(value) : String(value))
   if (!right) return '…'
   if ('operand' in right) return `${label(right.operand)} ${right.operand.interval}`
-  if ('band' in right) return `${right.band[0]}–${right.band[1]}`
-  if ('label' in right) return right.label || '…'
-  return String(right.value)
+  if ('band' in right) return clock ? `${number(right.band[0])} and ${number(right.band[1])}` : `${number(right.band[0])}–${number(right.band[1])}`
+  if ('label' in right) return right.label === ANY_LABEL ? 'any side' : right.label || '…'
+  return number(right.value)
 }

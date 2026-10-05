@@ -3505,3 +3505,49 @@ body.wd-has-dock > #app {
 .wd-replay-stop-reason.is-none {
   color: var(--muted-foreground);
 }
+
+/* A graph entry condition's settings (client/alerts/editor.ts): a summary line, and behind a
+   toggle the timeframes, the roots and the largest step, as checkbox rows. */
+.wd-alert-graph {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.wd-alert-graph-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex-basis: 100%;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.wd-alert-graph-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.625rem;
+}
+
+.wd-alert-graph-row .wd-alert-caption {
+  min-width: 6.5rem;
+}
+
+.wd-alert-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.wd-alert-check input {
+  accent-color: var(--primary);
+}
+
+.wd-alert-time {
+  width: 6.5rem;
+}

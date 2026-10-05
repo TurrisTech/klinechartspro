@@ -34,6 +34,36 @@ An **operand** is a value per bar of its timeframe, on the alert's instrument:
 | `indicator` | a klinecharts built-in — MA, EMA, RSI, MACD, BOLL, KDJ… (24 of them) — with its params and the line (`rsi1`, `dif`) | computed **in the browser** from the bars by the chart's own template (`getIndicatorClass`, which `patches/klinecharts@10.0.0.patch` exports for this) |
 | `series` | a stored registry row's series — AREV19…23 `p`, arev21_outlier, krev01 | `/plugins/{id}/values` |
 | `signal` | a plugin's published label on a bar — `long`, `top` — or '' for none | `/plugins/{id}/values`' `signal` field |
+| `graph` | a multi-timeframe overlay's **graph entry** on a 3m/5m bar -- the star the overlay draws, `top`/`bottom`, or '' | the overlay's own fetch and graph code, headless (`graphentry.ts`) |
+| `time` | the clock at each bar close: **time of day** (minutes past midnight, typed HH:MM) or **weekday**, on a chosen zone | the bar's close, on that zone's wall clock |
+
+A signal or a graph entry can be compared with **any side** (`is any side`, compiled to "not
+the empty label").
+
+**Graph entries** (2026-10-05, user: "an alert when there is a 3m or 5m signal at the end of a
+graph"). An entry is what the AREV21 outlier rank 85 MTF overlay stars: a 3m or 5m signal
+stepped to, through the graph, from a root (client/mtf/graph.ts `isEntry`). The alert runs the
+overlay's OWN code on the overlay's own fetch -- `storeGraphSignals`, `buildRootGraphs`,
+`isEntry` -- so it stars the bars the chart stars (`graphentry.test.ts` checks the two side by
+side). What the alert keeps of its own is the graph's SETTINGS -- the timeframes it reads, its
+roots, its largest step -- **copied from a pane when the condition is chosen** (the active pane
+if it carries the overlay, else the first that does; user's choice, so a later change to the
+pane does not change what the alert means), editable behind its Settings toggle, and copied
+again on "Copy from pane". With no pane carrying the overlay it reads **every** timeframe rooted
+at 1D: the overlay's own defaults switch on 1h and longer only, and a graph that cannot step
+below 1h has no entry to find. The entry's own timeframe is always added to what it reads.
+One difference from a pane is deliberate: a pane draws no timeframe finer than its chart, so a
+15m chart shows no 5m stars; the alert builds from every timeframe it was given. An entry is
+final once every timeframe the graph reads has been served past the instant it became knowable
+(`GraphEntries.through`); a timeframe the server has served nothing for (dev computes no arev21
+on 3m or 2h locally) is skipped rather than waited on.
+
+**Time conditions** (2026-10-05, user: "also allow alerts based on time signals"): `Time of day
+(New York) at 5m closes reaches 09:30` fires at the first close at or after 09:30, once a day;
+`is between 08:00 and 11:00` is a window other conditions must fall in; `Weekday is Mon` the
+same for days. Read at each bar CLOSE of the condition's timeframe, on the chosen zone's wall
+clock (New York, London, Frankfurt, Tokyo, Sydney, UTC), so DST moves nothing. A window across
+midnight is written as "is not between" its complement.
 
 OBV and PVT are not offered: they are running sums from the first bar loaded, so their value
 depends on where a window starts and never converges -- every alert reads a window, and a
@@ -158,6 +188,7 @@ them, and a replay's own price watches stay in its state blob.
 | `compute.ts` | Values per bar: built-ins through klinecharts, server points by bar date. |
 | `data.ts` | `/getbars` and `/plugins/{id}/values` past the read clock; `SpanCache`. |
 | `search.ts` | `AlertSearch`, `earliestHit` — Next alert's look-ahead. |
+| `graphentry.ts` | `GraphEntryEngine`: an MTF overlay's graph entries, headless, and how far they are final. |
 | `store.ts` | `ClientAlertStore`: the list, validation on write, persistence. |
 | `monitor.ts` | `AlertMonitor`: live evaluation at bar close, notifications. |
 | `editor.ts` | DOM. The rule editor. |

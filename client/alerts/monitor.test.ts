@@ -62,6 +62,9 @@ class FakeData implements AlertData {
   async bars(_symbol: string, interval: string): Promise<AlertBar[]> {
     return this.byInterval.get(interval) ?? this.history
   }
+  async votes() {
+    return []
+  }
   async points(_s: unknown, _sym: string, _i: string, from: number, to: number): Promise<Point[]> {
     if (this.gate) await this.gate
     return this.points_.filter((p) => p.date >= from && p.date < to)

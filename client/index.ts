@@ -1,5 +1,7 @@
 import { KLineChartPro, type ChartProPane } from '../src'
 import { mountAlertManager, startAlerts } from './alerts'
+import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './alerts/graphentry'
+import type { MtfConfig } from './mtf/config'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot } from './chartlayers/controller'
@@ -476,7 +478,18 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       return {
         symbol: active ? symbolKey(active.getSymbol()) : '',
         interval: active ? periodToResolution(active.getPeriod()) : '1h',
-        symbols: [...new Set(panes.map((p) => symbolKey(p.getSymbol())))]
+        symbols: [...new Set(panes.map((p) => symbolKey(p.getSymbol())))],
+        // A graph entry condition copies an overlay's graph settings from the active pane when
+        // that pane carries the overlay, else from the first pane that does, else its defaults.
+        graphSettings: (overlayId) => {
+          const overlay = graphOverlays().find((o) => o.id === overlayId)
+          const carries = (pane: ChartProPane | undefined): boolean =>
+            !!overlay && (pane?.getChart()?.getIndicators({ name: overlay.templateName }).length ?? 0) > 0
+          const pane = [active, ...panes].find(carries)
+          if (!overlay || !pane) return defaultGraphSettings()
+          const config = pluginHost.settingsModel(overlay.templateName)?.read(pane.id) as MtfConfig | null
+          return graphSettingsOf(config ?? undefined, `pane ${panes.indexOf(pane) + 1}`)
+        }
       }
     }
   })
