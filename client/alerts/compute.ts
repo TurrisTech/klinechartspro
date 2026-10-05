@@ -13,8 +13,9 @@
 
 import { getIndicatorClass, type Indicator, type KLineData } from 'klinecharts'
 import type { ReplayBar } from '../replay/cache'
+import { toWall } from '../replay/timeframes'
 import { readField } from '../tsregistry/api'
-import { operandKey } from './rules'
+import { operandKey, WEEKDAYS } from './rules'
 import type { Track, Value } from './timeline'
 import type { Operand } from './types'
 
@@ -94,15 +95,31 @@ export async function buildTrack(
         values.set(key, bars.map((bar) => seriesValue(index?.rows.get(bar.date), operand.key)))
         break
       }
-      case 'signal': {
+      // A graph entry reads like a signal: its points are the entries the engine found
+      // (graphentry.ts), each carrying the graph's side as its label.
+      case 'signal':
+      case 'graph': {
         const index = points(operand)
         values.set(key, bars.map((bar) => signalValue(index?.rows.get(bar.date), index !== undefined && index.through !== null && bar.date <= index.through)))
         break
       }
+      case 'time':
+        values.set(key, bars.map((bar) => clockValue(bar.end, operand.field, operand.zone)))
+        break
     }
   }
   return { interval, at: bars.map((bar) => bar.end), dates: bars.map((bar) => bar.date), values }
 }
+
+/** The clock at `at` on `zone`'s wall: minutes past midnight, or the weekday. Read at a bar's
+ * CLOSE, the instant it is evaluated at -- a 5m bar 09:25-09:30 reads 09:30. */
+export function clockValue(at: number, field: 'minute' | 'weekday', zone: string): Value {
+  const wall = toWall(at, zone)
+  if (field === 'weekday') return WEEKDAYS[(new Date(wall).getUTCDay() + 6) % 7]
+  return Math.floor((((wall % DAY_MS) + DAY_MS) % DAY_MS) / 60_000)
+}
+
+const DAY_MS = 86_400_000
 
 function barValue(bar: AlertBar, field: 'open' | 'high' | 'low' | 'close' | 'volume'): number {
   switch (field) {

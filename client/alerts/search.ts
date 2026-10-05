@@ -16,6 +16,7 @@ import { resolutionDurationMs } from '../periods'
 import { byInterval, leadInFor, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { type AlertData, type Point, SpanCache } from './data'
+import { GraphEntryEngine } from './graphentry'
 import { compile, operandKey } from './rules'
 import { freshRun, type Instant, instants, scan, type Track } from './timeline'
 import type { Alert, Operand } from './types'
@@ -68,16 +69,20 @@ function sourceKey(source: PointSource, symbol: string, interval: string): strin
 export class AlertSearch {
   private readonly bars = new Map<string, SpanCache<AlertBar>>()
   private readonly points = new Map<string, SpanCache<Point>>()
+  private readonly graphs: GraphEntryEngine
 
   constructor(
     private readonly data: AlertData,
     private readonly catalogue: () => Promise<ServerCatalogue>
-  ) {}
+  ) {
+    this.graphs = new GraphEntryEngine(data)
+  }
 
   /** Forget every fetched row (the instrument changed). */
   reset(): void {
     this.bars.clear()
     this.points.clear()
+    this.graphs.reset()
   }
 
   /** The first bar close in `(after, until]` at which `alert` triggers -- or null when it does
@@ -177,10 +182,17 @@ export class AlertSearch {
     ahead: number
   ): Promise<Map<string, PointIndex>> {
     const out = new Map<string, PointIndex>()
-    if (!catalogue || window.length === 0) return out
+    if (window.length === 0) return out
     const from = window[0].date
     const to = Math.max(window[window.length - 1].date + 1, ahead)
     for (const operand of operands) {
+      if (operand.kind === 'graph') {
+        // The overlay's own graph over this window (graphentry.ts), entries as points.
+        const found = await this.graphs.entries(symbol, operand, window[0].open, ahead)
+        out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
+        continue
+      }
+      if (!catalogue) continue
       const source = pointSource(operand, catalogue)
       if (!source) continue
       const key = sourceKey(source, symbol, interval)

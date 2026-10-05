@@ -35,6 +35,31 @@ export type Operand =
   /** A plugin's published signal labels (`GET /plugins/signals`): the label on a bar
    * (`long`, `top`), or '' on a bar that carries none. */
   | { kind: 'signal'; interval: string; plugin: string; variant: string }
+  /** An ENTRY of a multi-timeframe overlay's signal graph (client/mtf/graph.ts `isEntry`): the
+   * graph's side (`top`/`bottom`) on a bar of `interval` whose signal the overlay would draw as
+   * a star, '' on a bar whose signal is not one. The graph is built by the overlay's own code
+   * from the settings stored here -- copied from a pane when the alert is written, so changing
+   * the pane later does not change what the alert means. */
+  | {
+      kind: 'graph'
+      interval: string
+      /** The overlay's id (`mtf_arev21_outlier_rank_85`). */
+      overlay: string
+      /** The source timeframes the graph is built from (the pane's switched-on set). */
+      timeframes: string[]
+      /** The root timeframes graphs start from. */
+      roots: string[]
+      /** The most a step may shrink the timeframe by. */
+      maxStep: number
+    }
+  /** The clock at each bar close of `interval`, on `zone`'s wall clock: `minute` of the day
+   * (0-1439), or the `weekday` (`Mon`...`Sun`). What a "time" alert reads -- alone, an alert
+   * at a time of day; with other conditions, a window they must fall in. */
+  | { kind: 'time'; interval: string; field: 'minute' | 'weekday'; zone: string }
+
+/** A label right side meaning "any label at all" -- `is any side` on a signal or a graph entry,
+ * compiled to "not the empty label" (rules.ts). */
+export const ANY_LABEL = '*'
 
 /** What a comparison compares against. Absent for `changed`. */
 export type RuleRight =
