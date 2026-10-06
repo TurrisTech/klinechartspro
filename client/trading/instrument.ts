@@ -1,4 +1,5 @@
 import { cachedInstrumentConfig, instrumentConfig } from '../instrumentconfig'
+import { pipSizeOf } from '../pipsize'
 import type { InstrumentConfig } from '../symbols'
 
 // Per-instrument facts the trading panel needs to price in pips the OANDA way, cached by
@@ -63,13 +64,9 @@ export function instrumentInfo(vendorSymbol: string, onLoad?: () => void): Instr
 }
 
 function fromConfig(config: InstrumentConfig): InstrumentInfo {
-  const isForex = config.assetClass === 'forex' || config.assetClass === 'metal'
   return {
     precision: config.displayPrecision ?? 5,
-    pipSize:
-      isForex && typeof config.forexPipLocation === 'number'
-        ? 10 ** config.forexPipLocation
-        : null,
+    pipSize: pipSizeOf(config),
     assetClass: config.assetClass ?? 'forex',
     marginRate: typeof config.marginRate === 'number' && config.marginRate > 0 ? config.marginRate : null,
     unitsPrecision:

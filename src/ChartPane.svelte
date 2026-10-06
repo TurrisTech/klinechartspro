@@ -15,6 +15,7 @@
     type OverlayCreate,
     type OverlayMode,
     type Period as ChartPeriod,
+    type Point,
     type Styles,
     type SymbolInfo as ChartSymbolInfo,
     type TooltipFeatureStyle
@@ -31,6 +32,7 @@
   import { chartPaneStack, moveSubPane, subPaneMoves, withoutSubPane } from './state/paneOrder'
   import { clone, setByPath } from './utils/object'
   import { templateTooltipDataSource } from './indicators'
+  import { MEASURE_OVERLAY } from './extension/measure'
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
   import { applyCrosshairAt, crosshairPoint, paneMainAt, type CrosshairPoint } from './sync/crosshair'
@@ -126,6 +128,12 @@
   // next one. It is cleared instead by the pane's pointerdown capture handler, which runs before
   // the mousedown every pointer gesture produces, so it always describes the gesture in flight.
   let tooltipFeatureInteracted = false
+
+  // Set when a gesture's mousedown was the ruler's -- a Shift-press that started a measurement,
+  // or the press that put the last one away (see onMeasureMouseDown) -- so its click does not
+  // also seek the wall. Cleared, like the tooltip flag, by the pointerdown that opens every
+  // gesture, which precedes its mousedown.
+  let measureInteracted = false
 
   // True while the pointer gesture in flight is the one that SELECTED this pane -- set in the
   // root's pointerdown capture handler (below), which runs before any listener on the chart's
@@ -1033,6 +1041,50 @@
     widget?.removeOverlay({ groupId: 'drawing_tools' })
   }
 
+  // --- Ruler (Shift + drag on the price pane) -------------------------------------------------
+  //
+  // One measurement per pane, drawn by the `measure` overlay (src/extension/measure.ts) and
+  // anchored to timestamps and prices, so it stays on the candles it measured while the pane is
+  // panned or zoomed. It lasts until the next press on the chart, Escape, a new measurement, or
+  // a change of symbol or period -- a price measured on one instrument means nothing on another.
+
+  const MEASURE_GROUP = 'measure'
+  // Over the drawings: a ruler laid across a trend line is read, not hidden behind it.
+  const MEASURE_Z_LEVEL = 1000
+  let measureId: string | null = null
+
+  function clearMeasure(): void {
+    if (measureId === null) return
+    widget?.removeOverlay({ id: measureId })
+    measureId = null
+  }
+
+  // The price-pane point under a client position: its candle's timestamp and the price at that
+  // height. Clamped to the plotting area, so a drag carried past an edge measures to the edge
+  // rather than to a price on some other pane's scale. `strict` asks whether the position is IN
+  // the area at all, which is what decides whether a press starts a measurement.
+  function measurePointAt(clientX: number, clientY: number, strict: boolean): { timestamp: number; value: number } | null {
+    const main = widget?.getDom('candle_pane', 'main')
+    if (!widget || !main) return null
+    const rect = main.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return null
+    let x = clientX - rect.left
+    let y = clientY - rect.top
+    if (strict && (x < 0 || x > rect.width || y < 0 || y > rect.height)) return null
+    x = Math.max(0, Math.min(x, rect.width))
+    y = Math.max(0, Math.min(y, rect.height))
+    const point = (widget.convertFromPixel([{ x, y }], { paneId: 'candle_pane' }) as Array<Partial<Point>>)[0]
+    if (typeof point?.timestamp !== 'number' || typeof point.value !== 'number') return null
+    return { timestamp: point.timestamp, value: point.value }
+  }
+
+  $effect(() => {
+    void pane.symbol
+    void pane.period
+    if (!mounted) return
+    clearMeasure()
+  })
+
   function screenshot(background: string): string {
     return widget?.getConvertPictureUrl(true, 'jpeg', background) ?? ''
   }
@@ -1158,13 +1210,15 @@
     // outside the loaded range using this chart's own period. A click on a sub-pane carries no
     // price: its y is that indicator's own value, which `crosshairPoint` drops.
     //
-    // Five guards:
+    // Six guards:
     // - `selectingPointerDown` rules out the click that moved the wall's selection to this
     //   pane. Selecting a pane and pointing at an instant in it are two different intentions,
     //   and a click on an unselected pane is unambiguously the first: the user is reaching for
     //   a pane, not for a date, and having the rest of the wall jump away from where they left
     //   it is a side effect they did not ask for. Once this pane IS the active one the next
     //   click seeks as it always did.
+    // - `measureInteracted` rules out a Shift-click that started a measurement, and the click
+    //   that put one away -- see onMeasureMouseDown below.
     // - A pan-drag ending on the same element still fires a native 'click', so mousedown/click
     //   positions are compared against a 5px Manhattan-distance threshold, matching
     //   klinecharts' own `ManhattanDistance.CancelClick`.
@@ -1193,6 +1247,10 @@
       if (!target) return
       if (selectingPointerDown) {
         console.debug('[sync] click ignored: selected this pane', { pane: pane.id })
+        return
+      }
+      if (measureInteracted) {
+        console.debug('[sync] click ignored: started or put away a measurement', { pane: pane.id })
         return
       }
       if (Math.abs(event.clientX - clickDownX) + Math.abs(event.clientY - clickDownY) >= 5) {
@@ -1233,6 +1291,70 @@
     }
     chartDom.addEventListener('pointerdown', onClickPointerDown)
     chartDom.addEventListener('click', onChartClick)
+
+    // The ruler's gesture. Taken in the CAPTURE phase on the element klinecharts' own container
+    // sits in, so a Shift-press on the price pane is claimed before klinecharts sees the
+    // mousedown that would start a pan: stopping it there is what holds the candles still under
+    // the ruler. The hover mousemoves still reach the chart, so the crosshair keeps tracking the
+    // pointer. The drag is followed on the window, so it keeps measuring -- to the pane's edge --
+    // when the pointer leaves the pane, which on a dense wall is most drags.
+    let measureFrom: { timestamp: number; value: number } | null = null
+    let measureDownX = 0
+    let measureDownY = 0
+    const onMeasureMove = (event: MouseEvent) => {
+      if (measureFrom === null || measureId === null) return
+      const to = measurePointAt(event.clientX, event.clientY, false)
+      if (to) widget?.overrideOverlay({ id: measureId, points: [measureFrom, to] })
+    }
+    const onMeasureUp = (event: MouseEvent) => {
+      window.removeEventListener('mousemove', onMeasureMove)
+      window.removeEventListener('mouseup', onMeasureUp)
+      measureFrom = null
+      // A Shift-click that never moved measured nothing, and leaves nothing behind.
+      if (Math.abs(event.clientX - measureDownX) + Math.abs(event.clientY - measureDownY) < 3) clearMeasure()
+    }
+    const onMeasureMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return
+      // Only a press on klinecharts' own canvas. The app mounts controls of its own inside the
+      // price pane -- the trading layer's order labels and cards (client/trading/onchart.ts),
+      // whose +/- buttons take Shift for ten steps -- and a press on one of those is theirs.
+      if (!(event.target instanceof HTMLCanvasElement)) return
+      if (!event.shiftKey) {
+        // Any other press on the chart puts the last measurement away. It still starts a pan if
+        // it is dragged, but as a click it does nothing more: it does not seek the wall.
+        if (measureId !== null) {
+          clearMeasure()
+          measureInteracted = true
+        }
+        return
+      }
+      // Shift on an axis, a separator or an indicator sub-pane is left to klinecharts.
+      const from = measurePointAt(event.clientX, event.clientY, true)
+      if (!from) return
+      event.preventDefault()
+      event.stopPropagation()
+      measureInteracted = true
+      clearMeasure()
+      const created = widget?.createOverlay({
+        name: MEASURE_OVERLAY,
+        groupId: MEASURE_GROUP,
+        points: [from, from],
+        lock: true,
+        zLevel: MEASURE_Z_LEVEL
+      })
+      measureId = (Array.isArray(created) ? created[0] : created) ?? null
+      if (measureId === null) return
+      measureFrom = from
+      measureDownX = event.clientX
+      measureDownY = event.clientY
+      window.addEventListener('mousemove', onMeasureMove)
+      window.addEventListener('mouseup', onMeasureUp)
+    }
+    const onMeasureKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') clearMeasure()
+    }
+    widgetElement.addEventListener('mousedown', onMeasureMouseDown, true)
+    window.addEventListener('keydown', onMeasureKey)
 
     // Auto time sync source, and the jump-to-live control's own trigger. Both consume the same
     // dispatch: klinecharts fires this whenever the visible range moves, whether from a drag,
@@ -1332,6 +1454,10 @@
       window.removeEventListener('pointercancel', onPanPointerUp)
       chartDom.removeEventListener('pointerdown', onClickPointerDown)
       chartDom.removeEventListener('click', onChartClick)
+      widgetElement.removeEventListener('mousedown', onMeasureMouseDown, true)
+      window.removeEventListener('mousemove', onMeasureMove)
+      window.removeEventListener('mouseup', onMeasureUp)
+      window.removeEventListener('keydown', onMeasureKey)
       widget?.unsubscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
       widget?.unsubscribeAction('onCrosshairChange', onCrosshairChange)
       widget?.unsubscribeAction('onVisibleRangeChange', onVisibleRangeChange)
@@ -1365,6 +1491,7 @@
     // always describes the gesture actually in flight.
     selectingPointerDown = !active
     tooltipFeatureInteracted = false
+    measureInteracted = false
     onActivate(pane.id)
   }}
   onfocusin={() => onActivate(pane.id)}

@@ -40,6 +40,10 @@ export interface SymbolInfo {
   // every period the chart offers. The picker lists only these, and a pane moved onto an
   // instrument that lacks its period falls back to the shortest offered one at least as long.
   periods?: string[]
+  // One pip, in price (0.0001 for EURUSD, 0.01 for USDJPY), for an instrument priced in pips.
+  // Absent for one that is not -- crypto, equities -- and the price pane's Shift-drag ruler
+  // (src/extension/measure.ts) then states the move in price and percent alone.
+  pipSize?: number
 }
 
 // wmarkettypes' `DayGeometry`: a session day as two hour offsets from the midnight that
