@@ -151,6 +151,51 @@ const builtin = {
     { paramNameKey: 'swing_right_bars', precision: 0, min: 1, default: 10 },
     { paramNameKey: 'swing_marker', precision: 0, min: 0, max: 2, default: 0 }
   ],
+  // The NNFX shortlist's templates (src/indicators/nnfx/, whose README.md gives each default's
+  // provenance). The order is each template's calcParams order.
+  DODA_STOCH: [
+    { paramNameKey: 'doda_slw', precision: 0, min: 1, default: 12 },
+    { paramNameKey: 'doda_pds', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'doda_signal', precision: 0, min: 1, default: 14 }
+  ],
+  BANDPASS: [
+    { paramNameKey: 'bandpass_period', precision: 0, min: 2, default: 50 },
+    { paramNameKey: 'bandpass_delta', precision: 2, min: 0.01, max: 1, default: 0.1 },
+    { paramNameKey: 'nnfx_mt4_price', precision: 0, min: 0, max: 6, default: 4 }
+  ],
+  CORR_TREND: [
+    { paramNameKey: 'corr_short', precision: 0, min: 2, default: 40 },
+    { paramNameKey: 'corr_long', precision: 0, min: 2, default: 80 },
+    { paramNameKey: 'corr_price', precision: 0, min: 0, max: 21, default: 15 }
+  ],
+  HA_SMOOTHED: [
+    { paramNameKey: 'has_period', precision: 0, min: 1, default: 6 },
+    { paramNameKey: 'has_method', precision: 0, min: 0, max: 3, default: 2 },
+    { paramNameKey: 'has_period2', precision: 0, min: 1, default: 2 },
+    { paramNameKey: 'has_method2', precision: 0, min: 0, max: 3, default: 3 },
+    { paramNameKey: 'nnfx_opacity', precision: 0, min: 0, max: 100, default: 40 }
+  ],
+  OSCAR: [
+    { paramNameKey: 'oscar_length', precision: 0, min: 2, default: 20 },
+    { paramNameKey: 'oscar_smoothing', precision: 0, min: 0, max: 4, default: 0 }
+  ],
+  TTF: [
+    { paramNameKey: 'ttf_period', precision: 0, min: 1, default: 45 },
+    { paramNameKey: 'ttf_t3', precision: 0, min: 0, default: 0 },
+    { paramNameKey: 'ttf_b', precision: 2, min: 0, max: 1, default: 0.7 }
+  ],
+  CHANDELIER: [
+    { paramNameKey: 'chandelier_range', precision: 0, min: 1, default: 6 },
+    { paramNameKey: 'chandelier_atr', precision: 0, min: 1, default: 7 },
+    { paramNameKey: 'nnfx_atr_mult', precision: 2, min: 0, default: 2.5 },
+    { paramNameKey: 'chandelier_shift', precision: 0, min: 0, default: 0 },
+    { paramNameKey: 'nnfx_arrows', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  TREND_AKKAM: [
+    { paramNameKey: 'akkam_atr', precision: 0, min: 1, default: 150 },
+    { paramNameKey: 'akkam_factor', precision: 2, min: 0, default: 6 },
+    { paramNameKey: 'nnfx_arrows', precision: 0, min: 0, max: 1, default: 1 }
+  ],
   TRIX: [
     { paramNameKey: 'params_1', precision: 0, min: 1, default: 12 },
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 9 }
