@@ -360,7 +360,7 @@
   }
 
   const mainIndicatorNames = [
-    'MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SWING', 'SESSIONS',
+    'MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SSL', 'SWING', 'SESSIONS',
     // NNFX shortlist (src/indicators/nnfx)
     'HA_SMOOTHED', 'CHANDELIER', 'TREND_AKKAM'
   ]

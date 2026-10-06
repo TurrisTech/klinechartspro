@@ -16,6 +16,7 @@ import type { IndicatorCreateTooltipDataSourceCallback } from 'klinecharts'
 
 import nnfx from './nnfx'
 import sessions from './sessions'
+import ssl from './ssl'
 import swing from './swing'
 import wma from './wma'
 
@@ -25,7 +26,7 @@ import wma from './wma'
 // their settings live in src/config/indicators.ts and their picker entries in
 // ChartPro.svelte's `mainIndicatorNames` / `subIndicatorNames`. The NNFX shortlist's eight live in
 // ./nnfx (its README.md says where each came from and how it ranked).
-const indicators = [wma, swing, sessions, ...nnfx]
+const indicators = [wma, swing, sessions, ssl, ...nnfx]
 
 // The tooltip data source a template of this library declares, by name -- for ChartPane,
 // which installs its own on every indicator it creates (to pick the legend's icons) and

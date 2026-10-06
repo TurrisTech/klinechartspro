@@ -145,6 +145,14 @@ const builtin = {
     { paramNameKey: 'sessions_ribbon', precision: 0, min: 0, max: 1, default: 1 },
     { paramNameKey: 'sessions_week', precision: 0, min: 0, max: 1, default: 1 }
   ],
+  // SSL is this library's own template (src/indicators/ssl.ts).
+  SSL: [
+    { paramNameKey: 'ssl_length', precision: 0, min: 1, default: 15 },
+    { paramNameKey: 'ssl_ma', precision: 0, min: 0, max: 5, default: 0 },
+    { paramNameKey: 'ssl_shift', precision: 0, min: 0, default: 0 },
+    { paramNameKey: 'ssl_signals', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'ssl_fill', precision: 0, min: 0, max: 100, default: 12 }
+  ],
   // SWING is this library's own template (src/indicators/swing.ts).
   SWING: [
     { paramNameKey: 'swing_left_bars', precision: 0, min: 1, default: 10 },
