@@ -45,6 +45,29 @@ Two departures matter for reading a chart:
 - **The IIR ones depend slightly on where the loaded history starts.** These are the EMAs and
   SMMAs (Doda, Heiken Ashi Smoothed, OSCAR's RMA), the band-pass filter and Bilak's T3.
 
+## The library indicators the systems use
+
+Five more templates are the standard indicators the NNFX systems are built from, not shortlist
+entries of their own (`library.test.ts` locks each to the library the study ran, through
+`fixtures/library_parity.json`):
+
+| Template | Picker label | Pane | Used by (the NNFX Systems Manual) | Default | Locked to |
+|---|---|---|---|---|---|
+| `KELTNER` | Keltner Channel | price | System B's C1: the mid-line rising or falling | window 20, original version | `ta.volatility.KeltnerChannel` |
+| `RSX` | RSX | sub | System A's C2: above or below 50 | 21 | `pandas_ta.rsx` |
+| `SMI` | SMI | sub | System C's C1: SMI against its 3-bar average | 39, 6, 75, 27, average 3 | `talib.SMI` |
+| `LINREG` | Linear Regression Intercept | price | System C's C2: close above or below it | 28 | `talib.LINEARREG_INTERCEPT` |
+| `ATR` | ATR | sub | Every system: distance rule, stop, target, trail | 14, simple average (MT4) | the NNFX simulator's MT4 ATR, and `talib.ATR` for Wilder |
+
+How each departs from its library:
+
+- **Keltner.** `ta`'s original bands average a partial window over the first `window − 1` bars;
+  the template draws nothing there. The modern version (EMA ± ATR) is offered too.
+- **SMI.** TA-Lib withholds SMI until its signal line exists. The template draws it from its own
+  first value, with the same numbers wherever TA-Lib has one.
+- **Linear-regression intercept.** It is the fitted line's value at the **oldest** bar of the
+  window, as TA-Lib defines it, so it lags price by design.
+
 ## How each one reads
 
 - **Doda Stochastic.** The area between the main and signal lines is shaded up-colour while main
