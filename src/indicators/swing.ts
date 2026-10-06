@@ -104,7 +104,8 @@ function circle(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, 
 }
 
 // A filled triangle whose tip is at (x, y), pointing down for a top and up for a bottom.
-function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, down: boolean, color: string): void {
+// Exported so every signal this library draws (SSL's flips too) uses one arrow.
+export function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, down: boolean, color: string): void {
   const base = down ? y - size : y + size
   ctx.beginPath()
   ctx.moveTo(x, y)

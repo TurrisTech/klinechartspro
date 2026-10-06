@@ -15,6 +15,7 @@
 import type { IndicatorCreateTooltipDataSourceCallback } from 'klinecharts'
 
 import sessions from './sessions'
+import ssl from './ssl'
 import swing from './swing'
 import wma from './wma'
 
@@ -23,7 +24,7 @@ import wma from './wma'
 // (client/indicators), whose values come from the server. Registered in src/index.ts;
 // their settings live in src/config/indicators.ts and their picker entries in
 // ChartPro.svelte's `mainIndicatorNames` / `subIndicatorNames`.
-const indicators = [wma, swing, sessions]
+const indicators = [wma, swing, sessions, ssl]
 
 // The tooltip data source a template of this library declares, by name -- for ChartPane,
 // which installs its own on every indicator it creates (to pick the legend's icons) and
