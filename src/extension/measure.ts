@@ -21,13 +21,10 @@ import { FILL_ALPHA, measureReadout, withAlpha } from './measureReadout'
 // (ChartPane.svelte drives it; nothing in the drawing bar creates one). A box between the two
 // points, shaded in the direction's candle colour, an arrow along each side, and a label with
 // the move -- price, percent, pips where the instrument has them -- and the bars and time it
-// spans. Every indicator sub-pane carries the box's span too (`measureSpan`), so what each
-// indicator did over the measured stretch is marked under it. Every figure ignores events: a
-// measurement can be neither selected, dragged nor right-click deleted, and it never stands
-// between a click and the candles under it.
+// spans. Every figure ignores events: a measurement can be neither selected, dragged nor
+// right-click deleted, and it never stands between a click and the candles under it.
 
 export const MEASURE_OVERLAY = 'measure'
-export const MEASURE_SPAN_OVERLAY = 'measureSpan'
 
 const FONT_SIZE = 12
 const LINE_HEIGHT = 16
@@ -187,37 +184,6 @@ const measure: OverlayTemplate = {
           paddingTop: 2,
           paddingBottom: 2
         },
-        ignoreEvent: true
-      }
-    ]
-  }
-}
-
-// The ruler's box on an indicator sub-pane: the same two points, so it follows the drag and
-// the candles exactly as the price pane's box does, but full height -- a price means nothing on
-// an indicator's scale, so only the span between the two candles carries over.
-export const measureSpan: OverlayTemplate = {
-  name: MEASURE_SPAN_OVERLAY,
-  totalStep: 3,
-  lock: true,
-  needDefaultPointFigure: false,
-  needDefaultXAxisFigure: false,
-  needDefaultYAxisFigure: false,
-  createPointFigures: ({ chart, overlay, coordinates, bounding }) => {
-    if (coordinates.length < 2) return []
-    const [p0, p1] = overlay.points
-    if (typeof p0?.value !== 'number' || typeof p1?.value !== 'number') return []
-    const color = directionColor(chart, p1.value >= p0.value)
-    return [
-      {
-        type: 'rect',
-        attrs: {
-          x: Math.min(coordinates[0].x, coordinates[1].x),
-          y: 0,
-          width: Math.abs(coordinates[1].x - coordinates[0].x),
-          height: bounding.height
-        },
-        styles: { style: 'fill', color: withAlpha(color, FILL_ALPHA) },
         ignoreEvent: true
       }
     ]

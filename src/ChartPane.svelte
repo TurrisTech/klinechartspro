@@ -14,7 +14,6 @@
     type Nullable,
     type OverlayCreate,
     type OverlayMode,
-    type PaneOptions,
     type Period as ChartPeriod,
     type Point,
     type Styles,
@@ -33,7 +32,7 @@
   import { chartPaneStack, moveSubPane, subPaneMoves, withoutSubPane } from './state/paneOrder'
   import { clone, setByPath } from './utils/object'
   import { templateTooltipDataSource } from './indicators'
-  import { MEASURE_OVERLAY, MEASURE_SPAN_OVERLAY } from './extension/measure'
+  import { MEASURE_OVERLAY } from './extension/measure'
   import { periodDurationMs } from './utils/period'
   import type { SyncBus } from './sync/bus'
   import { applyCrosshairAt, crosshairPoint, paneMainAt, type CrosshairPoint } from './sync/crosshair'
@@ -192,8 +191,6 @@
     if (!indicatorId) return null
     const createdPaneId = widget.getIndicators({ id: indicatorId })[0]?.paneId ?? null
     if (createdPaneId) applyYAxisSettings(createdPaneId)
-    // A sub-pane opened under a measurement shows its span like the others.
-    spanMeasureSubPanes()
     return createdPaneId
   }
 
@@ -1048,55 +1045,25 @@
   //
   // One measurement per pane, drawn by the `measure` overlay (src/extension/measure.ts) and
   // anchored to timestamps and prices, so it stays on the candles it measured while the pane is
-  // panned or zoomed. Its span is shaded on every indicator sub-pane as well, by one
-  // `measureSpan` overlay per sub-pane on the same two points; all of them share a group, so
-  // the drag moves them and a clear removes them together. It lasts until the next press on the
-  // chart, Escape, a new measurement, or a change of symbol or period -- a price measured on one
-  // instrument means nothing on another.
-
-  type MeasurePoint = { timestamp: number; value: number }
+  // panned or zoomed. It lasts until the next press on the chart, Escape, a new measurement, or
+  // a change of symbol or period -- a price measured on one instrument means nothing on another.
 
   const MEASURE_GROUP = 'measure'
   // Over the drawings: a ruler laid across a trend line is read, not hidden behind it.
   const MEASURE_Z_LEVEL = 1000
-  // The measurement on the chart, if any: where it was pressed and where it has been dragged to.
-  let measurePoints: [MeasurePoint, MeasurePoint] | null = null
+  let measureId: string | null = null
 
   function clearMeasure(): void {
-    if (measurePoints === null) return
-    widget?.removeOverlay({ groupId: MEASURE_GROUP })
-    measurePoints = null
-  }
-
-  // Shades the measurement's span on every sub-pane that does not show it yet: all of them when
-  // it is made, and a sub-pane added while it is up. A sub-pane moved in the stack keeps its own
-  // (klinecharts re-orders panes, it does not rebuild them), and a removed one takes its band
-  // out of sight with it.
-  function spanMeasureSubPanes(): void {
-    if (!widget || measurePoints === null) return
-    const spanned = new Set(
-      widget.getOverlays({ groupId: MEASURE_GROUP, name: MEASURE_SPAN_OVERLAY }).map((overlay) => overlay.paneId)
-    )
-    const points = measurePoints
-    const missing = (widget.getPaneOptions() as PaneOptions[])
-      .map((options) => options.id)
-      .filter((id) => id !== 'candle_pane' && id !== 'x_axis_pane' && !spanned.has(id))
-    if (missing.length === 0) return
-    widget.createOverlay(missing.map((paneId) => ({
-      name: MEASURE_SPAN_OVERLAY,
-      groupId: MEASURE_GROUP,
-      paneId,
-      points: [...points],
-      lock: true,
-      zLevel: MEASURE_Z_LEVEL
-    })))
+    if (measureId === null) return
+    widget?.removeOverlay({ id: measureId })
+    measureId = null
   }
 
   // The price-pane point under a client position: its candle's timestamp and the price at that
   // height. Clamped to the plotting area, so a drag carried past an edge measures to the edge
   // rather than to a price on some other pane's scale. `strict` asks whether the position is IN
   // the area at all, which is what decides whether a press starts a measurement.
-  function measurePointAt(clientX: number, clientY: number, strict: boolean): MeasurePoint | null {
+  function measurePointAt(clientX: number, clientY: number, strict: boolean): { timestamp: number; value: number } | null {
     const main = widget?.getDom('candle_pane', 'main')
     if (!widget || !main) return null
     const rect = main.getBoundingClientRect()
@@ -1331,16 +1298,13 @@
     // the ruler. The hover mousemoves still reach the chart, so the crosshair keeps tracking the
     // pointer. The drag is followed on the window, so it keeps measuring -- to the pane's edge --
     // when the pointer leaves the pane, which on a dense wall is most drags.
-    let measureFrom: MeasurePoint | null = null
+    let measureFrom: { timestamp: number; value: number } | null = null
     let measureDownX = 0
     let measureDownY = 0
     const onMeasureMove = (event: MouseEvent) => {
-      if (measureFrom === null || measurePoints === null) return
+      if (measureFrom === null || measureId === null) return
       const to = measurePointAt(event.clientX, event.clientY, false)
-      if (!to) return
-      measurePoints = [measureFrom, to]
-      // The whole group: the box on the price pane and its span on every sub-pane.
-      widget?.overrideOverlay({ groupId: MEASURE_GROUP, points: [...measurePoints] })
+      if (to) widget?.overrideOverlay({ id: measureId, points: [measureFrom, to] })
     }
     const onMeasureUp = (event: MouseEvent) => {
       window.removeEventListener('mousemove', onMeasureMove)
@@ -1358,7 +1322,7 @@
       if (!event.shiftKey) {
         // Any other press on the chart puts the last measurement away. It still starts a pan if
         // it is dragged, but as a click it does nothing more: it does not seek the wall.
-        if (measurePoints !== null) {
+        if (measureId !== null) {
           clearMeasure()
           measureInteracted = true
         }
@@ -1378,10 +1342,8 @@
         lock: true,
         zLevel: MEASURE_Z_LEVEL
       })
-      const createdId = Array.isArray(created) ? created[0] : created
-      if (!createdId) return
-      measurePoints = [from, from]
-      spanMeasureSubPanes()
+      measureId = (Array.isArray(created) ? created[0] : created) ?? null
+      if (measureId === null) return
       measureFrom = from
       measureDownX = event.clientX
       measureDownY = event.clientY
