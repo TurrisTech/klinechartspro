@@ -362,14 +362,14 @@
   const mainIndicatorNames = [
     'MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SSL', 'SWING', 'SESSIONS',
     // NNFX shortlist (src/indicators/nnfx)
-    'HA_SMOOTHED', 'CHANDELIER', 'TREND_AKKAM'
+    'HA_SMOOTHED', 'CHANDELIER', 'TREND_AKKAM', 'KELTNER', 'LINREG'
   ]
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
     'DMI', 'CR', 'PSY', 'DMA', 'TRIX', 'OBV', 'VR', 'WR', 'MTM', 'EMV',
     'SAR', 'SMA', 'ROC', 'PVT', 'BBI', 'AO',
     // NNFX shortlist (src/indicators/nnfx)
-    'DODA_STOCH', 'BANDPASS', 'CORR_TREND', 'OSCAR', 'TTF'
+    'DODA_STOCH', 'BANDPASS', 'CORR_TREND', 'OSCAR', 'TTF', 'RSX', 'SMI', 'ATR'
   ]
 
   const drawingGroups: DrawingGroup[] = [

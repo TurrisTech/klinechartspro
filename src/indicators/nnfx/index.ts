@@ -12,18 +12,24 @@
  * limitations under the License.
  */
 
+import atr from './atr'
 import bandPass from './bandpass'
 import chandelier from './chandelier'
 import corrTrend from './corrtrend'
 import doda from './doda'
 import haSmoothed from './hasmoothed'
+import keltner from './keltner'
+import linReg from './linreg'
 import oscar from './oscar'
+import rsx from './rsx'
+import smi from './smi'
 import trendAkkam from './trendakkam'
 import ttf from './ttf'
 
 // The No Nonsense Forex shortlist's indicators (README.md in this directory): MQL / Pine
-// indicators the NNFX discovery ranked well, computed in the browser from the bars the pane holds.
-export const nnfxPriceIndicators = [haSmoothed, chandelier, trendAkkam]
-export const nnfxSubIndicators = [doda, bandPass, corrTrend, oscar, ttf]
+// indicators the NNFX discovery ranked well, and the library indicators its systems use (Keltner,
+// RSX, SMI, the regression intercept, ATR), computed in the browser from the bars the pane holds.
+export const nnfxPriceIndicators = [haSmoothed, chandelier, trendAkkam, keltner, linReg]
+export const nnfxSubIndicators = [doda, bandPass, corrTrend, oscar, ttf, rsx, smi, atr]
 
 export default [...nnfxPriceIndicators, ...nnfxSubIndicators]

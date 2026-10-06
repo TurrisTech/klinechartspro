@@ -204,6 +204,31 @@ const builtin = {
     { paramNameKey: 'akkam_factor', precision: 2, min: 0, default: 6 },
     { paramNameKey: 'nnfx_arrows', precision: 0, min: 0, max: 1, default: 1 }
   ],
+  // The library indicators the NNFX systems use (src/indicators/nnfx/; README.md there).
+  KELTNER: [
+    { paramNameKey: 'keltner_window', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'keltner_version', precision: 0, min: 0, max: 1, default: 0 },
+    { paramNameKey: 'keltner_atr', precision: 0, min: 1, default: 10 },
+    { paramNameKey: 'keltner_mult', precision: 2, min: 0, default: 2 },
+    { paramNameKey: 'nnfx_arrows', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  RSX: [
+    { paramNameKey: 'rsx_length', precision: 0, min: 2, default: 21 }
+  ],
+  SMI: [
+    { paramNameKey: 'smi_period', precision: 0, min: 1, default: 39 },
+    { paramNameKey: 'smi_fast', precision: 0, min: 1, default: 6 },
+    { paramNameKey: 'smi_slow', precision: 0, min: 1, default: 75 },
+    { paramNameKey: 'smi_signal', precision: 0, min: 1, default: 27 },
+    { paramNameKey: 'smi_ma', precision: 0, min: 1, default: 3 }
+  ],
+  LINREG: [
+    { paramNameKey: 'linreg_period', precision: 0, min: 2, default: 28 }
+  ],
+  ATR: [
+    { paramNameKey: 'atr_period', precision: 0, min: 1, default: 14 },
+    { paramNameKey: 'atr_method', precision: 0, min: 0, max: 1, default: 0 }
+  ],
   TRIX: [
     { paramNameKey: 'params_1', precision: 0, min: 1, default: 12 },
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 9 }
