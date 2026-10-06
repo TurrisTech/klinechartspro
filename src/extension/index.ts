@@ -16,7 +16,7 @@ import eightWaves from './eightWaves'
 import anyWaves from './anyWaves'
 import abcd from './abcd'
 import xabcd from './xabcd'
-import measure from './measure'
+import measure, { measureSpan } from './measure'
 
 const overlays = [
   arrow,
@@ -24,7 +24,7 @@ const overlays = [
   fibonacciCircle, fibonacciSegment, fibonacciSpiral,
   fibonacciSpeedResistanceFan, fibonacciExtension, gannBox,
   threeWaves, fiveWaves, eightWaves, anyWaves, abcd, xabcd,
-  measure
+  measure, measureSpan
 ]
 
 export default overlays
