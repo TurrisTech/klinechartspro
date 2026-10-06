@@ -2,6 +2,7 @@ import type { SymbolInfo } from '../src'
 import { offeredIntervalCodes } from './periods'
 import { apiGet } from './config'
 import { dayGeometryOf } from './daygeometry'
+import { pipSizeOf } from './pipsize'
 import { instrumentConfig } from './instrumentconfig'
 
 // wdashboard-server has no vendor/exchange field name of its own — `/search` returns
@@ -109,7 +110,8 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
     // The periods this instrument can be charted at. Capabilities are loaded before any
     // symbol is resolved (index.ts boot), and an instrument the server does not name for a
     // scoped code -- 5s anywhere but the fed FX pairs -- is simply not offered it.
-    periods: offeredIntervalCodes(vendor, symbol)
+    periods: offeredIntervalCodes(vendor, symbol),
+    pipSize: pipSizeOf(config) ?? undefined
   }
 }
 
