@@ -95,45 +95,33 @@ export function sslOptions(calcParams: readonly unknown[]): SslOptions {
 // -- the averages -------------------------------------------------------------------------------
 //
 // Each takes a series that may hold NaN (a bar with no volume, an inner average's warm-up) and
-// gives NaN wherever its window holds one, as the port does. SMA and WMA roll their sums forward
-// in O(1) per bar, as WMA (wma.ts) does, with a NaN counted rather than summed so it leaves the
-// window cleanly; ALMA's weights do not roll, so it sums its window.
+// gives NaN wherever its window holds one, as the port does.
+//
+// SMA and WMA sum each window outright, as the published code does, rather than rolling a sum
+// forward the way wma.ts can afford to. A rolled sum drifts -- measured against the published
+// scripts, HMA by 2.4e-9 of the price over 135k hourly bars, WMA 4e-11, SMA 2e-14 -- and the
+// trend turns on a strict comparison of the close with these lines, where a close EQUAL to a line
+// is common at short lengths and the drift then decides it (see TIE below). O(bars * length):
+// 200 bars of window over 20,000 bars is a few milliseconds.
 
 function sma(x: readonly number[], n: number): number[] {
   const out = new Array<number>(x.length).fill(Number.NaN)
-  let sum = 0
-  let missing = 0
-  for (let i = 0; i < x.length; i++) {
-    if (Number.isFinite(x[i])) sum += x[i]
-    else missing++
-    if (i >= n) {
-      if (Number.isFinite(x[i - n])) sum -= x[i - n]
-      else missing--
-    }
-    if (i >= n - 1 && missing === 0) out[i] = sum / n
+  for (let t = n - 1; t < x.length; t++) {
+    let sum = 0
+    for (let k = 0; k < n; k++) sum += x[t - k]
+    out[t] = sum / n // a NaN in the window makes the sum NaN
   }
   return out
 }
 
-// Linearly weighted, the newest bar weighted n. With S the plain sum of the window ending at
-// i-1 and W its weighted sum, W(i) = W(i-1) + n * x(i) - S(i-1) (see wma.ts); bars before the
-// first count as zeros, which makes the warm-up the same update.
+// Linearly weighted, the newest bar weighted n and the oldest 1.
 function wma(x: readonly number[], n: number): number[] {
   const out = new Array<number>(x.length).fill(Number.NaN)
   const norm = (n * (n + 1)) / 2
-  let sum = 0
-  let weighted = 0
-  let missing = 0
-  for (let i = 0; i < x.length; i++) {
-    const v = Number.isFinite(x[i]) ? x[i] : 0
-    if (!Number.isFinite(x[i])) missing++
-    weighted += n * v - sum
-    sum += v
-    if (i >= n) {
-      if (Number.isFinite(x[i - n])) sum -= x[i - n]
-      else missing--
-    }
-    if (i >= n - 1 && missing === 0) out[i] = weighted / norm
+  for (let t = n - 1; t < x.length; t++) {
+    let sum = 0
+    for (let k = 0; k < n; k++) sum += x[t - k] * (n - k)
+    out[t] = sum / norm
   }
   return out
 }
@@ -201,6 +189,18 @@ export function movingAverage(kind: SslMa, x: readonly number[], volume: readonl
   }
 }
 
+// A close EQUAL to a line holds the trend: the rule is strictly above the high MA or strictly below
+// the low one. Equal means equal at the quotes' precision. Stored prices carry float noise
+// (0.9385700000000001 for 0.93857) and an average of them a little more, so a tie arrives as a
+// difference of ~1e-17 of the price either way -- and with five-decimal quotes it is common: over
+// 28 pairs' daily and four pairs' hourly prod history (lengths 1-200), all 871 places where the
+// first version's trend parted from the published scripts began on a close exactly equal to an
+// average of the quotes, and its rolling sums broke the tie. TIE is far above that noise (under
+// 1e-13 even through HMA's cancellation) and below the smallest real gap between a quote and an SMA
+// or WMA of quotes: one tick over the weights' sum, about 5e-12 of the price at worst (BTC to the
+// cent against WMA(200)).
+const TIE = 1e-12
+
 function shifted(x: number[], shift: number): number[] {
   return shift === 0 ? x : x.map((_, i) => (i >= shift ? x[i - shift] : Number.NaN))
 }
@@ -218,7 +218,8 @@ export function sslChannel(bars: readonly KLineData[], options: SslOptions): Ssl
     const high = highs[i]
     const low = lows[i]
     // A comparison with NaN is false, so a bar with no channel holds the trend.
-    const next = bar.close > high ? 1 : bar.close < low ? -1 : trend
+    const tie = TIE * Math.abs(bar.close)
+    const next = bar.close - high > tie ? 1 : low - bar.close > tie ? -1 : trend
     if (next !== trend) {
       age = trend === 0 ? undefined : 1
       trend = next

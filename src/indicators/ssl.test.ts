@@ -77,6 +77,80 @@ describe('the MT4 form (shift 1) is the MQL source, read independently', () => {
   })
 })
 
+describe('a close equal to a line holds the trend, at the quotes\' precision', () => {
+  // The published rule in exact arithmetic: integer ticks, so n * close vs the window's sum is
+  // exact. Long when the close is strictly above the high MA, short strictly below the low one,
+  // and HOLD on equality -- which the floats must reproduce although every price is stored with
+  // noise (ticks / 1e5 is not exact in binary) and a tie then arrives as +-1e-17.
+  function exactTrend(high: bigint[], low: bigint[], close: bigint[], n: number, shift: number, weighted: boolean): number[] {
+    const norm = BigInt(weighted ? (n * (n + 1)) / 2 : n)
+    const ma = (xs: bigint[], t: number) => {
+      let sum = 0n
+      for (let k = 0; k < n; k++) sum += xs[t - k] * BigInt(weighted ? n - k : 1)
+      return sum
+    }
+    let trend = 0
+    return close.map((c, i) => {
+      const t = i - shift
+      if (t - n + 1 < 0) return trend
+      const scaled = c * norm
+      if (scaled > ma(high, t)) trend = 1
+      else if (scaled < ma(low, t)) trend = -1
+      return trend
+    })
+  }
+
+  // Five-decimal quotes on a coarse grid, so the close lands exactly on an average often.
+  let seed = 11
+  const rand = () => {
+    seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31
+    return seed / 2 ** 31
+  }
+  let mid = 110_000
+  const ticks = Array.from({ length: 4_000 }, () => {
+    mid += Math.round((rand() - 0.5) * 6) * 2
+    const high = mid + Math.round(rand() * 3) * 2
+    const low = mid - Math.round(rand() * 3) * 2
+    const close = low + Math.round(rand() * ((high - low) / 2)) * 2
+    return { high, low, close }
+  })
+  const quoted: KLineData[] = ticks.map((t, i) => ({ timestamp: i, open: t.close / 1e5, high: t.high / 1e5, low: t.low / 1e5, close: t.close / 1e5 }))
+  const big = (k: 'high' | 'low' | 'close') => ticks.map((t) => BigInt(t[k]))
+
+  for (const ma of ['SMA', 'WMA'] as const) {
+    for (const shift of [0, 1]) {
+      test(`${ma}, shift ${shift}: the trend is the exact rule's on every bar`, () => {
+        let ties = 0
+        for (const length of [1, 2, 3, 4, 10, 15]) {
+          const expected = exactTrend(big('high'), big('low'), big('close'), length, shift, ma === 'WMA')
+          const rows = sslChannel(quoted, { length, ma, shift })
+          expect(rows.map((r) => r.trend ?? 0)).toEqual(expected)
+          // Not vacuous: count the bars whose close sits exactly on a line.
+          const s = sslChannel(quoted, { length, ma, shift })
+          s.forEach((r, i) => {
+            if (r.up !== undefined && (r.up === quoted[i].close || r.down === quoted[i].close)) ties++
+          })
+        }
+        expect(ties).toBeGreaterThan(0)
+      })
+    }
+  }
+
+  test('a tie arriving as float noise holds: 0.1 + 0.2 is not above 0.3', () => {
+    const bars: KLineData[] = [
+      { timestamp: 0, open: 0.2, high: 0.1, low: 0.05, close: 0.06 },
+      // high MA (0.1 + 0.5) / 2 = 0.3, low MA 0.05: a close of 0.04 is below it -- short
+      { timestamp: 1, open: 0.2, high: 0.5, low: 0.05, close: 0.04 },
+      // high MA (0.5 + 0.1) / 2 = 0.3 again, and the close is 0.1 + 0.2 = 0.30000000000000004: a tie
+      { timestamp: 2, open: 0.2, high: 0.1, low: 0.05, close: 0.1 + 0.2 }
+    ]
+    const rows = sslChannel(bars, { length: 2, ma: 'SMA', shift: 0 })
+    expect(rows[1].trend).toBe(-1)
+    expect(0.1 + 0.2 > (0.5 + 0.1) / 2).toBe(true) // the naive comparison would flip it long
+    expect(rows[2].trend).toBe(-1)
+  })
+})
+
 describe('sslChannel', () => {
   test('no lookahead: every bar of a truncated run equals the full run', () => {
     for (const ma of SSL_MA) {
