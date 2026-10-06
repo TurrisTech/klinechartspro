@@ -171,6 +171,8 @@ const haSmoothed: IndicatorTemplate<HaSmoothed, number> = {
     const half = Math.max(1, Math.floor(barWidth * 0.35))
     const { from, to } = drawRange(chart, result.length)
     ctx.lineWidth = 1
+    // The canvas arrives with the last-price line's dash still set.
+    ctx.setLineDash([])
     for (let i = from; i <= to; i++) {
       const r = result[i]
       if (r?.open === undefined || r.close === undefined || r.trend === undefined) continue
