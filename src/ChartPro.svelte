@@ -359,7 +359,7 @@
     return label === key ? indicatorTitle(row.name) : label
   }
 
-  const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SWING', 'SESSIONS']
+  const mainIndicatorNames = ['MA', 'EMA', 'WMA', 'SMA', 'BOLL', 'SAR', 'BBI', 'SSL', 'SWING', 'SESSIONS']
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
     'DMI', 'CR', 'PSY', 'DMA', 'TRIX', 'OBV', 'VR', 'WR', 'MTM', 'EMV',
