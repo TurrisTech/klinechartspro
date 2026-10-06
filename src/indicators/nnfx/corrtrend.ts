@@ -16,6 +16,7 @@ import type { IndicatorTemplate, KLineData } from 'klinecharts'
 
 import { countParam, value } from './mt4'
 import { guide, guideColor, signLineStyle } from './paint'
+import { MLADEN_PRICE_MAX, mladenPrice } from './prices'
 
 /**
  * CORR_TREND -- John Ehlers' Correlation Trend (TASC May 2020; mladen's version, as the Stonehill
@@ -32,10 +33,14 @@ import { guide, guideColor, signLineStyle } from './paint'
  * change; the short line is the theme's first line colour. Whichever period is smaller is the
  * short line, as the source.
  *
- * `price` is mladen's price list: 0 close, 1 open, 2 high, 3 low, 4 median, 5 typical, 6 weighted,
- * 7 average, 8 median body, 9 trend biased, 10 trend biased (extreme), and 11..21 the same eleven
- * of Heiken Ashi candles (11 HA close ... 15 HA median ... 21 HA trend biased extreme). 15, the
- * Stonehill default, is the Heiken Ashi median. Nothing is drawn until a full window exists.
+ * `price` is mladen's price list, all 33 of it (prices.ts); 15, the Stonehill default, is the
+ * Heiken Ashi median. The MQL5 original reads the close only; the MT4 build Stonehill carries adds
+ * the list.
+ *
+ * Checked against mladen's published MQL5 (sources.test.ts): the same sums, y = -k, the shorter
+ * period always the short line, 0 when either variance term is not positive. One departure: the
+ * source also prints the first period - 1 bars, dividing partial-window sums by the full period;
+ * here nothing is drawn until a full window exists.
  */
 
 export interface CorrTrend {
@@ -53,71 +58,7 @@ export interface CorrTrendOptions {
 export function corrTrendOptions(calcParams: readonly unknown[]): CorrTrendOptions {
   const a = countParam(calcParams[0], 40, 2)
   const b = countParam(calcParams[1], 80, 2)
-  return { short: Math.min(a, b), long: Math.max(a, b), price: Math.min(21, countParam(calcParams[2], 15, 0)) }
-}
-
-/** mladen's getPrice: the plain prices 0..10, and the same eleven of Heiken Ashi candles 11..21. */
-export function mladenPrice(bars: readonly KLineData[], code: number): number[] {
-  let haOpenPrev = 0
-  let haClosePrev = 0
-  return bars.map(({ open: o, high: h, low: l, close: c }, i) => {
-    if (code >= 11) {
-      const hao = i > 0 ? (haOpenPrev + haClosePrev) / 2 : (o + c) / 2
-      const hac = (o + h + l + c) / 4
-      const hah = Math.max(h, hao, hac)
-      const hal = Math.min(l, hao, hac)
-      haOpenPrev = hao
-      haClosePrev = hac
-      switch (code) {
-        case 11:
-          return hac
-        case 12:
-          return hao
-        case 13:
-          return hah
-        case 14:
-          return hal
-        case 15:
-          return (hah + hal) / 2
-        case 16:
-          return (hah + hal + hac) / 3
-        case 17:
-          return (hah + hal + hac + hac) / 4
-        case 18:
-          return (hah + hal + hac + hao) / 4
-        case 19:
-          return (hao + hac) / 2
-        case 20:
-          return hac > hao ? (hah + hac) / 2 : (hal + hac) / 2
-        default:
-          return hac > hao ? hah : hac < hao ? hal : hac
-      }
-    }
-    switch (code) {
-      case 1:
-        return o
-      case 2:
-        return h
-      case 3:
-        return l
-      case 4:
-        return (h + l) / 2
-      case 5:
-        return (h + l + c) / 3
-      case 6:
-        return (h + l + c + c) / 4
-      case 7:
-        return (h + l + c + o) / 4
-      case 8:
-        return (o + c) / 2
-      case 9:
-        return c > o ? (h + c) / 2 : (l + c) / 2
-      case 10:
-        return c > o ? h : c < o ? l : c
-      default:
-        return c
-    }
-  })
+  return { short: Math.min(a, b), long: Math.max(a, b), price: Math.min(MLADEN_PRICE_MAX, countParam(calcParams[2], 15, 0)) }
 }
 
 // Pearson correlation of the last `per` values with y = -k for the value k bars back.

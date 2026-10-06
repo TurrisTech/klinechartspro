@@ -49,19 +49,21 @@ Two departures matter for reading a chart:
 
 - **Doda Stochastic.** The area between the main and signal lines is shaded up-colour while main
   is above signal. The colour change is the C1 cross.
-- **Band Pass Filter.** Histogram around zero. The colour is the side of zero; a solid bar is
-  moving away from zero, a hollow one is moving back towards it.
+- **Band Pass Filter.** Histogram around zero. The colour is the side of zero; a solid bar's
+  slope agrees with its side (moving away from zero), a hollow one's does not.
 - **Correlation Trend.** The long line takes the up colour above zero and the down colour below.
   The short line is context.
-- **Heiken Ashi Smoothed.** Smoothed candles over the price candles. The candle colour is the
-  signal. A wick need not contain its body, as in MT4.
+- **Heiken Ashi Smoothed.** Smoothed candles over the price candles. The body colour is the
+  signal. A wick need not contain its body, and its colour can differ from the body's for a bar
+  or two after a turn, both as in MT4.
 - **OSCAR.** Arrows mark the NNFX list's triggers:
   - long when the rough line crosses up through the oscar line below 35, with the two more than
     0.5 apart;
   - short when it crosses down above 65, likewise.
   - The bare line cross is not the signal.
-- **TTF.** One line, coloured by the side of zero, with guides at ±100. The `t3` setting switches
-  to Nick Bilak's MT4 version (disjoint windows plus a T3 smoothing).
+- **TTF.** One line, coloured by the side of zero, with guides at the version's own levels (±100,
+  or Bilak's ±75). The `t3` setting switches to Nick Bilak's MT4 version (disjoint windows plus a
+  T3 smoothing).
 - **Chandelier Exit / Trend Akkam.** The active stop only:
   - the long stop sits below price in the up colour;
   - the short stop sits above price in the down colour;
@@ -85,6 +87,35 @@ runs the Python/numba ports the discovery used (`nnfx/ports/`) on 250 prod EURUS
 
 Regenerate the fixture when a port changes; never edit it by hand.
 
-`mt4.ts` holds MT4's own averages, ATR and applied prices: an EMA seeded with the first value, a
+## Checked against the published code
+
+`sources.test.ts` transliterates each published source literally and runs it against the
+templates on the fixture bars. It keeps MQL's timeseries indexing (0 is the newest bar), its loop
+order and its globals. MT4's built-ins (`iMA`, `iMAOnArray`, `iATR`) are written out from
+MetaQuotes' own `Moving Averages.mq4` and `ATR.mq4`. The check is independent of the Python ports.
+Seventeen deliberately planted bugs were each caught by this test or by the port parity test.
+
+| Template | Published source | Agreement | Deliberate departures |
+|---|---|---|---|
+| `DODA_STOCH` | `Doda-Stochastic-modified.mq4` (Niels, 2023) | every bar | none |
+| `BANDPASS` | `band pass filter.mq4` (mladen, after Ehlers) | every bar, once the seed is made equal | **Seed.** The source seeds its two oldest values with the price, which rings for ~1,000 bars at period 50: invisible on MT4's history, most of a chart's window. They are seeded at zero, as Ehlers' original. The test proves the seed is the only difference: the gap between the two obeys the filter's bare recursion. |
+| `CORR_TREND` | `Correlation_trend_indicator.mq5` (mladen, 2020), plus his price list from the MT4 build | every bar with a full window | **Early bars.** The source also prints the first `long − 1` bars, dividing partial sums by the full period. Here those bars are blank. |
+| `HA_SMOOTHED` | `Heiken Ashi Smoothed.mq4` (Forex-TSD 2006, mod by Raff) | every bar after the warm-up (80 bars here) | **Warm-up.** The source's first HA open reads an uninitialised buffer, and its loop starts one bar later. The error halves every bar. |
+| `OSCAR` | `oscar.pine` (GenZai, NNFX) | every bar, lines and C1 triggers | The triggers are the script's own commented-out C1 rule. The **EMA** option's seeding is TradingView's built-in and cannot be checked from the script; it affects the warm-up only. |
+| `TTF` (t3 = 0) | `TTF.mq5` (MetaQuotes, 2018) | every bar | none; levels ±100 |
+| `TTF` (t3 ≥ 1) | `ttf.mq4` (Nick Bilak, 2005) | every bar | **Live re-application.** MT4 re-applies the T3 step on every tick of the forming bar (its stages are globals); here it is one step per bar. Levels ±75. |
+| `CHANDELIER` | `ChandelierExit.mq4` (MQLService, mod2008fxtsd) | from the first turn after the warm-up | **Partial windows.** The source's `Highest`/`Lowest` accept windows the history cannot fill yet. The template waits for a full window, and the difference lasts until the next turn. |
+| `TREND_AKKAM` | `TREND AKKAM.mq4` | from the first turn after the warm-up | **Zero-ATR warm-up.** The source runs its stop through ATR.mq4's zeroed warm-up bars; the template starts at the first ATR value. **Display.** The source draws one orange line; the side colours, breaks and flip arrows are additions. |
+
+Display rules taken from the sources:
+
+- **Band Pass.** A solid bar is the source's "strong" histogram (slope agrees with the side of
+  zero); a hollow bar is its "weak" one.
+- **Heiken Ashi Smoothed.** The wick and body colours are decided separately, as MT4 colours each
+  histogram pair by its larger buffer.
+- **Price lists.** Band Pass and Correlation Trend take mladen's whole 0–32 price list
+  (`prices.ts`).
+
+`mt4.ts` holds MT4's own averages and ATR: an EMA seeded with the first value, a
 Wilder SMMA seeded with an SMA, and an SMA that restarts after a gap. These are not the Pine
 versions SSL uses. The MQL indicators here call MT4's, and the ports reproduce them.

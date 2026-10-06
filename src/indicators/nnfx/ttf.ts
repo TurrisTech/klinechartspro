@@ -29,6 +29,10 @@ import { guide, guideColor, signLineStyle } from './paint'
  * one's lowest low; TTF = 200 (buy - sell) / (buy + sell), 0 when both are 0. Long above zero,
  * short below: the line takes the up colour above zero and the down colour below.
  *
+ * Levels are each version's own: +-100 for the MQL5 one, +-75 for Bilak's. Both are checked
+ * against their published sources (sources.test.ts); Bilak's MT4 re-applies the T3 step on every
+ * tick of the forming bar (its EMA stages are globals), which here is one step per bar.
+ *
  * `t3` chooses between the two versions in the Stonehill library:
  *   0  -- MetaQuotes' MQL5 TTF (2018), unsmoothed. Its older window starts one bar early, so the
  *         two windows share a bar -- the source's quirk, kept.
@@ -135,11 +139,14 @@ const ttf: IndicatorTemplate<Ttf, number> = {
     }
   ],
   calc: (dataList: KLineData[], indicator) => trendTriggerFactor(dataList, ttfOptions(indicator.calcParams)),
-  draw: ({ ctx, chart, bounding, yAxis }) => {
+  draw: ({ ctx, chart, indicator, bounding, yAxis }) => {
     const color = guideColor(chart)
+    // Each version's own levels: the MQL5 one's overbought/oversold +-100, Bilak's TopLine /
+    // BottomLine +-75 (the step his signal buffer draws).
+    const level = ttfOptions(indicator.calcParams).t3 === 0 ? 100 : 75
     guide(ctx, bounding, yAxis, 0, color, false)
-    guide(ctx, bounding, yAxis, 100, color)
-    guide(ctx, bounding, yAxis, -100, color)
+    guide(ctx, bounding, yAxis, level, color)
+    guide(ctx, bounding, yAxis, -level, color)
     return false
   }
 }

@@ -169,12 +169,12 @@ const builtin = {
   BANDPASS: [
     { paramNameKey: 'bandpass_period', precision: 0, min: 2, default: 50 },
     { paramNameKey: 'bandpass_delta', precision: 2, min: 0.01, max: 1, default: 0.1 },
-    { paramNameKey: 'nnfx_mt4_price', precision: 0, min: 0, max: 6, default: 4 }
+    { paramNameKey: 'mladen_price', precision: 0, min: 0, max: 32, default: 4 }
   ],
   CORR_TREND: [
     { paramNameKey: 'corr_short', precision: 0, min: 2, default: 40 },
     { paramNameKey: 'corr_long', precision: 0, min: 2, default: 80 },
-    { paramNameKey: 'corr_price', precision: 0, min: 0, max: 21, default: 15 }
+    { paramNameKey: 'mladen_price', precision: 0, min: 0, max: 32, default: 15 }
   ],
   HA_SMOOTHED: [
     { paramNameKey: 'has_period', precision: 0, min: 1, default: 6 },

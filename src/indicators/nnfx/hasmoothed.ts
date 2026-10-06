@@ -35,11 +35,15 @@ import { drawRange, priceLegends, trendAges, trendText, withAlpha } from './pain
  * series is smoothed again by MA(period2, method2). A candle is up-coloured while its smoothed
  * close is above its smoothed open, down-coloured below -- the colour change is the signal, and
  * an equal pair holds the colour before it. The wick spans the two smoothed extremes; smoothing
- * them separately from the body means a wick need not contain its body, exactly as in MT4.
+ * them separately from the body means a wick need not contain its body, exactly as in MT4, and its
+ * colour is decided separately too (MT4 colours each histogram pair by its larger buffer), so for a
+ * bar or two after a turn a wick can carry the other colour.
  *
- * The first HA open reads an uninitialised buffer in the source; here it is seeded with the first
- * smoothed (open + close) / 2. IIR throughout (the HA open, an EMA or SMMA), so the earliest
- * candles depend slightly on where the loaded history starts.
+ * Checked against the published MQ4 (sources.test.ts). Two departures, both in the warm-up: the
+ * source's first HA open reads an uninitialised buffer, seeded here with the first smoothed
+ * (open + close) / 2 -- the error halves every bar, so the two agree within a few dozen; and the
+ * source starts one bar later (its `limit`). IIR throughout (the HA open, an EMA or SMMA), so the
+ * earliest candles depend slightly on where the loaded history starts.
  */
 
 export interface HaSmoothed {
@@ -48,8 +52,10 @@ export interface HaSmoothed {
   close?: number
   high?: number
   low?: number
-  /** +1 up candle, -1 down candle; absent before the first candle with a colour. */
+  /** +1 up candle, -1 down candle (the body's colour); absent before the first candle with a colour. */
   trend?: number
+  /** The wick's colour, which MT4 decides separately (see heikenAshiSmoothed). */
+  wick?: number
   /** Bars since the colour last changed, the changing bar being 1; absent before the first change. */
   age?: number
 }
@@ -112,6 +118,12 @@ export function heikenAshiSmoothed(bars: readonly KLineData[], options: HaSmooth
     const lo = Number.isFinite(s1[i]) ? (Number.isFinite(s2[i]) ? Math.min(s1[i], s2[i]) : s1[i]) : s2[i]
     const row: HaSmoothed = { open: o, close: c, high: value(hi), low: value(lo) }
     if (trend !== 0) row.trend = trend
+    // MT4 colours a pair of histogram buffers by whichever holds the larger value: the body by the
+    // smoothed close against the smoothed open, the wick by the smoothed second extreme (the high
+    // on an up candle) against the first. Smoothed separately, the two can disagree for a bar or
+    // two after a turn; an equal pair takes the body's colour.
+    const wick = s2[i] > s1[i] ? 1 : s2[i] < s1[i] ? -1 : trend
+    if (wick !== 0) row.wick = wick
     return row
   })
   const ages = trendAges(rows.map((r) => r.trend))
@@ -180,13 +192,14 @@ const haSmoothed: IndicatorTemplate<HaSmoothed, number> = {
       const x = Math.round(xAxis.convertToPixel(i)) + 0.5
       const yo = yAxis.convertToPixel(r.open)
       const yc = yAxis.convertToPixel(r.close)
-      ctx.strokeStyle = color
       if (r.high !== undefined && r.low !== undefined) {
+        ctx.strokeStyle = (r.wick ?? r.trend) > 0 ? upColor : downColor
         ctx.beginPath()
         ctx.moveTo(x, yAxis.convertToPixel(r.high))
         ctx.lineTo(x, yAxis.convertToPixel(r.low))
         ctx.stroke()
       }
+      ctx.strokeStyle = color
       const top = Math.min(yo, yc)
       const height = Math.max(1, Math.abs(yo - yc))
       if (opacity > 0) {
