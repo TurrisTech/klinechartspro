@@ -15,7 +15,7 @@
 import type { KLineData } from 'klinecharts'
 
 /**
- * MetaTrader 4's built-in averages, ATR and applied prices, with MT4's own definitions -- the
+ * MetaTrader 4's built-in averages and ATR, with MT4's own definitions -- the
  * NNFX templates in this directory are MQL indicators, and these are the primitives their source
  * calls. Each mirrors `nnfx/ports/_mt4.py` in the workspace repo, which the parity fixture
  * (fixtures/parity.json) is generated from, including how each one treats a NaN (an inner
@@ -129,28 +129,6 @@ export function atr(bars: readonly KLineData[], n: number): number[] {
     return Math.max(bar.high - bar.low, Math.abs(bar.high - prevClose), Math.abs(bar.low - prevClose))
   })
   return sma(tr, n)
-}
-
-/** MT4's PRICE_* numbering: 0 close, 1 open, 2 high, 3 low, 4 median, 5 typical, 6 weighted. */
-export function appliedPrice(bars: readonly KLineData[], mode: number): number[] {
-  return bars.map((bar) => {
-    switch (mode) {
-      case 1:
-        return bar.open
-      case 2:
-        return bar.high
-      case 3:
-        return bar.low
-      case 4:
-        return (bar.high + bar.low) / 2
-      case 5:
-        return (bar.high + bar.low + bar.close) / 3
-      case 6:
-        return (bar.high + bar.low + 2 * bar.close) / 4
-      default:
-        return bar.close
-    }
-  })
 }
 
 /** A count from the settings dialog: a blank field arrives as undefined, a typed one may be fractional. */
