@@ -12,7 +12,8 @@ function fakePane(id: string): SyncPane & { shown: Array<Measurement | null> } {
     getChart: () => null,
     getPeriodMs: () => 3_600_000,
     seekTo: () => {},
-    showMeasurement: (measurement) => { shown.push(measurement) }
+    showMeasurement: (measurement) => { shown.push(measurement) },
+    showCrosshair: () => {}
   }
 }
 

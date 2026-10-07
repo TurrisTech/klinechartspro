@@ -5,6 +5,7 @@
     init,
     utils,
     type Chart,
+    type Coordinate,
     type DataLoader,
     type DeepPartial,
     type FormatDateParams,
@@ -36,7 +37,16 @@
   import { periodDurationMs } from './utils/period'
   import type { Measurement, MeasurePoint, SyncBus } from './sync/bus'
   import { sameSymbol } from './sync/follow'
-  import { applyCrosshairAt, crosshairPoint, paneMainAt, type CrosshairPoint } from './sync/crosshair'
+  import {
+    applyCrosshairAt,
+    clearCrosshair,
+    crosshairPoint,
+    crosshairReach,
+    paneMainAt,
+    type CrosshairPoint,
+    type CrosshairReach,
+    type CrosshairReason
+  } from './sync/crosshair'
   import {
     isTimestampVisible,
     LIVE_EDGE_FRACTION,
@@ -255,6 +265,21 @@
   // because every configured instrument answers this for itself.
   const displayTimezone = $derived(pane.symbol?.timezone ?? timezone)
 
+  // The display clock as klinecharts formats intraday times on it, for text this pane writes
+  // itself (the synced crosshair's edge tag) rather than hands to the chart.
+  const displayDateFormat = $derived(
+    new Intl.DateTimeFormat('en', {
+      timeZone: displayTimezone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  )
+
   function formatDate({ dateTimeFormat, timestamp, type }: FormatDateParams) {
     if (pane.period.timespan === 'second') {
       return utils.formatDate(dateTimeFormat, timestamp, type === 'xAxis'
@@ -441,7 +466,7 @@
     if (reach !== 'reload') {
       console.debug('[sync] seek target is past the live edge', { pane: pane.id, reach, timestamp })
       if (reach === 'live-edge') positionAtLive(widget)
-      if (crosshair) applyCrosshairAt(widget, crosshair)
+      if (crosshair) showCrosshair(crosshair)
       return
     }
     pendingLive = null
@@ -464,6 +489,8 @@
   // everything below the candles is a layout the user can add to and drag.
   let priceAreaBottom = $state(0)
   let yAxisWidth = $state(0)
+  // The price area's vertical middle, where the synced crosshair's edge tag sits.
+  let priceAreaMiddle = $state(0)
 
   function positionAtLive(chart: Chart): void {
     const last = chart.getDataList().at(-1)?.timestamp
@@ -524,6 +551,71 @@
         ? Math.max(chartHeight - (candlePane.top + candlePane.height), 0)
         : (widget.getSize('x_axis_pane')?.height ?? 0)
     yAxisWidth = widget.getSize('candle_pane', 'yAxis')?.width ?? 0
+    priceAreaMiddle = candlePane !== null ? candlePane.top + candlePane.height / 2 : 0
+    // What this pane shows just changed -- a seek's scroll animating in, a page of history, a
+    // reload landing -- so whether it holds the synced instant may have too.
+    if (syncedPoint !== null) refreshSyncedCrosshair()
+  }
+
+  // --- Synced crosshair (the bus's showCrosshair) --------------------------------------------
+
+  // The instant another pane's pointer is on, as the bus last handed it here; null while this
+  // pane is the source, or no pane is hovered. Kept, not just applied, because what this pane
+  // shows can change under it -- see refreshViewState.
+  let syncedPoint: CrosshairPoint | null = null
+  // What the edge tag says while this pane cannot mark the synced instant with its crosshair
+  // (crosshairReach: it does not hold it, or holds it off screen); null while it can.
+  let crosshairAway = $state<{ side: 'left' | 'right'; reason: CrosshairReason; label: string } | null>(null)
+
+  function syncedReach(chart: Chart, point: CrosshairPoint): CrosshairReach | null {
+    const data = chart.getDataList()
+    const main = chart.getSize('candle_pane', 'main')
+    if (data.length === 0 || !main) return null
+    const { x } = chart.convertToPixel({ timestamp: point.timestamp }, { paneId: 'candle_pane' }) as Partial<Coordinate>
+    if (typeof x !== 'number') return null
+    return crosshairReach({
+      timestamp: point.timestamp,
+      first: data[0].timestamp,
+      last: data[data.length - 1].timestamp,
+      periodMs: periodDurationMs(pane.period),
+      x,
+      width: main.width,
+      parked: parkedInHistory
+    })
+  }
+
+  // SyncPane.showCrosshair: marks the instant another pane is pointing at, or clears it.
+  function showCrosshair(point: CrosshairPoint | null): void {
+    syncedPoint = point
+    if (!widget) return
+    if (point === null) {
+      clearCrosshair(widget)
+      crosshairAway = null
+      return
+    }
+    const reach = syncedReach(widget, point)
+    // Not held: no crosshair at all, rather than one clamped onto the first or last bar with a
+    // legend describing that bar while the pointer moves elsewhere.
+    if (reach?.kind === 'away' && reach.reason === 'not-loaded') clearCrosshair(widget)
+    else applyCrosshairAt(widget, point)
+    crosshairAway =
+      reach?.kind === 'away'
+        ? {
+            side: reach.side,
+            reason: reach.reason,
+            label: formatDate({ dateTimeFormat: displayDateFormat, timestamp: point.timestamp, template: '', type: 'crosshair' })
+          }
+        : null
+  }
+
+  // Re-marks the synced instant when what this pane shows changed -- only when the answer did,
+  // so a pan or a stream of live bars costs a comparison, not a crosshair dispatch per frame.
+  function refreshSyncedCrosshair(): void {
+    if (!widget || syncedPoint === null) return
+    const reach = syncedReach(widget, syncedPoint)
+    const away = reach?.kind === 'away' ? `${reach.side}|${reach.reason}` : null
+    const current = crosshairAway ? `${crosshairAway.side}|${crosshairAway.reason}` : null
+    if (away !== current) showCrosshair(syncedPoint)
   }
 
   // onVisibleRangeChange fires once per animation frame during a drag, and again for every
@@ -763,7 +855,7 @@
             // place but shows no crosshair marking where every other pane just aligned to.
             // An auto-sync pan carries no crosshair (see SyncPane.seekTo): a pan points at
             // nothing, so the pane lands clean instead of marking an arbitrary instant.
-            if (seek.crosshair) applyCrosshairAt(widget, seek.crosshair)
+            if (seek.crosshair) showCrosshair(seek.crosshair)
           } else if (live && data.length > 0 && widget) {
             // The reload jumpToLive asked for -- or the one a restored live pane opens with --
             // has landed; only now does the tail exist to be positioned. Without this the pane
@@ -1227,6 +1319,9 @@
     const onCrosshairChange = (value?: unknown) => {
       const cr = value as { x?: number; y?: number; paneId?: string } | undefined
       if (!cr) return
+      // The pointer is on THIS pane: whatever another pane's hover left here is superseded.
+      syncedPoint = null
+      crosshairAway = null
       const point = crosshairPoint(chart, cr)
       if (!point) return
       bus.broadcastCrosshair(pane.id, point)
@@ -1429,7 +1524,8 @@
       getChart: () => widget,
       getPeriodMs: () => periodDurationMs(pane.period),
       seekTo,
-      showMeasurement
+      showMeasurement,
+      showCrosshair
     })
 
     widget.setStyles(theme)
@@ -1568,6 +1664,24 @@
          several tall indicator sub-panes those are a long way apart. -->
     {@render liveJump(priceAreaBottom, yAxisWidth)}
     {@render liveJump(0, 0)}
+  {/if}
+  {#if crosshairAway}
+    <!-- Where the instant another pane is pointing at lies, when this pane's crosshair cannot
+         mark it (crosshairReach): at the edge it lies beyond, inside the price area. Visual
+         only, like the crosshair it stands in for. -->
+    <div
+      class="klinecharts-pro-crosshair-away"
+      data-side={crosshairAway.side}
+      style={crosshairAway.side === 'left'
+        ? `top: ${priceAreaMiddle}px; left: 0;`
+        : `top: ${priceAreaMiddle}px; right: ${yAxisWidth}px;`}
+      aria-hidden="true"
+    >
+      <span>{crosshairAway.side === 'left' ? '◀ ' : ''}{crosshairAway.label}{crosshairAway.side === 'right' ? ' ▶' : ''}</span>
+      <span class="klinecharts-pro-crosshair-away-reason">
+        {i18n(`crosshair_${crosshairAway.reason.replace('-', '_')}`, locale)}
+      </span>
+    </div>
   {/if}
   {#if pane.loading}
     <div class="klinecharts-pro-loading"><LoaderCircleIcon class="kc-spinner" aria-label="Loading chart data" /></div>

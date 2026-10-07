@@ -15,7 +15,7 @@
 import type { Chart, Nullable } from 'klinecharts'
 
 import type { SymbolInfo } from '../types'
-import { applyCrosshairAt, clearCrosshair, type CrosshairPoint } from './crosshair'
+import type { CrosshairPoint } from './crosshair'
 import {
   isTimestampVisible,
   resolveSeekTarget,
@@ -51,6 +51,11 @@ export interface SyncPane {
   // whatever copy it drew before otherwise -- including when `measurement` is null. Called for
   // the source pane too, so the box being dragged and its copies can never disagree.
   showMeasurement(measurement: Measurement | null): void
+  // Marks a synced instant with this pane's crosshair, or clears it (`null`, the source's
+  // pointer left). The pane, not the bus, decides how: only it knows whether its data is parked
+  // in history, and an instant it does not hold is shown at its edge instead of by a crosshair
+  // clamped onto its first or last bar (crosshairReach, src/sync/crosshair.ts).
+  showCrosshair(point: CrosshairPoint | null): void
 }
 
 export interface MeasurePoint {
@@ -104,9 +109,9 @@ export class SyncBus {
 
   private crosshairRaf = 0
   private pendingCrosshair: { sourceId: string; point: CrosshairPoint } | null = null
-  // Guards against re-entrant dispatch: applyCrosshairAt/clearCrosshair on a target never
-  // re-fires that target's own onCrosshairChange subscribers (klinecharts dispatches with
-  // notExecuteAction: true).
+  // Guards against re-entrant dispatch: a target's showCrosshair (applyCrosshairAt /
+  // clearCrosshair) never re-fires that target's own onCrosshairChange subscribers
+  // (klinecharts dispatches with notExecuteAction: true).
   private dispatchingCrosshair = false
 
   private seekRaf = 0
@@ -192,10 +197,7 @@ export class SyncBus {
     try {
       for (const [id, pane] of this.panes) {
         if (id === sourceId) continue
-        const chart = pane.getChart()
-        if (!chart) continue
-        if (point === null) clearCrosshair(chart)
-        else applyCrosshairAt(chart, point)
+        pane.showCrosshair(point)
       }
     } finally {
       this.dispatchingCrosshair = false
@@ -275,8 +277,9 @@ export class SyncBus {
       sourceChart && sourcePeriodMs !== null
         ? resolveSeekTarget(chart, sourceChart, point, sourcePeriodMs, pane.getPeriodMs(), fraction)
         : { timestamp: point.timestamp, fraction, crosshairTimestamp: point.timestamp }
-    // Same price, wherever resolveSeekTarget decided to mark the crosshair -- applyCrosshairAt
-    // already re-derives the on-screen position on THIS pane's own scale from the raw value.
+    // Same price, wherever resolveSeekTarget decided to mark the crosshair -- the pane's
+    // showCrosshair (applyCrosshairAt) already re-derives the on-screen position on THIS
+    // pane's own scale from the raw value.
     // Deliberately NOT target.timestamp: the span-centring case scrolls to a midpoint but the
     // crosshair still marks the instant that was actually clicked (crosshairTimestamp).
     const crosshairTarget: CrosshairPoint = { timestamp: target.crosshairTimestamp, value: point.value }
@@ -290,7 +293,7 @@ export class SyncBus {
     // paper over it -- not something to skip.
     if (isTimestampVisible(chart, target.timestamp)) {
       console.debug('[sync] seekPane: target already visible, re-applying crosshair only', { pane: pane.id, target })
-      applyCrosshairAt(chart, crosshairTarget)
+      pane.showCrosshair(crosshairTarget)
       return
     }
 
@@ -301,7 +304,7 @@ export class SyncBus {
     if (target.timestamp >= oldest && target.timestamp <= newest) {
       console.debug('[sync] seekPane: direct seek (within loaded history)', { pane: pane.id, target })
       seekToTimestamp(chart, target.timestamp, target.fraction, SEEK_ANIMATION_MS)
-      applyCrosshairAt(chart, crosshairTarget)
+      pane.showCrosshair(crosshairTarget)
       return
     }
 

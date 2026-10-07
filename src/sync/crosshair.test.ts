@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Chart } from 'klinecharts'
-import { crosshairPoint, paneMainAt } from './crosshair'
+import { crosshairPoint, crosshairReach, paneMainAt } from './crosshair'
 
 // Click-to-scroll listens on the chart's root and asks which pane a click landed in, so that a
 // click on an indicator sub-pane seeks the wall exactly as one on the candles does. Nodes are
@@ -76,5 +76,47 @@ describe('crosshairPoint', () => {
 
   test('a candle_pane position carries the price too', () => {
     expect(crosshairPoint(chart, { x: 10, y: 40, paneId: 'candle_pane' })).toEqual({ timestamp: 1000, value: 1.25 })
+  })
+})
+
+describe('crosshairReach', () => {
+  const M = 60_000
+  // A pane holding 60 one-minute bars, 600 px wide.
+  const base = { first: 1_000 * M, last: 1_059 * M, periodMs: M, x: 300, width: 600, parked: false }
+
+  test('an instant among the loaded bars, on screen, is shown', () => {
+    expect(crosshairReach({ ...base, timestamp: 1_030 * M })).toEqual({ kind: 'shown' })
+  })
+
+  test('an instant before the first loaded bar is not held, whatever its x', () => {
+    // On a 1D-to-5s wall this is the 5s pane under most 1D hovers: the line would sit far off
+    // the left edge and the legend would read the first bar.
+    expect(crosshairReach({ ...base, timestamp: 900 * M, x: -6_000 })).toEqual({ kind: 'away', side: 'left', reason: 'not-loaded' })
+    expect(crosshairReach({ ...base, timestamp: 999 * M, x: 10 })).toEqual({ kind: 'away', side: 'left', reason: 'not-loaded' })
+  })
+
+  test('past the last bar is not held on a parked pane, and is the future on a live one', () => {
+    expect(crosshairReach({ ...base, timestamp: 1_100 * M, x: 2_000, parked: true })).toEqual({
+      kind: 'away',
+      side: 'right',
+      reason: 'not-loaded'
+    })
+    // Inside the parked pane's last bar: still that bar.
+    expect(crosshairReach({ ...base, timestamp: 1_059 * M + 30_000, parked: true })).toEqual({ kind: 'shown' })
+    // A live pane: drawn in the room right of the forming bar, as on the source...
+    expect(crosshairReach({ ...base, timestamp: 1_061 * M, x: 590 })).toEqual({ kind: 'shown' })
+    // ...or, beyond the room on the right, after the latest bar: no scroll reaches it.
+    expect(crosshairReach({ ...base, timestamp: 1_061 * M, x: 900 })).toEqual({ kind: 'away', side: 'right', reason: 'after-latest' })
+    // The forming bar itself, scrolled out of view, is merely off screen.
+    expect(crosshairReach({ ...base, timestamp: 1_059 * M + 30_000, x: 900 })).toEqual({
+      kind: 'away',
+      side: 'right',
+      reason: 'off-screen'
+    })
+  })
+
+  test('a loaded instant scrolled out of view is off screen on its side', () => {
+    expect(crosshairReach({ ...base, timestamp: 1_010 * M, x: -40 })).toEqual({ kind: 'away', side: 'left', reason: 'off-screen' })
+    expect(crosshairReach({ ...base, timestamp: 1_050 * M, x: 640 })).toEqual({ kind: 'away', side: 'right', reason: 'off-screen' })
   })
 })

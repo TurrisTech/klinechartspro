@@ -113,10 +113,52 @@ function laneHeight(style: MtfTimeframeStyle): number {
   return style.arrowSize * 1.4 + (style.textSize > 0 ? style.textSize + 2 : 0) + LANE_GAP
 }
 
-function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
+/** What a pane's last `calc` was computed from, and its result. */
+interface Computed {
+  data: KLineData[]
+  length: number
+  first: number | undefined
+  last: number | undefined
+  extend: ExtendData
+  rev: number
+  values: Value[]
+}
+
+const computed = new WeakMap<object, Computed>()
+
+/**
+ * The placed marks and graphs, recomputed only when what they are computed FROM changes.
+ *
+ * klinecharts recalculates every indicator on a pane for every live tick, and a tick that only
+ * moves the forming bar changes nothing here: placement reads the bars' timestamps, never their
+ * prices, and the votes come from the stores, whose changes arrive as a new `extendData` (the
+ * host's `rev`). Rebuilding anyway cost the prod wall about 1.7 s of main thread a minute, up to
+ * 60 ms per tick on a 3m pane with four graph roots (2026-10-07). So the previous result is
+ * reused while the pane holds the same bar list -- klinecharts replaces the array on a reload or
+ * a page of history and mutates it in place on a tick, so a new bar shows as a longer list -- and
+ * the same `extendData`. A new bar, a page of history, a store update or a settings change
+ * recomputes as before. Exported for its own test.
+ */
+export function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
   const extend = indicator.extendData
   if (!extend) return dataList.map(() => ({}))
-  return computeValues(dataList, extend)
+  const first = dataList[0]?.timestamp
+  const last = dataList[dataList.length - 1]?.timestamp
+  const prev = computed.get(indicator)
+  if (
+    prev &&
+    prev.data === dataList &&
+    prev.length === dataList.length &&
+    prev.first === first &&
+    prev.last === last &&
+    prev.extend === extend &&
+    prev.rev === extend.rev
+  ) {
+    return prev.values
+  }
+  const values = computeValues(dataList, extend)
+  computed.set(indicator, { data: dataList, length: dataList.length, first, last, extend, rev: extend.rev, values })
+  return values
 }
 
 /** Everything `calc` decides, from the bars and the pane's settings: the markers, the graphs and

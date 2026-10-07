@@ -110,3 +110,48 @@ export function applyCrosshairAt(chart: Chart, point: CrosshairPoint): void {
 export function clearCrosshair(chart: Chart): void {
   chart.executeAction('onCrosshairChange', undefined as unknown as Crosshair)
 }
+
+// Where a synced instant falls on a pane that did not produce it, and so whether that pane can
+// mark it with its crosshair.
+//
+// klinecharts places a crosshair by pixel and then CLAMPS the bar it describes to the data it
+// holds (`setCrosshair`): an instant before a pane's first loaded bar puts the vertical line
+// thousands of pixels off the left edge and leaves the legend reading the first bar, however
+// the pointer moves on the source. On a wall that runs 1D down to 5s that is most hovers on
+// the higher timeframes -- a 5s pane holds about forty minutes -- and it read as a crosshair
+// frozen in place (prod, 2026-10-07). So a pane that does not hold the instant shows no
+// crosshair and says so at the edge it lies beyond, and one that holds it off screen keeps its
+// crosshair (the legend is then right) and says which way it is. An instant after a live pane's
+// newest bar and beyond its right edge is neither: no scroll brings it into view, because the
+// bar does not exist yet -- which on an intraday pane is where a 1D bar's session-dated label
+// lands for the first hours of every session.
+export type CrosshairReason = 'not-loaded' | 'off-screen' | 'after-latest'
+
+export type CrosshairReach = { kind: 'shown' } | { kind: 'away'; side: 'left' | 'right'; reason: CrosshairReason }
+
+export interface CrosshairReachInput {
+  /** The synced instant. */
+  timestamp: number
+  /** The first and the last loaded bar's timestamp. */
+  first: number
+  last: number
+  /** One bar of this pane, nominally. */
+  periodMs: number
+  /** The instant on this pane's main area, as `convertToPixel` gives it, and that area's width. */
+  x: number
+  width: number
+  /** Whether a seek has parked this pane's data in the past, so that its last bar is not the
+   * newest there is. Past the last bar of a pane that is NOT parked lies the future, where the
+   * crosshair is drawn in the room right of the forming bar exactly as on the source. */
+  parked: boolean
+}
+
+export function crosshairReach(input: CrosshairReachInput): CrosshairReach {
+  const { timestamp, first, last, periodMs, x, width, parked } = input
+  if (timestamp < first) return { kind: 'away', side: 'left', reason: 'not-loaded' }
+  const afterLast = timestamp >= last + periodMs
+  if (parked && afterLast) return { kind: 'away', side: 'right', reason: 'not-loaded' }
+  if (x < 0) return { kind: 'away', side: 'left', reason: 'off-screen' }
+  if (x > width) return { kind: 'away', side: 'right', reason: afterLast ? 'after-latest' : 'off-screen' }
+  return { kind: 'shown' }
+}
