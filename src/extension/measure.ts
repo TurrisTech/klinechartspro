@@ -21,13 +21,10 @@ import { FILL_ALPHA, measureReadout, withAlpha } from './measureReadout'
 // (ChartPane.svelte drives it; nothing in the drawing bar creates one). A box between the two
 // points, shaded in the direction's candle colour, an arrow along each side, and a label with
 // the move -- price, percent, pips where the instrument has them -- and the bars and time it
-// spans. Every indicator sub-pane carries the box's span too (`measureSpan`), so what each
-// indicator did over the measured stretch is marked under it. Every figure ignores events: a
-// measurement can be neither selected, dragged nor right-click deleted, and it never stands
-// between a click and the candles under it.
+// spans. Every figure ignores events: a measurement can be neither selected, dragged nor
+// right-click deleted, and it never stands between a click and the candles under it.
 
 export const MEASURE_OVERLAY = 'measure'
-export const MEASURE_SPAN_OVERLAY = 'measureSpan'
 
 const FONT_SIZE = 12
 const LINE_HEIGHT = 16
@@ -91,6 +88,10 @@ const measure: OverlayTemplate = {
     const top = Math.min(a.y, b.y)
     const width = Math.abs(b.x - a.x)
     const height = Math.abs(b.y - a.y)
+    // Nothing while the box is wholly out of view -- a copy on a chart showing another stretch,
+    // or a pane panned away from it -- rather than its label pinned to an edge over candles it
+    // does not describe.
+    if (left > bounding.width || left + width < 0 || top > bounding.height || top + height < 0) return []
     const midX = (a.x + b.x) / 2
     const midY = (a.y + b.y) / 2
 
@@ -149,12 +150,15 @@ const measure: OverlayTemplate = {
       }
     ]
   },
-  // The two prices on the axis, with the band between them -- always, where klinecharts'
-  // default axis figures appear only while an overlay is selected, which this one never is.
+  // The two prices on the axis, with the band between them -- whenever the box is in view,
+  // where klinecharts' default axis figures appear only while an overlay is selected, which
+  // this one never is.
   createYAxisFigures: ({ chart, overlay, coordinates, bounding, yAxis }) => {
     if (coordinates.length < 2) return []
     const [p0, p1] = overlay.points
     if (typeof p0?.value !== 'number' || typeof p1?.value !== 'number') return []
+    const plotWidth = chart.getSize(overlay.paneId, 'main')?.width ?? Number.POSITIVE_INFINITY
+    if (Math.max(coordinates[0].x, coordinates[1].x) < 0 || Math.min(coordinates[0].x, coordinates[1].x) > plotWidth) return []
     const color = directionColor(chart, p1.value >= p0.value)
     const precision = (chart.getSymbol()?.pricePrecision as number | undefined) ?? 2
     const fromZero = yAxis?.isFromZero() ?? false
@@ -187,37 +191,6 @@ const measure: OverlayTemplate = {
           paddingTop: 2,
           paddingBottom: 2
         },
-        ignoreEvent: true
-      }
-    ]
-  }
-}
-
-// The ruler's box on an indicator sub-pane: the same two points, so it follows the drag and
-// the candles exactly as the price pane's box does, but full height -- a price means nothing on
-// an indicator's scale, so only the span between the two candles carries over.
-export const measureSpan: OverlayTemplate = {
-  name: MEASURE_SPAN_OVERLAY,
-  totalStep: 3,
-  lock: true,
-  needDefaultPointFigure: false,
-  needDefaultXAxisFigure: false,
-  needDefaultYAxisFigure: false,
-  createPointFigures: ({ chart, overlay, coordinates, bounding }) => {
-    if (coordinates.length < 2) return []
-    const [p0, p1] = overlay.points
-    if (typeof p0?.value !== 'number' || typeof p1?.value !== 'number') return []
-    const color = directionColor(chart, p1.value >= p0.value)
-    return [
-      {
-        type: 'rect',
-        attrs: {
-          x: Math.min(coordinates[0].x, coordinates[1].x),
-          y: 0,
-          width: Math.abs(coordinates[1].x - coordinates[0].x),
-          height: bounding.height
-        },
-        styles: { style: 'fill', color: withAlpha(color, FILL_ALPHA) },
         ignoreEvent: true
       }
     ]
