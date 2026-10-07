@@ -88,6 +88,10 @@ const measure: OverlayTemplate = {
     const top = Math.min(a.y, b.y)
     const width = Math.abs(b.x - a.x)
     const height = Math.abs(b.y - a.y)
+    // Nothing while the box is wholly out of view -- a copy on a chart showing another stretch,
+    // or a pane panned away from it -- rather than its label pinned to an edge over candles it
+    // does not describe.
+    if (left > bounding.width || left + width < 0 || top > bounding.height || top + height < 0) return []
     const midX = (a.x + b.x) / 2
     const midY = (a.y + b.y) / 2
 
@@ -146,12 +150,15 @@ const measure: OverlayTemplate = {
       }
     ]
   },
-  // The two prices on the axis, with the band between them -- always, where klinecharts'
-  // default axis figures appear only while an overlay is selected, which this one never is.
+  // The two prices on the axis, with the band between them -- whenever the box is in view,
+  // where klinecharts' default axis figures appear only while an overlay is selected, which
+  // this one never is.
   createYAxisFigures: ({ chart, overlay, coordinates, bounding, yAxis }) => {
     if (coordinates.length < 2) return []
     const [p0, p1] = overlay.points
     if (typeof p0?.value !== 'number' || typeof p1?.value !== 'number') return []
+    const plotWidth = chart.getSize(overlay.paneId, 'main')?.width ?? Number.POSITIVE_INFINITY
+    if (Math.max(coordinates[0].x, coordinates[1].x) < 0 || Math.min(coordinates[0].x, coordinates[1].x) > plotWidth) return []
     const color = directionColor(chart, p1.value >= p0.value)
     const precision = (chart.getSymbol()?.pricePrecision as number | undefined) ?? 2
     const fromZero = yAxis?.isFromZero() ?? false

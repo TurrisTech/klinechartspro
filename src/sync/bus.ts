@@ -14,6 +14,7 @@
 
 import type { Chart, Nullable } from 'klinecharts'
 
+import type { SymbolInfo } from '../types'
 import { applyCrosshairAt, clearCrosshair, type CrosshairPoint } from './crosshair'
 import {
   isTimestampVisible,
@@ -46,6 +47,24 @@ export interface SyncPane {
   // gesture, so there is no instant to mark, and the pane should land carrying no crosshair
   // rather than one at an arbitrary point of its new view.
   seekTo(timestamp: number, fraction: number, crosshair: CrosshairPoint | null): void
+  // Draws the wall's ruler measurement if this pane is on its instrument, and takes away
+  // whatever copy it drew before otherwise -- including when `measurement` is null. Called for
+  // the source pane too, so the box being dragged and its copies can never disagree.
+  showMeasurement(measurement: Measurement | null): void
+}
+
+export interface MeasurePoint {
+  timestamp: number
+  value: number
+}
+
+// The wall's ruler (Shift + drag on a price pane, see ChartPane.svelte): one measurement at a
+// time, made on one pane and shown on every pane on the same instrument, whatever its
+// timeframe. Only the same instrument: the box spans two prices, which mean nothing on another.
+export interface Measurement {
+  sourceId: string
+  symbol: SymbolInfo | undefined
+  points: [MeasurePoint, MeasurePoint]
 }
 
 export interface SyncOptions {
@@ -109,8 +128,12 @@ export class SyncBus {
   // rather than where it first left this pane's loaded range.
   private readonly panReloads = new Map<string, { timer: ReturnType<typeof setTimeout>; timestamp: number }>()
 
+  private measurement: Measurement | null = null
+
   register(pane: SyncPane): void {
     this.panes.set(pane.id, pane)
+    // A pane added to the wall while a measurement is up shows it like the rest.
+    if (this.measurement) pane.showMeasurement(this.measurement)
   }
 
   unregister(id: string): void {
@@ -120,6 +143,8 @@ export class SyncBus {
     // A pane being torn down while it was the crosshair source would otherwise leave every
     // other pane showing a line with no owner left to move or clear it.
     this.clearCrosshair(id)
+    // Likewise its measurement: the pane that made it is the one whose changes put it away.
+    if (this.measurement?.sourceId === id) this.setMeasurement(null)
   }
 
   setOptions(options: SyncOptions): void {
@@ -175,6 +200,21 @@ export class SyncBus {
     } finally {
       this.dispatchingCrosshair = false
     }
+  }
+
+  // --- Ruler ---------------------------------------------------------------------------
+
+  getMeasurement(): Measurement | null {
+    return this.measurement
+  }
+
+  // Not gated on any sync option, unlike the crosshair: a measurement is made deliberately and
+  // read across the wall, and every pane on its instrument shows it. Synchronous -- a drag
+  // updates it once per mousemove, and each pane only moves the two points of one overlay.
+  setMeasurement(measurement: Measurement | null): void {
+    if (measurement === null && this.measurement === null) return
+    this.measurement = measurement
+    for (const pane of this.panes.values()) pane.showMeasurement(measurement)
   }
 
   // --- Click to scroll -------------------------------------------------------------------
@@ -383,6 +423,7 @@ export class SyncBus {
     if (this.crosshairRaf !== 0) cancelAnimationFrame(this.crosshairRaf)
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
     this.cancelPan()
+    this.measurement = null
     this.panes.clear()
   }
 }

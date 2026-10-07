@@ -34,7 +34,8 @@
   import { templateTooltipDataSource } from './indicators'
   import { MEASURE_OVERLAY } from './extension/measure'
   import { periodDurationMs } from './utils/period'
-  import type { SyncBus } from './sync/bus'
+  import type { Measurement, MeasurePoint, SyncBus } from './sync/bus'
+  import { sameSymbol } from './sync/follow'
   import { applyCrosshairAt, crosshairPoint, paneMainAt, type CrosshairPoint } from './sync/crosshair'
   import {
     isTimestampVisible,
@@ -1043,27 +1044,53 @@
 
   // --- Ruler (Shift + drag on the price pane) -------------------------------------------------
   //
-  // One measurement per pane, drawn by the `measure` overlay (src/extension/measure.ts) and
-  // anchored to timestamps and prices, so it stays on the candles it measured while the pane is
-  // panned or zoomed. It lasts until the next press on the chart, Escape, a new measurement, or
-  // a change of symbol or period -- a price measured on one instrument means nothing on another.
+  // One measurement on the whole wall, held by the sync bus (src/sync/bus.ts) and drawn by the
+  // `measure` overlay (src/extension/measure.ts) on every pane on the instrument it was made on,
+  // whatever their timeframes -- each with its own label, its bars counted in its own candles.
+  // Anchored to timestamps and prices, so each copy stays on the candles it measured while its
+  // pane is panned or zoomed. It lasts until the next press on a chart showing it, Escape, a new
+  // measurement, or a change of symbol or period on the pane that made it -- a price measured on
+  // one instrument means nothing on another.
 
   const MEASURE_GROUP = 'measure'
   // Over the drawings: a ruler laid across a trend line is read, not hidden behind it.
   const MEASURE_Z_LEVEL = 1000
+  // This pane's copy of the wall's measurement, if it shows one.
   let measureId: string | null = null
 
-  function clearMeasure(): void {
-    if (measureId === null) return
-    widget?.removeOverlay({ id: measureId })
-    measureId = null
+  // SyncPane.showMeasurement: the copy follows the bus, and only a pane on the measurement's
+  // instrument has one. A copy klinecharts no longer holds is drawn afresh rather than moved.
+  function showMeasurement(measurement: Measurement | null): void {
+    if (!widget) return
+    if (measurement === null || !sameSymbol(pane.symbol, measurement.symbol)) {
+      if (measureId !== null) widget.removeOverlay({ id: measureId })
+      measureId = null
+      return
+    }
+    const points = [...measurement.points]
+    if (measureId !== null && widget.getOverlays({ id: measureId }).length > 0) {
+      widget.overrideOverlay({ id: measureId, points })
+      return
+    }
+    const created = widget.createOverlay({
+      name: MEASURE_OVERLAY,
+      groupId: MEASURE_GROUP,
+      points,
+      lock: true,
+      zLevel: MEASURE_Z_LEVEL
+    })
+    measureId = (Array.isArray(created) ? created[0] : created) ?? null
+  }
+
+  function measurementOf(from: MeasurePoint, to: MeasurePoint): Measurement {
+    return { sourceId: pane.id, symbol: pane.symbol, points: [from, to] }
   }
 
   // The price-pane point under a client position: its candle's timestamp and the price at that
   // height. Clamped to the plotting area, so a drag carried past an edge measures to the edge
   // rather than to a price on some other pane's scale. `strict` asks whether the position is IN
   // the area at all, which is what decides whether a press starts a measurement.
-  function measurePointAt(clientX: number, clientY: number, strict: boolean): { timestamp: number; value: number } | null {
+  function measurePointAt(clientX: number, clientY: number, strict: boolean): MeasurePoint | null {
     const main = widget?.getDom('candle_pane', 'main')
     if (!widget || !main) return null
     const rect = main.getBoundingClientRect()
@@ -1078,11 +1105,15 @@
     return { timestamp: point.timestamp, value: point.value }
   }
 
+  // A symbol or period change on the pane that made the measurement puts it away everywhere.
+  // On any other pane it only decides again whether that pane shows it.
   $effect(() => {
     void pane.symbol
     void pane.period
     if (!mounted) return
-    clearMeasure()
+    const measurement = bus.getMeasurement()
+    if (measurement?.sourceId === pane.id) bus.setMeasurement(null)
+    else showMeasurement(measurement)
   })
 
   function screenshot(background: string): string {
@@ -1298,20 +1329,20 @@
     // the ruler. The hover mousemoves still reach the chart, so the crosshair keeps tracking the
     // pointer. The drag is followed on the window, so it keeps measuring -- to the pane's edge --
     // when the pointer leaves the pane, which on a dense wall is most drags.
-    let measureFrom: { timestamp: number; value: number } | null = null
+    let measureFrom: MeasurePoint | null = null
     let measureDownX = 0
     let measureDownY = 0
     const onMeasureMove = (event: MouseEvent) => {
-      if (measureFrom === null || measureId === null) return
+      if (measureFrom === null) return
       const to = measurePointAt(event.clientX, event.clientY, false)
-      if (to) widget?.overrideOverlay({ id: measureId, points: [measureFrom, to] })
+      if (to) bus.setMeasurement(measurementOf(measureFrom, to))
     }
     const onMeasureUp = (event: MouseEvent) => {
       window.removeEventListener('mousemove', onMeasureMove)
       window.removeEventListener('mouseup', onMeasureUp)
       measureFrom = null
       // A Shift-click that never moved measured nothing, and leaves nothing behind.
-      if (Math.abs(event.clientX - measureDownX) + Math.abs(event.clientY - measureDownY) < 3) clearMeasure()
+      if (Math.abs(event.clientX - measureDownX) + Math.abs(event.clientY - measureDownY) < 3) bus.setMeasurement(null)
     }
     const onMeasureMouseDown = (event: MouseEvent) => {
       if (event.button !== 0) return
@@ -1320,10 +1351,11 @@
       // whose +/- buttons take Shift for ten steps -- and a press on one of those is theirs.
       if (!(event.target instanceof HTMLCanvasElement)) return
       if (!event.shiftKey) {
-        // Any other press on the chart puts the last measurement away. It still starts a pan if
-        // it is dragged, but as a click it does nothing more: it does not seek the wall.
+        // Any other press on a chart showing the measurement puts it away, on every pane. It
+        // still starts a pan if it is dragged, but as a click it does nothing more: it does not
+        // seek the wall.
         if (measureId !== null) {
-          clearMeasure()
+          bus.setMeasurement(null)
           measureInteracted = true
         }
         return
@@ -1334,16 +1366,8 @@
       event.preventDefault()
       event.stopPropagation()
       measureInteracted = true
-      clearMeasure()
-      const created = widget?.createOverlay({
-        name: MEASURE_OVERLAY,
-        groupId: MEASURE_GROUP,
-        points: [from, from],
-        lock: true,
-        zLevel: MEASURE_Z_LEVEL
-      })
-      measureId = (Array.isArray(created) ? created[0] : created) ?? null
-      if (measureId === null) return
+      // Replaces whatever measurement the wall had, on whichever pane made it.
+      bus.setMeasurement(measurementOf(from, from))
       measureFrom = from
       measureDownX = event.clientX
       measureDownY = event.clientY
@@ -1351,7 +1375,7 @@
       window.addEventListener('mouseup', onMeasureUp)
     }
     const onMeasureKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') clearMeasure()
+      if (event.key === 'Escape') bus.setMeasurement(null)
     }
     widgetElement.addEventListener('mousedown', onMeasureMouseDown, true)
     window.addEventListener('keydown', onMeasureKey)
@@ -1404,7 +1428,8 @@
       id: pane.id,
       getChart: () => widget,
       getPeriodMs: () => periodDurationMs(pane.period),
-      seekTo
+      seekTo,
+      showMeasurement
     })
 
     widget.setStyles(theme)
