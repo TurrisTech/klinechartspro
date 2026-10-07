@@ -8,12 +8,14 @@ import { dirname, join } from 'node:path'
 // to re-wrapping on every bar and nothing else fails.
 //
 // Read as text rather than imported: klinecharts touches `window` at import.
-test('the klinecharts the chart loads carries the stable-legend patch', async () => {
+// It also carries "contained drawing" (klinechartsContain.test.ts): without it one throw while a
+// chart draws leaves that canvas unpainted until the chart is disposed.
+test('the klinecharts the chart loads carries the stable-legend and contained-drawing patch', async () => {
   const entry = Bun.resolveSync('klinecharts', import.meta.dir)
   const pkg = await Bun.file(join(dirname(entry), '..', 'package.json')).json()
   expect(pkg.version).toBe('10.0.0')
   const source = await Bun.file(entry).text()
-  for (const marker of ['_legendSlotWidth', '_figureLegendReserves', '_candleLegendReserves', '_fitTooltipName']) {
+  for (const marker of ['_legendSlotWidth', '_figureLegendReserves', '_candleLegendReserves', '_fitTooltipName', 'drawContained', 'trackSaveDepth']) {
     expect(source).toContain(marker)
   }
 })

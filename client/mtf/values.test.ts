@@ -5,14 +5,15 @@ import { installWindow } from '../plugins/testing'
 // "hide signals outside the graph" filter -- the path the pane actually renders, driven here
 // end to end rather than through its pieces.
 installWindow()
-const { computeValues } = await import('./templates')
+const { calc, computeValues } = await import('./templates')
+import type { ExtendData, Value } from './templates'
 const { MTF_DEFAULTS } = await import('./config')
 const { GRID_ARRAY, RegistryStore } = await import('../tsregistry/store')
 const { storeFor } = await import('../plugins/store')
 const { FX_SCHEDULE } = await import('../replay/timeframes')
 
 import type { ArevPoint } from '../arev/api'
-import type { KLineData } from 'klinecharts'
+import type { Indicator, KLineData } from 'klinecharts'
 import type { MtfConfig } from './config'
 
 const H = 3_600_000
@@ -97,6 +98,29 @@ describe('one calc, from the stores to the markers', () => {
     // The 4h root and the 1h signal above it; the 1h signal at 1.09 is not beyond the root.
     const dots = values.flatMap((v, i) => (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}`))
     expect(dots).toEqual(['4h@bar4 root', '1h@bar6'])
+  })
+
+  test('a tick that only moves the forming bar reuses the last result; anything else recomputes', () => {
+    seed()
+    const data = chartBars(12)
+    // Only `extendData` is read, and the object's identity is what the reuse is keyed on.
+    const indicator = { extendData: extend(config(() => {})) } as unknown as Indicator<Value, number, ExtendData>
+    const first = calc(data, indicator)
+    // The forming bar's prices change in place, as klinecharts applies a tick: same result.
+    data[11] = { ...data[11], high: 1.2, close: 1.2 }
+    expect(calc(data, indicator)).toBe(first)
+    expect(first).toEqual(computeValues(data, extend(config(() => {}))))
+    // A new bar: klinecharts appends to the same array.
+    data.push({ timestamp: 12 * H, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 1 } as KLineData)
+    const appended = calc(data, indicator)
+    expect(appended).not.toBe(first)
+    expect(appended.length).toBe(13)
+    // A store update reaches the template as a new extendData with the host's new rev.
+    indicator.extendData = { ...extend(config(() => {})), rev: 2 }
+    const restored = calc(data, indicator)
+    expect(restored).not.toBe(appended)
+    // A reload or a page of history: klinecharts replaces the array.
+    expect(calc([...data], indicator)).not.toBe(restored)
   })
 
   test('with "hide signals outside the graph" on, only the graph\'s own markers are left', () => {

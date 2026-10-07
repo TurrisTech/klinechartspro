@@ -1081,6 +1081,42 @@
 	height: 0.875rem;
 }
 
+/* Where the instant another pane is pointing at lies, when this pane's crosshair cannot mark it
+   (ChartPane's crosshairAway): at the price area's edge, vertically centred. Two short lines
+   rather than one long one, so it fits a narrow wall pane; never takes the pointer. */
+.klinecharts-pro-crosshair-away {
+	position: absolute;
+	z-index: 3;
+	display: grid;
+	gap: 0.0625rem;
+	max-width: calc(100% - 4rem);
+	margin: 0 0.375rem;
+	padding: 0.125rem 0.375rem;
+	border: 1px dashed var(--border);
+	border-radius: var(--radius-sm);
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 0.6875rem;
+	line-height: 1.25;
+	white-space: nowrap;
+	pointer-events: none;
+	transform: translateY(-50%);
+	opacity: 0.92;
+}
+
+.klinecharts-pro-crosshair-away[data-side='right'] {
+	text-align: right;
+}
+
+.klinecharts-pro-crosshair-away > span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.klinecharts-pro-crosshair-away-reason {
+	font-style: italic;
+}
+
 /* The pane's handle for rearranging the wall (ChartPane's grip, ChartPro's paneDrag): over the
    top of the right-hand axis, which draws nothing in its first few pixels. Shown while the pointer is
    over the pane -- and, where there is no hover, on the active pane, so a finger can find it. */
