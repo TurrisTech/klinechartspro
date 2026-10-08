@@ -17,7 +17,7 @@
 // fetched as a tree of its own — see `derive.ts`, which carries the two rules fold must keep.
 
 import type { KLineData } from 'klinecharts'
-import { baseIntervalsFor } from '../capabilities'
+import { advertisedBaseIntervals, baseIntervalsFor } from '../capabilities'
 import { barsForTile } from './cache'
 import { fold, foldedCoveredTo, manifestDay, manifestTz, sourceInterval, sourceWindow } from './derive'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
@@ -62,13 +62,19 @@ export async function barsFromTiles(
   vendorSymbol: string,
   resolution: string,
   from: number,
-  to: number
+  to: number,
+  advertised: (vendor: string) => string[] | null = advertisedBaseIntervals
 ): Promise<TiledBars | null> {
   const [vendor, symbol] = vendorSymbol.includes(':')
     ? vendorSymbol.split(':', 2)
     : ['oanda', vendorSymbol]
 
-  const manifest = await manifestFor(vendor, symbol, resolution)
+  // Only an interval the server lists as tiled has a tree of its own. Any other's manifest is a
+  // certain 404 -- a round trip spent before the fold can start, and a red line in the console,
+  // per series per page load (on a prod FX wall: 3m, 5m, 15m, 20m, 30m, 2h, 4h and 8h). A server
+  // that lists nothing is asked, as before.
+  const tiled = advertised(vendor)
+  const manifest = tiled === null || tiled.includes(resolution) ? await manifestFor(vendor, symbol, resolution) : null
   if (manifest !== null) {
     const span = tilesUpTo(manifest, from, to)
     if (span === null) return null
@@ -76,7 +82,7 @@ export async function barsFromTiles(
     const bars = await barsInWindow(manifest, from, Math.min(to, span.coveredTo))
     return bars === null ? null : { bars, coveredTo: span.coveredTo }
   }
-  return foldedFromTiles(vendor, symbol, resolution, from, to)
+  return foldedFromTiles(vendor, symbol, resolution, from, to, tiled ?? baseIntervalsFor(vendor))
 }
 
 /**
@@ -93,9 +99,10 @@ async function foldedFromTiles(
   symbol: string,
   resolution: string,
   from: number,
-  to: number
+  to: number,
+  bases: string[]
 ): Promise<TiledBars | null> {
-  const code = sourceInterval(resolution, baseIntervalsFor(vendor))
+  const code = sourceInterval(resolution, bases)
   if (code === null) return null
   const manifest = await manifestFor(vendor, symbol, code)
   if (manifest === null) return null
