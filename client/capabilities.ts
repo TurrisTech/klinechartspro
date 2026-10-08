@@ -142,8 +142,16 @@ export interface Capabilities {
  * The fallback is oanda's shape, which is what every vendor was assumed to be before the
  * server advertised anything, so an older server behaves exactly as it did. */
 export function baseIntervalsFor(vendor: string): string[] {
+  return advertisedBaseIntervals(vendor) ?? ['5s', '1m', '1h', '1D', '1M']
+}
+
+/** The tiled intervals for one vendor exactly as the server states them, or null where it
+ * states none (a server older than `baseIntervals`, or discovery failed). No fallback, unlike
+ * `baseIntervalsFor`: this answers "can this interval have tiles of its own?", and only the
+ * server may answer no -- a guessed list would skip a tree that exists. */
+export function advertisedBaseIntervals(vendor: string): string[] | null {
   const advertised = capabilities().baseIntervals?.[vendor]
-  return advertised && advertised.length > 0 ? advertised : ['5s', '1m', '1h', '1D', '1M']
+  return advertised && advertised.length > 0 ? advertised : null
 }
 
 // Used when /capabilities is unreachable. Deliberately the conservative reading of the
