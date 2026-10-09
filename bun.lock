@@ -22,12 +22,12 @@
         "vitepress": "^1.6.0",
       },
       "peerDependencies": {
-        "klinecharts": "^10.0.0",
+        "klinecharts": "^10.0.3",
       },
     },
   },
   "patchedDependencies": {
-    "klinecharts@10.0.0": "patches/klinecharts@10.0.0.patch",
+    "klinecharts@10.0.3": "patches/klinecharts@10.0.3.patch",
   },
   "packages": {
     "@algolia/abtesting": ["@algolia/abtesting@1.22.0", "", { "dependencies": { "@algolia/client-common": "5.56.0", "@algolia/requester-browser-xhr": "5.56.0", "@algolia/requester-fetch": "5.56.0", "@algolia/requester-node-http": "5.56.0" } }, "sha512-BFR6zNowNKcY7Ou7TaJc9QWexES4YKPbmf/OTFofpdsdhz4x6q0lbxp3duO0EHnyrN7rE4ba/TSXuY+BDGu4+g=="],
@@ -446,7 +446,7 @@
 
     "jsonfile": ["jsonfile@6.2.1", "", { "dependencies": { "universalify": "^2.0.0" }, "optionalDependencies": { "graceful-fs": "^4.1.6" } }, "sha512-zwOTdL3rFQ/lRdBnntKVOX6k5cKJwEc1HdilT71BWEu7J41gXIB2MRp+vxduPSwZJPWBxEzv4yH1wYLJGUHX4Q=="],
 
-    "klinecharts": ["klinecharts@10.0.0", "", {}, "sha512-njopc5Wwff83l9R750Yrj+EcmQUe7JUwN4xgmmwhUPX30jd7ZLabBQT5s2+yTaAk98MMqglCE6vqrSnek/ppbg=="],
+    "klinecharts": ["klinecharts@10.0.3", "", {}, "sha512-phvf5CyS7oGE46nuC+nxQxl9D+8+5w8q3reExh0oNeMV1Jws4X0CMHNkOI9xlNA/XWctNS5whZ3PqIJi8YM2Tw=="],
 
     "less": ["less@4.1.3", "", { "dependencies": { "copy-anything": "^2.0.1", "parse-node-version": "^1.0.1", "tslib": "^2.3.0" }, "optionalDependencies": { "errno": "^0.1.1", "graceful-fs": "^4.1.2", "image-size": "~0.5.0", "make-dir": "^2.1.0", "mime": "^1.4.1", "needle": "^3.1.0", "source-map": "~0.6.0" }, "bin": { "lessc": "bin/lessc" } }, "sha512-w16Xk/Ta9Hhyei0Gpz9m7VS8F28nieJaL/VyShID7cYvP6IL5oHeL6p4TXSDJqZE/lNv0oJ2pGVjJsRkfwm5FA=="],
 
