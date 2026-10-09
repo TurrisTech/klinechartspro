@@ -1,11 +1,12 @@
 import { afterAll, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 
-// patches/klinecharts@10.0.0.patch, "contained drawing": one throw while a chart draws -- an
+// patches/klinecharts@10.0.3.patch, "contained drawing": one throw while a chart draws -- an
 // indicator's draw, an overlay's figures, a legend row -- must cost that one thing that frame and
-// nothing else. Before the patch klinecharts re-armed a canvas's repaint only after its listener
-// returned, so a single throw left that canvas unpainted for the life of the chart: on the prod
-// wall, candles frozen under a live price axis.
+// nothing else. klinecharts 10.0.0 re-armed a canvas's repaint only after its listener returned,
+// so a single throw left that canvas unpainted for the life of the chart: on the prod wall, candles
+// frozen under a live price axis. 10.0.1 re-arms first, but unpatched a throw still blanks the
+// whole canvas on every frame it throws, says nothing, and leaves its ctx.save open.
 //
 // A real chart, drawn by klinecharts itself: happy-dom supplies the DOM, and every canvas gets a
 // 2D context that records what is drawn instead of drawing it.

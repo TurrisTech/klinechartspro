@@ -353,7 +353,7 @@
   // The candle legend, compact: panes on a wall are narrow, and klinecharts' 'Time: ' /
   // 'Open: ' / ... labels cost them a row. A date needs no label, and O/H/L/C/V is the
   // convention every trading platform uses. Each item keeps a fixed-width slot while the
-  // crosshair moves (patches/klinecharts@10.0.0.patch), so the row breaks in the same place
+  // crosshair moves (patches/klinecharts@10.0.3.patch), so the row breaks in the same place
   // on every bar -- and the indicator rows and their buttons below it stay put.
   function applyCandleLegend() {
     widget?.setStyles({

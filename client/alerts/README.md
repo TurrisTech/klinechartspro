@@ -31,7 +31,7 @@ An **operand** is a value per bar of its timeframe, on the alert's instrument:
 | kind | what | from |
 |---|---|---|
 | `bar` | open / high / low / close / volume | `/getbars` |
-| `indicator` | a klinecharts built-in — MA, EMA, RSI, MACD, BOLL, KDJ… (24 of them) — with its params and the line (`rsi1`, `dif`) | computed **in the browser** from the bars by the chart's own template (`getIndicatorClass`, which `patches/klinecharts@10.0.0.patch` exports for this) |
+| `indicator` | a klinecharts built-in — MA, EMA, RSI, MACD, BOLL, KDJ… (24 of them) — with its params and the line (`rsi1`, `dif`) | computed **in the browser** from the bars by the chart's own template (`getIndicatorClass`, which `patches/klinecharts@10.0.3.patch` exports for this) |
 | `series` | a stored registry row's series — AREV19…23 `p`, arev21_outlier, krev01 | `/plugins/{id}/values` |
 | `signal` | a plugin's published label on a bar — `long`, `top` — or '' for none | `/plugins/{id}/values`' `signal` field |
 | `graph` | a multi-timeframe overlay's **graph entry** on a 3m/5m bar -- the star the overlay draws, `top`/`bottom`, or '' | the overlay's own fetch and graph code, headless (`graphentry.ts`) |

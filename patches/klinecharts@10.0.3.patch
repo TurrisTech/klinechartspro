@@ -1,11 +1,8 @@
-diff --git a/node_modules/klinecharts/.bun-tag-46d2475c3da72f5b b/.bun-tag-46d2475c3da72f5b
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/index.d.ts b/dist/index.d.ts
-index d3fd656bd65efdafebecf1760877d4b5b96a82b6..7d773d25a7f27a0cb8ff96504a27a911e773436e 100644
+index eecffb9086e602ea8b523e8f8f28bbc94067b43e..28154eb227a12091265023bb8869b5b785395096 100644
 --- a/dist/index.d.ts
 +++ b/dist/index.d.ts
-@@ -142,6 +142,12 @@ export type TooltipLegendStyle = TooltipTextStyle & {
+@@ -334,6 +334,12 @@ export type TooltipLegendStyle = TooltipTextStyle & {
  export interface TooltipLegendChild {
  	text: string;
  	color: string;
@@ -18,8 +15,8 @@ index d3fd656bd65efdafebecf1760877d4b5b96a82b6..7d773d25a7f27a0cb8ff96504a27a911
  }
  export interface TooltipLegend {
  	title: string | TooltipLegendChild;
-@@ -1201,6 +1207,11 @@ export declare function registerFigure<A = unknown, S = unknown>(figure: FigureT
- export declare function getFigureClass<A = unknown, S = unknown>(name: string): Nullable<FigureConstructor<A, S>>;
+@@ -1231,6 +1237,11 @@ export declare function registerLocale(locale: string, ls: Locales): void;
+ export declare function getSupportedLocales(): string[];
  export declare function registerIndicator<D = unknown, C = unknown, E = unknown>(indicator: IndicatorTemplate<D, C, E>): void;
  export declare function getSupportedIndicators(): string[];
 +/**
@@ -27,24 +24,25 @@ index d3fd656bd65efdafebecf1760877d4b5b96a82b6..7d773d25a7f27a0cb8ff96504a27a911
 + * built-in indicator can be computed over bars that are on no chart (client/alerts).
 + */
 +export declare function getIndicatorClass(name: string): Nullable<new () => Indicator>;
- export declare function registerLocale(locale: string, ls: Locales): void;
- export declare function getSupportedLocales(): string[];
  export declare function registerOverlay<E = unknown>(template: OverlayTemplate<E>): void;
+ export declare function getOverlayClass(name: string): Nullable<OverlayConstructor>;
+ export declare function getSupportedOverlays(): string[];
 diff --git a/dist/index.esm.js b/dist/index.esm.js
-index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311eddd95f9 100644
+index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8ba6465424 100644
 --- a/dist/index.esm.js
 +++ b/dist/index.esm.js
-@@ -487,6 +487,71 @@ function createDefaultBounding(bounding) {
+@@ -234,6 +234,72 @@ function isString(value) {
   * limitations under the License.
   */
  var DEFAULT_REQUEST_ID = -1;
-+// PATCH: contained drawing. klinecharts runs no drawing code under a guard, and a canvas re-arms
-+// its repaint only once its listener RETURNS (Canvas._executeListener), so one throw -- from an
-+// app indicator's draw, an overlay's figures, a legend row -- left that canvas unpainted for the
-+// life of the chart: candles frozen under a live price axis, or a crosshair that stopped following
-+// the pointer. The repaint is now re-armed whatever happens, and every view, indicator, overlay and
-+// legend row draws through drawContained, which confines a throw to the one thing that threw
-+// (skipped for that frame, retried on the next), closes whatever ctx.save it left open, and
++// PATCH: contained drawing. klinecharts runs no drawing code under a guard. Up to 10.0.0 a canvas
++// re-armed its repaint only once its listener RETURNED, so one throw -- from an app indicator's
++// draw, an overlay's figures, a legend row -- left that canvas unpainted for the life of the chart:
++// candles frozen under a live price axis, or a crosshair that stopped following the pointer.
++// 10.0.1's Canvas._scheduleDraw re-arms before it draws, but a throw still costs the whole canvas
++// that frame, reports nothing, and leaves any ctx.save it opened open. So every view, indicator,
++// overlay and legend row draws through drawContained, which confines a throw to the one thing that
++// threw (skipped for that frame, retried on the next), closes whatever ctx.save it left open, and
 +// reports it once per distinct message rather than once per frame.
 +var reportedChartErrors = new Set();
 +function reportChartError(where, error) {
@@ -106,45 +104,17 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
  function requestAnimationFrame(fn) {
      if (isFunction(window.requestAnimationFrame)) {
          return window.requestAnimationFrame(fn);
-@@ -1598,7 +1663,8 @@ var IndicatorImp = /** @class */ (function () {
+@@ -3248,7 +3314,8 @@ var IndicatorImp = /** @class */ (function () {
                          this.result = result;
                          return [2 /*return*/, true];
                      case 2:
--                        _a.sent();
+-                        _b.sent();
 +                        // PATCH: reported, not swallowed -- the previous result is kept as before.
-+                        reportChartError("indicator ".concat(this.name, " calc"), _a.sent());
++                        reportChartError("indicator ".concat(this.name, " calc"), _b.sent());
                          return [2 /*return*/, false];
                      case 3: return [2 /*return*/];
                  }
-@@ -6692,6 +6758,7 @@ var Canvas = /** @class */ (function () {
-         this._listener = listener;
-         this._element = createDom('canvas', style);
-         this._ctx = this._element.getContext('2d');
-+        trackSaveDepth(this._ctx);
-         isSupportedDevicePixelContentBox().then(function (result) {
-             _this._supportedDevicePixelContentBox = result;
-             if (result) {
-@@ -6735,10 +6802,15 @@ var Canvas = /** @class */ (function () {
-         var _this = this;
-         if (this._requestAnimationId === DEFAULT_REQUEST_ID) {
-             this._requestAnimationId = requestAnimationFrame(function () {
--                _this._ctx.clearRect(0, 0, _this._width, _this._height);
--                fn === null || fn === void 0 ? void 0 : fn();
--                _this._listener();
--                _this._requestAnimationId = DEFAULT_REQUEST_ID;
-+                // PATCH: re-armed in `finally` -- see drawContained.
-+                try {
-+                    _this._ctx.clearRect(0, 0, _this._width, _this._height);
-+                    fn === null || fn === void 0 ? void 0 : fn();
-+                    drawContained(_this._ctx, 'a chart canvas', function () { _this._listener(); });
-+                }
-+                finally {
-+                    _this._requestAnimationId = DEFAULT_REQUEST_ID;
-+                }
-             });
-         }
-     };
-@@ -7715,8 +7787,10 @@ var View = /** @class */ (function (_super) {
+@@ -6309,8 +6376,10 @@ var View = /** @class */ (function (_super) {
          return null;
      };
      View.prototype.draw = function (ctx) {
@@ -156,24 +126,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
      };
      View.prototype.checkEventOn = function (_) {
          return true;
-@@ -8123,6 +8197,8 @@ var IndicatorView = /** @class */ (function (_super) {
-         var defaultStyles = chartStore.getStyles().indicator;
-         ctx.save();
-         indicators.forEach(function (indicator) {
-+            // PATCH: contained -- one indicator's throw skips that indicator, not the pane.
-+            drawContained(ctx, function () { return "indicator ".concat(indicator.name, " on ").concat(pane.getId()); }, function () {
-             var yAxis = pane.getYAxisComponentById(indicator.yAxisId);
-             if (indicator.visible) {
-                 if (indicator.zLevel < 0) {
-@@ -8297,6 +8373,7 @@ var IndicatorView = /** @class */ (function (_super) {
-                     });
-                 }
-             }
-+            });
-         });
-         ctx.restore();
-     };
-@@ -8372,10 +8449,68 @@ var CrosshairLineView = /** @class */ (function (_super) {
+@@ -7021,10 +7090,68 @@ function i18n(key, locale) {
   * See the License for the specific language governing permissions and
   * limitations under the License.
   */
@@ -242,7 +195,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
          _this._activeFeatureInfo = null;
          _this._featureClickEvent = function (type, featureInfo) { return function () {
              var pane = _this.getWidget().getPane();
-@@ -8414,6 +8549,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7063,6 +7190,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
              var tooltipTitleStyles_1 = tooltipStyles.title;
              var tooltipLegendStyles_1 = tooltipStyles.legend;
              indicators.forEach(function (indicator) {
@@ -251,7 +204,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
                  var prevRowHeight = 0;
                  var coordinate = { x: left, y: top };
                  var _a = _this.getIndicatorTooltipData(indicator), name = _a.name, calcParamsText = _a.calcParamsText, legends = _a.legends, featuresStyles = _a.features;
-@@ -8427,6 +8564,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7076,6 +7205,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                          if (calcParamsText.length > 0) {
                              text = "".concat(text).concat(calcParamsText);
                          }
@@ -260,7 +213,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
                          var color = tooltipTitleStyles_1.color;
                          prevRowHeight = _this.drawStandardTooltipLegends(ctx, [
                              {
-@@ -8437,12 +8576,16 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7086,12 +7217,16 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                      }
                      prevRowHeight = _this.drawStandardTooltipFeatures(ctx, features[1], coordinate, indicator, left, prevRowHeight, maxWidth);
                      if (legendValid) {
@@ -278,7 +231,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
              });
          }
          return top;
-@@ -8551,18 +8694,23 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7196,18 +7331,23 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
          }
          return prevRowHeight;
      };
@@ -305,7 +258,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
                  var h = marginTop_1 + size_1 + marginBottom_1;
                  if (coordinate.x + marginLeft_1 + totalTextWidth + marginRight_1 > maxWidth) {
                      coordinate.x = left;
-@@ -8589,6 +8737,93 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7234,6 +7374,93 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
          }
          return prevRowHeight;
      };
@@ -398,17 +351,17 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
 +    };
      IndicatorTooltipView.prototype.isDrawTooltip = function (crosshair, styles) {
          var showRule = styles.showRule;
-         return showRule === 'always' ||
-@@ -8624,6 +8859,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+         return showRule === 'always' || (showRule === 'follow_cross' && isString(crosshair.paneId));
+@@ -7268,6 +7495,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
              var barSpace = chartStore.getBarSpace();
              var data_1 = (_a = result[dataIndex]) !== null && _a !== void 0 ? _a : {};
              var defaultValue_1 = tooltipStyles.legend.defaultValue;
 +            // PATCH: see createLegendValueStats
 +            var reserves_1 = this._figureLegendReserves(indicator, defaultValue_1, formatter, decimalFold, thousandsSeparator);
+             // @ts-ignore
              eachFigures(indicator, dataIndex, barSpace, styles, function (figure, figureStyles) {
                  if (isString(figure.title)) {
-                     var color = figureStyles.color;
-@@ -8636,7 +8873,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7280,7 +7509,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                          }
                          value = decimalFold.format(thousandsSeparator.format(value));
                      }
@@ -417,31 +370,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
                  }
              });
              tooltipData.legends = legends;
-@@ -9149,14 +9386,21 @@ var OverlayView = /** @class */ (function (_super) {
-     OverlayView.prototype.drawImp = function (ctx) {
-         var _this = this;
-         var overlays = this.getCompleteOverlays();
-+        var pane = this.getWidget().getPane();
-+        // PATCH: contained -- one overlay's throw skips that overlay, not the crosshair after it.
-+        var drawOne = function (overlay) {
-+            drawContained(ctx, function () { return "overlay ".concat(overlay.name, " ").concat(overlay.id, " on ").concat(pane.getId()); }, function () {
-+                _this._drawOverlay(ctx, overlay);
-+            });
-+        };
-         overlays.forEach(function (overlay) {
-             if (overlay.visible) {
--                _this._drawOverlay(ctx, overlay);
-+                drawOne(overlay);
-             }
-         });
-         var progressOverlay = this.getProgressOverlay();
-         if (isValid(progressOverlay) && progressOverlay.visible) {
--            this._drawOverlay(ctx, progressOverlay);
-+            drawOne(progressOverlay);
-         }
-     };
-     OverlayView.prototype._drawOverlay = function (ctx, overlay) {
-@@ -9859,7 +10103,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
+@@ -7443,7 +7672,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
              prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[0], coordinate, null, left, prevRowHeight, maxWidth);
              prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[1], coordinate, null, left, prevRowHeight, maxWidth);
              if (legends.length > 0) {
@@ -451,18 +380,18 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
              }
              prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[2], coordinate, null, left, prevRowHeight, maxWidth);
          }
-@@ -10081,6 +10326,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
+@@ -7664,6 +7894,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
          var prevClose = (_d = prev === null || prev === void 0 ? void 0 : prev.close) !== null && _d !== void 0 ? _d : current.close;
          var changeValue = current.close - prevClose;
-         var mapping = __assign(__assign({}, current), { time: formatter.formatDate(current.timestamp, PeriodTypeCrosshairTooltipFormat[(_e = period === null || period === void 0 ? void 0 : period.type) !== null && _e !== void 0 ? _e : 'day'], 'tooltip'), open: decimalFold.format(thousandsSeparator.format(formatPrecision(current.open, pricePrecision))), high: decimalFold.format(thousandsSeparator.format(formatPrecision(current.high, pricePrecision))), low: decimalFold.format(thousandsSeparator.format(formatPrecision(current.low, pricePrecision))), close: decimalFold.format(thousandsSeparator.format(formatPrecision(current.close, pricePrecision))), volume: decimalFold.format(thousandsSeparator.format(formatter.formatBigNumber(formatPrecision((_f = current.volume) !== null && _f !== void 0 ? _f : defaultValue, volumePrecision)))), turnover: decimalFold.format(thousandsSeparator.format(formatPrecision((_g = current.turnover) !== null && _g !== void 0 ? _g : defaultValue, pricePrecision))), change: prevClose === 0 ? defaultValue : "".concat(thousandsSeparator.format(formatPrecision(changeValue / prevClose * 100)), "%") });
+         var mapping = __assign(__assign({}, current), { time: formatter.formatDate(current.timestamp, PeriodTypeCrosshairTooltipFormat[(_e = period === null || period === void 0 ? void 0 : period.type) !== null && _e !== void 0 ? _e : 'day'], 'tooltip'), open: decimalFold.format(thousandsSeparator.format(formatPrecision(current.open, pricePrecision))), high: decimalFold.format(thousandsSeparator.format(formatPrecision(current.high, pricePrecision))), low: decimalFold.format(thousandsSeparator.format(formatPrecision(current.low, pricePrecision))), close: decimalFold.format(thousandsSeparator.format(formatPrecision(current.close, pricePrecision))), volume: decimalFold.format(thousandsSeparator.format(formatter.formatBigNumber(formatPrecision((_f = current.volume) !== null && _f !== void 0 ? _f : defaultValue, volumePrecision)))), turnover: decimalFold.format(thousandsSeparator.format(formatPrecision((_g = current.turnover) !== null && _g !== void 0 ? _g : defaultValue, pricePrecision))), change: prevClose === 0 ? defaultValue : "".concat(thousandsSeparator.format(formatPrecision((changeValue / prevClose) * 100)), "%") });
 +        // PATCH: see createLegendValueStats. Other keys (a raw bar field) reserve their current text.
 +        var reserveMapping = __assign(__assign({}, mapping), this._candleLegendReserves(dataList, formatter, decimalFold, thousandsSeparator, pricePrecision, volumePrecision, defaultValue, PeriodTypeCrosshairTooltipFormat[(_e = period === null || period === void 0 ? void 0 : period.type) !== null && _e !== void 0 ? _e : 'day']));
-         var legends = (isFunction(template)
-             ? template({ prev: prev, current: current, next: (_h = dataList[dataIndex + 1]) !== null && _h !== void 0 ? _h : null }, styles)
-             : template);
-@@ -10104,10 +10351,62 @@ var CandleTooltipView = /** @class */ (function (_super) {
+         // @ts-ignore
+         var legends = isFunction(template) ? template({ prev: prev, current: current, next: (_h = dataList[dataIndex + 1]) !== null && _h !== void 0 ? _h : null }, styles) : template;
+         return legends.map(function (_a) {
+@@ -7686,10 +7918,62 @@ var CandleTooltipView = /** @class */ (function (_super) {
              if (isValid(/{change}/.exec(v.text))) {
-                 v.color = changeValue === 0 ? styles.priceMark.last.noChangeColor : (changeValue > 0 ? styles.priceMark.last.upColor : styles.priceMark.last.downColor);
+                 v.color = changeValue === 0 ? styles.priceMark.last.noChangeColor : changeValue > 0 ? styles.priceMark.last.upColor : styles.priceMark.last.downColor;
              }
 +            // PATCH: a template's own `reserve` wins; otherwise its placeholders against the widest
 +            if (!isString(v.reserve)) {
@@ -523,13 +452,73 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
      return CandleTooltipView;
  }(IndicatorTooltipView));
  
-@@ -14524,10 +14823,18 @@ var ChartImp = /** @class */ (function () {
-         if (!this._layoutPending) {
+@@ -8038,6 +8322,8 @@ var IndicatorView = /** @class */ (function (_super) {
+         var defaultStyles = chartStore.getStyles().indicator;
+         ctx.save();
+         indicators.forEach(function (indicator) {
++            // PATCH: contained -- one indicator's throw skips that indicator, not the pane.
++            drawContained(ctx, function () { return "indicator ".concat(indicator.name, " on ").concat(pane.getId()); }, function () {
+             var yAxis = pane.getYAxisComponentById(indicator.yAxisId);
+             if (indicator.visible) {
+                 if (indicator.zLevel < 0) {
+@@ -8201,6 +8487,7 @@ var IndicatorView = /** @class */ (function (_super) {
+                     });
+                 }
+             }
++            });
+         });
+         ctx.restore();
+     };
+@@ -8892,14 +9179,21 @@ var OverlayView = /** @class */ (function (_super) {
+     OverlayView.prototype.drawImp = function (ctx) {
+         var _this = this;
+         var overlays = this.getCompleteOverlays();
++        var pane = this.getWidget().getPane();
++        // PATCH: contained -- one overlay's throw skips that overlay, not the crosshair after it.
++        var drawOne = function (overlay) {
++            drawContained(ctx, function () { return "overlay ".concat(overlay.name, " ").concat(overlay.id, " on ").concat(pane.getId()); }, function () {
++                _this._drawOverlay(ctx, overlay);
++            });
++        };
+         overlays.forEach(function (overlay) {
+             if (overlay.visible) {
+-                _this._drawOverlay(ctx, overlay);
++                drawOne(overlay);
+             }
+         });
+         var progressOverlay = this.getProgressOverlay();
+         if (isValid(progressOverlay) && progressOverlay.visible) {
+-            this._drawOverlay(ctx, progressOverlay);
++            drawOne(progressOverlay);
+         }
+     };
+     OverlayView.prototype._drawOverlay = function (ctx, overlay) {
+@@ -9085,6 +9379,7 @@ var Canvas = /** @class */ (function () {
+         this._listener = listener;
+         this._element = createDom('canvas', style);
+         this._ctx = this._element.getContext('2d');
++        trackSaveDepth(this._ctx);
+         isSupportedDevicePixelContentBox()
+             .then(function (result) {
+             if (_this._destroyed) {
+@@ -9148,7 +9443,8 @@ var Canvas = /** @class */ (function () {
+                     _this._ctx.scale(_this._pixelWidth / _this._width, _this._pixelHeight / _this._height);
+                 }
+                 try {
+-                    _this._listener();
++                    // PATCH: contained -- see drawContained. (10.0.1+ re-arms the frame first.)
++                    drawContained(_this._ctx, 'a chart canvas', function () { _this._listener(); });
+                 }
+                 finally {
+                     _this._ctx.restore();
+@@ -14753,11 +15049,18 @@ var ChartImp = /** @class */ (function () {
              this._layoutPending = true;
-             Promise.resolve().then(function (_) {
+             Promise.resolve()
+                 .then(function (_) {
 -                _this._layout();
 -                _this._layoutPending = false;
--            }).catch(function (_) {
+-            })
+-                .catch(function (_) {
 -                // todo
 +                // PATCH: `_layoutPending` is cleared whatever `_layout` does. Cleared only after a
 +                // clean return, one throw left it set and every later layout() a no-op: the chart
@@ -546,7 +535,7 @@ index 7b7d9f2157b5010f138f77a72f652955270c4d34..47b5065e33afdaed9fd79a6b72e02311
              });
          }
      };
-@@ -15680,4 +15987,7 @@ var utils = {
+@@ -15933,4 +16236,7 @@ var utils = {
      checkCoordinateOnText: checkCoordinateOnText
  };
  
