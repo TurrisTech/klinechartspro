@@ -123,8 +123,9 @@ export function clearCrosshair(chart: Chart): void {
 // crosshair and says so at the edge it lies beyond, and one that holds it off screen keeps its
 // crosshair (the legend is then right) and says which way it is. An instant after a live pane's
 // newest bar and beyond its right edge is neither: no scroll brings it into view, because the
-// bar does not exist yet -- which on an intraday pane is where a 1D bar's session-dated label
-// lands for the first hours of every session.
+// bar does not exist yet -- the blank room right of the source's forming bar. (A 1D bar's
+// session-dated label used to land there too, for the first hours of every session; the bus now
+// hands an intraday pane that bar's open instead -- src/sync/clock.ts.)
 export type CrosshairReason = 'not-loaded' | 'off-screen' | 'after-latest'
 
 export type CrosshairReach = { kind: 'shown' } | { kind: 'away'; side: 'left' | 'right'; reason: CrosshairReason }

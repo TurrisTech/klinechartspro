@@ -78,7 +78,8 @@ const SPAN_START_FRACTION = 0.2
 //   higher-timeframe candle on the target, which has no larger structure to align to -- centre
 //   it.
 // - Higher timeframe -> lower: the clicked candle (on the source) spans many bars on the
-//   target. `point.timestamp` is that candle's own open -- crosshairPoint/convertFromPixel
+//   target. `point.timestamp` is that candle's own label, which restated on the target's clock
+//   is its open -- crosshairPoint/convertFromPixel
 //   resolve to the exact stored bar timestamp, never an interpolated one, whenever the click
 //   landed inside the source's loaded data -- and its close is the SOURCE's own next loaded
 //   bar, not a nominal one-period step, which would be wrong across a real market-closed gap
@@ -87,26 +88,33 @@ const SPAN_START_FRACTION = 0.2
 //   so both ends are visible -- but the crosshair still marks `start`, the instant actually
 //   clicked, not the span's midpoint. When it doesn't fit, there's no span left to centre, so
 //   view and crosshair agree: anchor `start` near the left edge.
+//
+// `point` is on the SOURCE's bar axis, which is where its own next bar is looked up; `toTarget`
+// restates a source timestamp on the target's (src/sync/clock.ts), and everything returned is
+// on the target's. A clicked FX daily candle therefore spans 17:00 to 17:00 on an hourly
+// target -- its open to the next one's -- not the session dates' midnights seven hours later.
 export function resolveSeekTarget(
   targetChart: Chart,
   sourceChart: Chart,
   point: CrosshairPoint,
   sourcePeriodMs: number,
   targetPeriodMs: number,
-  clickFraction: number
+  clickFraction: number,
+  toTarget: (sourceTimestamp: number) => number
 ): SeekTarget {
+  const at = toTarget(point.timestamp)
   if (targetPeriodMs === sourcePeriodMs) {
-    return { timestamp: point.timestamp, fraction: clickFraction, crosshairTimestamp: point.timestamp }
+    return { timestamp: at, fraction: clickFraction, crosshairTimestamp: at }
   }
   if (targetPeriodMs > sourcePeriodMs) {
-    return { timestamp: point.timestamp, fraction: CENTER_FRACTION, crosshairTimestamp: point.timestamp }
+    return { timestamp: at, fraction: CENTER_FRACTION, crosshairTimestamp: at }
   }
 
-  const start = point.timestamp
   const sourceData = sourceChart.getDataList()
-  const sourceIndex = sourceData.findIndex((bar) => bar.timestamp === start)
+  const sourceIndex = sourceData.findIndex((bar) => bar.timestamp === point.timestamp)
   const nextBar = sourceIndex >= 0 ? sourceData[sourceIndex + 1] : undefined
-  const end = nextBar?.timestamp ?? start + sourcePeriodMs
+  const start = at
+  const end = toTarget(nextBar?.timestamp ?? point.timestamp + sourcePeriodMs)
 
   const main = targetChart.getSize('candle_pane', 'main')
   const startPixel = targetChart.convertToPixel(

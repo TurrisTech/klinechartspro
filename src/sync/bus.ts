@@ -15,6 +15,7 @@
 import type { Chart, Nullable } from 'klinecharts'
 
 import type { SymbolInfo } from '../types'
+import { type PaneClock, translateTimestamp } from './clock'
 import type { CrosshairPoint } from './crosshair'
 import {
   isTimestampVisible,
@@ -30,6 +31,12 @@ export interface SyncPane {
   // higher, or the reverse) against the SOURCE pane's own period -- see resolveSeekTarget
   // (src/sync/seek.ts).
   getPeriodMs(): number
+  // What a timestamp on this pane's bar axis means (src/sync/clock.ts). Every instant the bus
+  // carries between panes -- a crosshair, a click, a pan's midpoint -- is read on the source's
+  // clock and restated on each target's before the target sees it, so a daily bar's session
+  // date reaches an intraday pane as the instant the candle opened. Everything a pane is handed
+  // through this interface is therefore already on its OWN axis.
+  getClock(): PaneClock
   // Reloads this pane's data anchored on `timestamp` instead of "now" -- see
   // ChartPane.svelte's seekTo. What seekPane calls when the target is outside this pane's
   // own loaded history, replacing the old scroll-and-page walk (see git history on this
@@ -70,6 +77,9 @@ export interface Measurement {
   sourceId: string
   symbol: SymbolInfo | undefined
   points: [MeasurePoint, MeasurePoint]
+  // The clock `points` are on: the source pane's. A copy on another timeframe restates them on
+  // its own (translateTimestamp), so a box measured on 1D starts on 1h at the candle's open.
+  clock: PaneClock
 }
 
 export interface SyncOptions {
@@ -108,7 +118,7 @@ export class SyncBus {
   private options: SyncOptions = { crosshair: true, time: true, auto: false }
 
   private crosshairRaf = 0
-  private pendingCrosshair: { sourceId: string; point: CrosshairPoint } | null = null
+  private pendingCrosshair: { sourceId: string; point: CrosshairPoint; clock: PaneClock | null } | null = null
   // Guards against re-entrant dispatch: a target's showCrosshair (applyCrosshairAt /
   // clearCrosshair) never re-fires that target's own onCrosshairChange subscribers
   // (klinecharts dispatches with notExecuteAction: true).
@@ -117,7 +127,7 @@ export class SyncBus {
   private seekRaf = 0
 
   private panRaf = 0
-  private pendingPan: { sourceId: string; timestamp: number } | null = null
+  private pendingPan: { sourceId: string; timestamp: number; clock: PaneClock | null } | null = null
   // Re-entrancy only. Unlike the crosshair action, klinecharts has no notExecuteAction escape
   // for onVisibleRangeChange: the scroll this bus applies to a target pane dispatches that
   // pane's OWN range-change subscriber synchronously, from inside the loop below.
@@ -165,7 +175,8 @@ export class SyncBus {
 
   broadcastCrosshair(sourceId: string, point: CrosshairPoint): void {
     if (!this.options.crosshair) return
-    this.pendingCrosshair = { sourceId, point }
+    // The source's clock as of the hover, not the flush: the point was read on that axis.
+    this.pendingCrosshair = { sourceId, point, clock: this.clockOf(sourceId) }
     if (this.crosshairRaf !== 0) return
     this.crosshairRaf = requestAnimationFrame(() => {
       this.crosshairRaf = 0
@@ -181,23 +192,23 @@ export class SyncBus {
       this.crosshairRaf = 0
     }
     this.pendingCrosshair = null
-    this.dispatchCrosshair(sourceId, null)
+    this.dispatchCrosshair(sourceId, null, null)
   }
 
   private flushCrosshair(): void {
     const pending = this.pendingCrosshair
     this.pendingCrosshair = null
     if (!pending) return
-    this.dispatchCrosshair(pending.sourceId, pending.point)
+    this.dispatchCrosshair(pending.sourceId, pending.point, pending.clock)
   }
 
-  private dispatchCrosshair(sourceId: string, point: CrosshairPoint | null): void {
+  private dispatchCrosshair(sourceId: string, point: CrosshairPoint | null, clock: PaneClock | null): void {
     if (this.dispatchingCrosshair) return
     this.dispatchingCrosshair = true
     try {
       for (const [id, pane] of this.panes) {
         if (id === sourceId) continue
-        pane.showCrosshair(point)
+        pane.showCrosshair(point && restatePoint(point, clock, pane))
       }
     } finally {
       this.dispatchingCrosshair = false
@@ -237,6 +248,9 @@ export class SyncBus {
       return
     }
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
+    // Taken now, while the source is certainly registered: even the degraded path below, for a
+    // source torn down before the frame, must restate the click on each target's clock.
+    const sourceClock = this.clockOf(sourceId)
     this.seekRaf = requestAnimationFrame(() => {
       this.seekRaf = 0
       // Looked up once per dispatch, not per target: every target in this broadcast is
@@ -251,7 +265,7 @@ export class SyncBus {
         if (id === sourceId) continue
         const chart = pane.getChart()
         if (!chart) continue
-        this.seekPane(chart, pane, point, fraction, sourceChart, sourcePeriodMs)
+        this.seekPane(chart, pane, point, fraction, sourceChart, sourcePeriodMs, sourceClock)
       }
     })
   }
@@ -262,7 +276,8 @@ export class SyncBus {
     point: CrosshairPoint,
     fraction: number,
     sourceChart: Nullable<Chart>,
-    sourcePeriodMs: number | null
+    sourcePeriodMs: number | null,
+    sourceClock: PaneClock | null
   ): void {
     const dataList = chart.getDataList()
     if (dataList.length === 0) {
@@ -272,11 +287,13 @@ export class SyncBus {
 
     // Cross-timeframe positioning (centre / align-span / anchor-near-left -- see
     // resolveSeekTarget) needs the source's own chart and period; without them (source
-    // unregistered) this degrades to reproducing the click's own on-screen fraction.
+    // unregistered) this degrades to reproducing the click's own on-screen fraction. Either way
+    // the instant is restated on this pane's clock first (SyncPane.getClock).
+    const toTarget = (timestamp: number): number => restateTimestamp(timestamp, sourceClock, pane)
     const target =
       sourceChart && sourcePeriodMs !== null
-        ? resolveSeekTarget(chart, sourceChart, point, sourcePeriodMs, pane.getPeriodMs(), fraction)
-        : { timestamp: point.timestamp, fraction, crosshairTimestamp: point.timestamp }
+        ? resolveSeekTarget(chart, sourceChart, point, sourcePeriodMs, pane.getPeriodMs(), fraction, toTarget)
+        : { timestamp: toTarget(point.timestamp), fraction, crosshairTimestamp: toTarget(point.timestamp) }
     // Same price, wherever resolveSeekTarget decided to mark the crosshair -- the pane's
     // showCrosshair (applyCrosshairAt) already re-derives the on-screen position on THIS
     // pane's own scale from the raw value.
@@ -331,14 +348,14 @@ export class SyncBus {
   broadcastPan(sourceId: string, timestamp: number): void {
     if (!this.options.auto) return
     if (this.dispatchingPan) return
-    this.pendingPan = { sourceId, timestamp }
+    this.pendingPan = { sourceId, timestamp, clock: this.clockOf(sourceId) }
     if (this.panRaf !== 0) return
     this.panRaf = requestAnimationFrame(() => {
       this.panRaf = 0
       const pending = this.pendingPan
       this.pendingPan = null
       if (!pending) return
-      this.dispatchPan(pending.sourceId, pending.timestamp)
+      this.dispatchPan(pending.sourceId, pending.timestamp, pending.clock)
     })
   }
 
@@ -352,17 +369,17 @@ export class SyncBus {
     if (!chart) return
     const timestamp = visibleMidpointTimestamp(chart)
     if (timestamp === null) return
-    this.dispatchPan(sourceId, timestamp)
+    this.dispatchPan(sourceId, timestamp, source?.getClock() ?? null)
   }
 
-  private dispatchPan(sourceId: string, timestamp: number): void {
+  private dispatchPan(sourceId: string, timestamp: number, clock: PaneClock | null): void {
     this.dispatchingPan = true
     try {
       for (const [id, pane] of this.panes) {
         if (id === sourceId) continue
         const chart = pane.getChart()
         if (!chart) continue
-        this.panPane(chart, pane, timestamp)
+        this.panPane(chart, pane, restateTimestamp(timestamp, clock, pane))
       }
     } finally {
       this.dispatchingPan = false
@@ -422,6 +439,10 @@ export class SyncBus {
     this.panReloads.clear()
   }
 
+  private clockOf(id: string): PaneClock | null {
+    return this.panes.get(id)?.getClock() ?? null
+  }
+
   dispose(): void {
     if (this.crosshairRaf !== 0) cancelAnimationFrame(this.crosshairRaf)
     if (this.seekRaf !== 0) cancelAnimationFrame(this.seekRaf)
@@ -429,4 +450,16 @@ export class SyncBus {
     this.measurement = null
     this.panes.clear()
   }
+}
+
+// A source timestamp on `pane`'s own axis. A source whose clock is unknown (it left the wall
+// before its broadcast was dispatched) is passed through as it came, which is what the bus did
+// before panes had clocks.
+function restateTimestamp(timestamp: number, from: PaneClock | null, pane: SyncPane): number {
+  return from ? translateTimestamp(timestamp, from, pane.getClock()) : timestamp
+}
+
+function restatePoint(point: CrosshairPoint, from: PaneClock | null, pane: SyncPane): CrosshairPoint {
+  const timestamp = restateTimestamp(point.timestamp, from, pane)
+  return timestamp === point.timestamp ? point : { ...point, timestamp }
 }

@@ -36,6 +36,7 @@
   import { MEASURE_OVERLAY } from './extension/measure'
   import { periodDurationMs } from './utils/period'
   import type { Measurement, MeasurePoint, SyncBus } from './sync/bus'
+  import { paneClock, translateTimestamp } from './sync/clock'
   import { sameSymbol } from './sync/follow'
   import {
     applyCrosshairAt,
@@ -1159,7 +1160,12 @@
       measureId = null
       return
     }
-    const points = [...measurement.points]
+    // On this pane's own bar axis: a box measured on 1D starts on 1h where the candle opened.
+    const clock = paneClock(pane.period, pane.symbol)
+    const points = measurement.points.map((point) => ({
+      ...point,
+      timestamp: translateTimestamp(point.timestamp, measurement.clock, clock)
+    }))
     if (measureId !== null && widget.getOverlays({ id: measureId }).length > 0) {
       widget.overrideOverlay({ id: measureId, points })
       return
@@ -1175,7 +1181,7 @@
   }
 
   function measurementOf(from: MeasurePoint, to: MeasurePoint): Measurement {
-    return { sourceId: pane.id, symbol: pane.symbol, points: [from, to] }
+    return { sourceId: pane.id, symbol: pane.symbol, points: [from, to], clock: paneClock(pane.period, pane.symbol) }
   }
 
   // The price-pane point under a client position: its candle's timestamp and the price at that
@@ -1523,6 +1529,7 @@
       id: pane.id,
       getChart: () => widget,
       getPeriodMs: () => periodDurationMs(pane.period),
+      getClock: () => paneClock(pane.period, pane.symbol),
       seekTo,
       showMeasurement,
       showCrosshair
