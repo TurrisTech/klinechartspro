@@ -1,25 +1,24 @@
 import type { IndicatorGroup } from '../../src'
 import { AREV_GENERATIONS, type ArevGeneration } from '../arev/api'
-import { fetchBars } from '../history'
-import { setByPath } from '../chartlayers/settings'
-import { replacePaneConfigs } from '../plugins/panestate'
-import type {
-  BindContext,
-  BindingSpec,
-  BindingState,
-  IndicatorPlugin,
-  PluginFacilities,
-  PluginSettings,
-  Range,
-  SettingsRequest,
-  SourceSpec
-} from '../plugins/types'
+import { closedBarPage } from '../plugins/bars'
+import { paneConfig } from '../plugins/paneconfig'
+import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SourceSpec } from '../plugins/types'
 import { loadRegistry, type RegistryIndicator } from '../tsregistry/api'
 import { storedSource } from '../tsregistry/plugin'
-import { LAB_DEFAULTS, LAB_FIELDS, enabledGenerations, normaliseLabConfig, type LabConfig, type LabGeneration } from './config'
+import {
+  LAB_DEFAULTS,
+  LAB_FIELDS,
+  enabledGenerations,
+  fromStoredLabConfig,
+  normaliseLabConfig,
+  toStoredLabConfig,
+  type LabConfig,
+  type LabGeneration
+} from './config'
 import { spanMs, windowBars } from './compute'
 import { AREV22_HORIZON, type LabBar } from './labels'
 import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, registerLabIndicator } from './templates'
+import { phaseLabel } from '../plugins/legend'
 
 // The AREV lab as a client plugin: one sub-pane reading the prediction line of any AREV
 // generation, several at once, with each generation's arrows placed by the published rule or
@@ -46,11 +45,19 @@ import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, register
  * computed over less. Ten years of daily bars fit; ten years of 1m does not. */
 const LEAD_MAX_BARS = 40_000
 
-/** `/getbars` is bounded by range and 413s past the server's cap; fetch in nominal chunks
- * comfortably under it (as mtf/plugin.ts does). */
-const BAR_CHUNK = 4000
-
-const LEGEND_ROW_HEIGHT = 24
+/** The lab's settings, per pane, persisted as `PersistedPane.al`. Every lever is made legal
+ * before it reaches a binding -- a window of 0 or a quantile of 7 is a rule that cannot be
+ * computed. */
+export const LAB_PANE_CONFIG = paneConfig<LabConfig>({
+  templates: [LAB_TEMPLATE_NAME],
+  doc: 'al',
+  title: 'AREV lab',
+  fields: LAB_FIELDS,
+  defaults: LAB_DEFAULTS,
+  normalise: normaliseLabConfig,
+  toStored: toStoredLabConfig,
+  fromStored: fromStoredLabConfig
+})
 
 /** The history one generation's rule needs before the first bar it is drawn on: its window,
  * exactly -- plus, for arev22's prior, the ten bars its label waits for. Capped at what a pane
@@ -82,9 +89,7 @@ export function barsSourceKey(vendor: string, ticker: string, interval: string):
   return `arevlab-bars|${vendor}:${ticker}|${interval}`
 }
 
-function barsSource(f: PluginFacilities, ctx: BindContext, leadMs: number): SourceSpec<LabBar> {
-  const duration = f.resolutionDurationMs(ctx.interval)
-  const chunk = BAR_CHUNK * duration
+function barsSource(ctx: BindContext, leadMs: number): SourceSpec<LabBar> {
   const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
   return {
     id: BARS_SOURCE_ID,
@@ -92,12 +97,8 @@ function barsSource(f: PluginFacilities, ctx: BindContext, leadMs: number): Sour
     resolution: ctx.interval,
     window: (range) => widen(range, leadMs),
     fetch: async (range) => {
-      const to = Math.min(range.to, range.from + chunk)
-      const bars = await fetchBars(vendorSymbol, ctx.interval, range.from, to, null)
-      return {
-        points: bars.map((bar) => ({ date: bar.timestamp, open: bar.open, close: bar.close })),
-        nextFrom: to < range.to ? to : null
-      }
+      const { bars, nextFrom } = await closedBarPage(vendorSymbol, ctx.interval, range)
+      return { points: bars.map((bar) => ({ date: bar.timestamp, open: bar.open, close: bar.close })), nextFrom }
     }
   }
 }
@@ -105,11 +106,6 @@ function barsSource(f: PluginFacilities, ctx: BindContext, leadMs: number): Sour
 export function createArevLabPlugin(): IndicatorPlugin {
   let facilities: PluginFacilities | null = null
   let entries = new Map<ArevGeneration, RegistryIndicator>()
-  const configs: Record<number, LabConfig> = {}
-  const configRevs: Record<number, number> = {}
-  let panel: { close(): void } | null = null
-
-  const configFor = (paneIndex: number): LabConfig => configs[paneIndex] ?? LAB_DEFAULTS
 
   /** The generations switched on that this server actually serves. */
   const readable = (config: LabConfig): ArevGeneration[] => enabledGenerations(config).filter((g) => entries.has(g))
@@ -118,9 +114,8 @@ export function createArevLabPlugin(): IndicatorPlugin {
     const shown = readable(config)
     if (shown.length === 0) return 'AREV lab · none on'
     const names = shown.join(' ')
-    const stores = shown.map((g) => state.sources.find((s) => s.id === g)?.store)
-    if (stores.some((s) => s?.phase === 'error')) return `AREV lab ${names} · error`
-    if (stores.some((s) => !s || s.phase === 'idle' || s.phase === 'loading')) return `AREV lab ${names} · loading`
+    const pending = phaseLabel(`AREV lab ${names}`, shown.map((g) => state.sources.find((s) => s.id === g)?.store))
+    if (pending) return pending
     // A window this timeframe cannot hold is drawn over what it can, and says so -- a shortened
     // window is a different statistic, and silently computing one is how a reader is misled.
     const cut = shown
@@ -130,64 +125,11 @@ export function createArevLabPlugin(): IndicatorPlugin {
     return `AREV lab ${names}`
   }
 
-  /** A pane's new config, from its panel or from the indicator manager: every lever made legal
-   * before it reaches a binding -- the panel's number inputs commit every keystroke, and a
-   * window of 0 or a quantile of 7 is a rule that cannot be computed -- then kept, persisted
-   * and that pane alone redrawn. */
-  const applyConfig = (paneIndex: number, paneId: string, next: LabConfig): void => {
-    const f = facilities
-    if (!f) return
-    configs[paneIndex] = normaliseLabConfig(next)
-    configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
-    f.requestPersist()
-    f.requestReconcile(paneId)
-  }
-
-  const settings: PluginSettings = {
-    fields: LAB_FIELDS,
-    read: (paneIndex) => configFor(paneIndex),
-    write: (paneIndex, paneId, key, value) => {
-      const next = structuredClone(configFor(paneIndex))
-      setByPath(next, key, value)
-      applyConfig(paneIndex, paneId, next)
-    }
-  }
-
-  const openPanel = (paneId: string): boolean => {
-    const f = facilities
-    const info = f?.paneInfo(paneId)
-    if (!f || !info) return false
-    let anchor: HTMLElement | null = null
-    try {
-      anchor = info.chart.getDom() as HTMLElement | null
-    } catch {
-      anchor = null
-    }
-    if (!anchor) return false
-    // The gear is drawn on the canvas, so the panel hangs under the legend row rather than
-    // under an element (mtf/plugin.ts explains the rect).
-    const chartRect = anchor.getBoundingClientRect()
-    const paneIndex = info.paneIndex
-    panel?.close()
-    panel = f.openSettingsPanel<LabConfig>({
-      anchor,
-      anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
-      title: `AREV lab · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
-      fields: LAB_FIELDS,
-      config: configFor(paneIndex),
-      defaults: LAB_DEFAULTS,
-      onChange: (next) => applyConfig(paneIndex, paneId, next),
-      onClose: () => {
-        panel = null
-      }
-    })
-    return true
-  }
-
   return {
     id: 'arevlab',
     // Reads the AREV generations' own stored series, so it is gated on the same capability.
     feature: 'arev',
+    paneConfigs: [LAB_PANE_CONFIG],
     async register(f: PluginFacilities): Promise<IndicatorGroup[]> {
       facilities = f
       // The registry says which generations this server serves and how to read each; a
@@ -201,11 +143,10 @@ export function createArevLabPlugin(): IndicatorPlugin {
       return entries.size > 0 ? registerLabIndicator() : []
     },
     matches: isLabIndicator,
-    signature: (ctx) => [configRevs[ctx.paneIndex] ?? 0],
     bind(ctx: BindContext): BindingSpec | null {
       const f = facilities
       if (!f) return null
-      const config = configFor(ctx.paneIndex)
+      const config = ctx.config as LabConfig
       const duration = f.resolutionDurationMs(ctx.interval)
       const shown = readable(config)
       const sources: SourceSpec[] = shown.map((generation) => {
@@ -217,7 +158,7 @@ export function createArevLabPlugin(): IndicatorPlugin {
       const priors = shown.filter((g) => config.generations[g].signals === 'prior')
       if (priors.length > 0) {
         const lead = Math.max(...priors.map((g) => leadInMs(g, config.generations[g], duration)))
-        sources.push(barsSource(f, ctx, lead) as unknown as SourceSpec)
+        sources.push(barsSource(ctx, lead) as unknown as SourceSpec)
       }
       return {
         sources,
@@ -225,22 +166,6 @@ export function createArevLabPlugin(): IndicatorPlugin {
         extendData: () => ({ config }),
         overrides: { figures: labFigures(config) }
       }
-    },
-    handleSettings(request: SettingsRequest): boolean {
-      if (request.indicatorName !== LAB_TEMPLATE_NAME) return false
-      return openPanel(request.paneId)
-    },
-    ownsSettings: (templateName) => templateName === LAB_TEMPLATE_NAME,
-    settings: (templateName) => (templateName === LAB_TEMPLATE_NAME ? settings : null),
-    paneState: {
-      hydrate(initial) {
-        replacePaneConfigs(configs, configRevs, initial, (stored) => normaliseLabConfig(stored as LabConfig))
-      },
-      snapshot: () => ({ ...configs })
-    },
-    dispose() {
-      panel?.close()
-      panel = null
     }
   }
 }

@@ -91,8 +91,15 @@ function anchorTimestamp(chart: Chart): number | null {
   return data.length === 0 ? null : data[0].timestamp
 }
 
+interface WatchPane {
+  pane: ChartProPane
+  chart: Chart
+  /** What the drawn lines were made from -- their anchor and the pane's instrument. */
+  drawn: string
+}
+
 export class WatchOverlays {
-  private readonly panes = new Map<string, { pane: ChartProPane; chart: Chart }>()
+  private readonly panes = new Map<string, WatchPane>()
   private watches: Watch[] = []
 
   constructor(
@@ -114,11 +121,13 @@ export class WatchOverlays {
       if (this.panes.has(pane.id)) continue
       const chart = pane.getChart()
       if (!chart) continue
-      const entry = { pane, chart }
+      const entry: WatchPane = { pane, chart, drawn: '' }
       this.panes.set(pane.id, entry)
       // The anchor is the oldest loaded bar, so a history page-in moves it -- without this a
-      // pane that scrolled back would keep an anchor the chart no longer knows.
-      chart.subscribeAction('onVisibleRangeChange', () => this.redraw(entry))
+      // pane that scrolled back would keep an anchor the chart no longer knows. Only then: the
+      // event also fires on every tick, and rebuilding every line per tick cost a teardown and
+      // a repaint of the overlay layer each time (and could take a line out from under a drag).
+      chart.subscribeAction('onVisibleRangeChange', () => this.redraw(entry, false))
       this.redraw(entry)
     }
   }
@@ -171,10 +180,16 @@ export class WatchOverlays {
     }
   }
 
-  private redraw(entry: { pane: ChartProPane; chart: Chart }): void {
+  /** Redraws the pane's lines; unless `force`, only when their anchor or the pane's instrument
+   * moved -- the watches themselves changing always forces. */
+  private redraw(entry: WatchPane, force = true): void {
     const { pane, chart } = entry
-    this.clear(chart)
     const anchor = anchorTimestamp(chart)
+    const symbol = pane.getSymbol()
+    const drawn = `${anchor}|${symbolVendor(symbol)}:${symbol.ticker}`
+    if (!force && drawn === entry.drawn) return
+    entry.drawn = drawn
+    this.clear(chart)
     if (anchor === null) return
     for (const [watch, level] of this.drawableFor(pane)) {
       const created = overlayFor(watch, level, anchor, this.colors) as OverlayCreate & {

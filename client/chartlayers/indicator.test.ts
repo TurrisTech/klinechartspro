@@ -1,14 +1,15 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { Chart, Indicator, OverlayCreate } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup } from '../../src'
-import { fakePane, installWindow } from '../plugins/testing'
-import type { BindContext, PluginFacilities } from '../plugins/types'
+import { fakeFacilities, fakePane, flush, installWindow } from '../plugins/testing'
+import type { BindContext } from '../plugins/types'
 import type { SettingsField } from './settings'
 import type { ChartLayer } from './types'
 
-// A chart layer as an indicator: drawn on a pane exactly while that pane carries the layer's
-// template, visible, with settings of its own per pane -- the controller (controller.ts) and
-// the plugin around it (plugin.ts), over a stand-in layer and chart so nothing is fetched.
+// A chart layer as an indicator: drawn on a pane exactly while a binding of the layer's
+// template lives there and the indicator is shown, with settings of its own per pane -- the
+// view a binding attaches (controller.ts), and the plugin around it (plugin.ts) on the real
+// plugin host, over a stand-in layer and chart so nothing is fetched.
 
 installWindow()
 const win = globalThis.window as unknown as Record<string, unknown>
@@ -16,9 +17,10 @@ win.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () =>
 
 const { createLayerController } = await import('./controller')
 const { createLayerPlugin } = await import('./plugin')
+const { createPluginHost } = await import('../plugins/host')
 
 const TEMPLATE = 'LAYER:test'
-/** The controller samples its panes every 200ms; a little over one period. */
+/** A view samples its pane every 200ms; a little over one period. */
 const SAMPLE = 260
 
 interface Config {
@@ -72,8 +74,10 @@ function testChart(): TestChart {
   }))
   const state: TestChart = { chart: null as unknown as Chart, indicators: [], overlays: [] }
   state.chart = {
-    getIndicators: (filter?: { name?: string }) =>
-      state.indicators.filter((indicator) => !filter?.name || indicator.name === filter.name),
+    getIndicators: (filter?: { name?: string; id?: string }) =>
+      state.indicators.filter(
+        (indicator) => (!filter?.name || indicator.name === filter.name) && (!filter?.id || indicator.id === filter.id)
+      ),
     getDataList: () => bars,
     getVisibleRange: () => ({ from: 0, to: bars.length, realFrom: 0, realTo: bars.length - 1 }),
     getYAxes: () => [{ getRange: () => ({ from: 1.0, to: 1.2 }) }],
@@ -85,7 +89,9 @@ function testChart(): TestChart {
       state.overlays = state.overlays.filter((overlay) => overlay.groupId !== filter.groupId)
     },
     subscribeAction: () => {},
-    unsubscribeAction: () => {}
+    unsubscribeAction: () => {},
+    overrideIndicator: () => true,
+    overrideYAxis: () => {}
   } as unknown as Chart
   return state
 }
@@ -102,102 +108,104 @@ afterEach(() => {
   cleanup = []
 })
 
-function setup(panes = 1) {
+/** One view, attached as a binding would attach it. */
+function setup(config: Config = DEFAULTS, ticker = 'EURUSD') {
   const fetches: string[] = []
   const controller = createLayerController(testLayer(fetches), TEMPLATE)
-  const charts = Array.from({ length: panes }, () => testChart())
-  const wall: ChartProPane[] = charts.map((c, i) => fakePane(`p${i + 1}`, c.chart))
-  controller.sync(wall)
-  cleanup.push(() => controller.sync([]))
-  return { controller, charts, wall, fetches }
+  const chart = testChart()
+  const pane: ChartProPane = fakePane('p1', chart.chart, ticker)
+  let release = (): void => {}
+  const attach = (next: Config = config): (() => void) => {
+    release = controller.attach(pane, 'ind1', next)
+    return release
+  }
+  cleanup.push(() => release())
+  return { controller, chart, pane, fetches, attach }
 }
 
 function widths(chart: TestChart): number[] {
   return chart.overlays.map((overlay) => (overlay.styles as { line: { size: number } }).line.size)
 }
 
-describe('the controller', () => {
-  test('draws nothing on a pane without the indicator, and fetches nothing for it', async () => {
-    const { charts, fetches } = setup()
-    await sleep(SAMPLE)
-    expect(fetches).toEqual([])
-    expect(charts[0].overlays).toEqual([])
-  })
-
-  test('adding the indicator draws the layer; hiding it clears it; removing it clears it', async () => {
-    const { charts, fetches } = setup()
-    charts[0].indicators.push(indicator())
-    await sleep(SAMPLE)
-    expect(fetches).toEqual(['EURUSD'])
-    expect(charts[0].overlays.map((overlay) => overlay.groupId)).toEqual(['test'])
-
-    charts[0].indicators[0] = indicator(false)
-    await sleep(SAMPLE)
-    expect(charts[0].overlays).toEqual([])
-
-    // Back on: what it held was dropped when it went off, so this is a fresh read.
-    charts[0].indicators[0] = indicator(true)
-    await sleep(SAMPLE)
-    expect(fetches).toEqual(['EURUSD', 'EURUSD'])
-    expect(charts[0].overlays).toHaveLength(1)
-
-    charts[0].indicators.length = 0
-    await sleep(SAMPLE)
-    expect(charts[0].overlays).toEqual([])
-  })
-
-  test('only the panes carrying it, each with its own settings', async () => {
-    const { controller, charts, fetches } = setup(2)
-    charts[1].indicators.push(indicator())
-    await sleep(SAMPLE)
-    expect(fetches).toHaveLength(1)
-    expect(charts[0].overlays).toEqual([])
-    expect(widths(charts[1])).toEqual([1])
-
-    // A style edit repaints from what the pane holds: no request.
-    controller.setConfig(1, { ...DEFAULTS, width: 3 })
-    expect(widths(charts[1])).toEqual([3])
-    expect(fetches).toHaveLength(1)
-    expect(controller.configFor(0).width).toBe(1)
-
-    // A lever in the cache key reads again.
-    controller.setConfig(1, { ...controller.configFor(1), intervals: { '1W': true, '1M': false } })
-    await sleep(0)
-    expect(fetches).toHaveLength(2)
-  })
-
-  test('a settings edit is normalised, and only what differs is snapshotted', () => {
-    const { controller } = setup(2)
-    controller.setConfig(0, { width: 100, intervals: { '1W': false } })
-    expect(controller.configFor(0)).toEqual({ intervals: { '1W': false, '1M': true }, width: 8 })
-    controller.setConfig(1, structuredClone(DEFAULTS))
-    expect(controller.snapshot()).toEqual({ 0: { 'intervals.1W': false, width: 8 } })
-
-    const fresh = createLayerController(testLayer([]), TEMPLATE)
-    fresh.hydrate(controller.snapshot())
-    expect(fresh.configFor(0)).toEqual(controller.configFor(0))
-    expect(fresh.configFor(1)).toEqual(DEFAULTS)
-  })
-
-  test('an instrument without coverage draws nothing, however the pane is set', async () => {
-    const fetches: string[] = []
-    const controller = createLayerController(testLayer(fetches), TEMPLATE)
-    const chart = testChart()
-    chart.indicators.push(indicator())
-    controller.sync([fakePane('p1', chart.chart, 'NONE')])
-    cleanup.push(() => controller.sync([]))
+describe('the view', () => {
+  test('draws nothing while the indicator is hidden, and fetches nothing for it', async () => {
+    const { chart, fetches, attach } = setup()
+    chart.indicators.push(indicator(false))
+    attach()
     await sleep(SAMPLE)
     expect(fetches).toEqual([])
     expect(chart.overlays).toEqual([])
+  })
+
+  test('draws at once; hiding it clears it; showing it reads again; releasing it clears it', async () => {
+    const { chart, fetches, attach } = setup()
+    chart.indicators.push(indicator())
+    const release = attach()
+    await flush()
+    expect(fetches).toEqual(['EURUSD'])
+    expect(chart.overlays.map((overlay) => overlay.groupId)).toEqual(['test'])
+
+    chart.indicators[0] = indicator(false)
+    await sleep(SAMPLE)
+    expect(chart.overlays).toEqual([])
+
+    // Back on: what it held was dropped when it went off, so this is a fresh read.
+    chart.indicators[0] = indicator(true)
+    await sleep(SAMPLE)
+    expect(fetches).toEqual(['EURUSD', 'EURUSD'])
+    expect(chart.overlays).toHaveLength(1)
+
+    release()
+    expect(chart.overlays).toEqual([])
+  })
+
+  test('the binding that replaces another starts from what the pane holds', async () => {
+    const { chart, fetches, attach } = setup()
+    chart.indicators.push(indicator())
+    const first = attach()
+    await flush()
+    expect(widths(chart)).toEqual([1])
+
+    // A style edit: the new view is attached before the old one is released, and repaints
+    // from what the pane holds -- no request -- and the old one's release takes nothing with it.
+    const second = attach({ ...DEFAULTS, width: 3 })
+    first()
+    await flush()
+    expect(widths(chart)).toEqual([3])
+    expect(fetches).toHaveLength(1)
+
+    // A lever in the cache key reads again.
+    attach({ ...DEFAULTS, intervals: { '1W': true, '1M': false } })
+    second()
+    await flush()
+    expect(fetches).toHaveLength(2)
+  })
+
+  test('an instrument without coverage draws nothing, however the pane is set', async () => {
+    const { chart, fetches, attach } = setup(DEFAULTS, 'NONE')
+    chart.indicators.push(indicator())
+    attach()
+    await sleep(SAMPLE)
+    expect(fetches).toEqual([])
+    expect(chart.overlays).toEqual([])
+  })
+
+  test('a moved read clock forgets what every view holds and reads again', async () => {
+    const { controller, chart, fetches, attach } = setup()
+    chart.indicators.push(indicator())
+    attach()
+    await flush()
+    controller.invalidate()
+    await flush()
+    expect(fetches).toEqual(['EURUSD', 'EURUSD'])
   })
 })
 
 describe('the plugin', () => {
   function plugin(features: string[] = []) {
-    const controller = createLayerController(testLayer([]), TEMPLATE)
+    const fetches: string[] = []
+    const controller = createLayerController(testLayer(fetches), TEMPLATE)
     const gated = createLayerController({ ...testLayer([]), id: 'gated', label: 'Gated' }, 'LAYER:gated')
-    const persisted: number[] = []
-    const reconciled: Array<string | undefined> = []
     const p = createLayerPlugin({
       id: 'levels',
       group: 'Levels',
@@ -206,16 +214,29 @@ describe('the plugin', () => {
         { controller: gated, description: 'gated layer', feature: 'levels2' }
       ]
     })
-    const groups = p.register({
-      hasFeature: (feature: string) => features.includes(feature),
-      requestPersist: () => persisted.push(1),
-      requestReconcile: (paneId?: string) => reconciled.push(paneId)
-    } as unknown as PluginFacilities) as IndicatorGroup[]
-    return { p, controller, gated, groups, persisted, reconciled }
+    return { p, controller, gated, fetches, features }
   }
 
-  test("one 'Levels' group on the price pane, every layer in it", () => {
-    expect(plugin().groups).toEqual([
+  async function onHost(features: string[] = [], paneDocs: Record<number, Record<string, unknown>> = {}) {
+    const parts = plugin(features)
+    let persisted = 0
+    const host = await createPluginHost({
+      plugins: [parts.p],
+      facilities: fakeFacilities({ hasFeature: (feature) => features.includes(feature) }),
+      paneDocs,
+      requestPersist: () => {
+        persisted++
+      }
+    })
+    const charts = [testChart(), testChart(), testChart()]
+    const wall = charts.map((c, i) => fakePane(`p${i + 1}`, c.chart))
+    cleanup.push(() => host.teardown())
+    return { ...parts, host, charts, wall, persisted: () => persisted }
+  }
+
+  test("one 'Levels' group on the price pane, every layer in it", async () => {
+    const groups = (await plugin().p.register(fakeFacilities())) as IndicatorGroup[]
+    expect(groups).toEqual([
       {
         label: 'Levels',
         main: true,
@@ -227,66 +248,81 @@ describe('the plugin', () => {
     ])
   })
 
-  test('claims its templates, their gear and their settings', () => {
-    const { p } = plugin()
+  test('claims its templates; the host owns their gear and their settings', async () => {
+    const { p, host } = await onHost()
     expect(p.matches(TEMPLATE)).toBe(true)
     expect(p.matches('MA')).toBe(false)
-    expect(p.ownsSettings?.(TEMPLATE)).toBe(true)
-    expect(p.settings?.(TEMPLATE)?.fields).toBe(FIELDS)
-    expect(p.settings?.('MA')).toBeNull()
+    expect(host.ownsSettings(TEMPLATE)).toBe(true)
+    expect(host.settingsModel(TEMPLATE)?.fields).toBe(FIELDS)
+    expect(host.settingsModel('MA')).toBeNull()
   })
 
-  test('an inline edit writes one pane, persists, relabels it', () => {
-    const { p, controller, persisted, reconciled } = plugin()
-    const ctx = { paneIndex: 1, indicator: { name: TEMPLATE } } as unknown as BindContext
-    const before = p.signature?.(ctx)
-    p.settings?.(TEMPLATE)?.write(1, 'p2', 'width', 4)
-    expect(controller.configFor(1).width).toBe(4)
-    expect(controller.configFor(0).width).toBe(1)
-    expect(persisted).toHaveLength(1)
-    expect(reconciled).toEqual(['p2'])
-    expect(p.signature?.(ctx)).not.toEqual(before)
+  test('draws only on the panes carrying it, and an inline edit restyles that pane alone', async () => {
+    const { host, charts, wall, fetches, persisted } = await onHost()
+    charts[1].indicators.push(indicator())
+    host.sync(wall)
+    await flush()
+    expect(fetches).toHaveLength(1)
+    expect(charts[0].overlays).toEqual([])
+    expect(widths(charts[1])).toEqual([1])
+
+    const model = host.settingsModel(TEMPLATE)
+    model?.write('p2', 'width', 4)
+    await flush()
+    expect(widths(charts[1])).toEqual([4])
+    expect(fetches).toHaveLength(1)
+    expect(persisted()).toBe(1)
+    expect(model?.read('p1')).toMatchObject({ width: 1 })
+    // Normalised on the way in: the field's own bounds.
+    model?.write('p2', 'width', 100)
+    expect(model?.read('p2')).toMatchObject({ width: 8 })
   })
 
-  test('the wall document carries every layer by pane, then by layer id', () => {
-    const { p } = plugin()
-    p.settings?.(TEMPLATE)?.write(0, 'p1', 'width', 2)
-    p.settings?.('LAYER:gated')?.write(0, 'p1', 'intervals.1M', false)
-    p.settings?.('LAYER:gated')?.write(2, 'p3', 'width', 5)
-    const snapshot = p.paneState?.snapshot()
-    expect(snapshot).toEqual({ 0: { test: { width: 2 }, gated: { 'intervals.1M': false } }, 2: { gated: { width: 5 } } })
+  test('the wall document carries every layer by pane, then by layer id', async () => {
+    const { host, wall } = await onHost()
+    host.sync(wall)
+    host.settingsModel(TEMPLATE)?.write('p1', 'width', 2)
+    host.settingsModel('LAYER:gated')?.write('p1', 'intervals.1M', false)
+    host.settingsModel('LAYER:gated')?.write('p3', 'width', 5)
+    const docs = host.paneDocs()
+    expect(docs).toEqual({ 0: { ly: { test: { width: 2 }, gated: { 'intervals.1M': false } } }, 2: { ly: { gated: { width: 5 } } } })
 
-    const other = plugin()
-    other.p.paneState?.hydrate(JSON.parse(JSON.stringify(snapshot)))
-    expect(other.controller.configFor(0).width).toBe(2)
-    expect(other.gated.configFor(0).intervals['1M']).toBe(false)
-    expect(other.gated.configFor(2).width).toBe(5)
+    const other = await onHost([], JSON.parse(JSON.stringify(docs)))
+    other.host.sync(other.wall)
+    expect(other.host.settingsModel(TEMPLATE)?.read('p1')).toMatchObject({ width: 2 })
+    expect(other.host.settingsModel('LAYER:gated')?.read('p1')).toMatchObject({ intervals: { '1M': false } })
+    expect(other.host.settingsModel('LAYER:gated')?.read('p3')).toMatchObject({ width: 5 })
+    expect(other.host.settingsModel(TEMPLATE)?.read('p2')).toEqual(DEFAULTS)
   })
 
   test('the legend names the timeframes drawn, or why nothing is', () => {
-    const { p, controller } = plugin()
-    const ctx = (ticker: string): BindContext =>
+    const { p } = plugin()
+    void p.register(fakeFacilities({ hasFeature: () => false }))
+    const ctx = (ticker: string, config: Config = DEFAULTS): BindContext =>
       ({
         paneIndex: 0,
         indicator: { name: TEMPLATE },
         symbol: { ticker, pricePrecision: 5 },
         vendor: 'oanda',
-        ticker
+        ticker,
+        config
       }) as unknown as BindContext
-    const label = (ticker: string) => p.bind(ctx(ticker))?.label({ sources: [], chartInterval: '1h' })
+    const label = (ticker: string, config?: Config) => p.bind(ctx(ticker, config))?.label({ sources: [], chartInterval: '1h' })
     expect(label('EURUSD')).toBe('Test 1W 1M')
     expect(label('NONE')).toBe('Test · none for NONE')
-    controller.setConfig(0, { ...DEFAULTS, intervals: { '1W': false, '1M': false } })
-    expect(label('EURUSD')).toBe('Test · no timeframe chosen')
+    expect(label('EURUSD', { ...DEFAULTS, intervals: { '1W': false, '1M': false } })).toBe('Test · no timeframe chosen')
     expect(p.bind(ctx('EURUSD'))?.overrides).toEqual({ precision: 5 })
     expect(p.bind(ctx('EURUSD'))?.sources).toEqual([])
   })
 
-  test('a layer whose feature the server does not advertise says so', () => {
-    const ctx = { paneIndex: 0, indicator: { name: 'LAYER:gated' }, symbol: { ticker: 'EURUSD' }, vendor: 'oanda', ticker: 'EURUSD' }
-    const label = (features: string[]) =>
-      plugin(features).p.bind(ctx as unknown as BindContext)?.label({ sources: [], chartInterval: '1h' })
-    expect(label([])).toBe('Gated · not served here')
-    expect(label(['levels2'])).toBe('Gated 1W 1M')
+  test('a layer whose feature the server does not advertise says so', async () => {
+    const ctx = { paneIndex: 0, indicator: { name: 'LAYER:gated' }, symbol: { ticker: 'EURUSD' }, vendor: 'oanda', ticker: 'EURUSD', config: DEFAULTS }
+    const label = async (features: string[]) => {
+      const { p } = plugin(features)
+      await p.register(fakeFacilities({ hasFeature: (feature) => features.includes(feature) }))
+      return p.bind(ctx as unknown as BindContext)?.label({ sources: [], chartInterval: '1h' })
+    }
+    expect(await label([])).toBe('Gated · not served here')
+    expect(await label(['levels2'])).toBe('Gated 1W 1M')
   })
 })

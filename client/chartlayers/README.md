@@ -8,23 +8,31 @@ template on the bar grid, a layer draws objects anchored to *price*, with lifesp
 predate the loaded bars, and fetches by price band as well as time.
 
 **On the chart, though, a layer is an indicator** (since 2026-10-03; until then each was one
-toolbar button and one config for the whole wall). `plugin.ts` registers a template per layer
-(`LEVELS:levels`, `LEVELS:levels2` — saved walls name them, so never rename one) under one
-"Levels" picker group on the price pane; the template draws nothing itself. The controller
-draws a pane's overlays exactly while that pane carries the template, visible, so the picker,
-the legend's eye and ×, and the indicator manager turn it on and off per pane like anything
-else. Settings are per pane: the legend's gear opens the panel, the indicator manager edits
-the same fields inline, and the wall document keeps each pane's differences from the defaults
-as `ly` (`persist.ts` validates them on the way back in). A pane never configured starts from
-what the user last chose under the old toolbar button (`store.ts`, read only). The legend
-names the timeframes drawn, or why nothing is (`none for <ticker>`, `not served here` for
-Zones while no server advertises `levels2`).
+toolbar button and one config for the whole wall), and since 2026-10-11 an ordinary plugin
+binding. `plugin.ts` registers a template per layer (`LEVELS:levels`, `LEVELS:levels2` — saved
+walls name them, so never rename one) under one "Levels" picker group on the price pane; the
+template draws nothing itself. The plugin host binds it like any other plugin indicator, and the
+binding `attach`es a view (`controller.ts`) that draws the pane's overlays while the indicator is
+shown -- so the picker, the legend's eye and ×, and the indicator manager turn it on and off per
+pane like anything else, and a settings edit, a symbol change or the pane moving on the wall is a
+rebind. Settings are per pane and kept by the host (`client/plugins/paneconfig.ts`): the legend's
+gear opens the panel, the indicator manager edits the same fields inline, and the wall document
+keeps each pane's differences from the defaults under `ly.<layer id>` (`persist.ts` is the codec,
+and validates them on the way back in). A pane never configured starts from what the user last
+chose under the old toolbar button (`store.ts`, read only, awaited before the plugin registers).
+The legend names the timeframes drawn, or why nothing is (`none for <ticker>`, `not served here`
+for Zones while no server advertises `levels2`).
+
+Until 2026-10-11 each layer had a controller that followed the wall's panes itself -- its own
+pane table, its own range subscriptions, its own copy of the settings -- and sampled **every**
+pane five times a second for the template, whether or not any pane carried it. A view now
+samples only its own pane, and only while its binding lives.
 
 | file | what it is |
 |---|---|
 | `types.ts` | `ChartLayer`, `LayerWindow`, `LayerContext` — the contract |
-| `controller.ts` | the per-pane lifecycle: on while the pane carries the template, per-pane settings, debounced redraw |
-| `plugin.ts` | the layers as one indicator plugin: templates, picker group, legend, gear, inline settings, `paneState` |
+| `controller.ts` | a layer's view of one pane, attached by a binding: drawn while the indicator is shown, debounced redraw, what the pane holds kept across the bindings that follow one another |
+| `plugin.ts` | the layers as one indicator plugin: templates, picker group, legend, the settings each layer declares (`paneConfigs`), the binding's `attach` |
 | `persist.ts` | a layer config's stored form (diff from defaults, flat by path) and its validation against the fields |
 | `window.ts` | **pure**: what a pane has covered and what it still needs |
 | `paint.ts` | **pure**: whether a redraw would change the picture |
@@ -37,8 +45,11 @@ Zones while no server advertises `levels2`).
 Both halves of the same problem: a layer is asked to redraw far more often than anything it
 draws has changed, because **every live tick raises `onVisibleRangeChange`** (klinecharts
 re-adjusts the visible range when the last bar is merely updated) and nudges the autoscaled
-price axis for the axis watcher to notice on top of that. Three separate gates stand between
-that and work:
+price axis for the axis watcher to notice on top of that. Since 2026-10-11 the first of those
+no longer reaches a view at all: it subscribes through `client/chartview.ts`'s `onViewMoved`,
+which drops a dispatch whose visible bars and held bars are unchanged -- a tick that only moved
+the forming bar. The price band drift is still sampled. Three separate gates stand between
+what is left and work:
 
 1. **Is the window already held?** `controller.ts` keeps, per pane, the rectangle of the
    price/time plane it has fetched. If the view is inside it, there is no request — this is

@@ -1,3 +1,4 @@
+import { layerConfigCodec } from '../chartlayers/persist'
 import type { SettingsField } from '../chartlayers/settings'
 import type { Mode } from './source'
 
@@ -111,59 +112,15 @@ export const VP_FIELDS: SettingsField[] = [
   }
 ]
 
-const COLOR = /^#[0-9a-fA-F]{3,8}$/
-
-function read(source: object, path: string): unknown {
-  return path.split('.').reduce<unknown>((acc, key) => (acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[key] : undefined), source)
-}
-
-function write(target: object, path: string, value: unknown): void {
-  const keys = path.split('.')
-  let current = target as Record<string, unknown>
-  for (const key of keys.slice(0, -1)) current = current[key] as Record<string, unknown>
-  current[keys[keys.length - 1]] = value
-}
-
-const oneOf =
-  (values: readonly string[]) =>
-  (raw: unknown): unknown =>
-    (values as readonly unknown[]).includes(raw) ? raw : undefined
-const bool = (raw: unknown): unknown => (typeof raw === 'boolean' ? raw : undefined)
-const color = (raw: unknown): unknown => (typeof raw === 'string' && COLOR.test(raw) ? raw : undefined)
-
-/** Every stored path with the validator it is read back through: `undefined` means unusable. */
-const PATHS: ReadonlyArray<{ path: string; coerce: (raw: unknown) => unknown }> = [
-  { path: 'mode', coerce: oneOf(MODES) },
-  { path: 'session', coerce: oneOf(SESSION_UNITS) },
-  { path: 'source', coerce: oneOf(SOURCES) },
-  ...[...PROFILE_NUMBERS, ...DRAW_NUMBERS].map((n) => ({
-    path: n.path,
-    coerce: (raw: unknown) => {
-      const value = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : Number.NaN
-      if (!Number.isFinite(value)) return undefined
-      const clamped = Math.min(n.max, Math.max(n.min, value))
-      return n.integer ? Math.round(clamped) : clamped
-    }
-  })),
-  { path: 'draw.showPoc', coerce: bool },
-  { path: 'draw.showValueArea', coerce: bool },
-  { path: 'draw.upColor', coerce: color },
-  { path: 'draw.downColor', coerce: color },
-  { path: 'draw.pocColor', coerce: color }
-]
+// The stored form and its validation are derived from the defaults and the fields
+// (chartlayers/persist.ts): each value checked against its field's own options and bounds.
+const CODEC = layerConfigCodec(VP_DEFAULTS, VP_FIELDS)
 
 /** Any value -> a complete, drawable config: each field validated and clamped, anything
  * unusable falling back to its default. The panel commits every keystroke, and a stored
  * document may be from another build, so nothing reaches the drawing code unchecked. */
 export function normaliseVpConfig(value: unknown): VpConfig {
-  const config = structuredClone(VP_DEFAULTS)
-  if (value && typeof value === 'object') {
-    for (const { path, coerce } of PATHS) {
-      const coerced = coerce(read(value, path))
-      if (coerced !== undefined) write(config, path, coerced)
-    }
-  }
-  return config
+  return CODEC.normalise(value)
 }
 
 /** What a pane stores: only what differs from the defaults, flat by path; undefined when nothing
@@ -171,27 +128,11 @@ export function normaliseVpConfig(value: unknown): VpConfig {
 export type StoredVpConfig = Record<string, unknown>
 
 export function toStoredVpConfig(config: VpConfig): StoredVpConfig | undefined {
-  const out: StoredVpConfig = {}
-  for (const { path } of PATHS) {
-    const value = read(config, path)
-    if (value !== read(VP_DEFAULTS, path)) out[path] = value
-  }
-  return Object.keys(out).length > 0 ? out : undefined
+  return CODEC.toStored(config)
 }
 
 /** A stored diff merged onto the defaults, each value validated; undefined when nothing usable
  * is there, which reads as "never configured". A path this build does not know is ignored. */
 export function fromStoredVpConfig(stored: unknown): VpConfig | undefined {
-  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
-  const config = structuredClone(VP_DEFAULTS)
-  let touched = false
-  for (const { path, coerce } of PATHS) {
-    const raw = (stored as Record<string, unknown>)[path]
-    if (raw === undefined) continue
-    const value = coerce(raw)
-    if (value === undefined) continue
-    write(config, path, value)
-    touched = true
-  }
-  return touched ? config : undefined
+  return CODEC.fromStored(stored)
 }

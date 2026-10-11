@@ -3,6 +3,7 @@ import type { IndicatorGroup } from '../../src'
 import { MTF01_GENERATION, type Stage, type Mtf01Event, type Mtf01Trade } from './api'
 import { peekStore } from '../plugins/store'
 import type { Mtf01Store } from './store'
+import { timestampCalc } from '../plugins/calc'
 
 // One klinecharts indicator template: mtf01's cascade as a SUB-PANE. Like the AREV and
 // KREV templates, `calc` computes nothing — it reads what the controller fetched from
@@ -79,7 +80,7 @@ function indexAtOrBefore(dataList: KLineData[], instant: number): number {
   return found
 }
 
-function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] {
+const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] => {
   const key = indicator.extendData?.seriesKey
   const store = peekStore<Mtf01Store>(key)
   const out: Value[] = dataList.map(() => ({ stage: 0 }))
@@ -118,7 +119,7 @@ function calc(dataList: KLineData[], indicator: Indicator<Value, number, ExtendD
     for (const t of trades) hold(t.date, t.resolvedAt, STAGE_LEVEL.ltf)
   }
   return out
-}
+})
 
 function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
   const dataChanged =

@@ -1,14 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from './testing'
 
-// The published-signals contract as the client consumes it: the ref grammar, the URL a
-// signals read builds, and that the two labelling plugins and the MTF overlay all read
-// the server's label rather than restating its rule -- except where a pre-`plugins.signals`
-// server sends the old boolean, which the normalisers map with that rule, once.
+// The published-signals contract as the client consumes it: the AREV pane and the MTF overlay
+// read the server's label rather than restating its rule -- except where a
+// pre-`plugins.signals` server sends the old boolean, which `arevSignal` maps with that rule,
+// once.
 installWindow()
-const { parseSignalRef, signalRef, signalsUrl } = await import('./api')
 const { arevSignal } = await import('../arev/api')
-const { krevSignal } = await import('../krev/api')
 const { matches } = await import('../tsregistry/api')
 const { shiftSignals } = await import('../mtf/shift')
 const { FX_GRID } = await import('../replay/timeframes')
@@ -26,24 +24,6 @@ const point = (over: Partial<ArevPoint>): ArevPoint => ({
   ...over
 })
 
-describe('signal refs', () => {
-  test('round-trip, with an empty variant and an empty (every-label) id', () => {
-    expect(signalRef('arev', 'arev21', 'long')).toBe('arev:arev21:long')
-    expect(signalRef('fake', null)).toBe('fake::')
-    expect(parseSignalRef('arev:arev21:long')).toEqual({ plugin: 'arev', variant: 'arev21', id: 'long' })
-    expect(parseSignalRef('fake::go')).toEqual({ plugin: 'fake', variant: null, id: 'go' })
-    expect(() => parseSignalRef('arev/long')).toThrow()
-  })
-  test('a signals read names the plugin in the path and the variant/label in the query', () => {
-    const url = signalsUrl({ ref: 'arev:arev21:long', vendorSymbol: 'oanda:EURUSD', resolution: '4h', from: 1, to: 2, limit: 10 })
-    expect(url.pathname).toEndWith('/plugins/arev/signals')
-    expect(url.searchParams.get('variant')).toBe('arev21')
-    expect(url.searchParams.get('signal')).toBe('long')
-    const all = signalsUrl({ ref: 'arev:arev21:', vendorSymbol: 'EURUSD', resolution: '1h', from: 1, to: 2, limit: 10 })
-    expect(all.searchParams.has('signal')).toBe(false)
-  })
-})
-
 describe('the label is read, not re-derived', () => {
   test('arevSignal passes a published label through and maps the old boolean by the server rule', () => {
     expect(arevSignal({ signal: 'long', p: 0.3 })).toBe('long')
@@ -52,11 +32,6 @@ describe('the label is read, not re-derived', () => {
     expect(arevSignal({ signal: false, p: 0.9 })).toBeNull()
     expect(arevSignal({ signal: true, p: 0.6 })).toBe('long')
     expect(arevSignal({ signal: true, p: 0.4 })).toBe('short')
-  })
-  test('krevSignal likewise, the side being the label', () => {
-    expect(krevSignal({ signal: 'top', side: 'bottom' })).toBe('top')
-    expect(krevSignal({ signal: true, side: 'bottom' })).toBe('bottom')
-    expect(krevSignal({ signal: false, side: 'top' })).toBeNull()
   })
   test('the AREV pane marks exactly the labelled bars, whatever p did between them', () => {
     // The registry row's marks, as wtradingindicators declares them: each selects on the

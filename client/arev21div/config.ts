@@ -1,3 +1,4 @@
+import { layerConfigCodec } from '../chartlayers/persist'
 import type { SettingsField } from '../chartlayers/settings'
 import { AREV21_LOOKBACK, type Rule } from './divergence'
 
@@ -82,50 +83,19 @@ export const DIV_FIELDS: SettingsField[] = [
   }
 ]
 
-const COLOR = /^#[0-9a-fA-F]{3,8}$/
-
-function read(source: object, path: string): unknown {
-  return path.split('.').reduce<unknown>((acc, key) => (acc && typeof acc === 'object' ? (acc as Record<string, unknown>)[key] : undefined), source)
-}
-
-function write(target: object, path: string, value: unknown): void {
-  const keys = path.split('.')
-  let current = target as Record<string, unknown>
-  for (const key of keys.slice(0, -1)) current = current[key] as Record<string, unknown>
-  current[keys[keys.length - 1]] = value
-}
-
-/** Every stored path with the validator it is read back through: `undefined` means unusable. */
-const PATHS: ReadonlyArray<{ path: string; coerce: (raw: unknown) => unknown }> = [
-  ...[...RULE_NUMBERS, ...LINE_NUMBERS].map((n) => ({
-    path: n.path,
-    coerce: (raw: unknown) => {
-      const value = typeof raw === 'number' || typeof raw === 'string' ? Number(raw) : Number.NaN
-      if (!Number.isFinite(value)) return undefined
-      const clamped = Math.min(n.max, Math.max(n.min, value))
-      return n.integer ? Math.round(clamped) : clamped
-    }
-  })),
-  { path: 'rule.hidden', coerce: (raw: unknown) => (typeof raw === 'boolean' ? raw : undefined) },
-  { path: 'line.style', coerce: (raw: unknown) => ((LINE_STYLES as readonly unknown[]).includes(raw) ? raw : undefined) },
-  { path: 'line.bullColor', coerce: (raw: unknown) => (typeof raw === 'string' && COLOR.test(raw) ? raw : undefined) },
-  { path: 'line.bearColor', coerce: (raw: unknown) => (typeof raw === 'string' && COLOR.test(raw) ? raw : undefined) }
-]
+// The stored form and its validation are derived from the defaults and the fields
+// (chartlayers/persist.ts), plus the one rule across fields: an inverted gap window is widened
+// rather than left to match nothing.
+const CODEC = layerConfigCodec(DIV_DEFAULTS, DIV_FIELDS, (config) => {
+  config.rule.maxGap = Math.max(config.rule.maxGap, config.rule.minGap)
+  return config
+})
 
 /** Any value -> a complete, drawable config: each field validated and clamped, anything unusable
  * falling back to its default. The panel commits every keystroke, and a stored document may be
- * from another build, so nothing reaches the drawing code unchecked. An inverted gap window is
- * widened rather than left to match nothing. */
+ * from another build, so nothing reaches the drawing code unchecked. */
 export function normaliseDivConfig(value: unknown): DivConfig {
-  const config = structuredClone(DIV_DEFAULTS)
-  if (value && typeof value === 'object') {
-    for (const { path, coerce } of PATHS) {
-      const coerced = coerce(read(value, path))
-      if (coerced !== undefined) write(config, path, coerced)
-    }
-  }
-  config.rule.maxGap = Math.max(config.rule.maxGap, config.rule.minGap)
-  return config
+  return CODEC.normalise(value)
 }
 
 /** What a pane stores: only what differs from the defaults, flat by path; undefined when nothing
@@ -133,29 +103,11 @@ export function normaliseDivConfig(value: unknown): DivConfig {
 export type StoredDivConfig = Record<string, unknown>
 
 export function toStoredDivConfig(config: DivConfig): StoredDivConfig | undefined {
-  const out: StoredDivConfig = {}
-  for (const { path } of PATHS) {
-    const value = read(config, path)
-    if (value !== read(DIV_DEFAULTS, path)) out[path] = value
-  }
-  return Object.keys(out).length > 0 ? out : undefined
+  return CODEC.toStored(config)
 }
 
 /** A stored diff merged onto the defaults, each value validated; undefined when nothing usable is
  * there, which reads as "never configured". A path this build does not know is ignored. */
 export function fromStoredDivConfig(stored: unknown): DivConfig | undefined {
-  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
-  const config = structuredClone(DIV_DEFAULTS)
-  let touched = false
-  for (const { path, coerce } of PATHS) {
-    const raw = (stored as Record<string, unknown>)[path]
-    if (raw === undefined) continue
-    const value = coerce(raw)
-    if (value === undefined) continue
-    write(config, path, value)
-    touched = true
-  }
-  if (!touched) return undefined
-  config.rule.maxGap = Math.max(config.rule.maxGap, config.rule.minGap)
-  return config
+  return CODEC.fromStored(stored)
 }

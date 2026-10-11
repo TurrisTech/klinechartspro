@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { installWindow } from '../plugins/testing'
+import { fakeFacilities, installWindow } from '../plugins/testing'
 import type { BindContext, PluginFacilities, SourceSpec } from '../plugins/types'
 import type { LabConfig } from './config'
 import type { GenerationResult } from './compute'
@@ -35,7 +35,8 @@ afterAll(() => {
 
 const { LAB_DEFAULTS, normaliseLabConfig } = await import('./config')
 const { figureKeys, labValues } = await import('./compute')
-const { barsSourceKey, createArevLabPlugin, leadInMs, widen, windowTruncatedDays } = await import('./plugin')
+const { barsSourceKey, createArevLabPlugin, LAB_PANE_CONFIG, leadInMs, widen, windowTruncatedDays } = await import('./plugin')
+const { PaneConfigStore } = await import('../plugins/paneconfig')
 const { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, labFigures } = await import('./templates')
 const { storedSource } = await import('../tsregistry/plugin')
 const { loadRegistry } = await import('../tsregistry/api')
@@ -44,31 +45,18 @@ const HOUR = 3_600_000
 const DAY = 86_400_000
 
 function facilities(): PluginFacilities {
-  return {
-    api: { get: async () => ({}) as never, url: () => new URL('http://test/') },
-    stream: {} as PluginFacilities['stream'],
-    hasFeature: () => true,
-    points: async () => ({ points: [], nextFrom: null }),
-    periodToResolution: (p) => p.text,
-    resolutionDurationMs: () => HOUR,
-    symbolVendor: () => 'oanda',
-    openSettingsPanel: () => ({ close() {} }) as never,
-    paneInfo: () => null,
-    requestReconcile: () => {},
-    requestPersist: () => {},
-    maxValuesPerRequest: 5000,
-    signals: { catalogue: async () => [], points: async () => ({ points: [], nextFrom: null }) }
-  }
+  return fakeFacilities({ resolutionDurationMs: () => HOUR, maxValuesPerRequest: 5000 })
 }
 
-const ctx = (paneIndex = 0): BindContext =>
+const ctx = (paneIndex = 0, config: LabConfig = LAB_DEFAULTS): BindContext =>
   ({
     paneIndex,
     vendor: 'oanda',
     ticker: 'EURUSD',
     interval: '1h',
     indicator: { name: LAB_TEMPLATE_NAME, calcParams: [] },
-    siblings: []
+    siblings: [],
+    config
   }) as unknown as BindContext
 
 const configWith = (mutate: (c: LabConfig) => void): LabConfig => {
@@ -77,9 +65,8 @@ const configWith = (mutate: (c: LabConfig) => void): LabConfig => {
   return c
 }
 
-async function mounted(configs: Record<number, LabConfig> = {}) {
+async function mounted() {
   const plugin = createArevLabPlugin()
-  plugin.paneState?.hydrate(configs)
   const f = facilities()
   const groups = await plugin.register(f)
   return { plugin, f, groups }
@@ -99,8 +86,8 @@ describe('bind', () => {
     const config = configWith((c) => {
       c.generations.arev19.enabled = true
     })
-    const { plugin, f } = await mounted({ 0: config })
-    const spec = plugin.bind(ctx())
+    const { plugin, f } = await mounted()
+    const spec = plugin.bind(ctx(0, config))
     const entries = await loadRegistry()
     expect(spec?.sources.map((s) => s.id)).toEqual(['arev19', 'arev21'])
     for (const source of spec?.sources ?? []) {
@@ -116,8 +103,8 @@ describe('bind', () => {
     const config = configWith((c) => {
       c.generations.arev20.enabled = true
     })
-    const { plugin } = await mounted({ 0: config })
-    expect(plugin.bind(ctx())?.sources.map((s) => s.id)).toEqual(['arev21'])
+    const { plugin } = await mounted()
+    expect(plugin.bind(ctx(0, config))?.sources.map((s) => s.id)).toEqual(['arev21'])
   })
 
   test('the fixed rule reads the chart range; an adaptive one reaches back exactly its window', async () => {
@@ -128,7 +115,7 @@ describe('bind', () => {
       c.generations.arev21.signals = 'rank'
       c.generations.arev21.rank.bars = 200
     })
-    const widened = (await mounted({ 0: rank })).plugin.bind(ctx())?.sources[0] as SourceSpec
+    const widened = (await mounted()).plugin.bind(ctx(0, rank))?.sources[0] as SourceSpec
     const lead = leadInMs('arev21', rank.generations.arev21, HOUR)
     // rank counts bars: its window, and one bar so the first drawn bar has a predecessor.
     expect(lead).toBe(201 * HOUR)
@@ -142,7 +129,7 @@ describe('bind', () => {
       c.generations.arev19.enabled = true
       c.generations.arev19.signals = 'prior'
     })
-    const spec = (await mounted({ 0: prior })).plugin.bind(ctx())
+    const spec = (await mounted()).plugin.bind(ctx(0, prior))
     const bars = spec?.sources.find((s) => s.id === BARS_SOURCE_ID)
     expect(bars?.key).toBe(barsSourceKey('oanda', 'EURUSD', '1h'))
     expect(bars?.resolution).toBe('1h')
@@ -154,7 +141,7 @@ describe('bind', () => {
       c.generations.arev23.lines = true
       c.generations.arev23.signals = 'median'
     })
-    const spec = (await mounted({ 0: config })).plugin.bind(ctx())
+    const spec = (await mounted()).plugin.bind(ctx(0, config))
     const figures = (spec?.overrides?.figures ?? []) as Array<{ key: string; title?: string }>
     expect(figures.map((fig) => fig.key)).toEqual(['arev21_p', 'arev23_p', 'arev23_hi', 'arev23_lo', 'arev23_c'])
     // Only the p lines are titled, so the legend lists generations and not thresholds.
@@ -165,20 +152,21 @@ describe('bind', () => {
     const config = configWith((c) => {
       c.generations.arev22.enabled = true
     })
-    const { plugin } = await mounted({ 1: config })
+    const { plugin } = await mounted()
     expect(plugin.bind(ctx(0))?.sources.map((s) => s.id)).toEqual(['arev21'])
-    expect(plugin.bind(ctx(1))?.sources.map((s) => s.id)).toEqual(['arev21', 'arev22'])
-    expect(plugin.paneState?.snapshot()).toEqual({ 1: config })
+    expect(plugin.bind(ctx(1, config))?.sources.map((s) => s.id)).toEqual(['arev21', 'arev22'])
+    expect(plugin.paneConfigs).toEqual([LAB_PANE_CONFIG])
   })
 
-  test('a hydrated config is normalised before any binding reads it', async () => {
+  test('a stored config is normalised before any binding reads it', () => {
     const bad = configWith((c) => {
       c.generations.arev21.rank.bars = -3
     })
-    const { plugin } = await mounted({ 0: bad })
-    const snapshot = plugin.paneState?.snapshot() as Record<number, LabConfig>
-    expect(snapshot[0].generations.arev21.rank.bars).toBe(20)
-    expect(snapshot[0]).toEqual(normaliseLabConfig(bad))
+    const store = new PaneConfigStore([LAB_PANE_CONFIG])
+    store.hydrate({ 0: { al: { arev21: { 'rank.bars': -3 } } } })
+    const config = store.read(LAB_PANE_CONFIG, 0) as LabConfig
+    expect(config.generations.arev21.rank.bars).toBe(20)
+    expect(config).toEqual(normaliseLabConfig(bad))
   })
 })
 

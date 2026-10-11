@@ -1,5 +1,5 @@
 import type { KLineChartPro } from '../../src'
-import { attachToSlot } from '../chartlayers/controller'
+import { attachToSlot } from '../chrome/slot'
 import { notifications } from './center'
 import { createNotificationBell } from './bell'
 

@@ -5,29 +5,15 @@ import { installWindow } from './testing'
 installWindow()
 const { createPluginHost } = await import('./host')
 const { peekStore, WindowStore } = await import('./store')
-const { fakeChart, fakeIndicator, fakePane, flush } = await import('./testing')
-const { replacePaneConfigs } = await import('./panestate')
+const { fakeChart, fakeFacilities, fakeIndicator, fakePane, flush } = await import('./testing')
+const { paneConfig } = await import('./paneconfig')
 
-import type { HostFacilities } from './host'
-import type { BindContext, IndicatorPlugin, Page, PluginFacilities, Range, SourceSpec } from './types'
+import type { SettingsPanelOptions } from '../chartlayers/settings'
+import type { BindContext, IndicatorPlugin, Page, Range, SourceSpec } from './types'
 
 type Point = { date: number; v: number }
 
-function facilities(): HostFacilities {
-  return {
-    api: { get: async () => ({}) as never, url: () => new URL('http://test/') },
-    stream: {} as PluginFacilities['stream'],
-    hasFeature: () => true,
-    points: async () => ({ points: [], nextFrom: null }),
-    periodToResolution: (p) => p.text,
-    resolutionDurationMs: () => 3_600_000,
-    symbolVendor: () => 'oanda',
-    openSettingsPanel: () => ({ close() {} }) as never,
-    requestPersist: () => {},
-    maxValuesPerRequest: 3,
-    signals: { catalogue: async () => [], points: async () => ({ points: [], nextFrom: null }) }
-  }
-}
+const facilities = fakeFacilities
 
 /** A plugin whose one source serves `data`, paged at the host's cap. */
 function pointsPlugin(data: Point[], opts: { subscribe?: SourceSpec<Point>['subscribe']; label?: string } = {}) {
@@ -190,13 +176,12 @@ describe('createPluginHost', () => {
     expect([...keys].every((k) => peekStore(k) === undefined)).toBe(true)
   })
 
-  test('a signature rebind that keeps a source keeps its store reachable by key', async () => {
-    // A settings edit (mtf, the AREV lab) bumps the plugin signature and rebinds onto the
-    // same keys. The store must survive the hand-over under its key, or the template's
-    // peekStore finds nothing and the pane goes blank.
-    let rev = 0
+  test('a settings rebind that keeps a source keeps its store reachable by key', async () => {
+    // A settings edit (mtf, the AREV lab) rebinds onto the same keys. The store must survive
+    // the hand-over under its key, or the template's peekStore finds nothing and the pane goes
+    // blank.
     const { plugin: base, fetches } = pointsPlugin([{ date: 1, v: 1 }])
-    const plugin: IndicatorPlugin = { ...base, signature: () => rev }
+    const plugin: IndicatorPlugin = { ...base, paneConfigs: [SIZE_CONFIG('PTS')] }
     const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
     hosts.push(host)
     const fc = fakeChart()
@@ -207,9 +192,12 @@ describe('createPluginHost', () => {
     const key = (fc.overrides[0] as { extendData: { seriesKey: string } }).extendData.seriesKey
     const store = peekStore(key)
     expect(store?.size).toBe(1)
-    rev = 1
-    await new Promise((r) => setTimeout(r, 600)) // the reconcile poll
+    const applied = fc.overrides.length
+    host.settingsModel('PTS')?.write('p1', 'size', 4)
+    // Rebound at once (the new binding re-applies), onto the same store, with nothing refetched.
+    expect(fc.overrides.length).toBeGreaterThan(applied)
     expect(peekStore(key)).toBe(store)
+    await flush()
     expect(fetches.length).toBe(1)
   })
 
@@ -354,111 +342,206 @@ describe('createPluginHost', () => {
     expect(store?.covers({ from: 5, to: 10 })).toBe(true)
   })
 
-  test('settings, validation and pane state are dispatched to the plugin that claims the name', async () => {
-    const state: Record<number, unknown> = {}
+  test('extendData is replaced, never merged: what a plugin stops sending is gone', async () => {
+    let roots = ['1D', '8h']
+    const plugin: IndicatorPlugin = {
+      id: 'roots',
+      feature: null,
+      paneConfigs: [SIZE_CONFIG('RT')],
+      register: () => [],
+      matches: (name) => name === 'RT',
+      bind: () => ({ sources: [], label: () => 'RT', extendData: () => ({ roots }) })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.indicators = [fakeIndicator('RT', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    const current = () => (fc.indicators[0].extendData as { roots: string[] }).roots
+    expect(current()).toEqual(['1D', '8h'])
+    roots = ['8h']
+    host.settingsModel('RT')?.write('p1', 'size', 2)
+    expect(current()).toEqual(['8h'])
+    roots = []
+    host.settingsModel('RT')?.write('p1', 'size', 3)
+    expect(current()).toEqual([])
+  })
+
+  test('validation is dispatched to the plugin that claims the name', async () => {
     const plugin: IndicatorPlugin = {
       id: 'cfg',
       feature: null,
       register: () => [],
       matches: (name) => name === 'CFG',
       bind: () => null,
-      handleSettings: (request) => request.paneId === 'p1',
-      ownsSettings: (name) => name === 'CFG',
-      validateParams: async (request) => ({ ok: request.calcParams[0] !== 0, reason: 'zero' }),
-      paneState: {
-        hydrate: (initial) => Object.assign(state, initial),
-        snapshot: () => ({ ...state })
-      }
+      validateParams: async (request) => ({ ok: request.calcParams[0] !== 0, reason: 'zero' })
     }
-    const host = await createPluginHost({ plugins: [plugin], facilities: facilities(), paneState: { cfg: { 0: { a: 1 } } } })
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
     hosts.push(host)
-    expect(host.handleSettings({ indicatorName: 'CFG', paneId: 'p1', chartPaneId: 'candle_pane', calcParams: [] })).toBe(true)
-    expect(host.handleSettings({ indicatorName: 'MA', paneId: 'p1', chartPaneId: 'candle_pane', calcParams: [] })).toBe(false)
-    // Asked without opening anything, by the indicator manager; no plugin claims MA.
-    expect(host.ownsSettings('CFG')).toBe(true)
-    expect(host.ownsSettings('MA')).toBe(false)
     expect(host.validateParams).not.toBeNull()
     const check = await host.validateParams?.({ indicatorName: 'CFG', calcParams: [0], symbol: {} as never, period: {} as never })
     expect(check).toEqual({ ok: false, reason: 'zero' })
     expect(await host.validateParams?.({ indicatorName: 'MA', calcParams: [0], symbol: {} as never, period: {} as never })).toEqual({ ok: true })
-    expect(host.paneState()).toEqual({ cfg: { 0: { a: 1 } } })
+  })
+})
+
+/** Per-pane settings of one number, stored under the pane's `sz` field. */
+interface Size {
+  size: number
+}
+function SIZE_CONFIG(template: string, fallback?: () => Size) {
+  return paneConfig<Size>({
+    templates: [template],
+    doc: 'sz',
+    title: 'Size',
+    fields: [{ kind: 'number', key: 'size', label: 'Size', min: 1, max: 9, step: 1 }],
+    defaults: { size: 1 },
+    normalise: (config) => ({ size: Math.min(9, Math.max(1, Math.round(config.size))) }),
+    toStored: (config) => (config.size === 1 ? undefined : { size: config.size }),
+    fromStored: (stored) => {
+      const size = (stored as Partial<Size> | undefined)?.size
+      return typeof size === 'number' ? { size } : undefined
+    },
+    ...(fallback ? { fallback } : {})
+  })
+}
+
+describe('per-pane settings', () => {
+  /** A plugin with settings, recording the config every binding was made with. */
+  function sized(feature: string | null = null) {
+    const bound: Array<{ paneIndex: number; config: unknown }> = []
+    const plugin: IndicatorPlugin = {
+      id: 'sized',
+      feature: feature as never,
+      paneConfigs: [SIZE_CONFIG('SZ')],
+      register: () => [],
+      matches: (name) => name === 'SZ',
+      bind: (ctx) => {
+        bound.push({ paneIndex: ctx.paneIndex, config: ctx.config })
+        return { sources: [], label: () => 'SZ' }
+      }
+    }
+    return { plugin, bound }
+  }
+
+  test("a binding is handed its pane's config, and an edit rebinds that pane alone", async () => {
+    const { plugin, bound } = sized()
+    let persisted = 0
+    const host = await createPluginHost({
+      plugins: [plugin],
+      facilities: facilities(),
+      paneDocs: { 1: { sz: { size: 3 } } },
+      requestPersist: () => {
+        persisted++
+      }
+    })
+    hosts.push(host)
+    const charts = [fakeChart(), fakeChart()]
+    for (const [i, c] of charts.entries()) c.indicators = [fakeIndicator('SZ', `i${i}`)]
+    host.sync(charts.map((c, i) => fakePane(`p${i + 1}`, c.chart)))
+    expect(bound).toEqual([
+      { paneIndex: 0, config: { size: 1 } },
+      { paneIndex: 1, config: { size: 3 } }
+    ])
+    host.settingsModel('SZ')?.write('p1', 'size', 12)
+    expect(bound.at(-1)).toEqual({ paneIndex: 0, config: { size: 9 } })
+    expect(bound).toHaveLength(3)
+    expect(persisted).toBe(1)
+    expect(host.paneDocs()).toEqual({ 0: { sz: { size: 9 } }, 1: { sz: { size: 3 } } })
   })
 
-  test("a plugin's settings reach the indicator manager addressed by wall pane, not pane index", async () => {
-    const configs: Record<number, { size: number }> = { 0: { size: 1 }, 1: { size: 2 } }
-    const writes: unknown[][] = []
-    const plugin: IndicatorPlugin = {
-      id: 'cfg',
-      feature: null,
-      register: () => [],
-      matches: (name) => name === 'CFG',
-      bind: () => null,
-      settings: (name) =>
-        name === 'CFG'
-          ? {
-              fields: [{ kind: 'number', key: 'size', label: 'Size', min: 1, max: 9, step: 1 }],
-              read: (paneIndex) => configs[paneIndex],
-              write: (paneIndex, paneId, key, value) => writes.push([paneIndex, paneId, key, value])
-            }
-          : null
-    }
-    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+  test("the gear and the manager are the host's, addressed by wall pane, not pane index", async () => {
+    const { plugin } = sized()
+    const opened: SettingsPanelOptions<object>[] = []
+    const host = await createPluginHost({
+      plugins: [plugin],
+      facilities: facilities(),
+      paneDocs: { 0: { sz: { size: 2 } } },
+      openSettingsPanel: (options) => {
+        opened.push(options as unknown as SettingsPanelOptions<object>)
+        return { close() {} }
+      }
+    })
     hosts.push(host)
+    const dom = { getBoundingClientRect: () => ({ top: 10, left: 20 }) }
+    const chart = (): ReturnType<typeof fakeChart> => {
+      const c = fakeChart()
+      ;(c.chart as unknown as { getDom: () => unknown }).getDom = () => dom
+      return c
+    }
     // The wall's second pane first: its id and its index disagree, which is the whole mapping.
-    host.sync([fakePane('p2', fakeChart().chart), fakePane('p1', fakeChart().chart)])
-    const model = host.settingsModel('CFG')
-    expect(model?.fields.map((field) => field.kind)).toEqual(['number'])
-    expect(model?.read('p2')).toEqual({ size: 1 })
-    expect(model?.read('p1')).toEqual({ size: 2 })
+    host.sync([fakePane('p2', chart().chart), fakePane('p1', chart().chart)])
+    expect(host.ownsSettings('SZ')).toBe(true)
+    expect(host.ownsSettings('MA')).toBe(false)
+    expect(host.handleSettings({ indicatorName: 'MA', paneId: 'p1', chartPaneId: 'candle_pane', calcParams: [] })).toBe(false)
+    expect(host.handleSettings({ indicatorName: 'SZ', paneId: 'p2', chartPaneId: 'candle_pane', calcParams: [] })).toBe(true)
+    expect(opened[0].title).toBe('Size · EURUSD 1h')
+    expect(opened[0].config).toEqual({ size: 2 })
+    opened[0].onChange({ size: 5 })
+    const model = host.settingsModel('SZ')
+    expect(model?.read('p2')).toEqual({ size: 5 })
+    expect(model?.read('p1')).toEqual({ size: 1 })
     expect(model?.read('p9')).toBeNull()
     model?.write('p1', 'size', 4)
     model?.write('p9', 'size', 5)
-    expect(writes).toEqual([[1, 'p1', 'size', 4]])
+    expect(host.paneDocs()).toEqual({ 0: { sz: { size: 5 } }, 1: { sz: { size: 4 } } })
     expect(host.settingsModel('MA')).toBeNull()
   })
 
   test('panes changing places take their settings with them, and leave none behind', async () => {
-    const configs: Record<number, { size: number }> = {}
-    const revs: Record<number, number> = {}
-    const plugin: IndicatorPlugin = {
-      id: 'cfg',
-      feature: null,
-      register: () => [],
-      matches: (name) => name === 'CFG',
-      bind: () => null,
-      settings: (name) =>
-        name === 'CFG'
-          ? {
-              fields: [{ kind: 'number', key: 'size', label: 'Size', min: 1, max: 9, step: 1 }],
-              read: (paneIndex) => configs[paneIndex] ?? null,
-              write: () => {}
-            }
-          : null,
-      paneState: {
-        hydrate: (initial) => replacePaneConfigs(configs, revs, initial, (stored) => stored as { size: number }),
-        snapshot: () => ({ ...configs })
-      }
-    }
+    const { plugin, bound } = sized()
     const host = await createPluginHost({
       plugins: [plugin],
       facilities: facilities(),
-      paneState: { cfg: { 0: { size: 3 }, 4: { size: 9 } } }
+      paneDocs: { 0: { sz: { size: 3 } }, 4: { sz: { size: 9 } } }
     })
     hosts.push(host)
-    const p1 = fakePane('p1', fakeChart().chart)
-    const p2 = fakePane('p2', fakeChart().chart)
+    const c1 = fakeChart()
+    const c2 = fakeChart()
+    c1.indicators = [fakeIndicator('SZ', 'a')]
+    c2.indicators = [fakeIndicator('SZ', 'b')]
+    const p1 = fakePane('p1', c1.chart)
+    const p2 = fakePane('p2', c2.chart)
     host.sync([p1, p2])
-    const before = { ...revs }
+    bound.length = 0
     // What the wall reports when its second pane is moved first, before it reports the panes.
     host.reorderPanes([1, 0])
     host.sync([p2, p1])
-    const model = host.settingsModel('CFG')
+    const model = host.settingsModel('SZ')
     expect(model?.read('p1')).toEqual({ size: 3 })
-    expect(model?.read('p2')).toBeNull()
+    expect(model?.read('p2')).toEqual({ size: 1 })
     // A position the move did not reach (a pane the layout hides) keeps what it had.
-    expect(host.paneState()).toEqual({ cfg: { 1: { size: 3 }, 4: { size: 9 } } })
-    // Both positions whose config changed are bumped, so a binding there is rebuilt.
-    expect(revs[0]).toBeGreaterThan(before[0] ?? 0)
-    expect(revs[1]).toBeGreaterThan(before[1] ?? 0)
+    expect(host.paneDocs()).toEqual({ 1: { sz: { size: 3 } }, 4: { sz: { size: 9 } } })
+    // Both moved panes were rebound at their new positions, with the config that moved there.
+    expect(bound).toContainEqual({ paneIndex: 1, config: { size: 3 } })
+    expect(bound).toContainEqual({ paneIndex: 0, config: { size: 1 } })
+  })
+
+  test("a plugin this server does not mount keeps its panes' settings through a save", async () => {
+    const { plugin } = sized('levels2')
+    const host = await createPluginHost({
+      plugins: [plugin],
+      facilities: fakeFacilities({ hasFeature: () => false }),
+      paneDocs: { 0: { sz: { size: 3 }, junk: { a: 1 } }, 2: { sz: 'not even an object' } }
+    })
+    hosts.push(host)
+    expect(host.settingsModel('SZ')).toBeNull()
+    // Carried verbatim -- this server cannot judge them -- and moved with their panes; a field
+    // no plugin of this build declares is not carried at all.
+    expect(host.paneDocs()).toEqual({ 0: { sz: { size: 3 } }, 2: { sz: 'not even an object' } })
+    host.reorderPanes([2, 1, 0])
+    expect(host.paneDocs()).toEqual({ 0: { sz: 'not even an object' }, 2: { sz: { size: 3 } } })
+  })
+
+  test('a pane never configured reads the fallback, and stores nothing', async () => {
+    const plugin: IndicatorPlugin = {
+      ...sized().plugin,
+      paneConfigs: [SIZE_CONFIG('SZ', () => ({ size: 6 }))]
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    host.sync([fakePane('p1', fakeChart().chart)])
+    expect(host.settingsModel('SZ')?.read('p1')).toEqual({ size: 6 })
+    expect(host.paneDocs()).toEqual({})
   })
 })

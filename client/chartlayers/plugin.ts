@@ -1,26 +1,26 @@
 import { type IndicatorTemplate, registerIndicator } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import type { Feature } from '../capabilities'
-import type { BindContext, BindingSpec, IndicatorPlugin, PluginFacilities, PluginSettings, SettingsRequest } from '../plugins/types'
+import { timestampCalc } from '../plugins/calc'
+import { paneConfig } from '../plugins/paneconfig'
+import type { BindContext, BindingSpec, IndicatorPlugin, PluginFacilities } from '../plugins/types'
 import type { LayerController } from './controller'
-import { setByPath } from './settings'
 
-// The chart layers as indicators: each layer's controller (controller.ts) draws a pane's
-// overlays while that pane carries the layer's template, and this plugin is everything else an
-// indicator has -- the picker entry, the legend, the gear's settings panel, the indicator
-// manager's inline settings and the per-pane settings in the wall document.
+// The chart layers as indicators: a binding of a layer's template attaches that layer's view to
+// the pane (controller.ts), which draws its overlays for as long as the binding lives, and this
+// plugin is everything else an indicator has -- the picker entry and the legend -- plus what the
+// layer's settings are, which the host keeps per pane (the gear's panel, the indicator manager,
+// the wall document's `ly`).
 //
 // One plugin for every layer, not one each: the picker keys a group by its label, so two
 // plugins could not both put an entry under "Levels".
 //
 // The template draws nothing. A layer's objects are price-anchored overlays with lifespans
-// that predate the loaded bars (chartlayers/README.md), drawn by the controller; the template
-// exists to be added, hidden, removed and configured like any other indicator. It reads
-// nothing through the plugin host either -- a layer fetches by price band as well as time,
-// which the host's sources cannot express -- so a binding has no sources and only names the
-// layer in the legend.
-
-const LEGEND_ROW_HEIGHT = 24
+// that predate the loaded bars (chartlayers/README.md), drawn by its view; the template exists
+// to be added, hidden, removed and configured like any other indicator. It reads nothing
+// through the host's sources either -- a layer fetches by price band as well as time, which a
+// source cannot express -- so a binding has no sources, names the layer in the legend, and
+// attaches the view.
 
 export interface LayerIndicator {
   controller: LayerController
@@ -55,7 +55,7 @@ function registerTemplate(name: string, shortName: string): void {
     minValue: null,
     maxValue: null,
     styles: null,
-    calc: (dataList) => dataList.map(() => ({})),
+    calc: timestampCalc((dataList) => dataList.map(() => ({}))),
     regenerateFigures: null,
     createTooltipDataSource: null,
     draw: () => true
@@ -66,72 +66,15 @@ function registerTemplate(name: string, shortName: string): void {
 
 export function createLayerPlugin(options: { id: string; group: string; layers: LayerIndicator[] }): IndicatorPlugin {
   let facilities: PluginFacilities | null = null
-  let panel: { close(): void } | null = null
-  // Per layer and pane, bumped by every settings edit: part of the binding signature, so the
-  // legend (which names the timeframes drawn) follows the settings.
-  const revs = new Map<string, number>()
   const byTemplate = new Map(options.layers.map((entry) => [entry.controller.template, entry]))
-
-  const revKey = (template: string, paneIndex: number): string => `${template}|${paneIndex}`
-
-  const apply = (entry: LayerIndicator, paneIndex: number, paneId: string, next: unknown): void => {
-    entry.controller.setConfig(paneIndex, next)
-    const key = revKey(entry.controller.template, paneIndex)
-    revs.set(key, (revs.get(key) ?? 0) + 1)
-    facilities?.requestPersist()
-    facilities?.requestReconcile(paneId)
-  }
-
-  const settingsFor = (entry: LayerIndicator): PluginSettings => ({
-    fields: entry.controller.layer.fields,
-    read: (paneIndex) => entry.controller.configFor(paneIndex),
-    write: (paneIndex, paneId, key, value) => {
-      const next = structuredClone(entry.controller.configFor(paneIndex))
-      setByPath(next, key, value)
-      apply(entry, paneIndex, paneId, next)
-    }
-  })
-
-  const openPanel = (entry: LayerIndicator, paneId: string): boolean => {
-    const f = facilities
-    const info = f?.paneInfo(paneId)
-    if (!f || !info) return false
-    let anchor: HTMLElement | null = null
-    try {
-      anchor = info.chart.getDom() as HTMLElement | null
-    } catch {
-      anchor = null
-    }
-    if (!anchor) return false
-    // The gear is drawn on the canvas, so the panel hangs under the legend row rather than under
-    // an element (mtf/plugin.ts explains the rect).
-    const chartRect = anchor.getBoundingClientRect()
-    const paneIndex = info.paneIndex
-    const { layer } = entry.controller
-    panel?.close()
-    panel = f.openSettingsPanel<object>({
-      anchor,
-      anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
-      title: `${layer.label} · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
-      fields: layer.fields,
-      config: entry.controller.configFor(paneIndex),
-      defaults: layer.defaults,
-      onChange: (next) => apply(entry, paneIndex, paneId, next),
-      onClose: () => {
-        panel = null
-      }
-    })
-    return true
-  }
 
   // The legend: the layer's name and the timeframes it is drawing, or why it draws nothing.
   // Coverage is per instrument, and the old toolbar button said so by greying out; a legend
   // that reads only "Zones" over an empty chart would leave the user wondering.
-  const legend = (entry: LayerIndicator, ctx: BindContext): string => {
+  const legend = (entry: LayerIndicator, ctx: BindContext, config: { intervals?: Record<string, boolean> }): string => {
     const { layer } = entry.controller
     if (entry.feature && !facilities?.hasFeature(entry.feature)) return `${layer.label} · not served here`
     if (!layer.available(ctx.symbol, ctx.vendor)) return `${layer.label} · none for ${ctx.ticker}`
-    const config = entry.controller.configFor(ctx.paneIndex) as { intervals?: Record<string, boolean> }
     const intervals = Object.entries(config.intervals ?? {})
       .filter(([, on]) => on)
       .map(([code]) => code)
@@ -143,8 +86,26 @@ export function createLayerPlugin(options: { id: string; group: string; layers: 
     id: options.id,
     // `/levels` is as old as the chart; a layer that needs more says so in its legend.
     feature: null,
-    register(f: PluginFacilities): IndicatorGroup[] {
+    // Per pane and per layer, as the pane's `ly` stores them: `{ levels: {...}, levels2: {...} }`,
+    // each the differences from the layer's defaults (persist.ts). A pane never configured starts
+    // from what the user last chose under the old toolbar button (store.ts).
+    paneConfigs: options.layers.map(({ controller }) =>
+      paneConfig<object>({
+        templates: [controller.template],
+        doc: ['ly', controller.layer.id],
+        title: controller.layer.label,
+        fields: controller.layer.fields,
+        defaults: controller.layer.defaults,
+        normalise: (config) => controller.codec.normalise(config),
+        toStored: (config) => controller.codec.toStored(config),
+        fromStored: (stored) => controller.codec.fromStored(stored),
+        fallback: () => controller.baseline()
+      })
+    ),
+    async register(f: PluginFacilities): Promise<IndicatorGroup[]> {
       facilities = f
+      // A pane is drawn only once the baseline its unconfigured panes start from is known.
+      await Promise.all(options.layers.map(({ controller }) => controller.ready))
       const items = options.layers.map(({ controller, description }) => {
         registerTemplate(controller.template, controller.layer.label)
         return { name: controller.template, label: controller.layer.label, description }
@@ -152,51 +113,17 @@ export function createLayerPlugin(options: { id: string; group: string; layers: 
       return items.length > 0 ? [{ label: options.group, main: true, items }] : []
     },
     matches: (name) => byTemplate.has(name),
-    signature: (ctx) => revs.get(revKey(ctx.indicator.name, ctx.paneIndex)) ?? 0,
     bind(ctx: BindContext): BindingSpec | null {
       const entry = byTemplate.get(ctx.indicator.name)
       if (!entry) return null
+      const config = ctx.config as object
       const precision = ctx.symbol.pricePrecision
       return {
         sources: [],
-        label: () => legend(entry, ctx),
-        overrides: typeof precision === 'number' ? { precision } : undefined
+        label: () => legend(entry, ctx, config),
+        overrides: typeof precision === 'number' ? { precision } : undefined,
+        attach: () => entry.controller.attach(ctx.pane, ctx.indicator.id, config)
       }
-    },
-    handleSettings(request: SettingsRequest): boolean {
-      const entry = byTemplate.get(request.indicatorName)
-      return entry ? openPanel(entry, request.paneId) : false
-    },
-    ownsSettings: (templateName) => byTemplate.has(templateName),
-    settings: (templateName) => {
-      const entry = byTemplate.get(templateName)
-      return entry ? settingsFor(entry) : null
-    },
-    paneState: {
-      // By pane index, then by layer id: `{ 0: { levels: {...}, levels2: {...} } }`.
-      hydrate(initial) {
-        for (const { controller } of options.layers) {
-          const mine: Record<number, unknown> = {}
-          for (const [index, layers] of Object.entries(initial)) {
-            const stored = (layers as Record<string, unknown> | null)?.[controller.layer.id]
-            if (stored !== undefined) mine[Number(index)] = stored
-          }
-          controller.hydrate(mine)
-        }
-      },
-      snapshot() {
-        const out: Record<number, Record<string, unknown>> = {}
-        for (const { controller } of options.layers) {
-          for (const [index, stored] of Object.entries(controller.snapshot())) {
-            out[Number(index)] = { ...out[Number(index)], [controller.layer.id]: stored }
-          }
-        }
-        return out
-      }
-    },
-    dispose() {
-      panel?.close()
-      panel = null
     }
   }
 }

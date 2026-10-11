@@ -1,4 +1,3 @@
-import type { ChartProPane } from '../../src'
 import { createLayerController, type LayerController } from '../chartlayers/controller'
 import { createLayerPlugin } from '../chartlayers/plugin'
 import { levels2Layer } from '../levels2/layer'
@@ -8,7 +7,7 @@ import { levelsLayer } from './layer'
 // Levels and Zones, the two chart layers, as indicators in the picker's "Levels" group on the
 // price pane (chartlayers/plugin.ts). Built by the caller rather than inside the plugin
 // registry because the replay drives the Levels controller directly (a day boundary
-// invalidates it), and because the controllers follow the wall's panes themselves.
+// invalidates it).
 
 /** Saved walls name their indicators by template, so these names are a compatibility surface:
  * never rename one. The suffix is the layer id, which is also the server's route. */
@@ -19,8 +18,6 @@ export interface LevelsIndicators {
   plugin: IndicatorPlugin
   levels: LayerController
   zones: LayerController
-  /** Both controllers, from `ChartProOptions.onPanesChange`; `sync([])` at teardown. */
-  sync(panes: ChartProPane[]): void
 }
 
 export function createLevelsIndicators(): LevelsIndicators {
@@ -43,13 +40,5 @@ export function createLevelsIndicators(): LevelsIndicators {
       }
     ]
   })
-  return {
-    plugin,
-    levels,
-    zones,
-    sync(panes) {
-      levels.sync(panes)
-      zones.sync(panes)
-    }
-  }
+  return { plugin, levels, zones }
 }

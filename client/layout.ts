@@ -10,11 +10,7 @@ import type {
 } from '../src'
 import { periodFor } from '../src/utils/period'
 import { availablePeriods, defaultPeriod } from './periods'
-import { fromStoredDivConfig, toStoredDivConfig, type DivConfig, type StoredDivConfig } from './arev21div/config'
-import { fromStoredLabConfig, toStoredLabConfig, type LabConfig, type StoredLabConfig } from './arevlab/config'
-import { fromStoredMtfConfig, toStoredMtfConfig, type MtfConfig, type StoredMtfConfig } from './mtf/config'
-import { fromStoredVpConfig, toStoredVpConfig, type StoredVpConfig, type VpConfig } from './volprofile/config'
-import type { StoredLayerConfig } from './chartlayers/persist'
+import type { PaneDoc } from './plugins/paneconfig'
 import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 
 // The SHAPE of one wall document -- per pane its symbol/period/indicators, those indicators'
@@ -34,7 +30,7 @@ import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
 // used to mount. A bump would buy nothing and would strand every existing workspace.
 const LAYOUT_VERSION = 1
 
-interface PersistedPane {
+interface PersistedPane extends PanePluginFields {
   s: string // symbol ticker, e.g. 'EURUSD'
   v?: string // vendor; omitted when 'oanda' (client/symbols.ts symbolVendor's own default)
   p: string // Period.text -- which IS the server's resolution code ('1h', '1D')
@@ -45,33 +41,6 @@ interface PersistedPane {
   sa?: number
   ip?: Record<string, number[]> // indicator template name -> calcParams, omitted when empty
   vw?: PersistedView // where this pane was looking, omitted for a pane never read back
-  // The AREV21 multi-timeframe overlay's settings for THIS pane -- which timeframes it
-  // draws and each one's colour and sizes. Its own field rather than a slot in `ip`
-  // because those are klinecharts calcParams (a flat numeric array); this is a record per
-  // timeframe, which is the whole reason that overlay owns a settings panel of its own.
-  // Omitted for a pane that has never been configured, which reads as the defaults.
-  mtf?: StoredMtfConfig
-  // The other multi-timeframe overlays' settings (client/mtf/overlays.ts -- the arev21_outlier
-  // rank ones), the same diff-from-defaults shape as `mtf`, keyed by the overlay's plugin id
-  // (`mtf_<name>`). Omitted when no overlay on this pane has been configured.
-  mx?: Record<string, StoredMtfConfig>
-  // The AREV lab's settings for THIS pane -- which generations it draws, each one's colour and
-  // signal rule and that rule's levers -- for the same reason as `mtf`, and stored the same
-  // way: only what differs from the defaults, omitted for a pane never configured.
-  al?: StoredLabConfig
-  // The AREV21 divergence's settings for THIS pane -- its swing rule and how its lines are drawn,
-  // one config for both of its templates -- stored the same way: the differences from the
-  // defaults, flat by path, omitted for a pane never configured.
-  dv?: StoredDivConfig
-  // The volume profile's settings for THIS pane -- what it profiles, how finely and how it is
-  // drawn -- stored the same way: the differences from the defaults, flat by path, omitted for
-  // a pane never configured.
-  vp?: StoredVpConfig
-  // The chart layers' settings for THIS pane (client/chartlayers -- Levels and Zones), by layer
-  // id, each stored the same way: the differences from the layer's defaults, flat by path,
-  // omitted for a pane never configured. The layer validates them as it reads them back
-  // (chartlayers/persist.ts), so this file only checks their shape.
-  ly?: Record<string, StoredLayerConfig>
   // What the pane's own SETTINGS dialog says -- candle type, the three price marks, the
   // indicator last-value mark, the grid -- flat by klinecharts style path, and only where the
   // pane differs from what the app draws by. Omitted for a pane never styled, which is almost
@@ -79,6 +48,28 @@ interface PersistedPane {
   // klinecharts takes them through overrideYAxis rather than setStyles.
   st?: PaneStyleOverrides
 }
+
+// The plugins' settings for one pane, each a diff from that plugin's defaults and omitted for a
+// pane never configured. This file carries them and never reads them: the plugin host writes
+// and validates them (client/plugins/paneconfig.ts), under the field each plugin's
+// `paneConfigs` names -- so a plugin that adds settings changes nothing here. The fields in use:
+//
+//   mtf  the AREV21 multi-timeframe overlay's (client/mtf), its own field since before there
+//        were others: which timeframes it draws, each one's colour and sizes
+//   mx   the other MTF overlays' (the arev21_outlier rank ones), by plugin id
+//   al   the AREV lab's (client/arevlab), by generation
+//   dv   the AREV21 divergence's (client/arev21div), one config for both of its templates
+//   vp   the volume profile's (client/volprofile)
+//   ly   Levels' and Zones' (client/chartlayers), by layer id
+//
+// Their own fields rather than slots in `ip`, because those are klinecharts calcParams (a flat
+// numeric array) and these are records -- the whole reason those plugins own a settings panel.
+interface PanePluginFields {
+  [field: string]: unknown
+}
+
+// The keys of a pane entry that are the library's, not a plugin's.
+const PANE_FIELDS = new Set(['s', 'v', 'p', 'mi', 'si', 'sa', 'ip', 'vw', 'st'])
 
 // One pane's view -- the library's PaneViewState, minus what is not worth storing. Kept
 // deliberately small because the whole workspace SET shares one 64 KiB document and a wall of
@@ -118,19 +109,9 @@ export interface HydratedPane {
   /** How many of `subIndicators` sit above the price pane (PaneOptions.subIndicatorsAbove). */
   subIndicatorsAbove?: number
   indicatorParams: Record<string, number[]>
-  /** Undefined for a pane never configured; the overlay seeds those itself. */
-  mtfConfig?: MtfConfig
-  /** The other MTF overlays' settings by plugin id; only the configured ones. */
-  mtfOverlayConfigs?: Record<string, MtfConfig>
-  /** Undefined for a pane never configured; the AREV lab seeds those itself. */
-  labConfig?: LabConfig
-  /** Undefined for a pane never configured; the AREV21 divergence uses its defaults there. */
-  divConfig?: DivConfig
-  /** Undefined for a pane never configured; the volume profile uses its defaults there. */
-  vpConfig?: VpConfig
-  /** The chart layers' stored settings by layer id, still as stored (the layer validates them);
-   * undefined for a pane none was configured on. */
-  layerConfigs?: Record<string, StoredLayerConfig>
+  /** The plugins' settings, still as stored -- the plugin host validates them as it reads them
+   * (client/plugins/paneconfig.ts). Undefined for a pane none was configured on. */
+  plugins?: PaneDoc
   view: PaneViewState | null
   /** The pane's settings-dialog styles, still as stored: the library judges each entry against
    * the dialog's own options as it seeds the pane (`settingStyleValue`). Undefined for a pane
@@ -345,12 +326,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
 
   const symbols = await Promise.all(layout.panes.map(symbolFor))
   const panes: HydratedPane[] = layout.panes.map((pane, index) => {
-    const mtfConfig = fromStoredMtfConfig(pane.mtf)
-    const labConfig = fromStoredLabConfig(pane.al)
-    const divConfig = fromStoredDivConfig(pane.dv)
-    const vpConfig = fromStoredVpConfig(pane.vp)
-    const layerConfigs = hydrateLayerConfigs(pane.ly)
-    const mtfOverlayConfigs = hydrateOverlayConfigs(pane.mx)
+    const plugins = pluginFieldsOf(pane)
     const styleOverrides = hydrateStyleOverrides(pane.st)
     const subIndicators = live(pane.si ?? ['VOL'])
     return {
@@ -366,15 +342,7 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
       subIndicators,
       subIndicatorsAbove: hydrateSubIndicatorsAbove(pane, subIndicators),
       indicatorParams: hydrateIndicatorParams(pane),
-      // Merged onto the defaults and validated field by field: this is a stored document, so
-      // a malformed one must read as "never configured" rather than reach the drawing code
-      // as a half-object.
-      ...(mtfConfig ? { mtfConfig } : {}),
-      ...(labConfig ? { labConfig } : {}),
-      ...(divConfig ? { divConfig } : {}),
-      ...(vpConfig ? { vpConfig } : {}),
-      ...(layerConfigs ? { layerConfigs } : {}),
-      ...(mtfOverlayConfigs ? { mtfOverlayConfigs } : {}),
+      ...(plugins ? { plugins } : {}),
       ...(styleOverrides ? { styleOverrides } : {}),
       view: hydrateView(pane)
     }
@@ -459,107 +427,31 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
   }
 }
 
-/** The live wall, as a document. */
-/** Per-pane plugin settings, keyed by pane index -- app state the library has never heard of,
- * so unlike everything else here it cannot be read off a PaneSnapshot. */
-export interface PanePluginState {
-  /** The AREV21 multi-timeframe overlay's. */
-  mtf?: Record<number, MtfConfig>
-  /** The AREV lab's. */
-  arevlab?: Record<number, LabConfig>
-  /** The AREV21 divergence's. */
-  arev21div?: Record<number, DivConfig>
-  /** The volume profile's. */
-  volprofile?: Record<number, VpConfig>
-  /** The chart layers', already in their stored form, by layer id (chartlayers/plugin.ts). */
-  levels?: Record<number, Record<string, StoredLayerConfig>>
-  /** Every other MTF overlay's, under its plugin id -- which is always `mtf_<name>`
-   * (client/mtf/overlays.ts), so a new overlay persists without a change here. */
-  [overlayId: `${typeof MTF_OVERLAY_PREFIX}${string}`]: Record<number, MtfConfig> | undefined
-}
-
-/** A pane's stored `ly`: every layer entry that is a non-empty object; undefined when none is.
- * Only the shape -- the values are the layer's to judge, and it does so as it reads them. */
-function hydrateLayerConfigs(stored: unknown): Record<string, StoredLayerConfig> | undefined {
-  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
-  const out: Record<string, StoredLayerConfig> = {}
-  for (const [id, config] of Object.entries(stored)) {
-    if (config && typeof config === 'object' && !Array.isArray(config) && Object.keys(config).length > 0) {
-      out[id] = config as StoredLayerConfig
-    }
+/** A pane's plugin fields, as stored: every key that is not the library's, holding a
+ * non-empty object. Only the shape -- each plugin judges its own as the host reads them. */
+function pluginFieldsOf(pane: Readonly<Record<string, unknown>>): PaneDoc | undefined {
+  const out: PaneDoc = {}
+  for (const [key, value] of Object.entries(pane)) {
+    if (PANE_FIELDS.has(key) || !value || typeof value !== 'object' || Array.isArray(value)) continue
+    if (Object.keys(value).length > 0) out[key] = value
   }
   return Object.keys(out).length > 0 ? out : undefined
 }
 
-/** The prefix every non-original MTF overlay's plugin id carries (client/mtf/overlays.ts). */
-export const MTF_OVERLAY_PREFIX = 'mtf_'
-
-/** A pane's stored `mx`, each entry validated as `mtf` is; undefined when nothing survives. */
-function hydrateOverlayConfigs(stored: unknown): Record<string, MtfConfig> | undefined {
-  if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return undefined
-  const out: Record<string, MtfConfig> = {}
-  for (const [id, diff] of Object.entries(stored as Record<string, unknown>)) {
-    if (!id.startsWith(MTF_OVERLAY_PREFIX)) continue
-    const config = fromStoredMtfConfig(diff)
-    if (config) out[id] = config
-  }
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
-/** The hydrated panes' `mx`, turned round into the plugin host's shape: plugin id -> pane
- * index -> config. Seeds each overlay plugin with its own panes' settings. */
-export function overlayPaneState(panes: readonly HydratedPane[]): Record<string, Record<number, MtfConfig>> {
-  const out: Record<string, Record<number, MtfConfig>> = {}
-  panes.forEach((pane, index) => {
-    for (const [id, config] of Object.entries(pane.mtfOverlayConfigs ?? {})) {
-      out[id] ??= {}
-      out[id][index] = config
-    }
-  })
-  return out
-}
-
-/** One pane's `mx`: every overlay whose settings differ from the defaults. */
-function storedOverlayConfigs(pluginState: PanePluginState, index: number): Record<string, StoredMtfConfig> | undefined {
-  const out: Record<string, StoredMtfConfig> = {}
-  for (const [id, configs] of Object.entries(pluginState)) {
-    if (!id.startsWith(MTF_OVERLAY_PREFIX)) continue
-    const config = (configs as Record<number, MtfConfig> | undefined)?.[index]
-    const stored = config ? toStoredMtfConfig(config) : undefined
-    if (stored) out[id] = stored
-  }
-  return Object.keys(out).length > 0 ? out : undefined
-}
-
+/** The live wall, as a document. `plugins` is each pane's plugin settings as the plugin host
+ * stores them (PluginHost.paneDocs), by pane index. */
 export function toPersistedLayout(
   preset: string,
   panes: PaneSnapshot[],
   active: number,
   sync: SyncOptions,
-  pluginState: PanePluginState = {}
+  plugins: Readonly<Record<number, PaneDoc>> = {}
 ): PersistedLayout {
   return {
     version: LAYOUT_VERSION,
     preset,
     active,
-    panes: panes.map((pane, index) => {
-      const persisted: PersistedPane = toPersistedPane(pane)
-      const mtf = pluginState.mtf?.[index] ? toStoredMtfConfig(pluginState.mtf[index]) : undefined
-      const al = pluginState.arevlab?.[index] ? toStoredLabConfig(pluginState.arevlab[index]) : undefined
-      const dv = pluginState.arev21div?.[index] ? toStoredDivConfig(pluginState.arev21div[index]) : undefined
-      const vp = pluginState.volprofile?.[index] ? toStoredVpConfig(pluginState.volprofile[index]) : undefined
-      const mx = storedOverlayConfigs(pluginState, index)
-      const ly = hydrateLayerConfigs(pluginState.levels?.[index])
-      return {
-        ...persisted,
-        ...(mtf ? { mtf } : {}),
-        ...(al ? { al } : {}),
-        ...(dv ? { dv } : {}),
-        ...(vp ? { vp } : {}),
-        ...(mx ? { mx } : {}),
-        ...(ly ? { ly } : {})
-      }
-    }),
+    panes: panes.map((pane, index) => ({ ...toPersistedPane(pane), ...pluginFieldsOf(plugins[index] ?? {}) })),
     sync
   }
 }

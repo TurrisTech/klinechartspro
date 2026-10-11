@@ -1,0 +1,298 @@
+{
+ "_note": "Generated from main c212b64 (client-c212b64) by handing this document to every plugin's own paneState as client/index.ts did, before the host owned per-pane settings: what each pane's plugin fields were written as (`written`), and after panes 1 and 2 swap places (`swapped`). Keys sorted. Never regenerate from the code under test.",
+ "document": {
+  "version": 1,
+  "preset": "3",
+  "active": 0,
+  "sync": {
+   "crosshair": true,
+   "time": true
+  },
+  "panes": [
+   {
+    "s": "EURUSD",
+    "p": "1h",
+    "mi": [
+     "MTF:arev21",
+     "LEVELS:levels",
+     "LEVELS:levels2"
+    ],
+    "si": [
+     "VOL",
+     "LAB:arev"
+    ],
+    "mtf": {
+     "4h": {
+      "color": "#123456",
+      "enabled": true
+     },
+     "1D": {
+      "arrowSize": 20
+     },
+     "graph": {
+      "from": "8h",
+      "maxStep": 4
+     }
+    },
+    "mx": {
+     "mtf_arev21_outlier_rank_85": {
+      "1h": {
+       "enabled": false
+      },
+      "graph": {
+       "roots": {
+        "4h": true
+       },
+       "starColor": "#abcdef"
+      }
+     },
+     "mtf_arev21_outlier_rank_90": {
+      "2h": {
+       "textSize": 15
+      }
+     },
+     "mtf_unknown": {
+      "1h": {
+       "enabled": true
+      }
+     },
+     "notprefixed": {
+      "1h": {
+       "enabled": true
+      }
+     }
+    },
+    "al": {
+     "arev21": {
+      "signals": "rank",
+      "rank.q": 0.9
+     },
+     "arev19": {
+      "enabled": true
+     }
+    },
+    "dv": {
+     "rule.left": 12,
+     "rule.minGap": 30,
+     "rule.maxGap": 10,
+     "line.style": "dashed"
+    },
+    "vp": {
+     "rows": 60,
+     "draw.upColor": "#00ff00",
+     "mode": "session"
+    },
+    "ly": {
+     "levels": {
+      "intervals.1M": false,
+      "showSpent": true
+     },
+     "levels2": {
+      "showRetired": true,
+      "base.fillOpacity": 0.3
+     },
+     "bogus": [
+      1
+     ]
+    }
+   },
+   {
+    "s": "EURUSD",
+    "p": "4h",
+    "mtf": {
+     "4h": {
+      "color": "#FFFFFF"
+     }
+    },
+    "vp": {
+     "rows": "x"
+    },
+    "dv": {
+     "nonsense": 1
+    },
+    "ly": {
+     "levels": {}
+    }
+   },
+   {
+    "s": "GBPUSD",
+    "p": "1D",
+    "al": "junk",
+    "ly": {
+     "levels2": {
+      "intervals.4h": true
+     }
+    },
+    "mx": {
+     "mtf_arev21_outlier_rank_90": {
+      "graph": {
+       "maxStep": 1
+      }
+     }
+    }
+   }
+  ]
+ },
+ "written": [
+  {
+   "al": {
+    "arev19": {
+     "enabled": true
+    },
+    "arev21": {
+     "rank.q": 0.9,
+     "signals": "rank"
+    }
+   },
+   "dv": {
+    "line.style": "dashed",
+    "rule.left": 12,
+    "rule.maxGap": 30,
+    "rule.minGap": 30
+   },
+   "ly": {
+    "levels": {
+     "intervals.1M": false,
+     "showSpent": true
+    },
+    "levels2": {
+     "base.fillOpacity": 0.3,
+     "showRetired": true
+    }
+   },
+   "mtf": {
+    "1D": {
+     "arrowSize": 20
+    },
+    "4h": {
+     "color": "#123456"
+    },
+    "graph": {
+     "maxStep": 4,
+     "roots": {
+      "1D": false,
+      "8h": true
+     }
+    }
+   },
+   "mx": {
+    "mtf_arev21_outlier_rank_85": {
+     "1h": {
+      "enabled": false
+     },
+     "graph": {
+      "roots": {
+       "4h": true
+      },
+      "starColor": "#abcdef"
+     }
+    },
+    "mtf_arev21_outlier_rank_90": {
+     "2h": {
+      "textSize": 15
+     }
+    }
+   },
+   "vp": {
+    "draw.upColor": "#00ff00",
+    "mode": "session",
+    "rows": 60
+   }
+  },
+  {
+   "mtf": {
+    "4h": {
+     "color": "#FFFFFF"
+    }
+   }
+  },
+  {
+   "ly": {
+    "levels2": {
+     "intervals.4h": true
+    }
+   }
+  }
+ ],
+ "swapped": [
+  {
+   "mtf": {
+    "4h": {
+     "color": "#FFFFFF"
+    }
+   }
+  },
+  {
+   "al": {
+    "arev19": {
+     "enabled": true
+    },
+    "arev21": {
+     "rank.q": 0.9,
+     "signals": "rank"
+    }
+   },
+   "dv": {
+    "line.style": "dashed",
+    "rule.left": 12,
+    "rule.maxGap": 30,
+    "rule.minGap": 30
+   },
+   "ly": {
+    "levels": {
+     "intervals.1M": false,
+     "showSpent": true
+    },
+    "levels2": {
+     "base.fillOpacity": 0.3,
+     "showRetired": true
+    }
+   },
+   "mtf": {
+    "1D": {
+     "arrowSize": 20
+    },
+    "4h": {
+     "color": "#123456"
+    },
+    "graph": {
+     "maxStep": 4,
+     "roots": {
+      "1D": false,
+      "8h": true
+     }
+    }
+   },
+   "mx": {
+    "mtf_arev21_outlier_rank_85": {
+     "1h": {
+      "enabled": false
+     },
+     "graph": {
+      "roots": {
+       "4h": true
+      },
+      "starColor": "#abcdef"
+     }
+    },
+    "mtf_arev21_outlier_rank_90": {
+     "2h": {
+      "textSize": 15
+     }
+    }
+   },
+   "vp": {
+    "draw.upColor": "#00ff00",
+    "mode": "session",
+    "rows": 60
+   }
+  },
+  {
+   "ly": {
+    "levels2": {
+     "intervals.4h": true
+    }
+   }
+  }
+ ]
+}

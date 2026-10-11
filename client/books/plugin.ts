@@ -10,6 +10,8 @@ import {
   type BookProfilePoint
 } from './api'
 import { hoverIndex, parseTemplateName, registerBooksIndicators } from './templates'
+import { AXIS_GAP } from '../plugins/draw'
+import { phaseLabel } from '../plugins/legend'
 
 // The OANDA books as a client plugin (templates.ts has the catalogue of displays). One
 // source per binding; the depth overlay and the hover viewer of one kind share the
@@ -18,7 +20,6 @@ import { hoverIndex, parseTemplateName, registerBooksIndicators } from './templa
 // the next fetch — but the hover viewer does subscribe the CROSSHAIR, which is what makes
 // "the book at the candle under the pointer" repaint as the pointer moves.
 
-const AXIS_GAP = { top: 0.1, bottom: 0.05 }
 
 function baseLabel(display: string, kind: string): string {
   switch (display) {
@@ -101,17 +102,7 @@ export function createBooksPlugin(feed: BookFeed = OWN_BOOKS): IndicatorPlugin {
       const base = `${baseLabel(display, kind)}${feed.suffix}`
       return {
         sources: [source],
-        label: (state: BindingState) => {
-          switch (state.sources[0]?.store.phase) {
-            case 'idle':
-            case 'loading':
-              return `${base} · loading`
-            case 'error':
-              return `${base} · error`
-            default:
-              return base
-          }
-        },
+        label: (state: BindingState) => phaseLabel(base, [state.sources[0]?.store]) ?? base,
         extendData: (state: BindingState) => ({ chartInterval: state.chartInterval }),
         yAxisGap: display === 'sentiment' || display === 'flow' ? AXIS_GAP : undefined
       }

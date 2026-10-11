@@ -1,4 +1,4 @@
-import { fetchBars } from '../history'
+import { closedBarPage } from '../plugins/bars'
 import type { Page, Range, SourceSpec } from '../plugins/types'
 
 // The one thing TradeTalk reads that the chart does not already hold: DAILY bars.
@@ -8,11 +8,11 @@ import type { Page, Range, SourceSpec } from '../plugins/types'
 // back to the start of the year before it, which is the least that can answer "what did last
 // year's candle do" and, incidentally, far more than the 21 sessions the daily EMA needs.
 //
-// Nothing new on the server: `/getbars` has always served daily bars, and `fetchBars` reads
-// the closed part of the window straight from the chart tiles, so a pane that pans through
-// history costs no extra request. The read clock (a bar replay) is applied by the URL builder
-// every read goes through, and the source declares its resolution so the host knows how far a
-// reply taken at a cursor was final.
+// Nothing new on the server: `/getbars` has always served daily bars, and the closed part of
+// the window is read straight from the chart tiles, so a pane that pans through history costs
+// no extra request. Under a bar replay only the sessions the replay has seen close are read
+// (plugins/bars.ts), and the source declares its resolution so the host knows how far a reply
+// taken at a cursor was final.
 
 export interface DailyPoint {
   /** The bar's canonical date: 00:00 on the instrument's own clock, of its session. */
@@ -26,8 +26,6 @@ export interface DailyPoint {
 export const DAILY_RESOLUTION = '1D'
 
 const DAY_MS = 86_400_000
-/** `/getbars` 413s past the server's cap; a chunk well under it, as the other bar readers use. */
-const CHUNK_BARS = 4000
 /** Slack on the left edge, so the first session of a year is never cut off by the hours
  * between a candle's open and the date it is filed under. */
 const MARGIN_MS = 7 * DAY_MS
@@ -53,11 +51,10 @@ export function dailySource(vendor: string, ticker: string): SourceSpec<DailyPoi
     resolution: DAILY_RESOLUTION,
     window: dailyWindow,
     fetch: async (range: Range): Promise<Page<DailyPoint>> => {
-      const to = Math.min(range.to, range.from + CHUNK_BARS * DAY_MS)
-      const bars = await fetchBars(vendorSymbol, DAILY_RESOLUTION, range.from, to, null)
+      const { bars, nextFrom } = await closedBarPage(vendorSymbol, DAILY_RESOLUTION, range)
       return {
         points: bars.map((bar) => ({ date: bar.timestamp, open: bar.open, high: bar.high, low: bar.low, close: bar.close })),
-        nextFrom: to < range.to ? to : null
+        nextFrom
       }
     }
   }

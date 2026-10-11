@@ -4,6 +4,7 @@ import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFac
 import { MTF01_GENERATION, type Mtf01Event } from './api'
 import { isMtf01Indicator, registerMtf01Indicators } from './templates'
 import { Mtf01Store } from './store'
+import { phaseLabel } from '../plugins/legend'
 
 // mtf01 as a client plugin: one sub-pane template over one source, and that source reads
 // TWO kinds of row from one response -- the cascade events in `points`, the trades they
@@ -61,18 +62,7 @@ export function createMtf01Plugin(): IndicatorPlugin {
               })
           }
         ],
-        label: (state: BindingState) => {
-          const store = state.sources[0]?.store as Mtf01Store | undefined
-          switch (store?.phase) {
-            case 'idle':
-            case 'loading':
-              return `${base} · loading`
-            case 'error':
-              return `${base} · error`
-            default:
-              return store?.cascade ? `${base} · ${store.cascade}` : base
-          }
-        },
+        label: (state: BindingState) => phaseLabel(base, [state.sources[0]?.store]) ?? base,
         yAxisGap: AXIS_GAP
       }
     }

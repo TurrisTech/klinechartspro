@@ -1,4 +1,3 @@
-import { apiGet } from '../config'
 
 // wdashboard-server's mtf01 surface (services/mtf01.py): the multi-timeframe cascade a
 // hand-run research script (wtradingresearch bin/mtf01_generate.py) persisted to the algo
@@ -74,23 +73,4 @@ export interface Mtf01Trade {
   resolvedAt: number | null
   /** Short, so `avgEntry - exitPrice`: positive is a profit, in price units. */
   pnlPrice: number | null
-}
-
-/** One tier configuration an instrument holds rows for. A parameter sweep writes several,
- * and the cascade selector needs this list BEFORE it can ask for values -- which is why
- * the server keeps it on a route of its own rather than in the values envelope. */
-export interface Mtf01Cascade {
-  cascade: string
-  events: number
-  trades: number
-  firstAt: number | null
-  lastAt: number | null
-}
-
-export async function fetchMtf01Cascades(vendorSymbol: string): Promise<Mtf01Cascade[]> {
-  const body = await apiGet<{ cascades: Mtf01Cascade[] }>('/strategy/cascades', {
-    symbol: vendorSymbol,
-    generation: MTF01_GENERATION
-  })
-  return body.cascades ?? []
 }

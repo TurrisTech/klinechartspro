@@ -1,8 +1,10 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, IndicatorSettingsModel } from '../../src'
-import { permuteByIndex } from '../../src/state/paneOrder'
+import { openSettingsPanel as openPanel, setByPath, type SettingsPanelHandle } from '../chartlayers/settings'
+import { onViewMoved } from '../chartview'
 import { gridFor } from '../replay/timeframes'
 import { knownThrough } from './horizon'
+import { type PaneConfig, PaneConfigStore, type PaneDoc } from './paneconfig'
 import { dropStore, liveStores, storeFor, WindowStore } from './store'
 import type {
   BindContext,
@@ -38,6 +40,9 @@ const RANGE_DEBOUNCE_MS = 250
 const MAX_PAGES_PER_GAP = 20
 /** How often `settled` looks again while some binding is still fetching. */
 const SETTLE_POLL_MS = 50
+/** Rough height of one klinecharts legend row: a settings panel hangs just below the legend
+ * the gear sits in. */
+const LEGEND_ROW_HEIGHT = 24
 
 interface Binding {
   plugin: IndicatorPlugin
@@ -52,6 +57,8 @@ interface Binding {
   state: BindingState
   inFlight: Set<string>
   retryTimer: ReturnType<typeof setTimeout> | null
+  /** `BindingSpec.attach`'s release. */
+  detach: (() => void) | null
   disposed: boolean
   lastAppliedRev: number
   lastShortName: string
@@ -64,7 +71,8 @@ interface WiredPane {
   bindings: Map<string, Binding>
   poll: ReturnType<typeof setInterval>
   rangeTimer: ReturnType<typeof setTimeout> | null
-  onRange: () => void
+  /** The release of its view-moved subscription. */
+  unwatchView: () => void
 }
 
 export interface PluginHost {
@@ -81,11 +89,12 @@ export interface PluginHost {
   settingsModel(templateName: string): IndicatorSettingsModel | null
   /** ChartProOptions.indicatorParamsValidator, or null when no plugin validates. */
   readonly validateParams: ((request: ValidateRequest) => Promise<IndicatorParamsCheck>) | null
-  /** Per-plugin, per-pane document state -- what the wall document persists. */
-  paneState(): Record<string, Record<number, unknown>>
+  /** Every pane's plugin settings as the wall document stores them, by pane index
+   * (paneconfig.ts) -- what `client/layout.ts` writes into each pane's entry. */
+  paneDocs(): Record<number, PaneDoc>
   /** Panes changed places on the wall (ChartProOptions.onPaneOrderChange: `order[newIndex] =
-   * oldIndex`): every plugin's per-pane state moves with its pane. Called BEFORE the next
-   * `sync`, which then finds each moved pane at its new index and rebinds it there. */
+   * oldIndex`): every pane's settings move with it. Called BEFORE the next `sync`, which then
+   * finds each moved pane at its new index and rebinds it there. */
   reorderPanes(order: readonly number[]): void
   /** The read clock moved forward off `clock` (a replay step): forget the coverage that
    * `clock` made incomplete and re-cover every binding. */
@@ -98,38 +107,21 @@ export interface PluginHost {
   teardown(): void
 }
 
-export interface HostFacilities extends Omit<PluginFacilities, 'paneInfo' | 'requestReconcile'> {
-  /** Supplied by the host. */
-  paneInfo?: PluginFacilities['paneInfo']
-  requestReconcile?: PluginFacilities['requestReconcile']
-}
-
 export interface CreateHostOptions {
   plugins: IndicatorPlugin[]
-  facilities: HostFacilities
-  /** What the wall document hydrated per plugin (by plugin id, then pane index). */
-  paneState?: Record<string, Record<number, unknown>>
+  facilities: PluginFacilities
+  /** Each pane's plugin settings as the wall document stored them, by pane index. */
+  paneDocs?: Record<number, PaneDoc | undefined>
+  /** Ask the app to save the wall: a pane's settings were edited. */
+  requestPersist?: () => void
+  /** The settings panel; a test passes a recorder. */
+  openSettingsPanel?: typeof openPanel
 }
 
 export async function createPluginHost(options: CreateHostOptions): Promise<PluginHost> {
   const wired = new Map<string, WiredPane>()
-  const facilities = options.facilities as PluginFacilities
+  const facilities = options.facilities
   let seq = 0
-
-  // The host completes the facilities: a plugin may ask for a pane or a reconcile only
-  // once the host exists, and both are answered from its own tables.
-  facilities.paneInfo = (paneId) => {
-    const entry = wired.get(paneId)
-    return entry ? { chart: entry.chart, pane: entry.pane, paneIndex: entry.paneIndex } : null
-  }
-  facilities.requestReconcile = (paneId) => {
-    if (paneId) {
-      const entry = wired.get(paneId)
-      if (entry) reconcile(entry)
-      return
-    }
-    for (const entry of wired.values()) reconcile(entry)
-  }
 
   const plugins: IndicatorPlugin[] = []
   const groups: IndicatorGroup[] = []
@@ -137,7 +129,6 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     if (plugin.feature !== null && !facilities.hasFeature(plugin.feature)) continue
     try {
       groups.push(...(await plugin.register(facilities)))
-      plugin.paneState?.hydrate(options.paneState?.[plugin.id] ?? {})
       plugins.push(plugin)
     } catch (err) {
       // A plugin that cannot register (its catalogue failed to load, say) contributes
@@ -147,6 +138,64 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
   }
 
   const pluginFor = (name: string): IndicatorPlugin | undefined => plugins.find((p) => p.matches(name))
+
+  // Per-pane settings: owned for the plugins that registered, carried verbatim for the rest so
+  // a server that cannot draw an overlay does not cost a pane its settings at the next save.
+  const configByTemplate = new Map<string, PaneConfig>()
+  for (const plugin of plugins) for (const config of plugin.paneConfigs ?? []) for (const name of config.templates) configByTemplate.set(name, config)
+  const paneConfigs = new PaneConfigStore(
+    [...new Set(configByTemplate.values())],
+    options.plugins.flatMap((plugin) => (plugin.paneConfigs ?? []).map((config) => config.doc))
+  )
+  paneConfigs.hydrate(options.paneDocs ?? {})
+  const openSettingsPanel = options.openSettingsPanel ?? openPanel
+  let panel: SettingsPanelHandle | null = null
+
+  /** A pane's settings edited, from its panel or from the indicator manager: kept, the wall
+   * saved, and only that pane rebound -- the settings belong to it, so another pane showing the
+   * same instrument keeps whatever it was set to. */
+  const writeConfig = (config: PaneConfig, paneIndex: number, paneId: string, next: object): void => {
+    paneConfigs.write(config, paneIndex, next)
+    options.requestPersist?.()
+    const entry = wired.get(paneId)
+    if (entry) reconcile(entry)
+  }
+
+  const openConfigPanel = (config: PaneConfig, paneId: string): boolean => {
+    const entry = wired.get(paneId)
+    if (!entry) return false
+    // The gear is drawn on the chart's CANVAS, not in the DOM, so there is no element to point
+    // at. The chart container is what the panel must live inside (it carries the theme class
+    // the panel's tokens resolve against), but it is the full height of the pane, so its own
+    // rect is the wrong place to hang the panel from -- under its bottom edge is below the
+    // fold. Hence an explicit rect: just under the legend row at the chart's top left, which is
+    // where the gear that opened it is drawn.
+    let anchor: HTMLElement | null = null
+    try {
+      anchor = entry.chart.getDom() as HTMLElement | null
+    } catch {
+      anchor = null
+    }
+    if (!anchor) return false
+    const rect = anchor.getBoundingClientRect()
+    const paneIndex = entry.paneIndex
+    panel?.close()
+    panel = openSettingsPanel<object>({
+      anchor,
+      anchorRect: { top: rect.top, bottom: rect.top + LEGEND_ROW_HEIGHT, left: rect.left + 8 },
+      // Names the pane, because the settings are that pane's alone and a wall can have twelve
+      // of them open on different instruments.
+      title: `${config.title} · ${entry.pane.getSymbol().ticker} ${facilities.periodToResolution(entry.pane.getPeriod())}`,
+      fields: config.fields,
+      config: paneConfigs.read(config, paneIndex),
+      defaults: config.defaults,
+      onChange: (next) => writeConfig(config, paneIndex, paneId, next),
+      onClose: () => {
+        panel = null
+      }
+    })
+    return true
+  }
 
   const chartRange = (chart: Chart): Range | null => {
     const data = chart.getDataList()
@@ -182,6 +231,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       ...(b.spec.extendData?.(b.state) ?? {})
     }
     try {
+      // klinecharts MERGES an override's extendData into the indicator's own, deeply: an array
+      // is merged index by index and a key is never removed, so a plugin could never say "these
+      // and no others" -- an MTF overlay's graph roots going from ['1D', '8h'] to [] read
+      // ['8h', '8h'], and the graph stayed drawn. Clearing the indicator's own first makes the
+      // merge a copy of exactly what is sent.
+      for (const live of entry.chart.getIndicators({ id: b.indicatorId })) live.extendData = undefined
       entry.chart.overrideIndicator({ id: b.indicatorId, name: b.name, paneId: b.chartPaneId, extendData, shortName } as never)
     } catch (err) {
       console.warn(`[plugins] ${b.plugin.id} override failed`, err)
@@ -255,6 +310,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
   const dispose = (b: Binding): void => {
     b.disposed = true
     if (b.retryTimer) clearTimeout(b.retryTimer)
+    try {
+      b.detach?.()
+    } catch (err) {
+      console.error(`[plugins] ${b.plugin.id} detach failed for ${b.name}`, err)
+    }
+    b.detach = null
     for (const s of b.sources) {
       s.unsubscribe?.()
       s.unsubscribe = null
@@ -262,10 +323,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     }
   }
 
-  const signatureOf = (ind: Indicator, ctx: Omit<BindContext, 'indicator' | 'siblings'>, plugin: IndicatorPlugin): string => {
-    const base = [ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex]
-    const extra = plugin.signature ? plugin.signature({ ...ctx, indicator: ind, siblings: [] }) : null
-    return JSON.stringify([base, extra ?? null])
+  // Everything a binding is made from: the indicator, the instrument, the pane's position (what
+  // its settings are kept under) and the revision of those settings.
+  const signatureOf = (ind: Indicator, ctx: Omit<BindContext, 'indicator' | 'siblings' | 'config'>): string => {
+    const config = configByTemplate.get(ind.name)
+    const rev = config ? paneConfigs.rev(config, ctx.paneIndex) : null
+    return JSON.stringify([ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex, rev])
   }
 
   const bind = (entry: WiredPane, plugin: IndicatorPlugin, ind: Indicator, ctx: BindContext, sig: string): Binding | null => {
@@ -289,6 +352,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       state: { sources: [], chartInterval: ctx.interval },
       inFlight: new Set(),
       retryTimer: null,
+      detach: null,
       disposed: false,
       lastAppliedRev: -1,
       lastShortName: ''
@@ -328,6 +392,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         console.error(`[plugins] ${plugin.id} subscribe failed for ${s.id}`, err)
       }
     }
+    if (spec.attach) {
+      try {
+        b.detach = spec.attach()
+      } catch (err) {
+        console.error(`[plugins] ${plugin.id} attach failed for ${ind.name}`, err)
+      }
+    }
     return b
   }
 
@@ -348,7 +419,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const plugin = pluginFor(ind.name)
       if (!plugin) continue
       seen.add(ind.id)
-      const sig = signatureOf(ind, base, plugin)
+      const sig = signatureOf(ind, base)
       const existing = entry.bindings.get(ind.id)
       if (existing && existing.signature === sig) continue
       const siblings = [...entry.bindings.values()]
@@ -360,7 +431,8 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // `storeInUse`, which only sees filed bindings, and a store dropped while the new
       // binding still holds it is unreachable by key -- the template's `peekStore` finds
       // nothing and the pane stays blank however much the orphan is filled.
-      const b = bind(entry, plugin, ind, { ...base, indicator: ind, siblings }, sig)
+      const config = configByTemplate.get(ind.name)
+      const b = bind(entry, plugin, ind, { ...base, indicator: ind, siblings, config: config && paneConfigs.read(config, entry.paneIndex) }, sig)
       if (b) entry.bindings.set(ind.id, b)
       else entry.bindings.delete(ind.id)
       if (existing) dispose(existing)
@@ -392,15 +464,18 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       bindings: new Map(),
       poll: setInterval(() => reconcile(entry), POLL_MS),
       rangeTimer: null,
-      onRange: () => {
-        if (entry.rangeTimer) clearTimeout(entry.rangeTimer)
-        entry.rangeTimer = setTimeout(() => {
-          entry.rangeTimer = null
-          coverAll(entry)
-        }, RANGE_DEBOUNCE_MS)
-      }
+      unwatchView: () => {}
     }
-    chart.subscribeAction('onVisibleRangeChange', entry.onRange)
+    // A pan, a zoom or a page of history may expose bars a source has not covered. A tick that
+    // only moves the forming bar cannot, and on a fast feed it would otherwise keep resetting
+    // the debounce so that nothing newly exposed was fetched until the market went quiet.
+    entry.unwatchView = onViewMoved(chart, () => {
+      if (entry.rangeTimer) clearTimeout(entry.rangeTimer)
+      entry.rangeTimer = setTimeout(() => {
+        entry.rangeTimer = null
+        coverAll(entry)
+      }, RANGE_DEBOUNCE_MS)
+    })
     wired.set(pane.id, entry)
     reconcile(entry)
   }
@@ -410,11 +485,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     if (!entry) return
     clearInterval(entry.poll)
     if (entry.rangeTimer) clearTimeout(entry.rangeTimer)
-    try {
-      entry.chart.unsubscribeAction('onVisibleRangeChange', entry.onRange)
-    } catch {
-      // chart already disposed
-    }
+    entry.unwatchView()
     for (const b of entry.bindings.values()) dispose(b)
     entry.bindings.clear()
     wired.delete(id)
@@ -444,7 +515,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
             sources: b.sources.map((s) => ({ id: s.id, key: s.key, size: s.store.size, phase: s.store.phase, error: s.store.error }))
           }))
         ),
-      paneState: () => host.paneState()
+      paneDocs: () => host.paneDocs()
     }
   }
 
@@ -471,39 +542,38 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       }
     },
     handleSettings(request: SettingsRequest): boolean {
-      const plugin = pluginFor(request.indicatorName)
-      return plugin?.handleSettings ? plugin.handleSettings(request) : false
+      const config = configByTemplate.get(request.indicatorName)
+      return config ? openConfigPanel(config, request.paneId) : false
     },
     ownsSettings(templateName: string): boolean {
-      return pluginFor(templateName)?.ownsSettings?.(templateName) ?? false
+      return configByTemplate.has(templateName)
     },
     settingsModel(templateName: string): IndicatorSettingsModel | null {
-      const settings = pluginFor(templateName)?.settings?.(templateName)
-      if (!settings) return null
-      // A plugin keeps its configs by pane INDEX (what the wall document stores them under);
-      // the library addresses panes by id. Only a wired pane has an index, and only a wired
-      // pane can be holding the indicator.
+      const config = configByTemplate.get(templateName)
+      if (!config) return null
+      // Settings are kept by pane INDEX (what the wall document stores them under); the library
+      // addresses panes by id. Only a wired pane has an index, and only a wired pane can be
+      // holding the indicator.
       return {
-        fields: settings.fields,
+        fields: config.fields,
         read: (paneId) => {
           const entry = wired.get(paneId)
-          return entry ? settings.read(entry.paneIndex) : null
+          return entry ? paneConfigs.read(config, entry.paneIndex) : null
         },
         write: (paneId, key, value) => {
           const entry = wired.get(paneId)
-          if (entry) settings.write(entry.paneIndex, paneId, key, value)
+          if (!entry) return
+          const next = structuredClone(paneConfigs.read(config, entry.paneIndex))
+          setByPath(next, key, value)
+          writeConfig(config, entry.paneIndex, paneId, next)
         }
       }
     },
-    paneState(): Record<string, Record<number, unknown>> {
-      const out: Record<string, Record<number, unknown>> = {}
-      for (const p of plugins) if (p.paneState) out[p.id] = p.paneState.snapshot()
-      return out
+    paneDocs(): Record<number, PaneDoc> {
+      return paneConfigs.snapshot()
     },
     reorderPanes(order: readonly number[]): void {
-      for (const p of plugins) {
-        if (p.paneState) p.paneState.hydrate(permuteByIndex(p.paneState.snapshot(), order))
-      }
+      paneConfigs.reorder(order)
     },
     async settled(timeoutMs = 3000): Promise<void> {
       const deadline = Date.now() + timeoutMs
@@ -542,7 +612,8 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     },
     teardown(): void {
       host.sync([])
-      for (const p of plugins) p.dispose?.()
+      panel?.close()
+      panel = null
     }
   }
   return host
@@ -550,6 +621,6 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
 
 declare global {
   interface Window {
-    __wdPlugins?: { debug: () => unknown[]; paneState: () => unknown }
+    __wdPlugins?: { debug: () => unknown[]; paneDocs: () => unknown }
   }
 }

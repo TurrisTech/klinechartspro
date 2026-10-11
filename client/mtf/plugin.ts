@@ -1,6 +1,5 @@
 import type { IndicatorGroup } from '../../src'
-import { setByPath } from '../chartlayers/settings'
-import { replacePaneConfigs } from '../plugins/panestate'
+import { type PaneConfig, paneConfig } from '../plugins/paneconfig'
 import { peekStore } from '../plugins/store'
 import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire, subscribeLive } from '../tsregistry/plugin'
 import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
@@ -10,17 +9,26 @@ import type {
   BindingState,
   IndicatorPlugin,
   PluginFacilities,
-  PluginSettings,
   Range,
-  SettingsRequest,
   SourceSpec
 } from '../plugins/types'
 import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
-import { MTF_DEFAULTS, MTF_FIELDS, MTF_GRAPH_FIELDS, enabledIntervals, graphConfig, graphRoots, type MtfConfig } from './config'
+import {
+  MTF_DEFAULTS,
+  MTF_FIELDS,
+  MTF_GRAPH_FIELDS,
+  enabledIntervals,
+  fromStoredMtfConfig,
+  graphConfig,
+  graphRoots,
+  type MtfConfig,
+  toStoredMtfConfig
+} from './config'
 import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
 import { type CandleGrid, gridFor } from '../replay/timeframes'
 import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
+import { phaseLabel } from '../plugins/legend'
 import { registerMtfIndicators } from './templates'
 
 // A multi-timeframe signal overlay as a client plugin -- AREV21 MTF, and the arev21_outlier
@@ -29,12 +37,10 @@ import { registerMtfIndicators } from './templates'
 // -- and each source fetches a BAR GRID as well as the votes, because placing a vote one
 // source bar forward is a question about that timeframe's candle boundaries (shift.ts).
 //
-// Settings are per pane and live in that pane's own entry of the wall document
-// (client/layout.ts's PersistedPane.mtf), keyed by pane index. The plugin is their only
-// writer: it is seeded with what the layout hydrated (`paneState.hydrate`), and asks the
-// app to save the wall whenever the panel edits one. A settings edit bumps the pane's
-// config revision, which is part of the binding signature, so the host rebinds: sources
-// newly switched on are fetched, and the template repaints off the config in extendData.
+// Settings are per pane (`mtfPaneConfig`), kept by the host and stored in that pane's own entry
+// of the wall document: `PersistedPane.mtf` for AREV21 MTF, `PersistedPane.mx[<id>]` for the
+// others. An edit rebinds: sources newly switched on are fetched, and the template repaints off
+// the config in extendData.
 //
 // LIVE, one subscription per source timeframe: the research feed writes arev21 as each bar
 // closes and the server relays it (`plugins.live`), and a relayed point makes that timeframe
@@ -68,9 +74,24 @@ const GRAPH_LOOKBACK_MAX_BARS = 10_000
 // always comfortably under the 5000 cap.
 const GRID_CHUNK_BARS = 4000
 
-/** Rough height of one klinecharts legend row, used only to hang the settings panel just
- * below the legend the gear sits in. */
-const LEGEND_ROW_HEIGHT = 24
+/** One overlay's per-pane settings: which timeframes it draws and each one's colour and sizes,
+ * and the graph's where it offers one. A diff from the defaults in the wall document, under the
+ * pane's `mtf` for the original overlay -- its field since before there were others -- and under
+ * `mx` by plugin id for the rest. The codec is hand-written (config.ts): it reads the single
+ * graph root an older build stored, and its colour checks are not the fields'. */
+export function mtfPaneConfig(overlay: MtfOverlay): PaneConfig {
+  return paneConfig<MtfConfig>({
+    templates: [overlay.templateName],
+    doc: overlay.id === AREV21_MTF.id ? 'mtf' : ['mx', overlay.id],
+    title: overlay.title,
+    // Only an overlay that offers a graph shows the graph's settings.
+    fields: overlay.graph ? [...MTF_GRAPH_FIELDS, ...MTF_FIELDS] : MTF_FIELDS,
+    defaults: MTF_DEFAULTS,
+    normalise: (config) => structuredClone(config),
+    toStored: toStoredMtfConfig,
+    fromStored: fromStoredMtfConfig
+  })
+}
 
 /** The wire that tells one of an overlay's source timeframes it has a new bar: its
  * `liveEntry`'s, ALWAYS as a cue to re-read (`direct: false`), never as a value to file -- the
@@ -90,13 +111,6 @@ export async function mtfLiveWire(
 export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoaders = LIVE_LOADERS): IndicatorPlugin {
   const title = overlay.title
   let facilities: PluginFacilities | null = null
-  /** Every pane's settings by pane index -- the accumulated set: seeded from the document
-   * and updated on every edit, so it survives a pane being unwired. */
-  const configs: Record<number, MtfConfig> = {}
-  const configRevs: Record<number, number> = {}
-  let panel: { close(): void } | null = null
-
-  const configFor = (paneIndex: number): MtfConfig => configs[paneIndex] ?? MTF_DEFAULTS
 
   /** A source timeframe finer than the chart's is refused rather than drawn: hundreds of
    * sub-bar votes collapsing onto one candle reads as noise, not as context. Named in the
@@ -222,93 +236,26 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       const on = enabledIntervals(config)
       return on.length === 0 ? `${title} · none on` : `${title} · needs ≥ ${state.chartInterval} chart`
     }
-    const stores = shown.map((interval) => state.sources.find((s) => s.id === interval)?.store)
-    if (stores.some((s) => s?.phase === 'error')) return `${title} · error`
-    if (stores.some((s) => !s || s.phase === 'idle' || s.phase === 'loading')) {
-      return `${title} ${shown.join(' ')} · loading`
-    }
+    const pending = phaseLabel(`${title} ${shown.join(' ')}`, shown.map((interval) => state.sources.find((s) => s.id === interval)?.store))
+    if (pending) return pending
     // Names the active set, which is the one thing eight separate legend rows used to say
     // for free.
     return `${title} ${shown.join(' ')}${graphLabel(config, state.chartInterval)}`
   }
 
-  // Only an overlay that offers a graph shows the graph's settings.
-  const fields = overlay.graph ? [...MTF_GRAPH_FIELDS, ...MTF_FIELDS] : MTF_FIELDS
-
-  /** A pane's new config, from its panel or from the indicator manager: kept, persisted, and
-   * only that pane redrawn -- the settings belong to it, so another pane showing the same
-   * instrument keeps whatever it was set to. */
-  const applyConfig = (paneIndex: number, paneId: string, next: MtfConfig): void => {
-    const f = facilities
-    if (!f) return
-    configs[paneIndex] = next
-    configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
-    f.requestPersist()
-    f.requestReconcile(paneId)
-  }
-
-  const settings: PluginSettings = {
-    fields,
-    read: (paneIndex) => configFor(paneIndex),
-    write: (paneIndex, paneId, key, value) => {
-      const next = structuredClone(configFor(paneIndex))
-      setByPath(next, key, value)
-      applyConfig(paneIndex, paneId, next)
-    }
-  }
-
-  const openPanel = (paneId: string): boolean => {
-    const f = facilities
-    const info = f?.paneInfo(paneId)
-    if (!f || !info) return false
-    // The gear is drawn on the chart's CANVAS, not in the DOM, so there is no element to
-    // point at. The chart container is what the panel must live inside (it is what carries
-    // the theme class the panel's tokens resolve against), but it is the full height of the
-    // pane, so its own rect is the wrong place to hang the panel from -- under its bottom
-    // edge is below the fold. Hence an explicit rect: the panel opens just under the
-    // legend row at the chart's top left, which is where the gear that opened it is drawn.
-    let anchor: HTMLElement | null = null
-    try {
-      anchor = info.chart.getDom() as HTMLElement | null
-    } catch {
-      anchor = null
-    }
-    if (!anchor) return false
-    const chartRect = anchor.getBoundingClientRect()
-    const paneIndex = info.paneIndex
-    panel?.close()
-    panel = f.openSettingsPanel<MtfConfig>({
-      anchor,
-      anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
-      // Names the pane, because the settings are that pane's alone and a wall can have
-      // twelve of them open on different instruments.
-      title: `${title} · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
-      // No enable row: this overlay's on/off is the indicator being on the pane at all,
-      // which the picker and the legend's own close icon already own.
-      fields,
-      config: configFor(paneIndex),
-      defaults: MTF_DEFAULTS,
-      onChange: (next) => applyConfig(paneIndex, paneId, next),
-      onClose: () => {
-        panel = null
-      }
-    })
-    return true
-  }
-
   return {
     id: overlay.id,
     feature: overlay.feature,
+    paneConfigs: [mtfPaneConfig(overlay)],
     register(f: PluginFacilities): IndicatorGroup[] {
       facilities = f
       return registerMtfIndicators(overlay)
     },
     matches: (name) => name === overlay.templateName,
-    signature: (ctx) => [configRevs[ctx.paneIndex] ?? 0, enabledIntervals(configFor(ctx.paneIndex))],
     bind(ctx: BindContext): BindingSpec | null {
       const f = facilities
       if (!f) return null
-      const config = configFor(ctx.paneIndex)
+      const config = ctx.config as MtfConfig
       // The pane's instrument's own candle grid: where a vote becomes knowable, and which
       // chart bar was open then, both depend on how that market dates its days (shift.ts).
       // With none resolved the overlay says so and draws nothing, rather than place votes on
@@ -341,22 +288,6 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
           graphRoots: roots
         })
       }
-    },
-    handleSettings(request: SettingsRequest): boolean {
-      if (request.indicatorName !== overlay.templateName) return false
-      return openPanel(request.paneId)
-    },
-    ownsSettings: (templateName) => templateName === overlay.templateName,
-    settings: (templateName) => (templateName === overlay.templateName ? settings : null),
-    paneState: {
-      hydrate(initial) {
-        replacePaneConfigs(configs, configRevs, initial, (stored) => structuredClone(stored as MtfConfig))
-      },
-      snapshot: () => ({ ...configs })
-    },
-    dispose() {
-      panel?.close()
-      panel = null
     }
   }
 }

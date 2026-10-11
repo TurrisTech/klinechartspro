@@ -8,22 +8,17 @@ import type { PaneSnapshot, PaneStyleOverrides } from '../src'
 const hadWindow = 'window' in globalThis
 ;(globalThis as Record<string, unknown>).window = {
   location: { href: 'http://localhost/', origin: 'http://localhost' },
-  localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} }
+  localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+  // klinecharts sniffs the platform at import; the golden test reaches it through the plugins.
+  navigator: { userAgent: 'test' }
 }
 
-const {
-  defaultLayout,
-  hydrateLayout,
-  isPersistedLayout,
-  layoutSettingsSignature,
-  overlayPaneState,
-  toPaneOptions,
-  toPersistedLayout
-} = await import('./layout')
-const { LAB_DEFAULTS, fromStoredLabConfig } = await import('./arevlab/config')
-const { MTF_DEFAULTS, fromStoredMtfConfig } = await import('./mtf/config')
-const { DIV_DEFAULTS, fromStoredDivConfig } = await import('./arev21div/config')
-const { VP_DEFAULTS, fromStoredVpConfig } = await import('./volprofile/config')
+const { defaultLayout, hydrateLayout, isPersistedLayout, layoutSettingsSignature, toPaneOptions, toPersistedLayout } =
+  await import('./layout')
+const { PaneConfigStore } = await import('./plugins/paneconfig')
+const { builtinPlugins } = await import('./plugins/registry')
+const { createLevelsIndicators } = await import('./levels/indicator')
+const golden = (await import('./plugins/fixtures/panedocs-golden.json')).default
 
 afterAll(() => {
   if (!hadWindow) delete (globalThis as Record<string, unknown>).window
@@ -87,90 +82,52 @@ describe('a round trip through the document', () => {
     expect(isPersistedLayout(written)).toBe(true)
   })
 
-  test("each pane carries its own plugins' settings, and a pane on the defaults carries none", () => {
+  test("each pane carries its plugins' settings through untouched: read into `plugins`, written from the host's", async () => {
     const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
-    const lab = structuredClone(LAB_DEFAULTS)
-    lab.generations.arev19.enabled = true
-    lab.generations.arev19.signals = 'rank'
-    const mtf = structuredClone(MTF_DEFAULTS)
-    mtf.timeframes['4h'].enabled = !mtf.timeframes['4h'].enabled
-    const written = toPersistedLayout('3h', [PANE, { ...PANE, id: 'p2' }, { ...PANE, id: 'p3' }], 0, sync, {
-      mtf: { 0: mtf },
-      arevlab: { 0: lab, 1: structuredClone(LAB_DEFAULTS) }
-    })
-    expect(written.panes[0].al).toEqual({ arev19: { enabled: true, signals: 'rank' } })
-    expect(written.panes[0].mtf).toBeDefined()
-    expect('al' in written.panes[1]).toBe(false)
-    expect('al' in written.panes[2]).toBe(false)
-    expect(isPersistedLayout(written)).toBe(true)
-    // What hydrateLayout does with the field, minus the symbol lookup it needs a server for.
-    expect(fromStoredLabConfig(JSON.parse(JSON.stringify(written.panes[0].al)))).toEqual(lab)
-  })
-
-  test("the AREV21 divergence's settings ride in `dv`, only what differs from the defaults", () => {
-    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
-    const div = structuredClone(DIV_DEFAULTS)
-    div.line.style = 'dashed'
-    div.line.bullColor = '#00ff88'
-    div.rule.hidden = true
-    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, {
-      arev21div: { 0: div, 1: structuredClone(DIV_DEFAULTS) }
-    })
-    expect(written.panes[0].dv).toEqual({ 'rule.hidden': true, 'line.style': 'dashed', 'line.bullColor': '#00ff88' })
-    expect('dv' in written.panes[1]).toBe(false)
-    expect(isPersistedLayout(written)).toBe(true)
-    expect(fromStoredDivConfig(JSON.parse(JSON.stringify(written.panes[0].dv)))).toEqual(div)
-  })
-
-  test("the volume profile's settings ride in `vp`, only what differs from the defaults", () => {
-    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
-    const vp = structuredClone(VP_DEFAULTS)
-    vp.mode = 'session'
-    vp.draw.showPoc = false
-    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, {
-      volprofile: { 0: vp, 1: structuredClone(VP_DEFAULTS) }
-    })
-    expect(written.panes[0].vp).toEqual({ mode: 'session', 'draw.showPoc': false })
-    expect('vp' in written.panes[1]).toBe(false)
-    expect(isPersistedLayout(written)).toBe(true)
-    expect(fromStoredVpConfig(JSON.parse(JSON.stringify(written.panes[0].vp)))).toEqual(vp)
-  })
-
-  test("Levels' and Zones' settings ride in `ly`, by layer id, as the layers stored them", () => {
-    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
-    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }, { ...PANE, id: 'p3' }], 0, sync, {
-      levels: {
-        0: { levels: { showSpent: true }, levels2: { 'intervals.4h': true } },
-        // Nothing usable: the pane writes no `ly` at all rather than an empty record.
-        2: { levels: {}, levels2: [] as unknown as Record<string, unknown> }
-      }
-    })
-    expect(written.panes[0].ly).toEqual({ levels: { showSpent: true }, levels2: { 'intervals.4h': true } })
-    expect('ly' in written.panes[1]).toBe(false)
-    expect('ly' in written.panes[2]).toBe(false)
+    const hydrated = await hydrateOffline({
+      ...OLD_DOCUMENT,
+      panes: [
+        { s: 'EURUSD', p: '1h', mtf: { '4h': { color: '#123456' } }, ly: { levels: { showSpent: true } } },
+        // Nothing usable: no `plugins` at all rather than an empty record.
+        { s: 'GBPUSD', p: '1h', dv: {}, al: 'junk', vp: [1] }
+      ]
+    } as never)
+    expect(hydrated.panes[0].plugins).toEqual({ mtf: { '4h': { color: '#123456' } }, ly: { levels: { showSpent: true } } })
+    expect(hydrated.panes[1].plugins).toBeUndefined()
+    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, { 1: { al: { arev19: { enabled: true } } } })
+    expect('al' in written.panes[0]).toBe(false)
+    expect(written.panes[1].al).toEqual({ arev19: { enabled: true } })
     expect(isPersistedLayout(written)).toBe(true)
   })
 
-  test("the outlier MTF overlays' settings ride in `mx`, by plugin id, apart from AREV21 MTF's", () => {
+  test("a plugin's field never overwrites the pane's own, and an empty one is not written", () => {
     const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
-    const r90 = structuredClone(MTF_DEFAULTS)
-    r90.timeframes['1D'].color = '#123456'
-    const written = toPersistedLayout('2h', [PANE, { ...PANE, id: 'p2' }], 0, sync, {
-      mtf: { 0: structuredClone(MTF_DEFAULTS) },
-      mtf_arev21_outlier_rank_90: { 1: r90 },
-      mtf_arev21_outlier_rank_85: { 0: structuredClone(MTF_DEFAULTS) }
-    })
-    // Defaults store nothing, whichever overlay they belong to.
-    expect('mx' in written.panes[0]).toBe(false)
-    expect('mtf' in written.panes[0]).toBe(false)
-    expect(written.panes[1].mx).toEqual({ mtf_arev21_outlier_rank_90: { '1D': { color: '#123456' } } })
-    expect('mtf' in written.panes[1]).toBe(false)
-    expect(isPersistedLayout(written)).toBe(true)
-    // And back: what hydrateLayout files per pane, turned round into the host's shape.
-    const back = fromStoredMtfConfig(JSON.parse(JSON.stringify(written.panes[1].mx?.mtf_arev21_outlier_rank_90)))
-    expect(back).toEqual(r90)
-    const panes = [{}, { mtfOverlayConfigs: { mtf_arev21_outlier_rank_90: r90 } }] as never
-    expect(overlayPaneState(panes)).toEqual({ mtf_arev21_outlier_rank_90: { 1: r90 } })
+    const written = toPersistedLayout('1', [PANE], 0, sync, { 0: { s: { not: 'a ticker' }, ly: {}, vp: { rows: 60 } } })
+    expect(written.panes[0].s).toBe('EURUSD')
+    expect('ly' in written.panes[0]).toBe(false)
+    expect(written.panes[0].vp).toEqual({ rows: 60 })
+  })
+
+  test('every plugin field reads and writes exactly as it did before the host owned them', async () => {
+    // golden.json was written by main at c212b64, each plugin keeping its own settings: the
+    // document handed to every plugin as client/index.ts did, and written back -- then again
+    // after panes 1 and 2 swap places. mtf's legacy `graph.from`, a divergence window wider
+    // than its gap, invalid values and an overlay no build declares are all in it.
+    const configs = builtinPlugins(createLevelsIndicators().plugin).flatMap((plugin) => plugin.paneConfigs ?? [])
+    const store = new PaneConfigStore(configs)
+    const hydrated = await hydrateOffline(structuredClone(golden.document) as never)
+    store.hydrate(Object.fromEntries(hydrated.panes.map((pane, index) => [index, pane.plugins])))
+    const sync = { crosshair: true, time: true, auto: false, symbol: false, period: false }
+    const snapshots = hydrated.panes.map((pane, index) => ({ ...PANE, id: `p${index + 1}`, symbol: pane.symbol, period: pane.period }))
+    const fields = (docs: Record<number, Record<string, unknown>>) =>
+      canonical(
+        toPersistedLayout('3', snapshots, 0, sync, docs).panes.map((pane) =>
+          Object.fromEntries(Object.entries(pane).filter(([key]) => ['mtf', 'mx', 'al', 'dv', 'vp', 'ly'].includes(key)))
+        )
+      )
+    expect(fields(store.snapshot())).toEqual(golden.written)
+    store.reorder([1, 0, 2])
+    expect(fields(store.snapshot())).toEqual(golden.swapped)
   })
 
   test("the settings dialog's styles ride in `st`, and a pane drawing as the app says writes none", () => {
@@ -225,6 +182,17 @@ describe('a round trip through the document', () => {
     expect(layoutSettingsSignature(styled)).not.toEqual(layoutSettingsSignature(plain))
   })
 })
+
+/** JSON with every object's keys sorted, as the golden file is written. */
+function canonical(value: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(value, (_key, item: unknown) =>
+      item && typeof item === 'object' && !Array.isArray(item)
+        ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)))
+        : item
+    )
+  )
+}
 
 // Symbols are looked up while hydrating; offline, a lookup reads as "no configuration" rather
 // than failing, which is all these tests need -- and says so, which they do not.

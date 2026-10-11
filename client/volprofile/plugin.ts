@@ -1,33 +1,32 @@
 import type { IndicatorGroup } from '../../src'
 import { baseIntervalsFor } from '../capabilities'
-import { setByPath } from '../chartlayers/settings'
-import { replacePaneConfigs } from '../plugins/panestate'
-import type {
-  BindContext,
-  BindingSpec,
-  BindingState,
-  IndicatorPlugin,
-  PluginFacilities,
-  PluginSettings,
-  SettingsRequest
-} from '../plugins/types'
+import { paneConfig } from '../plugins/paneconfig'
+import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities } from '../plugins/types'
 import { nominalMs } from '../replay/timeframes'
 import { clockFor } from '../tradetalk/plugin'
-import { normaliseVpConfig, VP_DEFAULTS, VP_FIELDS, type VpConfig } from './config'
+import { fromStoredVpConfig, normaliseVpConfig, toStoredVpConfig, VP_DEFAULTS, VP_FIELDS, type VpConfig } from './config'
 import { type BarStore, barSource, barSourceKey, pickSource, type Schedule, wireShift } from './source'
-import { isVolumeProfileIndicator, registerVolumeProfileIndicator } from './templates'
+import { isVolumeProfileIndicator, registerVolumeProfileIndicator, TEMPLATE_NAME } from './templates'
 
 // The volume profile as a client plugin: one template on the price pane, at most one source
 // (bars of a lower timeframe than the chart, source.ts), and no server change of any kind --
 // the bars come from the chart tiles and `/getbars` like the chart's own, and the profile is
 // computed and drawn in the browser.
 //
-// Settings are per chart pane, persisted in the wall document (client/layout.ts's
-// PersistedPane.vp) the way the AREV21 divergence persists its own: this plugin is their only
-// writer, an edit bumps the pane's revision, the revision is part of the binding signature,
-// and the rebind picks the source again -- mode and rows both decide it.
+// Settings are per chart pane, kept by the host and persisted in the wall document as
+// `PersistedPane.vp`. An edit rebinds, and the rebind picks the source again -- mode and rows
+// both decide it.
 
-const LEGEND_ROW_HEIGHT = 24
+export const VP_PANE_CONFIG = paneConfig<VpConfig>({
+  templates: [TEMPLATE_NAME],
+  doc: 'vp',
+  title: 'Volume profile',
+  fields: VP_FIELDS,
+  defaults: VP_DEFAULTS,
+  normalise: normaliseVpConfig,
+  toStored: toStoredVpConfig,
+  fromStored: fromStoredVpConfig
+})
 
 function scheduleOf(ctx: BindContext): Schedule | null {
   const { timezone, dayGeometry } = ctx.symbol
@@ -54,76 +53,21 @@ function day(ms: number): string {
 
 export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = baseIntervalsFor): IndicatorPlugin {
   let facilities: PluginFacilities | null = null
-  const configs: Record<number, VpConfig> = {}
-  const configRevs: Record<number, number> = {}
-  let panel: { close(): void } | null = null
-
-  const configFor = (paneIndex: number): VpConfig => configs[paneIndex] ?? VP_DEFAULTS
-
-  const applyConfig = (paneIndex: number, paneId: string, next: VpConfig): void => {
-    const f = facilities
-    if (!f) return
-    configs[paneIndex] = normaliseVpConfig(next)
-    configRevs[paneIndex] = (configRevs[paneIndex] ?? 0) + 1
-    f.requestPersist()
-    f.requestReconcile(paneId)
-  }
-
-  const settings: PluginSettings = {
-    fields: VP_FIELDS,
-    read: (paneIndex) => configFor(paneIndex),
-    write: (paneIndex, paneId, key, value) => {
-      const next = structuredClone(configFor(paneIndex))
-      setByPath(next, key, value)
-      applyConfig(paneIndex, paneId, next)
-    }
-  }
-
-  const openPanel = (paneId: string): boolean => {
-    const f = facilities
-    const info = f?.paneInfo(paneId)
-    if (!f || !info) return false
-    let anchor: HTMLElement | null = null
-    try {
-      anchor = info.chart.getDom() as HTMLElement | null
-    } catch {
-      anchor = null
-    }
-    if (!anchor) return false
-    // The gear is drawn on the canvas, so the panel hangs under the legend row rather than under
-    // an element (mtf/plugin.ts explains the rect).
-    const chartRect = anchor.getBoundingClientRect()
-    const paneIndex = info.paneIndex
-    panel?.close()
-    panel = f.openSettingsPanel<VpConfig>({
-      anchor,
-      anchorRect: { top: chartRect.top, bottom: chartRect.top + LEGEND_ROW_HEIGHT, left: chartRect.left + 8 },
-      title: `Volume profile · ${info.pane.getSymbol().ticker} ${f.periodToResolution(info.pane.getPeriod())}`,
-      fields: VP_FIELDS,
-      config: configFor(paneIndex),
-      defaults: VP_DEFAULTS,
-      onChange: (next) => applyConfig(paneIndex, paneId, next),
-      onClose: () => {
-        panel = null
-      }
-    })
-    return true
-  }
 
   return {
     id: 'volprofile',
     // `/getbars` and the tiles are the oldest routes there are; nothing to gate on.
     feature: null,
+    paneConfigs: [VP_PANE_CONFIG],
     register(f: PluginFacilities): IndicatorGroup[] {
       facilities = f
       return registerVolumeProfileIndicator()
     },
     matches: isVolumeProfileIndicator,
-    signature: (ctx) => [configRevs[ctx.paneIndex] ?? 0],
     bind(ctx: BindContext): BindingSpec | null {
       const f = facilities
       if (!f) return null
-      const config = configFor(ctx.paneIndex)
+      const config = ctx.config as VpConfig
       const schedule = scheduleOf(ctx)
       const chartShift = wireShift(ctx.interval, schedule)
       let source = pickSource(ctx.interval, bases(ctx.vendor), config.mode, config.rows, config.source)
@@ -197,22 +141,6 @@ export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = 
         }),
         overrides: typeof precision === 'number' ? { precision } : undefined
       }
-    },
-    handleSettings(request: SettingsRequest): boolean {
-      if (!isVolumeProfileIndicator(request.indicatorName)) return false
-      return openPanel(request.paneId)
-    },
-    ownsSettings: (templateName) => isVolumeProfileIndicator(templateName),
-    settings: (templateName) => (isVolumeProfileIndicator(templateName) ? settings : null),
-    paneState: {
-      hydrate(initial) {
-        replacePaneConfigs(configs, configRevs, initial, normaliseVpConfig)
-      },
-      snapshot: () => ({ ...configs })
-    },
-    dispose() {
-      panel?.close()
-      panel = null
     }
   }
 }

@@ -186,7 +186,8 @@ describe('the registry pane and the MTF overlay read the same series into separa
       vendor: 'oanda',
       ticker: 'EURUSD',
       interval: '1h',
-      siblings: []
+      siblings: [],
+      config: (await import('../mtf/config')).MTF_DEFAULTS
     })
     // 4h is on by default and is not finer than a 1h chart, so the overlay binds it.
     const overlay = spec?.sources.find((s) => s.id === '4h')
@@ -304,7 +305,8 @@ describe('the outlier rank overlays read the sub-pane series at the same numbers
         vendor: 'oanda',
         ticker: 'EURUSD',
         interval: '1h',
-        siblings: []
+        siblings: [],
+        config: (await import('../mtf/config')).MTF_DEFAULTS
       })
       const source = spec?.sources.find((s) => s.id === '4h')
       const pane = storedSource(facilities, rank, ctx('4h'), storedParams(rank, [200, q, 0]))
@@ -376,7 +378,8 @@ describe('an overlay never inherits coverage from a sub-pane that fetched no gri
         vendor: 'oanda',
         ticker: 'EURUSD',
         interval: '1h',
-        siblings: []
+        siblings: [],
+        config: (await import('../mtf/config')).MTF_DEFAULTS
       })
       const overlay = spec?.sources.find((s) => s.id === '4h')
       if (!overlay) throw new Error('no 4h source')
