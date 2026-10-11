@@ -6,6 +6,7 @@ import type { RegistryStore } from '../tsregistry/store'
 import { LAB_DEFAULTS, enabledGenerations, type LabConfig } from './config'
 import { computeGeneration, figureKeys, labValues, sortedPoints, type GenerationResult, type LabMark, type LabValue } from './compute'
 import type { LabBar } from './labels'
+import { timestampCalc } from '../plugins/calc'
 
 // ONE klinecharts template, in a sub-pane of its own, drawing the prediction line `p` of as
 // many AREV generations as the pane's settings switch on -- each in its own colour, each with
@@ -91,7 +92,7 @@ export function labFigures(config: LabConfig): IndicatorFigure<LabValue>[] {
 const MEMO_LIMIT = 64
 const memo = new Map<string, { stamp: string; result: GenerationResult }>()
 
-function calc(dataList: KLineData[], indicator: Indicator<LabValue, number, ExtendData>): LabValue[] {
+const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<LabValue, number, ExtendData>): LabValue[] => {
   const extend = indicator.extendData
   if (!extend?.config) return dataList.map(() => ({}))
   const barStore = peekStore<WindowStore<LabBar>>(extend.seriesKeys[BARS_SOURCE_ID])
@@ -121,7 +122,7 @@ function calc(dataList: KLineData[], indicator: Indicator<LabValue, number, Exte
     extend.config,
     results
   )
-}
+})
 
 function shouldUpdate(prev: Indicator<LabValue, number, ExtendData>, cur: Indicator<LabValue, number, ExtendData>) {
   const a = prev.extendData

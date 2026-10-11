@@ -2,9 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 
 installWindow()
-const { createVolumeProfilePlugin } = await import('./plugin')
+const { createVolumeProfilePlugin, VP_PANE_CONFIG } = await import('./plugin')
+const { VP_DEFAULTS } = await import('./config')
 import type { SymbolInfo } from '../../src'
 import type { BindContext, BindingState, PluginFacilities } from '../plugins/types'
+import type { VpConfig } from './config'
 
 // The binding: which source a pane reads, and what the legend says about it.
 
@@ -20,7 +22,7 @@ const OANDA = ['5s', '1m', '1h', '1D', '1M']
 function setup(data: Array<{ timestamp: number; volume?: number }> = []) {
   const plugin = createVolumeProfilePlugin(() => OANDA)
   plugin.register({ stream: {} } as unknown as PluginFacilities)
-  const ctx = (interval: string, symbol: SymbolInfo = SYMBOL, vendor = 'oanda'): BindContext =>
+  const ctx = (interval: string, symbol: SymbolInfo = SYMBOL, vendor = 'oanda', config: VpConfig = VP_DEFAULTS): BindContext =>
     ({
       chart: { getDataList: () => data },
       pane: { id: 'p1' },
@@ -30,7 +32,8 @@ function setup(data: Array<{ timestamp: number; volume?: number }> = []) {
       vendor,
       ticker: 'EURUSD',
       interval,
-      siblings: []
+      siblings: [],
+      config
     }) as unknown as BindContext
   return { plugin, ctx }
 }
@@ -101,9 +104,10 @@ describe('the legend', () => {
 describe('settings', () => {
   test('are persisted per pane and change the source on rebind', () => {
     const { plugin, ctx } = setup()
-    plugin.paneState?.hydrate({ 0: { mode: 'session', rows: 40 } })
-    expect(plugin.paneState?.snapshot()[0]).toMatchObject({ mode: 'session' })
+    const config = VP_PANE_CONFIG.fromStored({ mode: 'session' }) as VpConfig
+    expect(VP_PANE_CONFIG.toStored(config)).toEqual({ mode: 'session' })
+    expect(plugin.paneConfigs).toEqual([VP_PANE_CONFIG])
     // Session mode wants the finest intraday base even under a daily chart.
-    expect(plugin.bind(ctx('1D'))?.sources.map((s) => s.key)).toEqual(['vp-bars|oanda:EURUSD|1m'])
+    expect(plugin.bind(ctx('1D', SYMBOL, 'oanda', config))?.sources.map((s) => s.key)).toEqual(['vp-bars|oanda:EURUSD|1m'])
   })
 })

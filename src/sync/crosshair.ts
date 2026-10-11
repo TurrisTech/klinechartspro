@@ -86,15 +86,24 @@ export function paneMainAt(
 //
 // Without a price (source hover was over an indicator sub-pane): dispatches with the
 // synthetic SYNC_PANE_ID, drawing the vertical line only.
-export function applyCrosshairAt(chart: Chart, point: CrosshairPoint): void {
-  if (chart.getDataList().length === 0) return
+//
+// Returns where it put the crosshair, as a key; handed the key it returned last time, it does
+// nothing when the crosshair would land on the same pixels. A dispatch repaints the pane's whole
+// overlay layer -- crosshair, legends, every level line -- and on a wall the source pane's
+// pointer moves dozens of times a second while a coarser pane's crosshair stays on one bar.
+// The caller forgets the key whenever something else moves or clears this chart's crosshair.
+export function applyCrosshairAt(chart: Chart, point: CrosshairPoint, previous: string | null = null): string | null {
+  if (chart.getDataList().length === 0) return null
   const target: Partial<Point> =
     typeof point.value === 'number'
       ? { timestamp: point.timestamp, value: point.value }
       : { timestamp: point.timestamp }
   const coordinate = chart.convertToPixel(target, { paneId: 'candle_pane' }) as Partial<Coordinate>
-  if (typeof coordinate.x !== 'number') return
-  if (typeof point.value === 'number' && typeof coordinate.y === 'number') {
+  if (typeof coordinate.x !== 'number') return null
+  const priced = typeof point.value === 'number' && typeof coordinate.y === 'number'
+  const key = priced ? `${coordinate.x}|${coordinate.y}` : `${coordinate.x}|`
+  if (key === previous) return key
+  if (priced) {
     chart.executeAction('onCrosshairChange', {
       x: coordinate.x,
       y: coordinate.y,
@@ -103,6 +112,7 @@ export function applyCrosshairAt(chart: Chart, point: CrosshairPoint): void {
   } else {
     chart.executeAction('onCrosshairChange', { x: coordinate.x, paneId: SYNC_PANE_ID } as Crosshair)
   }
+  return key
 }
 
 // Clears a target pane's synced crosshair by dispatching `undefined`: `setCrosshair`'s

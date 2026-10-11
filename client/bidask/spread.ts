@@ -2,6 +2,7 @@ import { registerIndicator, type IndicatorTemplate, type KLineData } from 'kline
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
 import type { QuotePoint } from './api'
+import { timestampCalc } from '../plugins/calc'
 
 // QUOTE:spread -- the bid/ask spread of every bar, in its own sub-pane.
 //
@@ -70,13 +71,13 @@ export function spreadValue(point: QuotePoint | undefined, unit: number, pointSi
   return { spread: raw }
 }
 
-function calc(dataList: KLineData[], indicator: { extendData?: SpreadExtendData; calcParams?: unknown[] }): SpreadValue[] {
+const calc = timestampCalc((dataList: KLineData[], indicator: { extendData?: SpreadExtendData; calcParams?: unknown[] }): SpreadValue[] => {
   const store = peekStore<WindowStore<QuotePoint>>(indicator.extendData?.seriesKey)
   if (!store) return dataList.map(() => ({}))
   const unit = spreadUnit(indicator.calcParams)
   const pointSize = indicator.extendData?.pointSize ?? 0
   return dataList.map((d) => spreadValue(store.values.get(d.timestamp), unit, pointSize))
-}
+})
 
 let registered = false
 

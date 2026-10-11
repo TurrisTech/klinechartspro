@@ -61,16 +61,6 @@ export interface SettingsPanelHandle {
 export interface SettingsPanelOptions<T extends object> {
   anchor: HTMLElement
   title: string
-  /** Whether the layer itself is on — rendered as the panel's first row, ahead of `fields`.
-   * Kept separate from `config`/`onChange` rather than folded into T: every layer has this
-   * regardless of what it configures, so it's a framework-level concern, not a per-layer one.
-   *
-   * OPTIONAL as a pair: omit `onToggleEnabled` and the row is not rendered at all. Not every
-   * caller has an on/off of its own — an indicator's is being on the pane, which is the
-   * picker's and the legend's business, not this panel's — and a switch that ignores clicks
-   * is worse than no switch. */
-  enabled?: boolean
-  onToggleEnabled?: (enabled: boolean) => void
   fields: SettingsField[]
   config: T
   defaults: T
@@ -97,9 +87,8 @@ export interface SettingsPanelOptions<T extends object> {
 export function openSettingsPanel<T extends object>(
   options: SettingsPanelOptions<T>
 ): SettingsPanelHandle {
-  const { anchor, title, fields, defaults, onChange, onClose, onToggleEnabled } = options
+  const { anchor, title, fields, defaults, onChange, onClose } = options
   let config = structuredClone(options.config)
-  let enabled = options.enabled ?? true
   // Whether any field depends on another: only then does a switch or select edit re-render.
   const conditional = (function hasCondition(list: SettingsField[]): boolean {
     return list.some((f) => Boolean(f.when) || (f.kind === 'group' && hasCondition(f.fields)))
@@ -267,30 +256,6 @@ export function openSettingsPanel<T extends object>(
       commit(next)
     })
     return input
-  }
-
-  // The enable/disable switch is the panel's first row, ahead of anything layer-specific —
-  // rendered once here (not by refresh()) since it isn't part of `fields`/`config` and Reset
-  // to defaults must not touch it. Skipped entirely for a caller that has no such toggle.
-  if (onToggleEnabled) {
-    const enabledRow = document.createElement('div')
-    enabledRow.className = 'kc-field kc-field-horizontal'
-    const enabledId = 'wd-field-enabled'
-    const enabledLabel = document.createElement('label')
-    enabledLabel.htmlFor = enabledId
-    enabledLabel.textContent = 'Enabled'
-    enabledRow.appendChild(enabledLabel)
-    enabledRow.appendChild(
-      createSwitch(
-        enabledId,
-        () => enabled,
-        (next) => {
-          enabled = next
-          onToggleEnabled(next)
-        }
-      )
-    )
-    body.appendChild(enabledRow)
   }
 
   const fieldsBody = document.createElement('div')

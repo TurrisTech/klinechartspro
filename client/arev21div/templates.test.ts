@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
-import { installWindow } from '../plugins/testing'
+import { fakeChart, fakeFacilities, fakeIndicator, fakePane, installWindow } from '../plugins/testing'
 import type { ArevPoint } from '../arev/api'
 import type { BindContext, PluginFacilities } from '../plugins/types'
 
@@ -25,7 +25,8 @@ afterAll(() => {
 })
 
 const { PRICE_TEMPLATE, SUB_TEMPLATE, buildTemplate, computeValues, isDivergenceIndicator } = await import('./templates')
-const { createArev21DivergencePlugin } = await import('./plugin')
+const { createArev21DivergencePlugin, DIV_PANE_CONFIG } = await import('./plugin')
+const { createPluginHost } = await import('../plugins/host')
 const { storedSource } = await import('../tsregistry/plugin')
 const { DIV_DEFAULTS, normaliseDivConfig } = await import('./config')
 import type { DivConfig } from './config'
@@ -210,7 +211,7 @@ describe('the plugin', () => {
       stream: {}
     }) as unknown as PluginFacilities
 
-  const ctx = { vendor: 'oanda', ticker: 'EURUSD', interval: '1h', paneIndex: 0, indicator: { name: SUB_TEMPLATE, calcParams: [] }, siblings: [] } as unknown as BindContext
+  const ctx = { vendor: 'oanda', ticker: 'EURUSD', interval: '1h', paneIndex: 0, indicator: { name: SUB_TEMPLATE, calcParams: [] }, siblings: [], config: DIV_DEFAULTS } as unknown as BindContext
 
   test('offers both panes, in groups a picker can tell apart', async () => {
     const plugin = createArev21DivergencePlugin()
@@ -239,57 +240,56 @@ describe('the plugin', () => {
 
   test('the gear on either template opens one panel, and an edit reaches both through the rebind', async () => {
     const opened: Array<{ title: string; onChange: (next: DivConfig) => void; config: DivConfig }> = []
-    const persisted: number[] = []
-    const reconciled: string[] = []
-    const f = {
-      ...facilities(),
-      paneInfo: (paneId: string) =>
-        paneId === 'p0'
-          ? {
-              paneIndex: 0,
-              chart: { getDom: () => ({ getBoundingClientRect: () => ({ top: 0, left: 0 }) }) },
-              pane: { getSymbol: () => ({ ticker: 'EURUSD' }), getPeriod: () => ({ text: '1h' }) }
-            }
-          : null,
-      periodToResolution: (p: { text: string }) => p.text,
-      openSettingsPanel: (options: never) => {
-        opened.push(options)
+    let persisted = 0
+    const bound: BindContext[] = []
+    const plugin = createArev21DivergencePlugin(async () => [row('arev21')] as never)
+    const host = await createPluginHost({
+      plugins: [
+        {
+          ...plugin,
+          bind: (c) => {
+            bound.push(c)
+            return plugin.bind(c)
+          }
+        }
+      ],
+      facilities: fakeFacilities({ resolutionDurationMs: () => STEP }),
+      openSettingsPanel: (options) => {
+        opened.push(options as never)
         return { close() {} }
       },
-      requestPersist: () => persisted.push(1),
-      requestReconcile: (paneId?: string) => reconciled.push(paneId ?? '')
-    } as unknown as PluginFacilities
-    const plugin = createArev21DivergencePlugin()
-    await plugin.register(f)
+      requestPersist: () => {
+        persisted++
+      }
+    })
+    const chart = fakeChart()
+    ;(chart.chart as unknown as { getDom: () => unknown }).getDom = () => ({ getBoundingClientRect: () => ({ top: 0, left: 0 }) })
+    chart.indicators = [fakeIndicator(SUB_TEMPLATE, 's'), fakeIndicator(PRICE_TEMPLATE, 'p')]
+    host.sync([fakePane('p0', chart.chart)])
     const request = (indicatorName: string) => ({ indicatorName, paneId: 'p0', chartPaneId: 'x', calcParams: [] })
-    expect(plugin.handleSettings?.(request('AREV:arev21'))).toBe(false)
-    expect(plugin.handleSettings?.(request(PRICE_TEMPLATE))).toBe(true)
-    expect(plugin.handleSettings?.(request(SUB_TEMPLATE))).toBe(true)
+    expect(host.handleSettings(request('AREV:arev21'))).toBe(false)
+    expect(host.handleSettings(request(PRICE_TEMPLATE))).toBe(true)
+    expect(host.handleSettings(request(SUB_TEMPLATE))).toBe(true)
     expect(opened[1].title).toBe('AREV21 divergence · EURUSD 1h')
     expect(opened[1].config).toEqual(DIV_DEFAULTS)
 
-    const before = plugin.signature?.(ctx)
+    bound.length = 0
     opened[1].onChange({ ...DIV_DEFAULTS, line: { ...DIV_DEFAULTS.line, style: 'solid', width: 99 } })
-    expect(plugin.signature?.(ctx)).not.toEqual(before)
-    expect(persisted.length).toBe(1)
-    expect(reconciled).toEqual(['p0'])
-    // Clamped on the way in, and handed to every binding on the pane.
-    const extend = plugin.bind(ctx)?.extendData?.({ sources: [], chartInterval: '1h' }) as { config: DivConfig }
-    expect(extend.config.line).toEqual({ ...DIV_DEFAULTS.line, style: 'solid', width: 10 })
-    const priceCtx = { ...ctx, indicator: { name: PRICE_TEMPLATE, calcParams: [] } } as unknown as BindContext
-    const priceExtend = plugin.bind(priceCtx)?.extendData?.({ sources: [], chartInterval: '1h' }) as { config: DivConfig } | undefined
-    expect(priceExtend?.config).toEqual(extend.config)
+    expect(persisted).toBe(1)
+    // Clamped on the way in, and handed to every binding on the pane: both templates rebound.
+    expect(bound.map((c) => c.indicator.name).sort()).toEqual([PRICE_TEMPLATE, SUB_TEMPLATE].sort())
+    const configs = bound.map((c) => (plugin.bind(c)?.extendData?.({ sources: [], chartInterval: '1h' }) as { config: DivConfig } | undefined)?.config as DivConfig)
+    expect(configs[0].line).toEqual({ ...DIV_DEFAULTS.line, style: 'solid', width: 10 })
+    expect(configs[1]).toEqual(configs[0])
     // And it is what the wall document saves for pane 0.
-    expect(plugin.paneState?.snapshot()).toEqual({ 0: extend.config })
+    expect(host.paneDocs()).toEqual({ 0: { dv: { 'line.style': 'solid', 'line.width': 10 } } })
+    host.teardown()
   })
 
-  test("a pane's saved settings come back through hydrate, normalised", async () => {
-    const plugin = createArev21DivergencePlugin()
-    await plugin.register(facilities())
-    plugin.paneState?.hydrate({ 0: { ...DIV_DEFAULTS, line: { ...DIV_DEFAULTS.line, bearColor: '#010203', width: -4 } } })
-    const extend = plugin.bind(ctx)?.extendData?.({ sources: [], chartInterval: '1h' }) as { config: DivConfig }
-    expect(extend.config.line.bearColor).toBe('#010203')
-    expect(extend.config.line.width).toBe(1)
+  test("a pane's saved settings come back normalised", () => {
+    const config = DIV_PANE_CONFIG.fromStored({ 'line.bearColor': '#010203', 'line.width': -4 }) as DivConfig
+    expect(config.line.bearColor).toBe('#010203')
+    expect(config.line.width).toBe(1)
   })
 
   test('offers nothing where the server serves no arev21', async () => {

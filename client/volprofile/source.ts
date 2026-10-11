@@ -1,5 +1,5 @@
 import { getReadClock } from '../config'
-import { fetchBars } from '../history'
+import { closedBarPage } from '../plugins/bars'
 import { missingRanges, mergeRange, truncate } from '../plugins/store'
 import type { Page, Phase, PluginStream, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import {
@@ -7,12 +7,10 @@ import {
   isInterval,
   nominalMs,
   parseInterval,
-  scheduleIntervalStart,
   scheduleWireShift,
   sessionDated
 } from '../replay/timeframes'
 import type { StreamListener } from '../stream'
-import { barsFromTiles } from '../tiles'
 import { lowerBound, type SourceBar } from './atoms'
 
 // Which bars the profile is built from, and reading them.
@@ -192,16 +190,6 @@ export function barSourceKey(vendor: string, ticker: string, source: string): st
   return `vp-bars|${vendor}:${ticker}|${source}`
 }
 
-/** Whether a bar dated `date` on `source`'s wire clock had closed by read clock `clock`. The
- * tiles are read straight from the bucket, so nothing on the server clamps them to a replay's
- * cursor (only `/getbars` is, through `apiUrl`); this is that clamp for this source. */
-export function closedBy(source: string, date: number, clock: number, schedule: Schedule | null): boolean {
-  if (!sessionDated(source)) return date + nominalMs(source) <= clock
-  if (!schedule) return false
-  const forming = scheduleIntervalStart(source, clock, schedule.timezone, schedule.day) + scheduleWireShift(source, schedule.day)
-  return date < forming
-}
-
 export interface BarSourceOptions {
   stream: PluginStream
   vendor: string
@@ -250,28 +238,10 @@ export function barSource(o: BarSourceOptions): SourceSpec<SourceBar> {
       const clock = getReadClock()
       if (range.from >= (clock ?? Date.now())) return { points: [], nextFrom: null }
       // Tiles first, in big pages; the API only for what they do not hold (the period still
-      // forming), in pages under its cap. `fetchBars` does both halves and the market-closed
-      // filter; asking it for a window the tiles cover means it never calls the API at all.
-      const tiled = await barsFromTiles(vendorSymbol, o.source, range.from, range.to)
-      const tiledTo = tiled ? tiled.coveredTo : range.from
-      let end: number
-      let next: number
-      if (tiledTo > range.from) {
-        next = Math.min(range.to, tiledTo, range.from + TILE_PAGE_BARS * sourceMs)
-        // `fetchBars` answers from tiles alone only when they run strictly past its `to`; one
-        // millisecond short of the tiles' edge holds no bar on any grid.
-        end = next === tiledTo ? tiledTo - 1 : next
-      } else {
-        next = Math.min(range.to, range.from + API_PAGE_BARS * sourceMs)
-        end = next
-      }
-      const bars = await fetchBars(vendorSymbol, o.source, range.from, end, null)
-      const points: SourceBar[] = []
-      for (const bar of bars) {
-        if (clock !== null && !closedBy(o.source, bar.timestamp, clock, o.schedule)) continue
-        points.push(toSourceBar(bar))
-      }
-      return { points, nextFrom: next < range.to ? next : null }
+      // forming), in pages under its cap -- and under a replay only the bars closed by its clock
+      // (plugins/bars.ts).
+      const { bars, nextFrom } = await closedBarPage(vendorSymbol, o.source, range, { apiPage: API_PAGE_BARS, tilePage: TILE_PAGE_BARS })
+      return { points: bars.map(toSourceBar), nextFrom }
     },
     // The live half: the forming source bar and each close, so a developing profile moves with
     // the market. A replay wall's stream is inert, so nothing live reaches a replay's store --

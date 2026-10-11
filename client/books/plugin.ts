@@ -6,10 +6,11 @@ import {
   nearSource,
   profileSource,
   totalsSource,
-  type BookFeed,
-  type BookProfilePoint
+  type BookFeed
 } from './api'
 import { hoverIndex, parseTemplateName, registerBooksIndicators } from './templates'
+import { AXIS_GAP } from '../plugins/draw'
+import { phaseLabel } from '../plugins/legend'
 
 // The OANDA books as a client plugin (templates.ts has the catalogue of displays). One
 // source per binding; the depth overlay and the hover viewer of one kind share the
@@ -18,7 +19,6 @@ import { hoverIndex, parseTemplateName, registerBooksIndicators } from './templa
 // the next fetch — but the hover viewer does subscribe the CROSSHAIR, which is what makes
 // "the book at the candle under the pointer" repaint as the pointer moves.
 
-const AXIS_GAP = { top: 0.1, bottom: 0.05 }
 
 function baseLabel(display: string, kind: string): string {
   switch (display) {
@@ -60,60 +60,54 @@ export function createBooksPlugin(feed: BookFeed = OWN_BOOKS): IndicatorPlugin {
         const rangePct = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_FLOW_RANGE_PCT
         source = nearSource(facilities, kind, ctx.vendor, ctx.ticker, ctx.interval, rangePct, feed) as SourceSpec
       }
-      if (display === 'view') {
-        // The crosshair, as a subscription on the shared profile store: moving the
-        // pointer bumps the store's rev (through a rAF throttle) so the host re-applies
-        // and the viewer redraws with the hovered bar's book. The disposer unhooks with
-        // the binding, which is what keeps a torn-down wall from leaking callbacks.
-        const chart = ctx.chart
-        source = {
-          ...(source as SourceSpec<BookProfilePoint>),
-          subscribe: (store, notify) => {
-            let queued = false
-            const cb = (payload: unknown) => {
-              // This fork's crosshair event carries only {x, y, paneId}; a stock
-              // klinecharts one carries dataIndex too. Take it when present, else
-              // convert the x pixel through the chart.
-              const c = payload as { dataIndex?: number; x?: number; paneId?: string } | undefined
-              let next: number | null = typeof c?.dataIndex === 'number' ? c.dataIndex : null
-              if (next === null && typeof c?.x === 'number') {
-                const point = chart.convertFromPixel([{ x: c.x }], { paneId: c.paneId ?? 'candle_pane' })
-                const p = Array.isArray(point) ? point[0] : point
-                if (typeof p?.dataIndex === 'number') next = p.dataIndex
-              }
-              if (hoverIndex.get(chart) === next) return
-              hoverIndex.set(chart, next)
-              if (queued) return
-              queued = true
-              const fire = () => {
+      // The hover viewer follows the crosshair. What it draws is the hovered bar's book, which
+      // `draw` reads off `hoverIndex`; nothing it CALCULATES changes, so a move asks for a redraw
+      // and nothing more. Until 2026-10-11 it bumped the shared profile store's revision, which
+      // recomputed this template and the depth overlay on the same store over every bar, per
+      // frame of pointer movement.
+      const chart = ctx.chart
+      const { id, name, paneId } = ctx.indicator
+      const attach =
+        display === 'view'
+          ? () => {
+              let queued = false
+              const redraw = (): void => {
                 queued = false
-                store.rev++
-                notify.changed()
+                try {
+                  chart.overrideIndicator({ id, name, paneId })
+                } catch {
+                  // chart already disposed
+                }
               }
-              if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fire)
-              else setTimeout(fire, 16)
+              const cb = (payload: unknown): void => {
+                // This fork's crosshair event carries only {x, y, paneId}; a stock klinecharts
+                // one carries dataIndex too. Take it when present, else convert the x pixel
+                // through the chart.
+                const c = payload as { dataIndex?: number; x?: number; paneId?: string } | undefined
+                let next: number | null = typeof c?.dataIndex === 'number' ? c.dataIndex : null
+                if (next === null && typeof c?.x === 'number') {
+                  const point = chart.convertFromPixel([{ x: c.x }], { paneId: c.paneId ?? 'candle_pane' })
+                  const p = Array.isArray(point) ? point[0] : point
+                  if (typeof p?.dataIndex === 'number') next = p.dataIndex
+                }
+                if (hoverIndex.get(chart) === next) return
+                hoverIndex.set(chart, next)
+                if (queued) return
+                queued = true
+                if (typeof requestAnimationFrame === 'function') requestAnimationFrame(redraw)
+                else setTimeout(redraw, 16)
+              }
+              chart.subscribeAction('onCrosshairChange', cb)
+              return () => chart.unsubscribeAction('onCrosshairChange', cb)
             }
-            chart.subscribeAction('onCrosshairChange', cb)
-            return () => chart.unsubscribeAction('onCrosshairChange', cb)
-          }
-        } as SourceSpec
-      }
+          : undefined
       const base = `${baseLabel(display, kind)}${feed.suffix}`
       return {
         sources: [source],
-        label: (state: BindingState) => {
-          switch (state.sources[0]?.store.phase) {
-            case 'idle':
-            case 'loading':
-              return `${base} · loading`
-            case 'error':
-              return `${base} · error`
-            default:
-              return base
-          }
-        },
+        label: (state: BindingState) => phaseLabel(base, [state.sources[0]?.store]) ?? base,
         extendData: (state: BindingState) => ({ chartInterval: state.chartInterval }),
-        yAxisGap: display === 'sentiment' || display === 'flow' ? AXIS_GAP : undefined
+        yAxisGap: display === 'sentiment' || display === 'flow' ? AXIS_GAP : undefined,
+        attach
       }
     }
   }

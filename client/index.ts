@@ -4,18 +4,10 @@ import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './alerts/g
 import type { MtfConfig } from './mtf/config'
 import { currentSession, logout } from './auth'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
-import { attachToSlot } from './chartlayers/controller'
+import { attachToSlot } from './chrome/slot'
 import { setFocusSource } from './chrome/focus'
 import { WdashboardDatafeed } from './datafeed'
-import {
-  defaultLayout,
-  hydrateLayout,
-  overlayPaneState,
-  toPaneOptions,
-  toPersistedLayout,
-  type PanePluginState,
-  type PersistedLayout
-} from './layout'
+import { defaultLayout, hydrateLayout, toPaneOptions, toPersistedLayout, type PersistedLayout } from './layout'
 import { createLevelsIndicators } from './levels/indicator'
 import { mountNotificationCenter, notifications } from './notifications'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
@@ -297,46 +289,25 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // every plugin's klinecharts templates (a restored layout may name them) and collects
   // their picker groups, which are construction-time too.
   //
-  // Every plugin, and the host, is built per MOUNT, not once per page: each holds per-pane
-  // state keyed by pane id, and the host seeds the plugins' per-pane document state from
-  // the workspace being switched TO. `teardown` below is what closes the outgoing set down.
+  // Every plugin, and the host, is built per MOUNT, not once per page: the host holds per-pane
+  // state keyed by pane id, and seeds every pane's plugin settings from the workspace being
+  // switched TO. `teardown` below is what closes the outgoing set down.
   // `persist` is declared below; the thunk is not called until a user edits something,
   // long after it is initialised.
   const [hydrated, starredTimeframes] = await Promise.all([
     hydrateLayout(options.layout),
     hasFeature('preferences') ? loadStarredTimeframes() : Promise.resolve(DEFAULT_STARRED_TIMEFRAMES)
   ])
-  // Levels and Zones: indicators in the picker, drawn by a controller per layer that follows
-  // the wall's panes (onPanesChange below) and that the replay invalidates directly.
+  // Levels and Zones: indicators in the picker, whose controllers the replay invalidates directly.
   const levels = createLevelsIndicators()
   const pluginHost = await createPluginHost({
     plugins: builtinPlugins(levels.plugin),
-    facilities: createFacilities({ requestPersist: () => persist(), stream: replayBoot ? inertStream : undefined }),
-    paneState: {
-      // The AREV21 overlay's per-pane settings: app state the library's PaneSnapshot has
-      // never heard of, carried in the pane's own document entry (layout.ts).
-      mtf: Object.fromEntries(
-        hydrated.panes.flatMap((pane, index) => (pane.mtfConfig ? [[index, pane.mtfConfig]] : []))
-      ),
-      // The AREV lab's, carried the same way.
-      arevlab: Object.fromEntries(
-        hydrated.panes.flatMap((pane, index) => (pane.labConfig ? [[index, pane.labConfig]] : []))
-      ),
-      // The AREV21 divergence's, likewise.
-      arev21div: Object.fromEntries(
-        hydrated.panes.flatMap((pane, index) => (pane.divConfig ? [[index, pane.divConfig]] : []))
-      ),
-      // The volume profile's, likewise.
-      volprofile: Object.fromEntries(
-        hydrated.panes.flatMap((pane, index) => (pane.vpConfig ? [[index, pane.vpConfig]] : []))
-      ),
-      // Levels' and Zones', by layer id, still in their stored form.
-      levels: Object.fromEntries(
-        hydrated.panes.flatMap((pane, index) => (pane.layerConfigs ? [[index, pane.layerConfigs]] : []))
-      ),
-      // The other MTF overlays' (the arev21_outlier rank ones), each under its plugin id.
-      ...overlayPaneState(hydrated.panes)
-    }
+    facilities: createFacilities({ stream: replayBoot ? inertStream : undefined }),
+    // Every pane's plugin settings -- the MTF overlays', the AREV lab's, Levels' and the rest --
+    // as the wall document stored them: app state the library's PaneSnapshot has never heard
+    // of, carried in the pane's own document entry (layout.ts) and kept by the host.
+    paneDocs: Object.fromEntries(hydrated.panes.flatMap((pane, index) => (pane.plugins ? [[index, pane.plugins]] : []))),
+    requestPersist: () => persist()
   })
 
   const periods = availablePeriods()
@@ -364,9 +335,8 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       panes,
       activeIndex,
       latestSync,
-      // The plugins' per-pane document state (the AREV21 overlay's and the AREV lab's
-      // settings), supplied here rather than read off the snapshots.
-      pluginHost.paneState() as PanePluginState
+      // The plugins' per-pane settings, supplied here rather than read off the snapshots.
+      pluginHost.paneDocs()
     )
   }
   // Every change STAGES the wall as the active workspace's draft; nothing reaches storage
@@ -432,7 +402,6 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       // Debug hook, like window.__wdPlugins: the live wall panes, so a console (or a
       // headless test) can reach a pane's chart. Read-only by convention.
       window.__wdPanes = panes
-      levels.sync(panes)
       pluginHost.sync(panes)
       paper?.sync(panes)
       replay?.sync(panes)
@@ -574,12 +543,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 
   return {
     teardown(): void {
-      // Order matters: the controllers unsubscribe their indicator streams and clear their
+      // Order matters: the plugin host unsubscribes its indicator streams and clears its
       // overlays against charts that are still alive, and only then does removing the
       // component unmount each ChartPane (which unsubscribes its own bar stream).
       // ChartPro.svelte's onPanesChange effect is destroyed with the component, so it never
-      // fires an empty list of its own -- this is the only teardown signal they get.
-      levels.sync([])
+      // fires an empty list of its own -- this is the only teardown signal it gets.
       pluginHost.teardown()
       // Clears its overlays against the still-alive charts and removes the dock, before the
       // component (and its panes) is unmounted below.

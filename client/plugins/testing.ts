@@ -1,5 +1,6 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, Period, SymbolInfo } from '../../src'
+import type { PluginFacilities } from './types'
 
 // Test doubles for the plugin host: a DOM stub for modules that read `window` at import,
 // and a fake chart/pane pair that records what the host does to it. Not shipped: nothing
@@ -36,10 +37,14 @@ export function fakeChart(): FakeChart {
     }
   }
   state.chart = {
-    getIndicators: () => state.indicators,
+    getIndicators: (filter?: { id?: string }) => state.indicators.filter((indicator) => !filter?.id || indicator.id === filter.id),
     getDataList: () => state.data,
+    getVisibleRange: () => ({ from: 0, to: state.data.length, realFrom: 0, realTo: state.data.length - 1 }),
     overrideIndicator: (patch: Record<string, unknown>) => {
       state.overrides.push(patch)
+      const { id, name, paneId, ...rest } = patch
+      const target = state.indicators.find((indicator) => indicator.id === id)
+      if (target) mergeLikeKlinecharts(target as unknown as Record<string, unknown>, rest)
       return true
     },
     overrideYAxis: (patch: Record<string, unknown>) => {
@@ -58,6 +63,16 @@ export function fakeChart(): FakeChart {
     }
   } as unknown as Chart
   return state
+}
+
+/** klinecharts' own `merge`, which `overrideIndicator` applies to the indicator: deep, an
+ * array merged index by index, and a key never removed. */
+function mergeLikeKlinecharts(target: Record<string, unknown>, source: Record<string, unknown>): void {
+  const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object'
+  for (const [key, value] of Object.entries(source)) {
+    if (isObject(value) && isObject(target[key])) mergeLikeKlinecharts(target[key] as Record<string, unknown>, value)
+    else target[key] = isObject(value) ? structuredClone(value) : value
+  }
 }
 
 export function fakeIndicator(name: string, id: string, calcParams: unknown[] = [], paneId = 'candle_pane'): Indicator {
@@ -79,3 +94,18 @@ export function fakePane(id: string, chart: Chart, ticker = 'EURUSD', period: Pe
 }
 
 export const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+/** Facilities that fetch nothing: every server read answers empty, every feature is on. */
+export function fakeFacilities(overrides: Partial<PluginFacilities> = {}): PluginFacilities {
+  return {
+    api: { get: async () => ({}) as never },
+    stream: {} as PluginFacilities['stream'],
+    hasFeature: () => true,
+    points: async () => ({ points: [], nextFrom: null }),
+    periodToResolution: (p) => p.text,
+    resolutionDurationMs: () => 3_600_000,
+    symbolVendor: () => 'oanda',
+    maxValuesPerRequest: 3,
+    ...overrides
+  }
+}

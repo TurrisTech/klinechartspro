@@ -74,23 +74,30 @@ export class WdashboardDatafeed implements Datafeed {
     const interval = periodToResolution(period)
     const key = subscriptionKey(vendor, symbol.ticker, interval)
 
-    const emit = (bar: OHLCVBar, closed: boolean): void => {
+    /** `bar` as the chart takes it, or null when it is older than what the chart holds. */
+    const admit = (bar: OHLCVBar, closed: boolean): KLineData | null => {
       const latest = this.latest.get(key) ?? 0
       // Strictly-older bars only. Equality must pass through, and for both kinds: a closed
       // bar at `latest` is the final version of the bar the chart is holding open, and a
       // forming bar at `latest` is that same bar still ticking. Only `<` is stale history.
-      if (bar.date < latest) return
+      if (bar.date < latest) return null
       // Forming bars deliberately do not advance the watermark — the bar is not settled, so
       // a later backfill covering it must still be allowed through.
       if (closed) this.latest.set(key, bar.date)
-      callback(barToKLineData(bar))
+      return barToKLineData(bar)
     }
 
     const listener: StreamListener = {
+      // In one go: after a long disconnect this is hundreds of bars, and a pane following the
+      // live edge reloads rather than taking them one recalculation at a time.
       onBackfill: (bars) => {
-        for (const bar of bars) emit(bar, true)
+        const gap = bars.map((bar) => admit(bar, true)).filter((bar): bar is KLineData => bar !== null)
+        if (gap.length > 0) callback(gap)
       },
-      onBar: (bar, closed) => emit(bar, closed)
+      onBar: (bar, closed) => {
+        const admitted = admit(bar, closed)
+        if (admitted) callback(admitted)
+      }
     }
 
     this.listeners.set(key, listener)

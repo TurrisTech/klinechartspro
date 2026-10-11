@@ -1,5 +1,4 @@
-import type { KLineData } from 'klinecharts'
-import { fetchBars } from '../history'
+import { fetchClosedBars } from '../plugins/bars'
 import { fetchArevValues, type ArevPoint } from '../arev/api'
 
 // The multi-timeframe AREV21 overlay's data layer. It reads two things per source
@@ -90,9 +89,9 @@ export async function fetchMtfBarGrid(
   // exactly what tiles hold -- and asking the API for it meant panning back through fully
   // tiled history still cost one request per grid window per enabled source timeframe.
   // Observed as `resolution=1h&from=…&to=…` firing on a 15m or 3m chart, where 1h is not
-  // the pane's own interval and so could only have come from here.
-  const bars = await fetchBars(vendorSymbol, interval, from, to, null)
+  // the pane's own interval and so could only have come from here. Closed bars only, under a
+  // replay as live (plugins/bars.ts): shift.ts places a vote on the bar that follows it.
+  const bars = await fetchClosedBars(vendorSymbol, interval, from, to)
   return bars.map((bar) => ({ date: bar.timestamp, open: bar.open, close: bar.close }))
 }
 
-export type { KLineData }

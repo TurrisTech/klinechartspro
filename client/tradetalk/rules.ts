@@ -83,6 +83,9 @@ export interface TradeTalkInput {
   /** The instrument's price tick, for comparing levels that are the same price. */
   tick: number
   settings: Settings
+  /** `levelMap(bars, sessions, clock, barMs, tick, settings.minUnit)`, when the caller holds it
+   * already -- the chart keeps it across live ticks, which cannot change it (templates.ts). */
+  map?: LevelMap | null
 }
 
 export interface Target {
@@ -203,21 +206,115 @@ export function pickLevel(candidates: readonly Level[], close: number): Level | 
  * coarser one's name. Two lines on one price would otherwise double-count "another level
  * between entry and stop" and draw the same line three times at a year boundary. */
 export function dedupeLevels(levels: readonly Level[], tick: number): Level[] {
-  const step = tick > 0 ? tick : 0
   const byPrice = new Map<number, Level>()
   for (const level of levels) {
     if (!Number.isFinite(level.price)) continue
-    const key = step > 0 ? Math.round(level.price / step) : level.price
+    const key = priceKey(level.price, tick)
     const held = byPrice.get(key)
-    if (
-      held === undefined ||
-      levelRank(level) > levelRank(held) ||
-      (levelRank(level) === levelRank(held) && KIND_RANK[level.kind] > KIND_RANK[held.kind])
-    ) {
-      byPrice.set(key, level)
-    }
+    if (held === undefined || outranks(level, held)) byPrice.set(key, level)
   }
   return [...byPrice.values()].sort((a, b) => b.price - a.price)
+}
+
+/** The price two levels must share to be one line: the same tick. */
+function priceKey(price: number, tick: number): number {
+  return tick > 0 ? Math.round(price / tick) : price
+}
+
+/** Whether `level` takes a price from `held`, which got there first. */
+function outranks(level: Level, held: Level): boolean {
+  return levelRank(level) > levelRank(held) || (levelRank(level) === levelRank(held) && KIND_RANK[level.kind] > KIND_RANK[held.kind])
+}
+
+/**
+ * The supply and demand zones in force, kept in price order as they come and go, so a bar's
+ * lines are its calendar map and these merged in one pass. Exactly `dedupeLevels` over the
+ * calendar map followed by the zones in the order they came into force -- which is what this
+ * replaced, and what `rules.test.ts` holds it to: rebuilding and re-sorting that list each time
+ * a zone came or went was most of a TradeTalk pass on a long history, where unbroken zones
+ * accumulate into the hundreds.
+ */
+export class ActiveZones {
+  /** By price key, each key's zones in the order they came into force: the first is the one a
+   * merge keeps (two zones are never ranked apart). */
+  private readonly byKey = new Map<number, Level[]>()
+  /** The keys held, highest first. */
+  private readonly keys: number[] = []
+  private readonly lines = new Map<HeathLevel, Level>()
+
+  constructor(private readonly tick: number) {}
+
+  get size(): number {
+    return this.keys.length
+  }
+
+  add(zone: HeathLevel): void {
+    const line = this.lineOf(zone)
+    if (!Number.isFinite(line.price)) return
+    const key = priceKey(line.price, this.tick)
+    const held = this.byKey.get(key)
+    if (held) {
+      held.push(line)
+      return
+    }
+    this.byKey.set(key, [line])
+    this.keys.splice(this.insertAt(key), 0, key)
+  }
+
+  remove(zone: HeathLevel): void {
+    const line = this.lines.get(zone)
+    if (!line || !Number.isFinite(line.price)) return
+    const key = priceKey(line.price, this.tick)
+    const held = this.byKey.get(key)
+    if (!held) return
+    const at = held.indexOf(line)
+    if (at >= 0) held.splice(at, 1)
+    if (held.length > 0) return
+    this.byKey.delete(key)
+    this.keys.splice(this.insertAt(key), 1)
+  }
+
+  /** `calendar` (a `dedupeLevels` result: unique prices, highest first) with these merged in. */
+  mergeInto(calendar: readonly Level[]): Level[] {
+    const out: Level[] = []
+    let c = 0
+    let z = 0
+    while (c < calendar.length || z < this.keys.length) {
+      const calendarKey = c < calendar.length ? priceKey(calendar[c].price, this.tick) : Number.NEGATIVE_INFINITY
+      const zoneKey = z < this.keys.length ? this.keys[z] : Number.NEGATIVE_INFINITY
+      if (calendarKey > zoneKey) {
+        out.push(calendar[c++])
+      } else if (zoneKey > calendarKey) {
+        out.push((this.byKey.get(this.keys[z++]) as Level[])[0])
+      } else {
+        const zone = (this.byKey.get(this.keys[z++]) as Level[])[0]
+        const held = calendar[c++]
+        out.push(outranks(zone, held) ? zone : held)
+      }
+    }
+    return out
+  }
+
+  private lineOf(zone: HeathLevel): Level {
+    let line = this.lines.get(zone)
+    if (!line) {
+      line = heathAsLevel(zone)
+      this.lines.set(zone, line)
+    }
+    return line
+  }
+
+  /** Where `key` is, or would go, among the keys (highest first). */
+  private insertAt(key: number): number {
+    let lo = 0
+    let hi = this.keys.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (this.keys[mid] > key) lo = mid + 1
+      else hi = mid
+    }
+    return lo
+  }
 }
 
 /** Whether a position may be OPENED at this instant: "nothing after 11:00 a.m. ET", no
@@ -309,7 +406,7 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
   const values: BarValue[] = bars.map(() => ({}))
   const trades: Trade[] = []
   const skips: Skips = { bias: 0, rr: 0, hours: 0, invalidated: 0, expired: 0 }
-  const map = levelMap(bars, sessions, clock, barMs, tick, settings.minUnit)
+  const map = input.map !== undefined ? input.map : levelMap(bars, sessions, clock, barMs, tick, settings.minUnit)
   if (map === null) return { values, trades, units: unitsFor(settings.minUnit, barMs), skips }
 
   const { maps, days, units } = map
@@ -331,23 +428,40 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
     .map((level) => ({ level, from: Math.max(level.confirmIndex, level.armedIndex ?? 0) }))
     .sort((a, b) => a.from - b.from)
   let heathNext = 0
-  let active: HeathLevel[] = []
+  const active = new ActiveZones(tick)
   let activeVersion = 0
+  // Erasures in the order they happen, so a bar where none does costs one comparison.
+  const byBreak = heathByConfirm
+    .filter(({ level }) => level.brokenIndex !== null)
+    .map(({ level, from }) => ({ level, from, at: level.brokenIndex as number }))
+    .sort((a, b) => a.at - b.at)
+  let breakNext = 0
   const calendarId = new Map<readonly Level[], number>()
   const merged = new Map<string, Level[]>()
+  // Consecutive bars almost always share their lines; the previous bar's answer is checked first.
+  let lastCalendar: Level[] | null = null
+  let lastVersion = -1
+  let lastLevels: Level[] = []
   const levelsFor = (i: number, calendar: Level[]): Level[] => {
     if (heathByConfirm.length === 0) return calendar
     let changed = false
     while (heathNext < heathByConfirm.length && heathByConfirm[heathNext].from <= i) {
-      active.push(heathByConfirm[heathNext++].level)
+      const level = heathByConfirm[heathNext++].level
+      // Erased by the time it would come into force: it never stands at all.
+      if (level.brokenIndex === null || level.brokenIndex > i) active.add(level)
       changed = true
     }
-    if (active.some((level) => level.brokenIndex !== null && level.brokenIndex <= i)) {
-      active = active.filter((level) => level.brokenIndex === null || level.brokenIndex > i)
+    // A zone erased on this bar or before comes off; one that never came into force is not there.
+    while (breakNext < byBreak.length && byBreak[breakNext].at <= i) {
+      const { level, from, at } = byBreak[breakNext++]
+      if (from < at) active.remove(level)
       changed = true
     }
     if (changed) activeVersion++
-    if (active.length === 0) return calendar
+    if (active.size === 0) return calendar
+    if (calendar === lastCalendar && activeVersion === lastVersion) return lastLevels
+    lastCalendar = calendar
+    lastVersion = activeVersion
     let id = calendarId.get(calendar)
     if (id === undefined) {
       id = calendarId.size
@@ -355,9 +469,13 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
     }
     const key = `${id}|${activeVersion}`
     const held = merged.get(key)
-    if (held) return held
-    const built = dedupeLevels([...calendar, ...active.map(heathAsLevel)], tick)
+    if (held) {
+      lastLevels = held
+      return held
+    }
+    const built = active.mergeInto(calendar)
     merged.set(key, built)
+    lastLevels = built
     return built
   }
 
@@ -465,7 +583,9 @@ export function computeTradeTalk(input: TradeTalkInput): TradeTalkResult {
 
     // 3. A new signal. Never while a position is open: "one trade a day is enough", and a
     // second entry would need a second risk budget the method does not describe.
-    if (open === null) {
+    // Only a line inside the candle's range can have been swept, and on most candles there is
+    // none: `signalAt` would find nothing, so it is not asked.
+    if (open === null && anyWithin(levels, Math.min(bar.low, bar.open, bar.close), Math.max(bar.high, bar.open, bar.close))) {
       const { order, skip } = signalAt(bar, levels, {
         tick,
         half,
@@ -505,6 +625,19 @@ interface SignalContext {
   dayHigh: number
   dayLow: number
   intraday: boolean
+}
+
+/** Whether any of `levels` -- highest price first, as a bar's lines always are -- lies strictly
+ * between `low` and `high`. */
+export function anyWithin(levels: readonly Level[], low: number, high: number): boolean {
+  let lo = 0
+  let hi = levels.length
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (levels[mid].price >= high) lo = mid + 1
+    else hi = mid
+  }
+  return lo < levels.length && levels[lo].price > low
 }
 
 /** The order this candle would leave working, or null. Everything it reads is knowable at

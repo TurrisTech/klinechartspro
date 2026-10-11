@@ -4,6 +4,7 @@ import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFac
 import { quoteSource } from './api'
 import { registerSpreadIndicator, SPREAD_TEMPLATE_NAME, spreadPrecision, spreadUnit, spreadUnitLabel } from './spread'
 import { registerBidAskIndicator, TEMPLATE_NAME } from './templates'
+import { phaseLabel } from '../plugins/legend'
 
 // The bid/ask of every bar, as a client plugin with two templates: the bid and ask closes on
 // the price pane (QUOTE:bidask) and their spread in a sub-pane (QUOTE:spread). One source per
@@ -18,15 +19,7 @@ const NAMES = new Set([TEMPLATE_NAME, SPREAD_TEMPLATE_NAME])
 function legend(prefix: string) {
   return (state: BindingState): string => {
     const store = state.sources[0]?.store
-    switch (store?.phase) {
-      case 'idle':
-      case 'loading':
-        return `${prefix} · loading`
-      case 'error':
-        return `${prefix} · error`
-      default:
-        return store && store.size === 0 ? `${prefix} · no quotes for this instrument` : prefix
-    }
+    return phaseLabel(prefix, [store]) ?? (store?.size === 0 ? `${prefix} · no quotes for this instrument` : prefix)
   }
 }
 

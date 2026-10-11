@@ -6,6 +6,7 @@ const { createMtfPlugin, mtfLiveWire } = await import('./plugin')
 const { AREV21_MTF, AREV21_OUTLIER_RANK_85_MTF } = await import('./overlays')
 const { storeFactory } = await import('../tsregistry/store')
 const { FX_DAY } = await import('../replay/timeframes')
+const { MTF_DEFAULTS } = await import('./config')
 const FX_DAY_TZ = 'America/New_York'
 import type { PluginCatalogue } from '../plugins/api'
 import type { BindContext, PluginFacilities, SourceStore } from '../plugins/types'
@@ -62,7 +63,7 @@ describe('a bound overlay', () => {
     // The schedule rides on the symbol, as client/symbols.ts resolves it; without one the overlay
     // declines to bind (it cannot place a vote without knowing how the market dates its days).
     const symbol = withSchedule ? { ticker: 'EURUSD', exchange: 'oanda', timezone: FX_DAY_TZ, dayGeometry: FX_DAY } : { ticker: 'EURUSD', exchange: 'oanda' }
-    const ctx = { vendor: 'oanda', ticker: 'EURUSD', interval: '1h', paneIndex: 0, symbol } as unknown as BindContext
+    const ctx = { vendor: 'oanda', ticker: 'EURUSD', interval: '1h', paneIndex: 0, symbol, config: MTF_DEFAULTS } as unknown as BindContext
     const spec = plugin.bind(ctx)
     return { subs, spec }
   }

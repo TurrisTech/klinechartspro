@@ -1,13 +1,15 @@
-import { describe, expect, test } from 'bun:test'
-import { installWindow } from './testing'
-import type { PluginFacilities } from './types'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { fakeChart, fakeFacilities, fakeIndicator, fakePane, installWindow } from './testing'
+import type { IndicatorPlugin } from './types'
 
 installWindow()
 
 // The indicator manager edits the AREV21 MTF overlay's, the AREV21 divergence's and the AREV
-// lab's settings inline (IndicatorPlugin.settings). What it writes has to land exactly where the plugin's own
-// panel writes: the same per-pane config, persisted, and only that pane redrawn.
+// lab's settings inline (IndicatorPlugin.paneConfigs, through the host). What it writes has to
+// land exactly where the plugin's own panel writes: the same per-pane config, persisted, and
+// only that pane redrawn.
 
+const { createPluginHost } = await import('./host')
 const { createMtfPlugin } = await import('../mtf/plugin')
 const { AREV21_MTF, AREV21_OUTLIER_RANK_85_MTF } = await import('../mtf/overlays')
 const { MTF_DEFAULTS } = await import('../mtf/config')
@@ -21,19 +23,6 @@ const { lineApplies, settingLines } = await import('../../src/state/indicatorMat
 import type { LabConfig } from '../arevlab/config'
 import type { RegistryIndicator } from '../tsregistry/api'
 
-function recorder() {
-  const calls = { persist: 0, reconcile: [] as Array<string | undefined> }
-  const facilities = {
-    requestPersist: () => {
-      calls.persist++
-    },
-    requestReconcile: (paneId?: string) => {
-      calls.reconcile.push(paneId)
-    }
-  } as unknown as PluginFacilities
-  return { calls, facilities }
-}
-
 const ROW = {
   name: 'arev21',
   template: 'AREV:arev21',
@@ -44,81 +33,104 @@ const ROW = {
   wire: { plugin: 'arev', variant: 'arev21' }
 } as unknown as RegistryIndicator
 
+const hosts: Array<{ teardown(): void }> = []
+afterEach(() => {
+  for (const host of hosts.splice(0)) host.teardown()
+})
+
+/** The plugin on a host over a two-pane wall carrying `template` on its second pane, with the
+ * persists and rebinds it causes counted. */
+async function onHost(plugin: IndicatorPlugin, template: string) {
+  const calls = { persist: 0, binds: 0 }
+  const host = await createPluginHost({
+    plugins: [
+      {
+        ...plugin,
+        bind: (ctx) => {
+          calls.binds++
+          return plugin.bind(ctx)
+        }
+      }
+    ],
+    facilities: fakeFacilities(),
+    requestPersist: () => {
+      calls.persist++
+    }
+  })
+  hosts.push(host)
+  const charts = [fakeChart(), fakeChart()]
+  charts[1].indicators = [fakeIndicator(template, 'i1')]
+  host.sync(charts.map((c, i) => fakePane(`p${i + 1}`, c.chart)))
+  calls.binds = 0
+  return { host, calls }
+}
+
 describe('the MTF overlay', () => {
   test('offers its panel fields for its own template only, the graph group only where it draws one', async () => {
-    const plain = createMtfPlugin(AREV21_MTF)
-    await plain.register(recorder().facilities)
-    const settings = plain.settings?.(AREV21_MTF.templateName)
-    expect(settings?.fields.map((f) => f.label).slice(0, 2)).toEqual(['3m', '5m'])
-    expect(plain.settings?.('MA')).toBeNull()
-    const graphed = createMtfPlugin(AREV21_OUTLIER_RANK_85_MTF)
-    await graphed.register(recorder().facilities)
-    expect(graphed.settings?.(AREV21_OUTLIER_RANK_85_MTF.templateName)?.fields.map((f) => f.label).slice(0, 2)).toEqual(['Graph', '3m'])
-    expect(graphed.settings?.(AREV21_MTF.templateName)).toBeNull()
+    const plain = await onHost(createMtfPlugin(AREV21_MTF), AREV21_MTF.templateName)
+    expect(plain.host.settingsModel(AREV21_MTF.templateName)?.fields.map((f) => f.label).slice(0, 2)).toEqual(['3m', '5m'])
+    expect(plain.host.settingsModel('MA')).toBeNull()
+    const graphed = await onHost(createMtfPlugin(AREV21_OUTLIER_RANK_85_MTF), AREV21_OUTLIER_RANK_85_MTF.templateName)
+    expect(graphed.host.settingsModel(AREV21_OUTLIER_RANK_85_MTF.templateName)?.fields.map((f) => f.label).slice(0, 2)).toEqual(['Graph', '3m'])
+    expect(graphed.host.settingsModel(AREV21_MTF.templateName)).toBeNull()
   })
 
   test('a write changes that pane alone, persists, and redraws that pane', async () => {
-    const { calls, facilities } = recorder()
-    const plugin = createMtfPlugin(AREV21_OUTLIER_RANK_85_MTF)
-    await plugin.register(facilities)
-    const settings = plugin.settings?.(AREV21_OUTLIER_RANK_85_MTF.templateName)
-    settings?.write(1, 'p2', 'timeframes.4h.color', '#123456')
-    settings?.write(1, 'p2', 'graph.roots.8h', true)
-    const written = settings?.read(1) as typeof MTF_DEFAULTS
+    const { host, calls } = await onHost(createMtfPlugin(AREV21_OUTLIER_RANK_85_MTF), AREV21_OUTLIER_RANK_85_MTF.templateName)
+    const settings = host.settingsModel(AREV21_OUTLIER_RANK_85_MTF.templateName)
+    settings?.write('p2', 'timeframes.4h.color', '#123456')
+    settings?.write('p2', 'graph.roots.8h', true)
+    const written = settings?.read('p2') as typeof MTF_DEFAULTS
     expect(written.timeframes['4h'].color).toBe('#123456')
     expect(written.graph.roots['8h']).toBe(true)
-    expect(settings?.read(0)).toEqual(MTF_DEFAULTS)
+    expect(settings?.read('p1')).toEqual(MTF_DEFAULTS)
     expect(MTF_DEFAULTS.timeframes['4h'].color).not.toBe('#123456')
     expect(calls.persist).toBe(2)
-    expect(calls.reconcile).toEqual(['p2', 'p2'])
-    // And it is what the wall document stores for that pane.
-    expect(plugin.paneState?.snapshot()[1]).toEqual(settings?.read(1))
+    expect(calls.binds).toBe(2)
+    // And it is what the wall document stores for that pane, under `mx` by plugin id.
+    expect(host.paneDocs()[1]).toEqual({ mx: { [AREV21_OUTLIER_RANK_85_MTF.id]: { '4h': { color: '#123456' }, graph: { roots: { '8h': true } } } } })
   })
 })
 
 describe('the AREV21 divergence', () => {
   test('both templates edit one config per pane, clamped by its own normaliser', async () => {
-    const { calls, facilities } = recorder()
-    const plugin = createArev21DivergencePlugin(async () => [ROW])
-    await plugin.register(facilities)
-    const sub = plugin.settings?.(SUB_TEMPLATE)
-    const price = plugin.settings?.(PRICE_TEMPLATE)
+    const { host, calls } = await onHost(createArev21DivergencePlugin(async () => [ROW]), SUB_TEMPLATE)
+    const sub = host.settingsModel(SUB_TEMPLATE)
+    const price = host.settingsModel(PRICE_TEMPLATE)
     expect(sub?.fields.map((f) => f.label)).toEqual(['Swings', 'Lines'])
-    sub?.write(0, 'p1', 'rule.left', 5000)
-    price?.write(0, 'p1', 'line.style', 'dashed')
-    const config = price?.read(0) as typeof DIV_DEFAULTS
+    sub?.write('p1', 'rule.left', 5000)
+    price?.write('p1', 'line.style', 'dashed')
+    const config = price?.read('p1') as typeof DIV_DEFAULTS
     expect(config.rule.left).toBe(100)
     expect(config.line.style).toBe('dashed')
-    expect(sub?.read(0)).toEqual(config)
-    expect(sub?.read(1)).toEqual(DIV_DEFAULTS)
-    expect(calls.reconcile).toEqual(['p1', 'p1'])
-    expect(plugin.settings?.('AREV:arev21')).toBeNull()
+    expect(sub?.read('p1')).toEqual(config)
+    expect(sub?.read('p2')).toEqual(DIV_DEFAULTS)
+    expect(calls.persist).toBe(2)
+    expect(host.settingsModel('AREV:arev21')).toBeNull()
   })
 })
 
 describe('the AREV lab', () => {
-  test('a write lands in that pane, made legal by the lab\'s own normaliser', async () => {
-    const { calls, facilities } = recorder()
-    const plugin = createArevLabPlugin()
+  test("a write lands in that pane, made legal by the lab's own normaliser", async () => {
     // Offline: the registry read fails and the lab registers nothing, but the settings are the
     // plugin's own and do not depend on what the server serves.
     const realFetch = globalThis.fetch
     globalThis.fetch = (async () => new Response('{}', { status: 503 })) as unknown as typeof fetch
+    let host: Awaited<ReturnType<typeof onHost>>['host']
     try {
-      await plugin.register(facilities)
+      ;({ host } = await onHost(createArevLabPlugin(), LAB_TEMPLATE_NAME))
     } finally {
       globalThis.fetch = realFetch
     }
-    const settings = plugin.settings?.(LAB_TEMPLATE_NAME)
+    const settings = host.settingsModel(LAB_TEMPLATE_NAME)
     expect(settings?.fields).toBe(LAB_FIELDS)
-    settings?.write(0, 'p1', 'generations.arev21.signals', 'rank')
-    settings?.write(0, 'p1', 'generations.arev21.rank.q', 7)
-    const config = settings?.read(0) as LabConfig
+    settings?.write('p1', 'generations.arev21.signals', 'rank')
+    settings?.write('p1', 'generations.arev21.rank.q', 7)
+    const config = settings?.read('p1') as LabConfig
     expect(config.generations.arev21.signals).toBe('rank')
     expect(config.generations.arev21.rank.q).toBe(1)
-    expect(settings?.read(1)).toEqual(LAB_DEFAULTS)
-    expect(calls.reconcile).toEqual(['p1', 'p1'])
-    expect(plugin.settings?.('MA')).toBeNull()
+    expect(settings?.read('p2')).toEqual(LAB_DEFAULTS)
+    expect(host.settingsModel('MA')).toBeNull()
   })
 
   test("the manager offers each pane only its own rule's levers, and only for a generation it shows", () => {

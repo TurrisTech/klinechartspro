@@ -1,6 +1,7 @@
 import { registerIndicator, type Chart, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
+import { timestampCalc } from '../plugins/calc'
 import {
   DEFAULT_FLOW_RANGE_PCT,
   GRID_MS,
@@ -97,7 +98,7 @@ export function sentimentValue(point: BookTotalsPoint | undefined): SentimentVal
   return { pctLong: (point.long / total) * 100, mid: 50 }
 }
 
-function sentimentCalc(dataList: KLineData[], indicator: Indicator<SentimentValue, number, ExtendData>): SentimentValue[] {
+const sentimentCalc = timestampCalc((dataList: KLineData[], indicator: Indicator<SentimentValue, number, ExtendData>): SentimentValue[] => {
   const store = peekStore<WindowStore<BookTotalsPoint>>(indicator.extendData?.seriesKey)
   if (!store) return dataList.map(() => ({}))
   let last: BookTotalsPoint | undefined
@@ -106,7 +107,7 @@ function sentimentCalc(dataList: KLineData[], indicator: Indicator<SentimentValu
     if (point) last = point
     return sentimentValue(last)
   })
-}
+})
 
 // -- flow -------------------------------------------------------------------------------
 
@@ -127,7 +128,7 @@ export function flowValue(point: BookNearPoint | undefined): FlowValue {
   }
 }
 
-function flowCalc(dataList: KLineData[], indicator: Indicator<FlowValue, number, ExtendData>): FlowValue[] {
+const flowCalc = timestampCalc((dataList: KLineData[], indicator: Indicator<FlowValue, number, ExtendData>): FlowValue[] => {
   const store = peekStore<WindowStore<BookNearPoint>>(indicator.extendData?.seriesKey)
   if (!store) return dataList.map(() => ({}))
   let last: BookNearPoint | undefined
@@ -136,7 +137,7 @@ function flowCalc(dataList: KLineData[], indicator: Indicator<FlowValue, number,
     if (point) last = point
     return flowValue(last)
   })
-}
+})
 
 // -- profiles (depth overlay + hover view) ----------------------------------------------
 
@@ -145,7 +146,7 @@ export interface ProfileValue {
 }
 
 function profileCalc(forwardFill: boolean) {
-  return (dataList: KLineData[], indicator: Indicator<ProfileValue, number, ExtendData>): ProfileValue[] => {
+  return timestampCalc((dataList: KLineData[], indicator: Indicator<ProfileValue, number, ExtendData>): ProfileValue[] => {
     const store = peekStore<WindowStore<BookProfilePoint>>(indicator.extendData?.seriesKey)
     if (!store) return dataList.map(() => ({}))
     let last: BookProfilePoint | undefined
@@ -155,7 +156,7 @@ function profileCalc(forwardFill: boolean) {
       const snap = forwardFill ? last : point
       return snap ? { snap } : {}
     })
-  }
+  })
 }
 
 function shouldUpdate<D>(prev: Indicator<D, number, ExtendData>, cur: Indicator<D, number, ExtendData>) {

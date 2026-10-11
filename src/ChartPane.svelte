@@ -586,27 +586,40 @@
   }
 
   // SyncPane.showCrosshair: marks the instant another pane is pointing at, or clears it.
+  // Where the sync last put this chart's crosshair (applyCrosshairAt's key), so a move that
+  // lands it on the same pixels -- most of them, on a pane coarser than the one being hovered --
+  // repaints nothing. Forgotten whenever anything else moves or clears it: this pane's own
+  // pointer, and every data load (resetData clears the crosshair with the data).
+  let syncedCrosshair: string | null = null
+  const CLEARED = 'cleared'
+
   function showCrosshair(point: CrosshairPoint | null): void {
     syncedPoint = point
     if (!widget) return
     if (point === null) {
-      clearCrosshair(widget)
+      if (syncedCrosshair !== CLEARED) clearCrosshair(widget)
+      syncedCrosshair = CLEARED
       crosshairAway = null
       return
     }
     const reach = syncedReach(widget, point)
     // Not held: no crosshair at all, rather than one clamped onto the first or last bar with a
     // legend describing that bar while the pointer moves elsewhere.
-    if (reach?.kind === 'away' && reach.reason === 'not-loaded') clearCrosshair(widget)
-    else applyCrosshairAt(widget, point)
-    crosshairAway =
-      reach?.kind === 'away'
-        ? {
-            side: reach.side,
-            reason: reach.reason,
-            label: formatDate({ dateTimeFormat: displayDateFormat, timestamp: point.timestamp, template: '', type: 'crosshair' })
-          }
-        : null
+    if (reach?.kind === 'away' && reach.reason === 'not-loaded') {
+      if (syncedCrosshair !== CLEARED) clearCrosshair(widget)
+      syncedCrosshair = CLEARED
+    } else {
+      syncedCrosshair = applyCrosshairAt(widget, point, syncedCrosshair)
+    }
+    if (reach?.kind !== 'away') {
+      crosshairAway = null
+      return
+    }
+    const label = formatDate({ dateTimeFormat: displayDateFormat, timestamp: point.timestamp, template: '', type: 'crosshair' })
+    // Reassigned only when it changes: the tag is reactive, and a new object every move
+    // re-renders it however little moved.
+    if (crosshairAway?.side === reach.side && crosshairAway.reason === reach.reason && crosshairAway.label === label) return
+    crosshairAway = { side: reach.side, reason: reach.reason, label }
   }
 
   // Re-marks the synced instant when what this pane shows changed -- only when the answer did,
@@ -656,6 +669,9 @@
   // A capture is worth one workspace write, and onVisibleRangeChange fires once per animation
   // frame for the whole of a drag -- so captures wait for the gesture to stop rather than
   // riding the same rAF tick refreshViewState does.
+  // More new bars than this handed over at once -- a reconnect's backfill -- reload a pane that
+  // follows the live edge rather than being appended one recalculation at a time.
+  const BACKFILL_RELOAD_BARS = 20
   const VIEW_CAPTURE_DEBOUNCE_MS = 400
 
   // klinecharts' y-axis keeps a manual range (set by dragging the axis) as an internal
@@ -799,6 +815,8 @@
       }
 
       if (type === 'init') {
+        // The reload that asked for this cleared the crosshair with the data.
+        syncedCrosshair = null
         const generation = ++loadGeneration
         const seek = pendingSeek
         pendingSeek = null
@@ -898,27 +916,43 @@
     subscribeBar({ symbol: chartSymbol, period: chartPeriod, callback }) {
       const currentPeriod = fromChartPeriod(chartPeriod)
       const periodMs = periodDurationMs(currentPeriod)
-      pane.datafeed.subscribe(chartSymbol as SymbolInfo, currentPeriod, (bar: KLineData) => {
-        // Once a seek has parked this pane's data in the past, the live stream must not push
-        // a bar at "now" onto the tail -- _addData's single-bar path accepts anything newer
-        // than the last loaded bar unconditionally, which would strand one candle far to the
-        // right with a dead zone in between.
-        //
-        // Both halves of this test are needed, and the flag is the load-bearing one. A gap
-        // wider than one period does NOT mean the pane is parked: the market closes. The bar
-        // after Thursday's daily candle opens Sunday 17:00, three periods later; the bar
-        // after Friday's last hourly one opens 49 hours later. A gap test alone dropped
-        // every one of those -- the whole first session of the week, at every period -- and
-        // dropped it silently. The period arithmetic is kept only for the parked case, where
-        // it is what lets a pane that has been paged back up to the tail take live bars
-        // again without waiting for a backward page to run dry.
-        const last = widget?.getDataList().at(-1)?.timestamp
-        if (parkedInHistory && last !== undefined && bar.timestamp > last + periodMs) {
-          console.debug('[sync] live bar dropped: pane is parked in history', { pane: pane.id })
-          return
+      // A datafeed may hand over several bars at once -- a reconnect's backfill, up to hundreds
+      // of missed bars. Each bar klinecharts is handed costs a recalculation of every indicator
+      // on the pane over every bar it holds, and a layout, so a pane that follows the live edge
+      // reloads instead when more than a few are new.
+      pane.datafeed.subscribe(chartSymbol as SymbolInfo, currentPeriod, (data: KLineData | readonly KLineData[]) => {
+        const bars: readonly KLineData[] = Array.isArray(data) ? data : [data as KLineData]
+        if (bars.length > BACKFILL_RELOAD_BARS && atLive && !parkedInHistory && widget) {
+          const held = widget.getDataList().at(-1)?.timestamp
+          if (bars.filter((bar) => held === undefined || bar.timestamp > held).length > BACKFILL_RELOAD_BARS) {
+            pendingSeek = null
+            pendingLive = { broadcast: false }
+            widget.resetData()
+            return
+          }
         }
-        parkedInHistory = false
-        callback(bar)
+        for (const bar of bars) {
+          // Once a seek has parked this pane's data in the past, the live stream must not
+          // push a bar at "now" onto the tail -- _addData's single-bar path accepts anything
+          // newer than the last loaded bar unconditionally, which would strand one candle far
+          // to the right with a dead zone in between.
+          //
+          // Both halves of this test are needed, and the flag is the load-bearing one. A gap
+          // wider than one period does NOT mean the pane is parked: the market closes. The
+          // bar after Thursday's daily candle opens Sunday 17:00, three periods later; the
+          // bar after Friday's last hourly one opens 49 hours later. A gap test alone dropped
+          // every one of those -- the whole first session of the week, at every period -- and
+          // dropped it silently. The period arithmetic is kept only for the parked case, where
+          // it is what lets a pane that has been paged back up to the tail take live bars
+          // again without waiting for a backward page to run dry.
+          const last = widget?.getDataList().at(-1)?.timestamp
+          if (parkedInHistory && last !== undefined && bar.timestamp > last + periodMs) {
+            console.debug('[sync] live bar dropped: pane is parked in history', { pane: pane.id })
+            continue
+          }
+          parkedInHistory = false
+          callback(bar)
+        }
         scheduleViewTick()
       })
     },
@@ -1327,6 +1361,7 @@
       if (!cr) return
       // The pointer is on THIS pane: whatever another pane's hover left here is superseded.
       syncedPoint = null
+      syncedCrosshair = null
       crosshairAway = null
       const point = crosshairPoint(chart, cr)
       if (!point) return

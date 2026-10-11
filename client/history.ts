@@ -1,9 +1,9 @@
 import type { KLineData } from 'klinecharts'
 import { capabilities } from './capabilities'
-import { apiGet } from './config'
+import { apiGet, OhlcvApiError, type QueryParams } from './config'
 import { instrumentConfig } from './instrumentconfig'
 import { dropMarketClosedBars } from './marketclosed'
-import { barToKLineData, isNoData, type GetBarsResponse } from './ohlcv'
+import { barToKLineData, isNoData, type GetBarsResponse, type OHLCVBar } from './ohlcv'
 import { barsFromTiles } from './tiles'
 
 // How many times an empty window may be widened before we accept that history really is
@@ -42,7 +42,10 @@ export async function fetchBars(
   // already on disk, and any gap left in the result is a real market gap.
   //
   // The split is exact: tiles run to `coveredTo` exclusive and the API is asked from
-  // `coveredTo`, so no bar can be served twice or dropped between them.
+  // `coveredTo`, so no bar can be served twice or dropped between them. Tiles reaching `to`
+  // itself answer the window alone (`to` is exclusive): asking the API for `[to, to)` was a
+  // request for nothing, and the volume profile stopped a millisecond short of every tile
+  // edge to avoid it.
   //
   // The schedule lookup is started alongside the tile read rather than before it: both are
   // cached for the life of the page, so only the first window per instrument pays anything at
@@ -55,7 +58,7 @@ export async function fetchBars(
   // `limit` bars from an already-trimmed array.
   const keep = (bars: KLineData[]): KLineData[] =>
     dropMarketClosedBars(bars, resolution, hours, limit === null ? undefined : limit)
-  if (tiled !== null && tiled.coveredTo > to) {
+  if (tiled !== null && tiled.coveredTo >= to) {
     // `limit` means "the last n bars", which the server would have applied for us.
     return keep(tiled.bars)
   }
@@ -117,5 +120,33 @@ export async function fetchBarsWidened(
     if (bars.length > 0 || attempt >= MAX_WIDENING_ATTEMPTS_HARD) return bars
     if (attempt >= MAX_WIDENING_ATTEMPTS && widened >= MIN_WIDENING_REACH_MS) return bars
     widened *= 2
+  }
+}
+
+/**
+ * `/getbars` over `[from, to)` on the wire clock, split in halves wherever the server answers
+ * 413 -- a span denser than its nominal length promised (5s bars over a busy hour, say) -- down
+ * to `minSpanMs`. No `limit`: it keeps the LAST n bars, the wrong end for a read that pages
+ * forwards. `get` is the API getter to use (a plugin's facilities, or a read past the replay
+ * clock with `asof: null` in `params`).
+ */
+export async function getbarsSplit(
+  get: <T>(path: string, params?: QueryParams) => Promise<T>,
+  params: QueryParams & { from: number; to: number },
+  minSpanMs: number
+): Promise<OHLCVBar[]> {
+  try {
+    const body = await get<GetBarsResponse>('/getbars', params)
+    return isNoData(body) || !Array.isArray(body) ? [] : (body as OHLCVBar[])
+  } catch (err) {
+    if (err instanceof OhlcvApiError && err.code === 'too_large' && params.to - params.from > minSpanMs) {
+      const mid = params.from + Math.floor((params.to - params.from) / 2)
+      const [a, b] = await Promise.all([
+        getbarsSplit(get, { ...params, to: mid }, minSpanMs),
+        getbarsSplit(get, { ...params, from: mid }, minSpanMs)
+      ])
+      return [...a, ...b]
+    }
+    throw err
   }
 }

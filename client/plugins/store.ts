@@ -18,8 +18,6 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
   progress: number | null = null
   error: string | null = null
   rev = 0
-  /** Free-form notes the source may leave (the server's own key, say), for debugging. */
-  meta: Record<string, unknown> = {}
 
   constructor(
     readonly key: string,

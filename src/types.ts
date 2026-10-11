@@ -60,7 +60,10 @@ export interface Period {
   text: string
 }
 
-export type DatafeedSubscribeCallback = (data: KLineData) => void
+/** One live bar, or several at once -- a reconnect's backfill -- in time order. A pane that
+ * follows the live edge reloads rather than appending more than a handful one recalculation at
+ * a time (ChartPane `subscribeBar`). */
+export type DatafeedSubscribeCallback = (data: KLineData | readonly KLineData[]) => void
 
 export interface Datafeed {
   searchSymbols (search?: string): Promise<SymbolInfo[]>

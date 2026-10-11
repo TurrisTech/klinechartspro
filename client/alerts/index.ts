@@ -1,5 +1,5 @@
 import type { KLineChartPro } from '../../src'
-import { attachToSlot } from '../chartlayers/controller'
+import { attachToSlot } from '../chrome/slot'
 import type { NotificationSink } from '../notifications'
 import { stream } from '../stream'
 import { loadServerCatalogue, type ServerCatalogue } from './catalogue'

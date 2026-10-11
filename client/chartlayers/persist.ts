@@ -4,12 +4,11 @@ import type { SettingsField } from './settings'
 // and [min, max] tuples, which index like objects -- whose SHAPE is its defaults, so the
 // defaults say which paths exist and the layer's own settings fields say what each may hold.
 // That is enough to validate a stored document generically: the levels and zones configs each
-// run to some forty paths, and a hand-written list of them (client/volprofile/config.ts's
-// PATHS) would be one more thing to keep in step with the fields.
+// run to some forty paths, and a hand-written list of them would be one more thing to keep in
+// step with the fields. The volume profile and the AREV21 divergence are stored through it too.
 //
-// What is stored is the VP shape (`StoredVpConfig`): only what differs from the defaults, flat
-// by path, nothing at all for an untouched pane -- the whole workspace set shares one 64 KiB
-// document.
+// What is stored is only what differs from the defaults, flat by path, nothing at all for an
+// untouched pane -- the whole workspace set shares one 64 KiB document.
 
 export type StoredLayerConfig = Record<string, unknown>
 
@@ -100,7 +99,13 @@ export interface LayerConfigCodec<T> {
   fromStored(stored: unknown): T | undefined
 }
 
-export function layerConfigCodec<T extends object>(defaults: T, fields: SettingsField[]): LayerConfigCodec<T> {
+/** `refine` is a rule across fields, applied to every whole config the codec builds -- the
+ * AREV21 divergence widens an inverted gap window rather than leave it matching nothing. */
+export function layerConfigCodec<T extends object>(
+  defaults: T,
+  fields: SettingsField[],
+  refine: (config: T) => T = (config) => config
+): LayerConfigCodec<T> {
   const leaves = leavesOf(defaults, fields)
   return {
     normalise(value) {
@@ -109,7 +114,7 @@ export function layerConfigCodec<T extends object>(defaults: T, fields: Settings
         const coerced = leaf.coerce(read(value, leaf.path))
         if (coerced !== undefined) write(config, leaf.path, coerced)
       }
-      return config
+      return refine(config)
     },
     toStored(config) {
       const out: StoredLayerConfig = {}
@@ -131,7 +136,7 @@ export function layerConfigCodec<T extends object>(defaults: T, fields: Settings
         write(config, leaf.path, value)
         touched = true
       }
-      return touched ? config : undefined
+      return touched ? refine(config) : undefined
     }
   }
 }

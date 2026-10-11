@@ -138,3 +138,55 @@ describe('intradayMs', () => {
     expect(GRID_MS / (intradayMs('10m') as number)).toBe(2)
   })
 })
+
+// The hover viewer follows the crosshair by redrawing, never by recalculating: its book is read
+// off `hoverIndex` at draw time, and the profile store it shares with the depth overlay must not
+// change revision, or both templates recompute over every bar per frame of pointer movement.
+describe('the hover viewer', () => {
+  test('a crosshair move is a draw-only override; the shared store is left alone', async () => {
+    const { createBooksPlugin } = await import('./plugin')
+    const { hoverIndex } = await import('./templates')
+    const { fakeChart } = await import('../plugins/testing')
+    const plugin = createBooksPlugin()
+    plugin.register(facilities)
+    const fc = fakeChart()
+    ;(fc.chart as unknown as { convertFromPixel: () => unknown }).convertFromPixel = () => [{ dataIndex: 7 }]
+    const spec = plugin.bind({
+      chart: fc.chart,
+      indicator: { id: 'v1', name: templateName('view', 'order'), paneId: 'pane_x', calcParams: [] },
+      vendor: 'oanda',
+      ticker: 'EURUSD',
+      interval: '1h'
+    } as never)
+    expect(spec?.sources[0]?.subscribe).toBeUndefined()
+    const release = spec?.attach?.()
+    for (const fn of fc.actions.get('onCrosshairChange') ?? []) (fn as (p: unknown) => void)({ x: 100, paneId: 'candle_pane' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(hoverIndex.get(fc.chart)).toBe(7)
+    expect(fc.overrides).toEqual([{ id: 'v1', name: templateName('view', 'order'), paneId: 'pane_x' }])
+    release?.()
+    expect(fc.actions.get('onCrosshairChange')?.size).toBe(0)
+  })
+})
+
+// Book tiles hold, per bar, the snapshot knowable at that bar's close, and nothing on the server
+// clamps a tile -- so under a bar replay the tiled points of bars the replay has not seen close
+// are not served (plugins/bars.ts `closedFilter`).
+describe('the tile/API join under a replay', () => {
+  test('tiled points past the clock are dropped; the API half is asked as before', async () => {
+    const { joinTiled } = await import('./api')
+    const points = [10, 20, 30, 40].map((date) => ({ date, long: 1, short: 1 }))
+    const asked: Array<{ from: number; to: number }> = []
+    const fromApi = async (range: { from: number; to: number }) => {
+      asked.push(range)
+      return { points: [], nextFrom: null }
+    }
+    const closedBefore30 = (date: number) => date < 30
+    const whole = await joinTiled({ points, coveredTo: 100 }, closedBefore30, { from: 0, to: 50 }, 500, fromApi)
+    expect(whole.points.map((p) => p.date)).toEqual([10, 20])
+    expect(asked).toEqual([])
+    const crossing = await joinTiled({ points, coveredTo: 45 }, null, { from: 0, to: 60 }, 500, fromApi)
+    expect(crossing.points.map((p) => p.date)).toEqual([10, 20, 30, 40])
+    expect(asked).toEqual([{ from: 45, to: 60 }])
+  })
+})

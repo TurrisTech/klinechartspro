@@ -19,6 +19,7 @@ import { tieredFetch } from '../indicatortiles/source'
 import { loadRegistry, type RegistryIndicator, type RegistryWire } from './api'
 import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore } from './store'
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
+import { phaseLabel } from '../plugins/legend'
 
 // The one client plugin for every server indicator: it reads the registry, registers a
 // template per row, and binds each one to the wire its row names.
@@ -326,23 +327,7 @@ export function createRegistryPlugin(): IndicatorPlugin {
         sources: [source],
         // klinecharts renders `${shortName}(${calcParams})` itself, so the label carries the
         // title and the source's state, never the params.
-        label: (state: BindingState) => {
-          const store = state.sources[0]?.store
-          if (!store) return `${entry.title} · loading`
-          switch (store.phase) {
-            case 'idle':
-            case 'loading':
-              return `${entry.title} · loading`
-            case 'queued':
-              return `${entry.title} · queued`
-            case 'replaying':
-              return `${entry.title} · computing${store.progress != null ? ` ${Math.round(store.progress * 100)}%` : '…'}`
-            case 'error':
-              return `${entry.title} · error`
-            default:
-              return entry.title
-          }
-        },
+        label: (state: BindingState) => phaseLabel(entry.title, [state.sources[0]?.store]) ?? entry.title,
         overrides,
         yAxisGap: entry.axisGap ?? undefined
       }

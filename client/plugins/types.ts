@@ -2,8 +2,8 @@ import type { TileHint } from '../indicatortiles/index'
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, Period, SymbolInfo } from '../../src'
 import type { Feature } from '../capabilities'
-import type { SettingsField, SettingsPanelHandle, SettingsPanelOptions } from '../chartlayers/settings'
 import type { stream } from '../stream'
+import type { PaneConfig } from './paneconfig'
 
 // The client half of the indicator plugin model.
 //
@@ -123,6 +123,13 @@ export interface BindingSpec {
   overrides?: Record<string, unknown>
   /** The pane's y-axis padding, for a sub-pane whose range is bounded by its own lines. */
   yAxisGap?: { top: number; bottom: number }
+  /** What the binding does to the pane beyond its template: Levels and Zones draw
+   * price-anchored overlays that follow the pane's VIEW -- its visible bars and its price
+   * axis -- rather than the bar grid its sources cover (chartlayers/). Called once the
+   * binding is filed and BEFORE the binding it replaces is released, so what the two share
+   * can be handed over rather than torn down and rebuilt; the returned function is called
+   * when the binding is released. */
+  attach?(): () => void
 }
 
 export interface BindContext {
@@ -138,12 +145,10 @@ export interface BindContext {
   interval: string
   /** This plugin's other bindings on the pane, in order of appearance. */
   siblings: Array<{ indicatorId: string; name: string }>
-}
-
-export interface PaneInfo {
-  chart: Chart
-  pane: ChartProPane
-  paneIndex: number
+  /** The pane's settings for this template, when its plugin declares some (`paneConfigs`):
+   * the pane's own, or what an unconfigured pane draws with. An edit rebinds, so a binding
+   * reads this once and never has to watch it. */
+  config: object | undefined
 }
 
 export interface SettingsRequest {
@@ -162,13 +167,12 @@ export interface ValidateRequest {
 
 /** The stream surface a plugin may use: the page's live `StreamClient`, or an inert one on
  * a replay wall (nothing live may reach a replay's stores). */
-export type PluginStream = Pick<typeof stream, 'subscribe' | 'unsubscribe' | 'subscribeIndicator' | 'unsubscribeIndicator' | 'subscribePlugin' | 'unsubscribePlugin' | 'onStatus'>
+export type PluginStream = Pick<typeof stream, 'subscribe' | 'unsubscribe' | 'subscribeIndicator' | 'unsubscribeIndicator' | 'subscribePlugin' | 'unsubscribePlugin'>
 
 /** What the client gives every plugin: the app's shared services, generalised. */
 export interface PluginFacilities {
   api: {
     get<T>(path: string, params?: Record<string, string | number | null | undefined>): Promise<T>
-    url(path: string, params?: Record<string, string | number | null | undefined>): URL
   }
   stream: PluginStream
   hasFeature(feature: Feature): boolean
@@ -178,22 +182,8 @@ export interface PluginFacilities {
   periodToResolution(period: Period): string
   resolutionDurationMs(code: string): number
   symbolVendor(symbol: SymbolInfo): string
-  openSettingsPanel<T extends object>(options: SettingsPanelOptions<T>): SettingsPanelHandle
-  /** Live pane by wall pane id, or null once it is gone. */
-  paneInfo(paneId: string): PaneInfo | null
-  /** Re-run reconciliation (a settings edit changed what a binding reads). */
-  requestReconcile(paneId?: string): void
-  /** Ask the app to save the wall document. */
-  requestPersist(): void
   /** The server's per-request values cap. */
   maxValuesPerRequest: number
-  /** Published signals: what every mounted plugin labels, and one plugin's labelled
-   * points -- how a plugin (or a script) consumes another's signals without re-deriving
-   * them. Empty / `no_data` on a server without the `plugins.signals` feature. */
-  signals: {
-    catalogue(): Promise<SignalCatalogueEntry[]>
-    points<P extends { date: number }>(request: SignalsRequest): Promise<Page<SignalPoint<P>>>
-  }
 }
 
 /** One label a plugin publishes (the server's `signal()` row). `id` is what a point's
@@ -213,26 +203,6 @@ export interface SignalCatalogueEntry extends SignalSpec {
   variant: string | null
   available: boolean
   ref: string
-}
-
-/** A point the server labelled, as `GET /plugins/{id}/signals` serves it: the plugin's
- * point with its label id and the ABSOLUTE instant (epoch ms, not a wire date) at which
- * the signal became knowable -- its bar's close. Any multi-timeframe consumer keys off
- * `effective`, never off `date` (CLAUDE.md, "Effective timestamps"). */
-export type SignalPoint<P = Record<string, unknown>> = P & { date: number; signal: string; effective: number }
-
-export interface SignalsRequest {
-  /** A `SignalCatalogueEntry.ref`; an empty id (`arev:arev21:`) is every label. */
-  ref: string
-  vendorSymbol: string
-  resolution: string
-  from: number
-  to: number
-  limit: number
-  params?: Record<string, unknown>
-  /** The read clock for this request; `null` reads past it on purpose (the replay's own
-   * signal look-ahead). Absent: the page-wide clock (config.ts) applies. */
-  asof?: number | null
 }
 
 export interface PointsRequest {
@@ -259,17 +229,6 @@ export interface PointsRequest {
   asof?: number | null
 }
 
-/** A plugin's per-pane config as fields, read and written one pane at a time (see
- * IndicatorPlugin.settings). */
-export interface PluginSettings {
-  fields: SettingsField[]
-  /** The pane's whole config. */
-  read(paneIndex: number): object
-  /** One field of one pane, applied as an edit in the plugin's own panel is: kept, persisted,
-   * and that pane redrawn. */
-  write(paneIndex: number, paneId: string, key: string, value: unknown): void
-}
-
 export interface IndicatorPlugin {
   id: string
   /** The capability that gates it; `null` for a plugin that is always on. */
@@ -278,29 +237,13 @@ export interface IndicatorPlugin {
    * only when `feature` is advertised. */
   register(facilities: PluginFacilities): Promise<IndicatorGroup[]> | IndicatorGroup[]
   matches(templateName: string): boolean
-  /** Extra identity of a binding beyond (template, pane, calcParams, instrument, interval):
-   * a per-pane settings revision, say. A change rebinds. */
-  signature?(ctx: BindContext): unknown
   bind(ctx: BindContext): BindingSpec | null
-  /** Claim the gear on one of this plugin's indicators (ChartProOptions.indicatorSettingsHandler). */
-  handleSettings?(request: SettingsRequest): boolean
-  /** Whether `handleSettings` opens a UI for this template -- asked without opening it, by the
-   * indicator manager (ChartProOptions.indicatorSettingsOwned). */
-  ownsSettings?(templateName: string): boolean
-  /** This template's settings for the indicator manager to edit inline, or null where it has
-   * none to offer (ChartProOptions.indicatorSettingsModel): the fields its own panel draws, over
-   * the same per-pane config. */
-  settings?(templateName: string): PluginSettings | null
+  /** Settings kept per wall pane (paneconfig.ts). The host owns everything that follows from
+   * them -- the gear's panel, the indicator manager's fields, the rebind an edit causes, the
+   * wall document, panes changing places -- and hands each binding its pane's config
+   * (`BindContext.config`). Static: the host reads it before `register`, so a pane's settings
+   * survive a server that does not advertise the plugin. */
+  paneConfigs?: readonly PaneConfig[]
   /** Answer the params dialog (ChartProOptions.indicatorParamsValidator). */
   validateParams?(request: ValidateRequest): Promise<IndicatorParamsCheck>
-  /** Per-pane document state, keyed by pane index -- what the wall document persists. */
-  paneState?: {
-    /** REPLACES every pane's state (an index absent here has none afterwards): called once
-     * with the wall document's, and again with the plugin's own snapshot re-keyed whenever
-     * panes change places on the wall (PluginHost.reorderPanes). */
-    hydrate(initial: Record<number, unknown>): void
-    snapshot(): Record<number, unknown>
-  }
-  /** The wall is being torn down. */
-  dispose?(): void
 }

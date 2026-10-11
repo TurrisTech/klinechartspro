@@ -1,6 +1,7 @@
 import { capabilities } from '../capabilities'
-import { apiGet, OhlcvApiError } from '../config'
-import { isNoData, type OHLCVBar } from '../ohlcv'
+import { apiGet } from '../config'
+import { getbarsSplit } from '../history'
+import type { OHLCVBar } from '../ohlcv'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import { type CandleGrid, nominalMs } from './timeframes'
 
@@ -60,30 +61,14 @@ export class HttpBarSource implements BarSource {
     return out
   }
 
-  /** One range, split in halves on the server's 413 (a span denser than its nominal
-   * length suggested -- 5s bars over a busy hour, say). */
+  /** One range, split in halves on the server's 413 (a span denser than its nominal length
+   * suggested -- 5s bars over a busy hour, say). */
   private async fetchRange(symbol: string, interval: string, from: number, to: number, columns: Columns, grid: CandleGrid): Promise<ReplayBar[]> {
     // `/getbars` takes `from`/`to` on the WIRE clock (session-dated for daily and coarser:
-    // +7h forex, 0 crypto, -9h equities).
+    // +7h forex, 0 crypto, -9h equities). Past the replay clock on purpose (`asof: null`): these
+    // caches prefetch ahead of the cursor and are hidden from the chart.
     const shift = grid.toWire(interval, from) - from
-    try {
-      const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
-        symbol,
-        resolution: interval,
-        from: from + shift,
-        to: to + shift - 1,
-        columns,
-        asof: null
-      })
-      if (isNoData(body) || !Array.isArray(body)) return []
-      return body.map((b) => toReplayBar(interval, b as OHLCVBar & Record<string, unknown>, grid))
-    } catch (err) {
-      if (err instanceof OhlcvApiError && err.code === 'too_large' && to - from > nominalMs(interval)) {
-        const mid = from + Math.floor((to - from) / 2)
-        const [a, b] = await Promise.all([this.fetchRange(symbol, interval, from, mid, columns, grid), this.fetchRange(symbol, interval, mid, to, columns, grid)])
-        return [...a, ...b]
-      }
-      throw err
-    }
+    const bars = await getbarsSplit(apiGet, { symbol, resolution: interval, from: from + shift, to: to + shift - 1, columns, asof: null }, nominalMs(interval))
+    return bars.map((b: OHLCVBar) => toReplayBar(interval, b as OHLCVBar & Record<string, unknown>, grid))
   }
 }

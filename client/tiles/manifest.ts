@@ -5,15 +5,11 @@
 // them — it is the only thing the client must not cache, because it is how a new tile
 // becomes visible. See that script's docstring for the format and why it exists.
 
-// Resolved on first use rather than at module load: the pure functions here (coverage
-// arithmetic) are unit-tested outside a DOM, where touching `window` at import time
-// would throw before any test ran.
-let baseUrl: string | null = null
+import { bucketBase } from './cachestore'
+
+const base = bucketBase(() => window.TILES_BASE_URL ?? `${window.location.origin}/tiles`)
 export function tilesBaseUrl(): string {
-  if (baseUrl === null) {
-    baseUrl = (window.TILES_BASE_URL ?? `${window.location.origin}/tiles`).replace(/\/+$/, '')
-  }
-  return baseUrl
+  return base.get()
 }
 
 /** The tile layout this client reads. Bumped v1 -> v2 when the builder moved candles from
@@ -126,11 +122,11 @@ export function manifestFor(
  * window. Getting this wrong is invisible in any check that only asks whether the API's bars
  * are present in the tiles: the tiles simply carry one bar more than the API would return.
  */
-export function tilesUpTo(
-  manifest: TileManifest,
+export function tilesUpTo<E extends { from: number; to: number }>(
+  manifest: { coveredFrom: number; coveredTo: number; tiles: readonly E[] },
   from: number,
   to: number
-): { entries: TileEntry[]; coveredTo: number } | null {
+): { entries: E[]; coveredTo: number } | null {
   if (from >= manifest.coveredTo) return null
   const tileEnd = Math.min(to, manifest.coveredTo)
   const entries = manifest.tiles.filter((t) => t.to >= from && t.from < tileEnd)

@@ -1,7 +1,7 @@
 import type { TileHint } from '../indicatortiles/index'
 import { hasFeature } from '../capabilities'
 import { apiGet, apiUrl, OhlcvApiError } from '../config'
-import type { Page, PointsRequest, SignalCatalogueEntry, SignalPoint, SignalSpec, SignalsRequest } from './types'
+import type { Page, PointsRequest, SignalCatalogueEntry, SignalSpec } from './types'
 
 // The unified plugin wire (wdashboard_server/plugins/host.py):
 //
@@ -64,44 +64,6 @@ export function loadSignalCatalogue(): Promise<SignalCatalogueEntry[]> {
   return signalCatalogue
 }
 
-/** `plugin:variant:id` -- the server's `signal_ref`; the variant part empty when the
- * plugin has none, the id part empty for "every label". */
-export function signalRef(plugin: string, variant: string | null | undefined, id = ''): string {
-  return `${plugin}:${variant ?? ''}:${id}`
-}
-
-export function parseSignalRef(ref: string): { plugin: string; variant: string | null; id: string } {
-  const parts = ref.split(':')
-  if (parts.length !== 3 || !parts[0]) throw new Error(`not a signal ref: ${ref} (want plugin:variant:id)`)
-  return { plugin: parts[0], variant: parts[1] || null, id: parts[2] }
-}
-
-export function signalsUrl(request: SignalsRequest): URL {
-  const { plugin, variant, id } = parseSignalRef(request.ref)
-  return apiUrl(`/plugins/${plugin}/signals`, {
-    symbol: request.vendorSymbol,
-    resolution: request.resolution,
-    from: request.from,
-    to: request.to,
-    limit: request.limit,
-    variant: variant ?? undefined,
-    signal: id || undefined,
-    params: request.params ? JSON.stringify(request.params) : undefined,
-    ...(request.asof !== undefined ? { asof: request.asof } : {})
-  })
-}
-
-/** The facilities' `signals.points`: a page of one plugin's labelled points. The page
- * continues from the server's `nextFrom` (the underlying read is what is paged, so a page
- * can hold no signal and still not be the end), not from its last point. */
-export async function fetchSignals<P extends { date: number }>(request: SignalsRequest): Promise<Page<SignalPoint<P>>> {
-  if (!hasFeature('plugins.signals')) return { points: [], nextFrom: null }
-  const envelope = await fetchEnvelope<SignalPoint<P>>(signalsUrl(request))
-  const page = toPage(envelope, Number.POSITIVE_INFINITY)
-  const nextFrom = envelope.s === 'replaying' ? null : typeof envelope.nextFrom === 'number' ? envelope.nextFrom : null
-  return { ...page, nextFrom }
-}
-
 export type PointsEnvelope<P> =
   | { s: 'ok'; points: P[]; [extra: string]: unknown }
   | { s: 'no_data'; [extra: string]: unknown }
@@ -118,13 +80,7 @@ export async function fetchEnvelope<P>(url: URL): Promise<PointsEnvelope<P>> {
 }
 
 /** Turn an envelope into the host's page: a capped `ok` continues from its last point. */
-export function toPage<P extends { date: number }>(
-  envelope: PointsEnvelope<P>,
-  limit: number,
-  onEnvelope?: (envelope: PointsEnvelope<P>) => void,
-  arrays?: readonly string[]
-): Page<P> {
-  onEnvelope?.(envelope)
+export function toPage<P extends { date: number }>(envelope: PointsEnvelope<P>, limit: number, arrays?: readonly string[]): Page<P> {
   // A requested array always appears on the page, even on an envelope that carries none:
   // `no_data`, a replaying server, or one too old to know the name. The plugin then reads
   // an empty array instead of `undefined`, which is the honest answer in every case.
@@ -190,9 +146,6 @@ export function pointsUrl(request: PointsRequest): URL {
 }
 
 /** The facilities' `points`: one fetch for every plugin, paged by the host. */
-export async function fetchPoints<P extends { date: number }>(
-  request: PointsRequest,
-  onEnvelope?: (envelope: PointsEnvelope<P>) => void
-): Promise<Page<P>> {
-  return toPage(await fetchEnvelope<P>(pointsUrl(request)), request.limit, onEnvelope, request.arrays)
+export async function fetchPoints<P extends { date: number }>(request: PointsRequest): Promise<Page<P>> {
+  return toPage(await fetchEnvelope<P>(pointsUrl(request)), request.limit, request.arrays)
 }

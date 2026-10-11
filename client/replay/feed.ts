@@ -276,9 +276,5 @@ export const inertStream: PluginStream = {
   subscribeIndicator() {},
   unsubscribeIndicator() {},
   subscribePlugin() {},
-  unsubscribePlugin() {},
-  onStatus(listener) {
-    listener('offline')
-    return () => {}
-  }
+  unsubscribePlugin() {}
 }

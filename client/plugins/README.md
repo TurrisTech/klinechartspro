@@ -6,9 +6,14 @@ AREV generation, krev's votes, the AREV21 multi-timeframe overlay — is an **`I
 maps to **sources** (a series to fetch, keyed so panes showing the same one share it). The
 **host** (`host.ts`) owns everything that used to be copied per plugin: watching each pane's
 indicator list, fetching exactly the windows a store is missing (paged), keeping a store per
-source alive for as long as some pane reads it, subscribing live updates, and handing the
-chart the values by bumping the indicator's `extendData` — which the plugin's `calc` reads back
-with `peekStore` (`store.ts`).
+source alive for as long as some pane reads it, subscribing live updates, handing the chart
+the values by replacing the indicator's `extendData` — which the plugin's `calc` reads back
+with `peekStore` (`store.ts`) — and, since 2026-10-11, every pane's **settings** for the
+plugins that have any (`paneconfig.ts`).
+
+The "super indicators" are plugins on the same host, not a second system: the MTF overlays
+(sources on other timeframes), the AREV lab, the divergence and the volume profile (settings
+per pane), and Levels and Zones (price-anchored overlays drawn by a binding's own `attach`).
 
 The server has the same shape (`wdashboard-server/docs/plugins.md`); the two meet on
 `GET /plugins/{id}/values` (`api.ts`), with each plugin's legacy path as the fallback on a
@@ -30,20 +35,78 @@ const plugin: IndicatorPlugin = {
       fetch: (range, limit) => facilities.points({ pluginId: 'mine', legacyPath: '/mine/values', ... }),
       // optional: window(chartRange), createStore(key), subscribe(store, notify)
     }],
-    label: (state) => `MINE · ${state.sources[0]?.store.phase}`,
-    // optional: extendData(state), overrides, yAxisGap
+    label: (state) => phaseLabel('MINE', [state.sources[0]?.store]) ?? 'MINE',   // legend.ts
+    // optional: extendData(state), overrides, yAxisGap, attach()
   }),
-  // optional: signature(ctx), handleSettings, validateParams, paneState, dispose
+  // optional: paneConfigs (settings per pane, below), validateParams
 }
 ```
 
 Then add it to `registry.ts`. `PluginFacilities` is the whole of what a plugin may depend on:
-the API, the stream, `hasFeature`, the unified `points` fetch, the period/symbol helpers, the
-settings panel, `paneInfo`, `requestReconcile`, `requestPersist`, and `signals` (below).
+the API (`api.get`), the stream, `hasFeature`, the unified `points` fetch, the period/symbol
+helpers and the server's values cap. Everything a plugin used to reach for to keep its
+settings -- the panel, `paneInfo`, `requestReconcile`, `requestPersist` -- is the host's now.
 
 A template's `calc` reads its store back: `peekStore<WindowStore<P, V>>(indicator.extendData.seriesKey)`
-(`seriesKeys[id]` for a multi-source binding). The host bumps `extendData.rev` on every store
-change, so `shouldUpdate` compares it.
+(`seriesKeys[id]` for a multi-source binding). The host replaces `extendData` on every store
+change, carrying a new `rev`, so `shouldUpdate` compares it. **Replaces, not merges**:
+klinecharts deep-merges an override's `extendData` into the indicator's own -- an array index
+by index, and a key never removed -- so until 2026-10-11 an MTF overlay's graph roots going from
+`['1D', '4h']` to `[]` read `['1D', '4h']` and the graph stayed drawn. The host clears the
+indicator's own before every override.
+
+**Wrap `calc` in `timestampCalc`** (`calc.ts`) when its result depends on the bars'
+timestamps, its stores and its params but never on a bar's prices -- every template here that
+reads a store does. klinecharts recalculates every indicator on a pane, over every bar it holds,
+on every live tick; the wrapper hands back the last result while nothing it is computed from
+moved. The divergence, the volume profile and TradeTalk read prices and must not use it.
+
+**Bars a plugin reads for itself** (TradeTalk's daily candles, the AREV lab's prior, the MTF
+grid) go through `bars.ts` (`fetchClosedBars`, `closedBarPage`): tiles first, `/getbars` for
+the rest, and under a bar replay only the bars the replay has seen close. The tiles are read
+from the bucket and nothing on the server clamps them; before 2026-10-11 these three read the
+bar forming at the cursor whole, and past it.
+
+## Settings per pane
+
+A plugin with settings declares them, and the host does the rest:
+
+```ts
+export const MINE_PANE_CONFIG = paneConfig<MineConfig>({
+  templates: ['MINE:a', 'MINE:b'],   // several templates may share one config
+  doc: 'mn',                         // the pane's field in the wall document -- never rename
+  title: 'Mine',                     // the panel's title; ticker and timeframe are appended
+  fields: MINE_FIELDS,               // what the gear's panel and the indicator manager draw
+  defaults: MINE_DEFAULTS,
+  normalise, toStored, fromStored    // layerConfigCodec(defaults, fields) builds all three
+  // optional: fallback() -- what a pane never configured draws with
+})
+const plugin: IndicatorPlugin = { ..., paneConfigs: [MINE_PANE_CONFIG], bind: (ctx) => use(ctx.config as MineConfig) }
+```
+
+The host keeps a config per pane INDEX (`PaneConfigStore`), opens the panel from the legend's
+gear, hands the indicator manager the same fields, rebinds the pane on an edit (the config's
+revision is in every binding's signature, so a binding reads `ctx.config` once and never watches
+it), asks the app to save, writes the document's fields (`PluginHost.paneDocs`, which
+`client/layout.ts` merges into each pane's entry without reading them) and moves every pane's
+settings with it when panes change places. A config whose plugin this server does not mount is
+carried through verbatim, so a save there does not cost a pane its settings.
+
+`doc` is a field of its own (`'mtf'`, `'al'`, `'dv'`, `'vp'`) or a key inside a shared one
+(`['mx', 'mtf_<name>']`, `['ly', 'levels']`). Until 2026-10-11 each of the five plugins with
+settings carried its own copy of all this -- six optional `IndicatorPlugin` members -- and
+`client/layout.ts` and `client/index.ts` named every one of their fields.
+`fixtures/panedocs-golden.json` is what `main` wrote for all six fields before the move, and
+`layout.test.ts` holds the host to it.
+
+## A binding that draws itself
+
+A binding may `attach()` -- called once it is filed and BEFORE the binding it replaces is
+released, its return called on release. Levels and Zones use it: their overlays are anchored to
+price and fetched by price band, which a source cannot express, so each binding attaches a view
+(`chartlayers/controller.ts`) that follows the pane's view and draws while the indicator is
+shown. What a pane holds is kept per chart, so the binding that follows another (a settings
+edit, a symbol change) starts from it.
 
 ## Two bindings on one key
 
@@ -107,37 +170,28 @@ became knowable and what any multi-timeframe consumer keys off.
 The client draws the label and never re-derives one: the AREV pane's arrows are the `long`
 (green, up) and `short` (red, down) labels, the same events the AREV21 MTF overlay places and
 an alert can read (`client/alerts`, a `signal` operand -- which is how a replay's Next alert
-jumps to one). A plugin (or a script) consumes another's signals through
-the facilities:
+jumps to one). The alerts read the catalogue through `loadSignalCatalogue` (`api.ts`). The
+plugin-facing `facilities.signals` that once let one plugin read another's labelled points was
+never used by any plugin and was removed on 2026-10-11, along with `client/krev/api.ts`.
 
-```ts
-const labels = await facilities.signals.catalogue()          // SignalCatalogueEntry[]
-const page = await facilities.signals.points<ArevPoint>({
-  ref: 'arev:arev21:long',                                   // '' id = every label
-  vendorSymbol: 'oanda:EURUSD', resolution: '4h', from, to, limit: 5000
-})
-for (const p of page.points) place(p.effective /* not p.date */, p.signal)
-```
-
-Both are gated on the `plugins.signals` feature (empty / `no_data` on an older server, whose
-points carry the old boolean — `arevSignal` / `krevSignal` in the plugins' `api.ts`
-normalise it with the server's own rule). Tests: `signals.test.ts`.
+The catalogue is gated on the `plugins.signals` feature (empty on an older server, whose points
+carry the old boolean -- `arevSignal` in `client/arev/api.ts` normalises it with the server's own
+rule). Tests: `signals.test.ts`.
 
 ## Built-ins
 
 | plugin | templates | sources | notes |
 |---|---|---|---|
-| `indicators/plugin.ts` | `S:<name>@<version>` per catalogue entry | one: the resolved series | subscribes over the stream; validates params via `/indicators/resolve` |
-| `arev/plugin.ts` | `AREV:<generation>` | one per template | no live stream |
-| `krev/plugin.ts` | `KREV:krev01:p` | one, folded by side | |
-| `mtf/plugin.ts` | `MTF:arev21` | one per enabled source timeframe (`MtfStore`: votes + bar grid) | per-pane settings, own panel; shares arev21 stores with the AREV plugin |
+| `tsregistry/plugin.ts` (`registry`) | one per enabled row of `GET /indicators/registry`: `S:…`, `AREV:…`, `KREV:krev01:p`, `TS:…` | one per binding, on the wire its row names | every server indicator; see "The registry plugin" below |
+| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per enabled source timeframe, in its own `\|mtf` store (votes + the bar grid as an auxiliary array) | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay |
+| `mtf01/plugin.ts` | `MTF01:mtf01` | one: the cascade's events with its trades as an auxiliary array | |
 | `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, reaching back exactly the rule's window), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed level or a client-side rank/median/prior over a window of DAYS; every bar with a usable `p` is compared unless `samplesOnly`; per-pane settings, own panel; the quantile, the band and the entry rule are locked to the server's by `arevlab/fixtures/rules_parity.json` |
-| `arev21div/plugin.ts` | `DIV:arev21` (sub-pane), `DIV:arev21:price` (price pane) | one: the registry's own arev21 `storedSource`, unmodified -- the AREV21 pane's store, key and all, so beside one it costs no request | where price and arev21's `p` disagree at a swing (a lower low with a higher `p` is `bull`, a higher high with a lower `p` `bear`; the hidden pair on param `hidden`), computed entirely in the browser from the pane's own bars in `calc`; swings strict on `left` (10, arev21's lookback, so every swing is a sample bar) and confirmed by `right` (5), each compared with the swing immediately before it; the arrow is on the CONFIRMING bar and a line joins the two swings in each pane (thick dotted by default); rule, line style, width and colours are one per-pane config on the gear (`handleSettings`, own panel), shared by both templates and persisted as `PersistedPane.dv`, so an edit recomputes or redraws without refetching; calcParams stay empty; no server change |
+| `arev21div/plugin.ts` | `DIV:arev21` (sub-pane), `DIV:arev21:price` (price pane) | one: the registry's own arev21 `storedSource`, unmodified -- the AREV21 pane's store, key and all, so beside one it costs no request | where price and arev21's `p` disagree at a swing (a lower low with a higher `p` is `bull`, a higher high with a lower `p` `bear`; the hidden pair on param `hidden`), computed entirely in the browser from the pane's own bars in `calc`; swings strict on `left` (10, arev21's lookback, so every swing is a sample bar) and confirmed by `right` (5), each compared with the swing immediately before it; the arrow is on the CONFIRMING bar and a line joins the two swings in each pane (thick dotted by default); rule, line style, width and colours are one per-pane config (`paneConfigs`), shared by both templates and persisted as `PersistedPane.dv`, so an edit recomputes or redraws without refetching; calcParams stay empty; no server change |
 | `books/plugin.ts` | `BOOK:depth:*`, `BOOK:view:*`, `BOOK:sentiment:*`, `BOOK:flow` | one per binding; depth + view share one profile store per kind | the OANDA 20-minute books: depth draws every snapshot on the price pane at its own instant, view follows the crosshair, sentiment/flow are sub-pane series |
 | `bidask/plugin.ts` | `QUOTE:bidask` | one per binding: `/getbars?columns=all`, paged forwards by nominal span (no `limit`, which keeps the wrong end), a 413 split in halves | the bid and ask close of every bar on the price pane with the spread shaded between; a bar is quoted when all eight quote columns are numbers and the sides differ (coinbase and schwab fill them with one price, so they draw nothing and the legend says so); `/getbars` serves closed bars only and the stream is mid-only, so the forming bar has no quote until it closes; a closed frame re-reads everything after the newest quote held |
 | `tradetalk/plugin.ts` | `TT:entries` | one: `1D` bars over the chart window widened back to the start of the previous calendar year | where the TradeTalk (Heath) method would enter — the calendar level map off the instrument's own schedule (`SymbolInfo.timezone` + `dayGeometry`), a sweep-and-reclaim entry with its stop and target boxed out, and a corner line counting the sweeps each filter refused; computed entirely in the browser, no server change (`client/tradetalk/README.md`) |
-| `chartlayers/plugin.ts` (`levels`) | `LEVELS:levels`, `LEVELS:levels2` (price pane, the "Levels" group: Levels and Zones) | none: the template draws nothing and a per-layer controller (`chartlayers/controller.ts`) fetches `/levels` / `/levels2` by price band and draws overlays while the pane carries the template, visible | the toolbar's Levels and Zones buttons until 2026-10-03; settings per pane on the gear and inline in the manager, persisted as `PersistedPane.ly`; the legend names the timeframes drawn or why nothing is; built by `client/levels/indicator.ts` and handed to `builtinPlugins`, because the replay invalidates the Levels controller directly (`chartlayers/README.md`) |
-| `volprofile/plugin.ts` | `VP:volume` (price pane) | at most one: bars of a stored interval finer than the chart (`vp-bars\|vendor:ticker\|<interval>`, a custom `BarStore` -- ascending, with a change log so a live tick rebuilds one chart bar), tiles first, `/getbars` for the forming period, the stream for the forming bar | volume at price over the visible range or one profile per session; the source is chosen for the PROFILE, not the chart (`source.ts`: a source bar should span no more than a display row, so `source <= chart * 150 / rows^2`, or the finest intraday base for sessions), which makes the same span give the same profile on every timeframe; each source bar's volume is spread evenly over its range onto a fixed price grid per chart bar (`atoms.ts`), and whatever of a chart bar's volume its source bars do not account for (out of reach, past the 250k-bar budget, not arrived yet) is spread from the chart bar itself so no volume is lost -- the legend names the source and the date it runs from; replay-clamped in the source, because tiles are read from the bucket and nothing on the server clamps them; settings per pane on the gear, persisted as `PersistedPane.vp`; no server change |
+| `chartlayers/plugin.ts` (`levels`) | `LEVELS:levels`, `LEVELS:levels2` (price pane, the "Levels" group: Levels and Zones) | none: the template draws nothing; each binding `attach`es a view (`chartlayers/controller.ts`) that fetches `/levels` / `/levels2` by price band and draws overlays while the indicator is shown | the toolbar's Levels and Zones buttons until 2026-10-03; settings per pane (`ly.<layer>`), starting from the toolbar era's wall-wide ones; the legend names the timeframes drawn or why nothing is; built by `client/levels/indicator.ts` and handed to `builtinPlugins`, because the replay invalidates the Levels views directly on a day boundary (`chartlayers/README.md`) |
+| `volprofile/plugin.ts` | `VP:volume` (price pane) | at most one: bars of a stored interval finer than the chart (`vp-bars\|vendor:ticker\|<interval>`, a custom `BarStore` -- ascending, with a change log so a live tick rebuilds one chart bar), tiles first, `/getbars` for the forming period, the stream for the forming bar | volume at price over the visible range or one profile per session; the source is chosen for the PROFILE, not the chart (`source.ts`: a source bar should span no more than a display row, so `source <= chart * 150 / rows^2`, or the finest intraday base for sessions), which makes the same span give the same profile on every timeframe; each source bar's volume is spread evenly over its range onto a fixed price grid per chart bar (`atoms.ts`), and whatever of a chart bar's volume its source bars do not account for (out of reach, past the 250k-bar budget, not arrived yet) is spread from the chart bar itself so no volume is lost -- the legend names the source and the date it runs from; replay-clamped in the source, because tiles are read from the bucket and nothing on the server clamps them; settings per pane, persisted as `PersistedPane.vp`; no server change |
 
 Tests: `bun test client` (`*.test.ts` here, with `testing.ts`'s fake chart).
 
@@ -166,8 +220,9 @@ keeps working. Anything new is `TS:<name>`.
   arriving during the history read is not lost. Store key
   `S|vendor:ticker|interval|<series doc>`, unchanged.
 * anything else — the unified `GET /plugins/{id}/values?variant=`. Store key
-  `<name>|vendor:ticker|interval`, unchanged. Nothing to subscribe: the rows are written by
-  hand-run research scripts.
+  `<name>|vendor:ticker|interval`, unchanged. Subscribed where the server relays that
+  plugin's points (`plugins.live`, `subscribeLive`); elsewhere new values arrive on a reload
+  or a range change.
 
 **What the generic template can say**, which is exactly what the four it replaced needed:
 several lines with their own colours and dash styles; flat reference lines from a constant;

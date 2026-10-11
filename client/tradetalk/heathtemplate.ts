@@ -14,6 +14,7 @@ import {
   paneBackground,
   type ExtendData
 } from './levelmap'
+import { timestampMemo } from '../plugins/calc'
 
 // TT:heathlevels -- "Heath levels", the method's supply and demand lines (dossier §3), drawn
 // on the price pane from the bars the pane already holds: a Heath level is a statement about
@@ -94,6 +95,28 @@ const FRESH_ALPHA = 0.95
 const TESTED_ALPHA = 0.45
 const STOP_ALPHA = 0.3
 
+/** The calendar map under the zones, kept across live ticks, which cannot change it
+ * (templates.ts `calendar` says why); the zones themselves read every bar's prices and are
+ * found again on each pass. */
+const calendar = timestampMemo((dataList: KLineData[], indicator: { extendData?: ExtendData; calcParams?: unknown }) =>
+  chartLevelMap(dataList, indicator.extendData, 'D')
+)
+
+/** Exported for its test. */
+export function calc(dataList: KLineData[], indicator: { extendData?: ExtendData; calcParams?: unknown[] }): HeathValue[] {
+  const settings = settingsOf(indicator.calcParams)
+  const values: HeathValue[] = dataList.map(() => ({}))
+  if (settings.calendar) {
+    const map = calendar(dataList, indicator)
+    map?.forEach((levels, i) => {
+      values[i].levels = levels
+    })
+  }
+  const last = values[values.length - 1]
+  if (last) last.heath = heathLevels(dataList, settings)
+  return values
+}
+
 let registered = false
 
 export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
@@ -125,19 +148,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
           a?.seriesKey !== b?.seriesKey || a?.rev !== b?.rev || JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
         return { calc: changed, draw: true }
       },
-      calc: (dataList: KLineData[], indicator) => {
-        const settings = settingsOf(indicator.calcParams)
-        const values: HeathValue[] = dataList.map(() => ({}))
-        if (settings.calendar) {
-          const map = chartLevelMap(dataList, indicator.extendData, 'D')
-          map?.forEach((levels, i) => {
-            values[i].levels = levels
-          })
-        }
-        const last = values[values.length - 1]
-        if (last) last.heath = heathLevels(dataList, settings)
-        return values
-      },
+      calc,
       draw: ({ ctx, chart, indicator, bounding, xAxis, yAxis }) => {
         const data = chart.getDataList()
         const result = indicator.result

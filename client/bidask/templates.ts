@@ -2,6 +2,7 @@ import { registerIndicator, type IndicatorTemplate, type KLineData } from 'kline
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
 import type { QuotePoint } from './api'
+import { timestampCalc } from '../plugins/calc'
 
 // QUOTE:bidask -- the bid and the ask of every bar on the price pane.
 //
@@ -45,11 +46,11 @@ export function bandOpacity(calcParams: unknown[] | undefined): number {
   return Number.isFinite(band) ? Math.max(0, Math.min(100, band)) : DEFAULT_BAND
 }
 
-function calc(dataList: KLineData[], indicator: { extendData?: ExtendData }): QuoteValue[] {
+const calc = timestampCalc((dataList: KLineData[], indicator: { extendData?: ExtendData }): QuoteValue[] => {
   const store = peekStore<WindowStore<QuotePoint>>(indicator.extendData?.seriesKey)
   if (!store) return dataList.map(() => ({}))
   return dataList.map((d) => quoteValue(store.values.get(d.timestamp)))
-}
+})
 
 let registered = false
 

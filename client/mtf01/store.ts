@@ -21,7 +21,6 @@ export class Mtf01Store implements SourceStore<Mtf01Event> {
   private ranges: Range[] = []
   phase: Phase = 'idle'
   error: string | null = null
-  cascade: string | null = null
   /** Bumped on every change; the klinecharts template's shouldUpdate compares it. */
   rev = 0
 
@@ -91,12 +90,6 @@ export class Mtf01Store implements SourceStore<Mtf01Event> {
       for (const t of rows) this.seen.delete(tradeKey(t))
       this.trades.delete(date)
     }
-    this.rev++
-  }
-
-  setCascade(cascade: string | null): void {
-    if (cascade == null || this.cascade === cascade) return
-    this.cascade = cascade
     this.rev++
   }
 

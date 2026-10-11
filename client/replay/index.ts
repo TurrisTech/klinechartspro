@@ -1,6 +1,5 @@
 import type { ChartProPane, Datafeed, KLineChartPro } from '../../src'
 import { capabilities, hasFeature } from '../capabilities'
-import type { LayerController } from '../chartlayers/controller'
 import { apiGet, OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
 import { isNoData, type OHLCVBar } from '../ohlcv'
@@ -62,7 +61,8 @@ export interface ReplayAlertsContext {
 
 export interface ReplayWallContext {
   pluginHost: PluginHost
-  levelsController: LayerController
+  /** Levels are computed on 1W/1M; a day boundary is when one can appear or be spent. */
+  levelsController: { invalidate(): void }
   /** Where a fired replay watch, and an alert Next alert stops at, is announced. Supplied by
    * client/index.ts, the one module that knows the Notification Center, the watches and the
    * alerts exist together. */

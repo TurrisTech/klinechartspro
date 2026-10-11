@@ -5,6 +5,7 @@ import { peekStore } from '../plugins/store'
 import { matches, readField, type MarkSpec, type RegistryIndicator, type RegistrySeries } from './api'
 import { drawLabel, drawMark, type Fill } from './marks'
 import type { BarValue, RegistryStore } from './store'
+import { timestampCalc } from '../plugins/calc'
 
 // ONE klinecharts template, built from a registry row. It computes nothing: `calc` reads
 // the points the host fetched into the store and turns them into the figures the row
@@ -98,7 +99,7 @@ export function barValues(entry: RegistryIndicator, bar: BarValue | undefined): 
 
 function makeCalc(entry: RegistryIndicator) {
   const held = entry.series.filter((s) => s.render === 'hold').map((s) => figureKey(s.key))
-  return (dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] => {
+  return timestampCalc((dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] => {
     const store = peekStore<RegistryStore>(indicator.extendData?.seriesKey)
     if (!store) return dataList.map(() => ({}))
     // `hold` carries the last value forward over bars that have none. A vote exists only on
@@ -113,7 +114,7 @@ function makeCalc(entry: RegistryIndicator) {
       }
       return value
     })
-  }
+  })
 }
 
 function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
