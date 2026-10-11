@@ -1,9 +1,9 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 
-// A plugin's own bars under a bar replay: only what the replay has seen close. The tiles are
-// read straight from the bucket, so nothing on the server clamps them to the cursor; a bar
-// forming at the cursor used to come back whole -- its final high, low and close -- and a
-// window past the cursor read the future.
+// A plugin's own bars under a bar replay: only what the replay has seen close. The server
+// rebuilds the bar forming at the cursor, which a pane draws and a plugin must not read, so the
+// window ends at the replay's horizon and that bar is never asked for (the tiles' own stop at the
+// clock is `tiles/join.test.ts`).
 
 const hadWindow = 'window' in globalThis
 ;(globalThis as Record<string, unknown>).window = {
@@ -16,6 +16,8 @@ afterAll(() => {
 })
 
 const H = 3_600_000
+/** Every `/getbars` window's end. */
+const asked: number[] = []
 // Wednesday 2026-09-23, New York on EDT (UTC-4).
 const nyHour = (day: number, hour: number) => Date.UTC(2026, 8, day, hour + 4)
 const HOURLY = [6, 7, 8, 9, 10, 11, 12].map((hour) => nyHour(23, hour))
@@ -33,14 +35,14 @@ globalThis.fetch = (async (input: URL | RequestInfo) => {
   if (!url.pathname.endsWith('/getbars')) return new Response('not found', { status: 404 })
   const from = Number(url.searchParams.get('from'))
   const to = Number(url.searchParams.get('to'))
+  asked.push(to)
   const dates = url.searchParams.get('resolution') === '1D' ? DAILY : HOURLY
   const inside = dates.filter((date) => date >= from && date < to)
   return Response.json(inside.length === 0 ? { s: 'no_data' } : inside.map((date) => ({ date, open: 1, high: 1, low: 1, close: 1, volume: 1 })))
 }) as typeof fetch
 
 const { setReadClock } = await import('../config')
-const { closedBarPage, closedBy, fetchClosedBars } = await import('./bars')
-const { FX_DAY, gridFor } = await import('../replay/timeframes')
+const { closedBarPage, fetchClosedBars } = await import('./bars')
 
 describe('fetchClosedBars', () => {
   test('live, everything fetchBars returns', async () => {
@@ -51,12 +53,15 @@ describe('fetchClosedBars', () => {
 
   test('under a replay, only the bars closed by the cursor: not the one forming at it', async () => {
     setReadClock(nyHour(23, 10) + 15 * 60_000)
+    asked.length = 0
     try {
       const hourly = await fetchClosedBars('oanda:ZZZBARS', '1h', HOURLY[0], HOURLY.at(-1) as number + H)
       expect(hourly.map((bar) => bar.timestamp)).toEqual([6, 7, 8, 9].map((hour) => nyHour(23, hour)))
       // Wednesday's session opened Tuesday 17:00 and is forming at the cursor.
       const daily = await fetchClosedBars('oanda:ZZZBARS', '1D', DAILY[0], DAILY.at(-1) as number + 1)
       expect(daily.map((bar) => bar.timestamp)).toEqual([nyHour(21, 0), nyHour(22, 0)])
+      // The forming bars were never asked for: each window ended at its horizon.
+      expect(asked).toEqual([nyHour(23, 10), nyHour(23, 0)])
     } finally {
       setReadClock(null)
     }
@@ -66,28 +71,5 @@ describe('fetchClosedBars', () => {
     const page = await closedBarPage('oanda:ZZZBARS', '1h', { from: HOURLY[0], to: HOURLY[0] + 5000 * H })
     expect(page.nextFrom).toBe(HOURLY[0] + 4000 * H)
     expect(page.bars).toHaveLength(HOURLY.length)
-  })
-})
-
-describe('closedBy', () => {
-  const fx = gridFor({ timezone: 'America/New_York', dayGeometry: FX_DAY })
-  test('an intraday bar is in once it has closed, with or without a schedule', () => {
-    expect(closedBy('1m', 0, 60_000, null)).toBe(true)
-    expect(closedBy('1m', 0, 59_999, null)).toBe(false)
-    const open = Date.UTC(2026, 8, 16, 14)
-    expect(closedBy('1h', open, open + H, fx)).toBe(true)
-    expect(closedBy('1h', open, open + H - 1, fx)).toBe(false)
-  })
-
-  test('a daily bar is in once the session forming at the clock is a later one', () => {
-    // Wednesday 2026-09-16 12:00 New York (16:00Z): Wednesday's session is forming, Tuesday's
-    // has closed. Wire dates are the sessions' New York midnights. Without a schedule a
-    // session-dated bar cannot be placed, and none is admitted.
-    const clock = Date.UTC(2026, 8, 16, 16)
-    const tuesday = Date.UTC(2026, 8, 15, 4)
-    const wednesday = Date.UTC(2026, 8, 16, 4)
-    expect(closedBy('1D', tuesday, clock, fx)).toBe(true)
-    expect(closedBy('1D', wednesday, clock, fx)).toBe(false)
-    expect(closedBy('1D', tuesday, clock, null)).toBe(false)
   })
 })

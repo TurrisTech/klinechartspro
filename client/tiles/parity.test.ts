@@ -50,9 +50,9 @@ async function getbars(symbol: string, resolution: string, from: number, to: num
 async function tiledThenApi(symbol: string, resolution: string, from: number, to: number) {
   const tiled = await barsFromTiles(symbol, resolution, from, to)
   if (tiled === null) return { bars: await getbars(symbol, resolution, from, to), tiles: 0 }
-  if (tiled.coveredTo > to) return { bars: tiled.bars, tiles: tiled.bars.length }
+  if (tiled.coveredTo > to) return { bars: tiled.items, tiles: tiled.items.length }
   const tail = await getbars(symbol, resolution, tiled.coveredTo, to)
-  return { bars: tiled.bars.concat(tail), tiles: tiled.bars.length }
+  return { bars: tiled.items.concat(tail), tiles: tiled.items.length }
 }
 
 beforeAll(async () => {

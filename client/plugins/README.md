@@ -62,10 +62,17 @@ on every live tick; the wrapper hands back the last result while nothing it is c
 moved. The divergence, the volume profile and TradeTalk read prices and must not use it.
 
 **Bars a plugin reads for itself** (TradeTalk's daily candles, the AREV lab's prior, the MTF
-grid) go through `bars.ts` (`fetchClosedBars`, `closedBarPage`): tiles first, `/getbars` for
-the rest, and under a bar replay only the bars the replay has seen close. The tiles are read
-from the bucket and nothing on the server clamps them; before 2026-10-11 these three read the
-bar forming at the cursor whole, and past it.
+grid, the volume profile's finer bars) go through `bars.ts` (`fetchClosedBars`,
+`closedBarPage`): closed bars only, so under a bar replay the window ends at the bar forming at
+the cursor.
+
+**Every tile read is one join** (`client/tiles/join.ts`, `readTiled`): the tiles for what they
+hold of a window, the API from where they stop, the first n of a forward page or the last n of
+a chart window. The bars (`history.ts` `fetchBars`), the books and a tiered indicator
+(`indicatortiles/source.ts`) all call it. Under a bar replay it stops the tiles at the bar
+forming at the clock (`readHorizon`, the host's own horizon) and lets the server, which clamps
+to the cursor, answer the rest. Nothing on the server clamps a tile, so a source with tiles must
+read through it.
 
 ## Settings per pane
 

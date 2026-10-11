@@ -23,6 +23,7 @@
 
 import { parquetRead } from 'hyparquet'
 import { bucketBase, tileBytes } from '../tiles/cachestore'
+import type { Tiled } from '../tiles/join'
 import { tilesUpTo } from '../tiles/manifest'
 import type { BookBucket, BookKind, BookNearPoint, BookProfilePoint, BookTotalsPoint } from './api'
 
@@ -208,12 +209,6 @@ async function profilesOf(
 
 // -- the public read -------------------------------------------------------------------------
 
-export interface TiledPoints<P> {
-  points: P[]
-  /** Exclusive instant the tiles run to; `[coveredTo, to)` is the caller's to fetch. */
-  coveredTo: number
-}
-
 /** Which metrics tiles can answer. `near` is a sum over a radius the tile does not carry,
  * so it stays on the API -- and says so here rather than failing quietly somewhere. */
 export type TiledMetric = 'totals' | 'profile'
@@ -235,7 +230,7 @@ export async function pointsFromTiles<P extends BookTotalsPoint | BookProfilePoi
   interval: string,
   from: number,
   to: number
-): Promise<TiledPoints<P> | null> {
+): Promise<Tiled<P> | null> {
   const manifest = await manifestFor(kind, vendor, symbol, interval)
   if (manifest === null) return null
   const span = tilesUpTo(manifest, from, to)
@@ -257,7 +252,7 @@ export async function pointsFromTiles<P extends BookTotalsPoint | BookProfilePoi
       if (point.date >= from && point.date < end) points.push(point)
     }
   }
-  return { points, coveredTo: span.coveredTo }
+  return { items: points, coveredTo: span.coveredTo }
 }
 
 /** Test seam: the manifest and decoded-tile caches are per page load by design. */
