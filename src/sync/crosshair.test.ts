@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { Chart } from 'klinecharts'
-import { crosshairPoint, crosshairReach, paneMainAt } from './crosshair'
+import { applyCrosshairAt, crosshairPoint, crosshairReach, paneMainAt } from './crosshair'
 
 // Click-to-scroll listens on the chart's root and asks which pane a click landed in, so that a
 // click on an indicator sub-pane seeks the wall exactly as one on the candles does. Nodes are
@@ -118,5 +118,27 @@ describe('crosshairReach', () => {
   test('a loaded instant scrolled out of view is off screen on its side', () => {
     expect(crosshairReach({ ...base, timestamp: 1_010 * M, x: -40 })).toEqual({ kind: 'away', side: 'left', reason: 'off-screen' })
     expect(crosshairReach({ ...base, timestamp: 1_050 * M, x: 640 })).toEqual({ kind: 'away', side: 'right', reason: 'off-screen' })
+  })
+})
+
+describe('applyCrosshairAt', () => {
+  test('a move that lands on the same pixels dispatches nothing; a new place does', () => {
+    const dispatched: unknown[] = []
+    let x = 120
+    const chart = {
+      getDataList: () => [{ timestamp: 1 }],
+      convertToPixel: () => ({ x, y: 40 }),
+      executeAction: (_type: string, payload: unknown) => dispatched.push(payload)
+    } as unknown as Parameters<typeof applyCrosshairAt>[0]
+    const first = applyCrosshairAt(chart, { timestamp: 1, value: 1.1 }, null)
+    expect(dispatched).toHaveLength(1)
+    expect(applyCrosshairAt(chart, { timestamp: 1, value: 1.1 }, first)).toBe(first)
+    expect(dispatched).toHaveLength(1)
+    // The key handed back is forgotten (the pane's own pointer moved it): dispatched again.
+    applyCrosshairAt(chart, { timestamp: 1, value: 1.1 }, null)
+    expect(dispatched).toHaveLength(2)
+    x = 130
+    applyCrosshairAt(chart, { timestamp: 1, value: 1.1 }, first)
+    expect(dispatched).toHaveLength(3)
   })
 })

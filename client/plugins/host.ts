@@ -5,7 +5,7 @@ import { onViewMoved } from '../chartview'
 import { gridFor } from '../replay/timeframes'
 import { knownThrough } from './horizon'
 import { type PaneConfig, PaneConfigStore, type PaneDoc } from './paneconfig'
-import { dropStore, liveStores, storeFor, WindowStore } from './store'
+import { dropStore, liveStores, missingRanges, storeFor, WindowStore } from './store'
 import type {
   BindContext,
   BindingSpec,
@@ -40,6 +40,8 @@ const RANGE_DEBOUNCE_MS = 250
 const MAX_PAGES_PER_GAP = 20
 /** How often `settled` looks again while some binding is still fetching. */
 const SETTLE_POLL_MS = 50
+/** The longest a re-apply waits for an animation frame: none comes in a hidden tab. */
+const APPLY_FALLBACK_MS = 100
 /** Rough height of one klinecharts legend row: a settings panel hangs just below the legend
  * the gear sits in. */
 const LEGEND_ROW_HEIGHT = 24
@@ -243,6 +245,54 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     }
   }
 
+  // Re-applies are coalesced to one per binding per animation frame. Each is an
+  // `overrideIndicator`, and so a full `calc` of the template and a layout: a fetch arrives in
+  // pages, an MTF overlay reads five sources, and a live point lands on several stores at once,
+  // so applying each as it came recalculated the same indicator several times a frame -- going
+  // live once cost five back-to-back ~150 ms frames on a prod wall (2026-10-07). A binding just
+  // made is still applied at once (`reconcile`), so its legend appears with it.
+  const dirty = new Map<Binding, WiredPane>()
+  let flushPending = false
+  const flushApplies = (): void => {
+    flushPending = false
+    const batch = [...dirty]
+    dirty.clear()
+    for (const [b, entry] of batch) apply(entry, b)
+  }
+  const requestApply = (entry: WiredPane, b: Binding): void => {
+    dirty.set(b, entry)
+    if (flushPending) return
+    flushPending = true
+    if (typeof requestAnimationFrame !== 'function') {
+      queueMicrotask(flushApplies)
+      return
+    }
+    let done = false
+    const run = (): void => {
+      if (done) return
+      done = true
+      if (flushPending) flushApplies()
+    }
+    requestAnimationFrame(run)
+    setTimeout(run, APPLY_FALLBACK_MS)
+  }
+
+  /** Every binding on the wall that reads the store under `key` -- what a fetch into that
+   * store changed, whichever binding asked for it. */
+  const applyReaders = (key: string): void => {
+    for (const e of wired.values()) {
+      for (const other of e.bindings.values()) {
+        if (!other.disposed && other.sources.some((s) => s.key === key)) requestApply(e, other)
+      }
+    }
+  }
+
+  // Every fetch in flight, by store: what it covers and when it ends. A binding whose window
+  // overlaps a fetch another binding already has in flight waits for it rather than asking for
+  // the same bars again -- two panes on one instrument (an MTF overlay's 4h source under a 1h and
+  // a 15m pane) used to fetch the part they share twice.
+  const storeFetches = new Map<string, Set<{ range: Range; done: Promise<void> }>>()
+
   const scheduleRetry = (entry: WiredPane, b: Binding, afterMs: number): void => {
     if (b.retryTimer) clearTimeout(b.retryTimer)
     b.retryTimer = setTimeout(() => {
@@ -256,6 +306,14 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     if (b.inFlight.has(tag)) return
     b.inFlight.add(tag)
     const store = source.store
+    let finish = (): void => {}
+    const fetch = { range: gap, done: new Promise<void>((resolve) => (finish = resolve)) }
+    let running = storeFetches.get(source.key)
+    if (!running) {
+      running = new Set()
+      storeFetches.set(source.key, running)
+    }
+    running.add(fetch)
     try {
       let from = gap.from
       let pages = 0
@@ -265,23 +323,26 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         if (b.disposed) return
         if (page.status) {
           store.setPhase(page.status.phase, page.status.progress)
-          apply(entry, b)
+          applyReaders(source.key)
           scheduleRetry(entry, b, page.status.retryAfterMs)
           return
         }
         const to = page.nextFrom ?? gap.to
         store.ingest(page.points, { from, to }, page.arrays)
         store.setPhase('ready')
-        apply(entry, b)
+        applyReaders(source.key)
         if (page.nextFrom === null) return
         from = page.nextFrom
       }
     } catch (err) {
       store.setPhase('error', null, err instanceof Error ? err.message : String(err))
-      apply(entry, b)
+      applyReaders(source.key)
       console.error(`[plugins] ${b.plugin.id} fetch failed for ${source.id}`, err)
     } finally {
       b.inFlight.delete(tag)
+      running.delete(fetch)
+      if (running.size === 0) storeFetches.delete(source.key)
+      finish()
     }
   }
 
@@ -292,9 +353,24 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     for (const source of b.sources) {
       const window = source.spec.window ? source.spec.window(range) : range
       if (!window) continue
-      for (const gap of source.store.missing(window)) await fetchGap(entry, b, source, gap)
+      // Twice at most: a fetch waited on can end short of its range -- its binding was released,
+      // or the server is still building the series -- and what it left is then this one's.
+      for (let pass = 0; pass < 2 && !b.disposed; pass++) {
+        const waits = new Set<Promise<void>>()
+        for (const gap of source.store.missing(window)) {
+          const running = [...(storeFetches.get(source.key) ?? [])].filter((f) => f.range.from < gap.to && f.range.to > gap.from)
+          for (const f of running) waits.add(f.done)
+          for (const free of missingRanges(running.map((f) => f.range), gap)) await fetchGap(entry, b, source, free)
+        }
+        if (waits.size === 0) break
+        // Counted as this binding's own fetch while it waits, so `settled` waits for it too.
+        const tag = `${source.id}|waiting`
+        b.inFlight.add(tag)
+        await Promise.all(waits)
+        b.inFlight.delete(tag)
+      }
     }
-    apply(entry, b)
+    requestApply(entry, b)
   }
 
   const storeInUse = (key: string, except: Binding): boolean => {
@@ -385,7 +461,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       if (!s.spec.subscribe) continue
       try {
         s.unsubscribe = s.spec.subscribe(s.store, {
-          changed: () => apply(entry, b),
+          changed: () => requestApply(entry, b),
           refetch: () => void ensureCoverage(entry, b)
         })
       } catch (err) {
@@ -580,7 +656,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       for (;;) {
         let busy = false
         for (const entry of wired.values()) for (const b of entry.bindings.values()) if (b.inFlight.size > 0) busy = true
-        if (!busy || Date.now() >= deadline) return
+        if (!busy || Date.now() >= deadline) {
+          // What was fetched reaches the panes now rather than on the next frame: the caller
+          // reads what they draw.
+          if (dirty.size > 0) flushApplies()
+          return
+        }
         await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS))
       }
     },

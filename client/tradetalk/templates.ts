@@ -15,7 +15,8 @@ import {
   type Axis,
   type ExtendData
 } from './levelmap'
-import { computeTradeTalk, type BarValue, type Settings, type Skips, type Trade } from './rules'
+import { timestampMemo } from '../plugins/calc'
+import { computeTradeTalk, levelMap, type BarValue, type Settings, type Skips, type Trade } from './rules'
 
 // TT:entries -- where TradeTalk would enter, drawn on the price pane.
 //
@@ -90,11 +91,36 @@ export interface TradeTalkValue extends BarValue {
   summary?: Summary
 }
 
-function calc(dataList: KLineData[], indicator: { extendData?: ExtendData; calcParams?: unknown[] }): TradeTalkValue[] {
+type Indicator = { extendData?: ExtendData; calcParams?: unknown[] }
+
+/**
+ * The sessions the chart can see and the calendar map over its bars -- the half of a pass a live
+ * tick cannot change, so it is kept across ticks (plugins/calc.ts) and only the rule is run
+ * again. klinecharts recalculates on every tick, and rebuilding these each time was most of
+ * TradeTalk's cost per tick.
+ *
+ * Why a tick cannot change them: it moves only the forming bar, which cannot open a session or
+ * move a session's open (that is its first bar's). The map reads a period in progress for its
+ * OPEN alone, and only closed periods for their high, low and midpoint; the daily bias reads
+ * only sessions that have closed (`computeTradeTalk`'s `biasOf`). So the forming session's
+ * high, low and close held here go stale between ticks, and nothing reads them --
+ * `templates.test.ts` holds a run of ticks to a fresh pass.
+ */
+const calendar = timestampMemo((dataList: KLineData[], indicator: Indicator) => {
   const extend = indicator.extendData
-  if (!extend?.clock) return dataList.map(() => ({}))
-  const settings = settingsOf(indicator.calcParams)
+  if (!extend?.clock) return null
   const sessions = chartSessions(dataList, { ...extend, clock: extend.clock })
+  const map = levelMap(dataList, sessions, extend.clock, extend.barMs, extend.tick, settingsOf(indicator.calcParams).minUnit)
+  return { sessions, map }
+})
+
+/** Exported for its test. */
+export function calc(dataList: KLineData[], indicator: Indicator): TradeTalkValue[] {
+  const extend = indicator.extendData
+  const held = calendar(dataList, indicator)
+  if (!extend?.clock || held === null) return dataList.map(() => ({}))
+  const settings = settingsOf(indicator.calcParams)
+  const { sessions, map } = held
   const { values, trades, units, skips } = computeTradeTalk({
     bars: dataList,
     heath: settings.heath ? heathLevels(dataList, ENTRY_HEATH) : undefined,
@@ -102,7 +128,8 @@ function calc(dataList: KLineData[], indicator: { extendData?: ExtendData; calcP
     clock: extend.clock,
     barMs: extend.barMs,
     tick: extend.tick,
-    settings
+    settings,
+    map
   })
   const out = values as TradeTalkValue[]
   const last = out[out.length - 1]

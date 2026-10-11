@@ -138,3 +138,33 @@ describe('intradayMs', () => {
     expect(GRID_MS / (intradayMs('10m') as number)).toBe(2)
   })
 })
+
+// The hover viewer follows the crosshair by redrawing, never by recalculating: its book is read
+// off `hoverIndex` at draw time, and the profile store it shares with the depth overlay must not
+// change revision, or both templates recompute over every bar per frame of pointer movement.
+describe('the hover viewer', () => {
+  test('a crosshair move is a draw-only override; the shared store is left alone', async () => {
+    const { createBooksPlugin } = await import('./plugin')
+    const { hoverIndex } = await import('./templates')
+    const { fakeChart } = await import('../plugins/testing')
+    const plugin = createBooksPlugin()
+    plugin.register(facilities)
+    const fc = fakeChart()
+    ;(fc.chart as unknown as { convertFromPixel: () => unknown }).convertFromPixel = () => [{ dataIndex: 7 }]
+    const spec = plugin.bind({
+      chart: fc.chart,
+      indicator: { id: 'v1', name: templateName('view', 'order'), paneId: 'pane_x', calcParams: [] },
+      vendor: 'oanda',
+      ticker: 'EURUSD',
+      interval: '1h'
+    } as never)
+    expect(spec?.sources[0]?.subscribe).toBeUndefined()
+    const release = spec?.attach?.()
+    for (const fn of fc.actions.get('onCrosshairChange') ?? []) (fn as (p: unknown) => void)({ x: 100, paneId: 'candle_pane' })
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(hoverIndex.get(fc.chart)).toBe(7)
+    expect(fc.overrides).toEqual([{ id: 'v1', name: templateName('view', 'order'), paneId: 'pane_x' }])
+    release?.()
+    expect(fc.actions.get('onCrosshairChange')?.size).toBe(0)
+  })
+})

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { mergeSessions, sessionsFromBars, type Candle, type Level, type SessionBar, type SessionClock } from './calendar'
 import type { HeathLevel } from './heathlevels'
 import {
+  ActiveZones,
   computeTradeTalk,
   dedupeLevels,
   heathAsLevel,
@@ -513,5 +514,51 @@ describe('a zone reaches the rule only once it is established', () => {
     const late = { ...heath('demand', 93.4, 1), armedIndex: 3 }
     expect(levelsAt([late], 2)).toBe(0)
     expect(levelsAt([late], 3)).toBe(1)
+  })
+})
+
+// A bar's lines are its calendar map with the zones in force merged in. `ActiveZones` keeps the
+// zones in price order as they come and go and merges in one pass; it must be exactly what
+// deduplicating the calendar map followed by the zones (in the order they came into force) gives.
+describe('ActiveZones', () => {
+  test('merges exactly as dedupeLevels over the calendar and the zones in force', () => {
+    let seed = 11
+    const random = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31
+      return seed / 2 ** 31
+    }
+    const tick = 0.0001
+    // Prices on a coarse grid so calendar levels, zones and zones among themselves collide.
+    const price = (): number => 1.1 + Math.floor(random() * 40) * tick + (random() < 0.3 ? tick / 3 : 0)
+    const units = ['Y', 'Q', 'M', 'W', 'D'] as const
+    const kinds = ['open', 'high', 'low', 'mid'] as const
+    for (let round = 0; round < 200; round++) {
+      const calendar = dedupeLevels(
+        Array.from({ length: Math.floor(random() * 14) }, () => ({
+          unit: units[Math.floor(random() * units.length)],
+          kind: kinds[Math.floor(random() * kinds.length)],
+          price: price(),
+          label: 'c',
+          current: random() < 0.3
+        })),
+        tick
+      )
+      const zones = Array.from({ length: 30 }, (_, i) => ({ side: i % 2 ? 'supply' : 'demand', price: price() }) as unknown as HeathLevel)
+      const active = new ActiveZones(tick)
+      const inForce: HeathLevel[] = []
+      for (let step = 0; step < 60; step++) {
+        if (inForce.length > 0 && random() < 0.4) {
+          const [zone] = inForce.splice(Math.floor(random() * inForce.length), 1)
+          active.remove(zone)
+        } else {
+          const zone = zones[Math.floor(random() * zones.length)]
+          if (inForce.includes(zone)) continue
+          inForce.push(zone)
+          active.add(zone)
+        }
+        const expected = dedupeLevels([...calendar, ...inForce.map(heathAsLevel)], tick)
+        expect(JSON.stringify(active.mergeInto(calendar))).toBe(JSON.stringify(expected))
+      }
+    }
   })
 })

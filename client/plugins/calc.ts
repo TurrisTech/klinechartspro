@@ -11,9 +11,10 @@ import type { KLineData } from 'klinecharts'
 // This keeps a template's last result while nothing it is computed from moved, and hands back
 // the SAME array, which also keeps the legend's width scan (patches/klinecharts) from running
 // again. A template whose result depends on a bar's prices -- the divergence's swings, the
-// volume profile, TradeTalk -- must not use it.
+// volume profile, TradeTalk -- must not use it for its whole `calc`, but may memoise the PART of
+// a pass that reads only timestamps and stores (`timestampMemo`): TradeTalk's calendar map.
 
-/** What a result was computed from: klinecharts replaces the bar array on a reload or a page of
+/** What a value was computed from: klinecharts replaces the bar array on a reload or a page of
  * history and mutates it in place on a tick, so a new bar shows as a longer list; the host
  * replaces `extendData` whenever a store or a setting changes; a params edit replaces
  * `calcParams`. */
@@ -25,15 +26,15 @@ interface Held<D> {
   extendData: unknown
   rev: unknown
   calcParams: unknown
-  result: D[]
+  result: D
 }
 
-/** `calc`, reused while the pane holds the same bars, the same `extendData` (and its `rev`) and
- * the same `calcParams`. */
-export function timestampCalc<D, I extends { extendData?: unknown; calcParams?: unknown }>(
-  calc: (dataList: KLineData[], indicator: I) => D[]
-): (dataList: KLineData[], indicator: I) => D[] {
-  const held = new WeakMap<object, Held<D>>()
+/** `compute`, reused while the pane holds the same bars, the same `extendData` (and its `rev`)
+ * and the same `calcParams` -- one value per indicator. */
+export function timestampMemo<R, I extends { extendData?: unknown; calcParams?: unknown }>(
+  compute: (dataList: KLineData[], indicator: I) => R
+): (dataList: KLineData[], indicator: I) => R {
+  const held = new WeakMap<object, Held<R>>()
   return (dataList, indicator) => {
     const first = dataList[0]?.timestamp
     const last = dataList[dataList.length - 1]?.timestamp
@@ -51,8 +52,15 @@ export function timestampCalc<D, I extends { extendData?: unknown; calcParams?: 
     ) {
       return prev.result
     }
-    const result = calc(dataList, indicator)
+    const result = compute(dataList, indicator)
     held.set(indicator, { data: dataList, length: dataList.length, first, last, extendData: indicator.extendData, rev, calcParams: indicator.calcParams, result })
     return result
   }
+}
+
+/** A template's whole `calc`, reused on a tick that cannot change it (see above). */
+export function timestampCalc<D, I extends { extendData?: unknown; calcParams?: unknown }>(
+  calc: (dataList: KLineData[], indicator: I) => D[]
+): (dataList: KLineData[], indicator: I) => D[] {
+  return timestampMemo(calc)
 }

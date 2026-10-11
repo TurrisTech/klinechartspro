@@ -224,10 +224,68 @@ describe('createPluginHost', () => {
     host.sync([fakePane('p1', fc.chart)])
     await flush()
     const before = fc.overrides.length
+    // A burst of live points is one re-apply -- one recalculation -- not one each.
     ;(notifyChanged as unknown as () => void)()
+    ;(notifyChanged as unknown as () => void)()
+    await flush()
     expect(fc.overrides.length).toBe(before + 1)
     host.sync([])
     expect(disposed).toBe(1)
+  })
+
+  test('two panes reading one store fetch what they share once, and both are re-applied', async () => {
+    const data = Array.from({ length: 40 }, (_, i) => ({ date: i, v: i }))
+    const fetches: Range[] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const plugin: IndicatorPlugin = {
+      id: 'shared',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'SH',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'shared|EURUSD|1h',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              await gate
+              return { points: data.filter((p) => p.date >= range.from && p.date < range.to), nextFrom: null }
+            }
+          }
+        ],
+        label: () => 'SH'
+      })
+    }
+    const f = facilities()
+    f.maxValuesPerRequest = 100
+    const host = await createPluginHost({ plugins: [plugin], facilities: f })
+    hosts.push(host)
+    const a = fakeChart()
+    const b = fakeChart()
+    a.data = Array.from({ length: 20 }, (_, i) => ({ timestamp: i + 10 }))
+    b.data = Array.from({ length: 20 }, (_, i) => ({ timestamp: i + 20 }))
+    a.indicators = [fakeIndicator('SH', 'a')]
+    b.indicators = [fakeIndicator('SH', 'b')]
+    host.sync([fakePane('p1', a.chart), fakePane('p2', b.chart)])
+    await flush()
+    // The second pane asked only for what the first was not already fetching.
+    expect(fetches).toEqual([
+      { from: 10, to: 30 },
+      { from: 30, to: 40 }
+    ])
+    release()
+    await host.settled()
+    const rev = (fc: typeof a) => (fc.indicators[0].extendData as { rev: number } | undefined)?.rev
+    const key = (fc: typeof a) => (fc.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key(a))
+    expect(store?.size).toBe(30)
+    // Both panes were handed the store's latest revision, whichever of them fetched it (a
+    // binding's rev is its own sequence number folded with its stores' revs).
+    expect((rev(a) as number) % 1_000_003).toBe(store?.rev as number)
+    expect((rev(b) as number) % 1_000_003).toBe(store?.rev as number)
   })
 
   test('a replaying page records the phase and retries', async () => {

@@ -92,7 +92,9 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
       const chart = new FakeChart()
       charts.set(interval, chart)
       const period = resolutionToPeriod(interval) as Period
-      feed.subscribe(symbolInfo, period, (bar) => chart.updateData(bar))
+      feed.subscribe(symbolInfo, period, (data) => {
+        for (const bar of Array.isArray(data) ? data : [data]) chart.updateData(bar)
+      })
       panes.push({
         id: `p${interval}`,
         getChart: () => chart as unknown as ReturnType<ChartProPane['getChart']>,
