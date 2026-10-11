@@ -1,5 +1,5 @@
-import { OhlcvApiError } from '../config'
-import { isNoData, type OHLCVBar } from '../ohlcv'
+import { getbarsSplit } from '../history'
+import type { OHLCVBar } from '../ohlcv'
 import type { StreamListener } from '../stream'
 import type { Page, PluginFacilities, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import type { WindowStore } from '../plugins/store'
@@ -64,27 +64,16 @@ export function quoteSource(
   const symbol = `${vendor}:${ticker}`
   const barMs = Math.max(1, f.resolutionDurationMs(interval))
 
+  // The chart's range is on the wire clock and so is `/getbars`'s window; `to` is exclusive
+  // there, as it is in the host's ranges.
   const read = async (from: number, to: number): Promise<QuotePoint[]> => {
-    try {
-      // The chart's range is on the wire clock and so is `/getbars`'s window; `to` is
-      // exclusive there, as it is in the host's ranges. No `limit`: it keeps the LAST n
-      // bars, the wrong end for a page that continues forwards.
-      const body = await f.api.get<OHLCVBar[] | { s: 'no_data' }>('/getbars', { symbol, resolution: interval, from, to, columns: 'all' })
-      if (isNoData(body) || !Array.isArray(body)) return []
-      const out: QuotePoint[] = []
-      for (const bar of body) {
-        const q = quoteOf(bar as OHLCVBar & Record<string, unknown>)
-        if (q) out.push(q)
-      }
-      return out
-    } catch (err) {
-      if (err instanceof OhlcvApiError && err.code === 'too_large' && to - from > barMs) {
-        const mid = from + Math.floor((to - from) / 2)
-        const [a, b] = await Promise.all([read(from, mid), read(mid, to)])
-        return [...a, ...b]
-      }
-      throw err
+    const bars = await getbarsSplit(f.api.get, { symbol, resolution: interval, from, to, columns: 'all' }, barMs)
+    const out: QuotePoint[] = []
+    for (const bar of bars) {
+      const q = quoteOf(bar as OHLCVBar & Record<string, unknown>)
+      if (q) out.push(q)
     }
+    return out
   }
 
   return {

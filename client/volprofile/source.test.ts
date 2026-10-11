@@ -5,7 +5,7 @@ import { FX_DAY } from '../replay/timeframes'
 // client/config.ts reads `window` at module load and this module reaches it through the bar
 // fetch; installed before the dynamic import, which a static one would be hoisted above.
 installWindow()
-const { BarStore, closedBy, pickSource, wireShift } = await import('./source')
+const { BarStore, pickSource, wireShift } = await import('./source')
 
 // Which bars a profile is built from, and the store that holds them.
 
@@ -48,25 +48,6 @@ describe('wire dates', () => {
     expect(wireShift('1h', null)).toBe(0)
     expect(wireShift('1D', fx)).toBe(7 * 3_600_000)
     expect(wireShift('1D', null)).toBeNull()
-  })
-})
-
-describe('the replay clamp', () => {
-  const fx = { timezone: 'America/New_York', day: FX_DAY }
-  test('an intraday bar is in once it has closed', () => {
-    expect(closedBy('1m', 0, 60_000, null)).toBe(true)
-    expect(closedBy('1m', 0, 59_999, null)).toBe(false)
-  })
-
-  test("a daily bar is in once the session forming at the clock is a later one", () => {
-    // Wednesday 2026-09-16 12:00 New York (16:00Z): Wednesday's session is forming, Tuesday's
-    // has closed. Wire dates are the sessions' New York midnights.
-    const clock = Date.UTC(2026, 8, 16, 16)
-    const tuesday = Date.UTC(2026, 8, 15, 4)
-    const wednesday = Date.UTC(2026, 8, 16, 4)
-    expect(closedBy('1D', tuesday, clock, fx)).toBe(true)
-    expect(closedBy('1D', wednesday, clock, fx)).toBe(false)
-    expect(closedBy('1D', tuesday, clock, null)).toBe(false)
   })
 })
 

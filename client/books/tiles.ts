@@ -22,6 +22,8 @@
 // over a window the tile does not carry.
 
 import { parquetRead } from 'hyparquet'
+import { bucketBase, tileBytes } from '../tiles/cachestore'
+import { tilesUpTo } from '../tiles/manifest'
 import type { BookBucket, BookKind, BookNearPoint, BookProfilePoint, BookTotalsPoint } from './api'
 
 /** Bumped when the tile layout changes: a closed tile is served `immutable` for a year, so
@@ -62,16 +64,9 @@ export interface BookTileManifest {
   tiles: BookTileEntry[]
 }
 
-let baseUrl: string | null = null
+const base = bucketBase(() => `${(window.BOOK_TILES_BASE_URL ?? `${window.location.origin}/tiles`).replace(/\/+$/, '')}/books`)
 export function bookTilesBaseUrl(): string {
-  if (baseUrl === null) {
-    // The same origin and the same nginx route as the bar tiles, under their own layout
-    // prefix -- one bucket, one proxy, one cache policy. `BOOK_TILES_BASE_URL` exists for
-    // a dev server serving a locally built tree.
-    const root = window.BOOK_TILES_BASE_URL ?? `${window.location.origin}/tiles`
-    baseUrl = `${root.replace(/\/+$/, '')}/books`
-  }
-  return baseUrl
+  return base.get()
 }
 
 function seriesUrl(kind: string, vendor: string, symbol: string, interval: string): string {
@@ -114,71 +109,9 @@ export function manifestFor(
   return pending
 }
 
-/**
- * Tiles answering as much of `[from, to)` as tiled history reaches, in order.
- *
- * Null means tiles can contribute nothing and the caller should fetch the whole window.
- * A non-null answer may stop short of `to`, at `coveredTo` -- which is a *period*
- * boundary, never the last point. Splitting at the last point instead would hand the API
- * a range starting inside an already-tiled period, and the join would serve every point
- * between twice.
- *
- * `to` is exclusive, matching `/getbars` and the plugin routes.
- */
-export function tilesUpTo(
-  manifest: BookTileManifest,
-  from: number,
-  to: number
-): { entries: BookTileEntry[]; coveredTo: number } | null {
-  if (from >= manifest.coveredTo) return null
-  const end = Math.min(to, manifest.coveredTo)
-  const entries = manifest.tiles.filter((t) => t.to >= from && t.from < end)
-  if (entries.length > 0) return { entries, coveredTo: manifest.coveredTo }
-  // No tile overlaps. Inside the covered window that is a real answer -- a weekend, a
-  // holiday, an outage the books have no snapshot for -- and returning null would send
-  // every such probe to the API for a range the tiles have already settled.
-  return from >= manifest.coveredFrom ? { entries: [], coveredTo: manifest.coveredTo } : null
-}
-
 // -- bytes -------------------------------------------------------------------------------
 
-let store: Promise<Cache | null> | null = null
-
-function cacheStore(): Promise<Cache | null> {
-  if (store === null) {
-    store = (async () => {
-      try {
-        return typeof caches === 'undefined' ? null : await caches.open(CACHE_NAME)
-      } catch {
-        return null
-      }
-    })()
-  }
-  return store
-}
-
-async function bytesFor(url: string): Promise<ArrayBuffer | null> {
-  const cache = await cacheStore()
-  if (cache !== null) {
-    try {
-      const hit = await cache.match(url)
-      if (hit !== undefined) return await hit.arrayBuffer()
-    } catch {
-      // fall through to the network
-    }
-  }
-  const response = await fetch(url)
-  if (!response.ok) return null
-  const bytes = await response.arrayBuffer()
-  if (cache !== null) {
-    try {
-      await cache.put(url, new Response(bytes.slice(0), { headers: response.headers }))
-    } catch {
-      // Quota exceeded or a storage-blocked origin; the bytes are already in hand.
-    }
-  }
-  return bytes
-}
+const bytesFor = tileBytes(CACHE_NAME)
 
 async function columns(url: string, names: string[]): Promise<Record<string, number[]> | null> {
   const bytes = await bytesFor(url)
@@ -332,8 +265,7 @@ export function resetBookTileCaches(): void {
   manifests.clear()
   decoded.clear()
   inflight.clear()
-  store = null
-  baseUrl = null
+  base.set(null)
 }
 
 export type { BookNearPoint }

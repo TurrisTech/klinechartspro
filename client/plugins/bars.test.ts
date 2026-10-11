@@ -39,7 +39,8 @@ globalThis.fetch = (async (input: URL | RequestInfo) => {
 }) as typeof fetch
 
 const { setReadClock } = await import('../config')
-const { closedBarPage, fetchClosedBars } = await import('./bars')
+const { closedBarPage, closedBy, fetchClosedBars } = await import('./bars')
+const { FX_DAY, gridFor } = await import('../replay/timeframes')
 
 describe('fetchClosedBars', () => {
   test('live, everything fetchBars returns', async () => {
@@ -65,5 +66,28 @@ describe('fetchClosedBars', () => {
     const page = await closedBarPage('oanda:ZZZBARS', '1h', { from: HOURLY[0], to: HOURLY[0] + 5000 * H })
     expect(page.nextFrom).toBe(HOURLY[0] + 4000 * H)
     expect(page.bars).toHaveLength(HOURLY.length)
+  })
+})
+
+describe('closedBy', () => {
+  const fx = gridFor({ timezone: 'America/New_York', dayGeometry: FX_DAY })
+  test('an intraday bar is in once it has closed, with or without a schedule', () => {
+    expect(closedBy('1m', 0, 60_000, null)).toBe(true)
+    expect(closedBy('1m', 0, 59_999, null)).toBe(false)
+    const open = Date.UTC(2026, 8, 16, 14)
+    expect(closedBy('1h', open, open + H, fx)).toBe(true)
+    expect(closedBy('1h', open, open + H - 1, fx)).toBe(false)
+  })
+
+  test('a daily bar is in once the session forming at the clock is a later one', () => {
+    // Wednesday 2026-09-16 12:00 New York (16:00Z): Wednesday's session is forming, Tuesday's
+    // has closed. Wire dates are the sessions' New York midnights. Without a schedule a
+    // session-dated bar cannot be placed, and none is admitted.
+    const clock = Date.UTC(2026, 8, 16, 16)
+    const tuesday = Date.UTC(2026, 8, 15, 4)
+    const wednesday = Date.UTC(2026, 8, 16, 4)
+    expect(closedBy('1D', tuesday, clock, fx)).toBe(true)
+    expect(closedBy('1D', wednesday, clock, fx)).toBe(false)
+    expect(closedBy('1D', tuesday, clock, null)).toBe(false)
   })
 })

@@ -21,6 +21,7 @@
 // notes/architecture/tiered-indicator-storage.md); the manifest itself is never cached.
 
 import { parquetRead } from 'hyparquet'
+import { bucketBase, tileBytes } from '../tiles/cachestore'
 
 export interface SeriesManifest {
   format: number
@@ -74,20 +75,14 @@ const MANIFEST_TTL_MS = 60_000
 const CACHE_NAME = 'indicator-tiles-v1'
 const DECODED_LIMIT = 32
 
-let baseUrl: string | null = null
+const base = bucketBase(() => window.INDICATOR_TILES_BASE_URL ?? `${window.location.origin}/indicator-tiles`)
 export function indicatorTilesBaseUrl(): string {
-  if (baseUrl === null) {
-    baseUrl = (window.INDICATOR_TILES_BASE_URL ?? `${window.location.origin}/indicator-tiles`).replace(
-      /\/+$/,
-      ''
-    )
-  }
-  return baseUrl
+  return base.get()
 }
 
 /** For tests: point the module at a base and forget everything it cached. */
-export function resetIndicatorTiles(base: string | null = null): void {
-  baseUrl = base
+export function resetIndicatorTiles(next: string | null = null): void {
+  base.set(next)
   manifests.clear()
   shards.clear()
   decoded.clear()
@@ -141,42 +136,7 @@ function shardFor(path: string, manifest: SeriesManifest, year: string): Promise
   return pending
 }
 
-let cacheStore: Promise<Cache | null> | null = null
-function tileCache(): Promise<Cache | null> {
-  if (cacheStore === null) {
-    cacheStore = (async () => {
-      try {
-        return typeof caches === 'undefined' ? null : await caches.open(CACHE_NAME)
-      } catch {
-        return null
-      }
-    })()
-  }
-  return cacheStore
-}
-
-async function bytesFor(url: string): Promise<ArrayBuffer | null> {
-  const cache = await tileCache()
-  if (cache !== null) {
-    try {
-      const hit = await cache.match(url)
-      if (hit !== undefined) return await hit.arrayBuffer()
-    } catch {
-      // fall through to the network
-    }
-  }
-  const response = await fetch(url)
-  if (!response.ok) return null
-  const bytes = await response.arrayBuffer()
-  if (cache !== null) {
-    try {
-      await cache.put(url, new Response(bytes.slice(0), { headers: response.headers }))
-    } catch {
-      // quota or a storage-blocked origin: the rows are in hand either way
-    }
-  }
-  return bytes
-}
+const bytesFor = tileBytes(CACHE_NAME)
 
 /** Every column of one tile, as numbers where they are numeric (hyparquet hands INT64 back as
  * BigInt, which no arithmetic downstream expects). */

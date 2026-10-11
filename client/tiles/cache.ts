@@ -10,10 +10,10 @@
 //     by bar count, least recently used out first: a weekly 5s tile is ~70k bars, so panning
 //     back through months of 5s would otherwise hold every week ever decoded until reload.
 //
-// Storage access is wrapped throughout: `caches` is undefined on an insecure origin and
-// throws outright in some privacy modes, and a chart that cannot cache must still draw.
+// The Cache API half is shared with the other tile families (cachestore.ts).
 
 import type { KLineData } from 'klinecharts'
+import { tileBytes } from './cachestore'
 import { decodeTile } from './decode'
 import { type TileEntry, type TileManifest, tileUrl } from './manifest'
 
@@ -66,45 +66,7 @@ const decoded = new DecodedTiles(MAX_DECODED_BARS)
 
 const inflight = new Map<string, Promise<KLineData[] | null>>()
 
-let store: Promise<Cache | null> | null = null
-
-function cacheStore(): Promise<Cache | null> {
-  if (store === null) {
-    store = (async () => {
-      try {
-        return typeof caches === 'undefined' ? null : await caches.open(CACHE_NAME)
-      } catch {
-        return null
-      }
-    })()
-  }
-  return store
-}
-
-async function bytesFor(url: string): Promise<ArrayBuffer | null> {
-  const cache = await cacheStore()
-  if (cache !== null) {
-    try {
-      const hit = await cache.match(url)
-      if (hit !== undefined) return await hit.arrayBuffer()
-    } catch {
-      // fall through to the network
-    }
-  }
-  const response = await fetch(url)
-  if (!response.ok) return null
-  // Read the body before caching: cache.put() consumes the response, and we need the bytes
-  // in hand either way.
-  const bytes = await response.arrayBuffer()
-  if (cache !== null) {
-    try {
-      await cache.put(url, new Response(bytes.slice(0), { headers: response.headers }))
-    } catch {
-      // Quota exceeded, or a storage-blocked origin. The bars are already in hand.
-    }
-  }
-  return bytes
-}
+const bytesFor = tileBytes(CACHE_NAME)
 
 async function load(manifest: TileManifest, entry: TileEntry): Promise<KLineData[] | null> {
   const url = tileUrl(manifest, entry)

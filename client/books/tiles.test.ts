@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import type { PluginFacilities } from '../plugins/types'
 import { nearSource, totalsSource } from './api'
-import { LAYOUT_VERSION, type BookTileManifest, tilesUpTo } from './tiles'
+import { tilesUpTo } from '../tiles/manifest'
+import { LAYOUT_VERSION, type BookTileManifest } from './tiles'
 
 // Two halves. The coverage arithmetic is pure and always runs -- it is where both of the
 // bar tiles' off-by-ones lived (chart-tiles.md, trap 2) and neither is visible to a check

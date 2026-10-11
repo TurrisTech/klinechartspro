@@ -168,3 +168,25 @@ describe('the hover viewer', () => {
     expect(fc.actions.get('onCrosshairChange')?.size).toBe(0)
   })
 })
+
+// Book tiles hold, per bar, the snapshot knowable at that bar's close, and nothing on the server
+// clamps a tile -- so under a bar replay the tiled points of bars the replay has not seen close
+// are not served (plugins/bars.ts `closedFilter`).
+describe('the tile/API join under a replay', () => {
+  test('tiled points past the clock are dropped; the API half is asked as before', async () => {
+    const { joinTiled } = await import('./api')
+    const points = [10, 20, 30, 40].map((date) => ({ date, long: 1, short: 1 }))
+    const asked: Array<{ from: number; to: number }> = []
+    const fromApi = async (range: { from: number; to: number }) => {
+      asked.push(range)
+      return { points: [], nextFrom: null }
+    }
+    const closedBefore30 = (date: number) => date < 30
+    const whole = await joinTiled({ points, coveredTo: 100 }, closedBefore30, { from: 0, to: 50 }, 500, fromApi)
+    expect(whole.points.map((p) => p.date)).toEqual([10, 20])
+    expect(asked).toEqual([])
+    const crossing = await joinTiled({ points, coveredTo: 45 }, null, { from: 0, to: 60 }, 500, fromApi)
+    expect(crossing.points.map((p) => p.date)).toEqual([10, 20, 30, 40])
+    expect(asked).toEqual([{ from: 45, to: 60 }])
+  })
+})

@@ -1,5 +1,6 @@
 import type { Page, PluginFacilities, SourceSpec } from '../plugins/types'
-import { isTiledMetric, pointsFromTiles } from './tiles'
+import { isTiledMetric, pointsFromTiles, type TiledPoints } from './tiles'
+import { closedFilter } from '../plugins/bars'
 
 // The client half of the server's `books` plugin (`GET /plugins/books/values`,
 // wdashboard-server services/books.py): OANDA's 20-minute client order/position book
@@ -121,28 +122,39 @@ function fetchBooks<P extends { date: number }>(
   // rather than the whole window being handed back to the API. The split is exact — tiles
   // run to `coveredTo` exclusive and the API is asked from `coveredTo` — so no point can
   // be served twice or dropped between them.
+  //
+  // Under a bar replay only the points of bars closed by its clock: a tile holds the snapshot
+  // each bar serves, knowable at that bar's close, and nothing on the server clamps a tile
+  // (plugins/bars.ts). Until 2026-10-11 a replay read every book of the period it stood in.
   return async (range, limit) => {
-    const tiled = await pointsFromTiles<P & (BookTotalsPoint | BookProfilePoint)>(
-      metric,
-      kind,
-      vendor,
-      ticker,
-      interval,
-      range.from,
-      range.to
-    )
+    const [tiled, closed] = await Promise.all([
+      pointsFromTiles<P & (BookTotalsPoint | BookProfilePoint)>(metric, kind, vendor, ticker, interval, range.from, range.to),
+      closedFilter(`${vendor}:${ticker}`, interval)
+    ])
     if (tiled === null) return fromApi(range, limit)
-    const points = tiled.points as unknown as P[]
-    if (tiled.coveredTo >= range.to) {
-      // `limit` is the server's cap on one page; applying it here keeps a tiled read and
-      // an API read paging identically, and `nextFrom` continues from the last point.
-      const capped = points.slice(0, limit)
-      const more = capped.length < points.length
-      return { points: capped, nextFrom: more ? capped[capped.length - 1].date + 1 : null }
-    }
-    const rest = await fromApi({ from: tiled.coveredTo, to: range.to }, limit)
-    return { ...rest, points: [...points, ...rest.points] }
+    return joinTiled(tiled as unknown as TiledPoints<P>, closed, range, limit, fromApi)
   }
+}
+
+/** One page of `range` from what the tiles hold (`tiled`, read for that range) and the API for
+ * the rest, with `closed` -- under a replay -- deciding which tiled points may be seen. */
+export async function joinTiled<P extends { date: number }>(
+  tiled: TiledPoints<P>,
+  closed: ((date: number) => boolean) | null,
+  range: { from: number; to: number },
+  limit: number,
+  fromApi: (range: { from: number; to: number }, limit: number) => Promise<Page<P>>
+): Promise<Page<P>> {
+  const points = closed === null ? tiled.points : tiled.points.filter((point) => closed(point.date))
+  if (tiled.coveredTo >= range.to) {
+    // `limit` is the server's cap on one page; applying it here keeps a tiled read and an API
+    // read paging identically, and `nextFrom` continues from the last point.
+    const capped = points.slice(0, limit)
+    const more = capped.length < points.length
+    return { points: capped, nextFrom: more ? capped[capped.length - 1].date + 1 : null }
+  }
+  const rest = await fromApi({ from: tiled.coveredTo, to: range.to }, limit)
+  return { ...rest, points: [...points, ...rest.points] }
 }
 
 /** The profile source for one kind on one instrument/interval — shared by the depth
