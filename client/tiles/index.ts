@@ -2,7 +2,7 @@
 //
 // Tiles hold every *closed* calendar period, so they answer historical reads in full. The
 // one thing they never hold is the period currently forming — that comes from /getbars,
-// which is where the forming bar and the websocket already come from, and the caller joins
+// which is where the forming bar and the websocket already come from, and `join.ts` joins
 // the two at `coveredTo`.
 //
 // The join means a window crossing that boundary is answered from both, not abandoned to
@@ -20,15 +20,10 @@ import type { KLineData } from 'klinecharts'
 import { advertisedBaseIntervals, baseIntervalsFor } from '../capabilities'
 import { barsForTile } from './cache'
 import { fold, foldedCoveredTo, manifestDay, manifestTz, sourceInterval, sourceWindow } from './derive'
+import type { Tiled } from './join'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
 
 export { tilesBaseUrl } from './manifest'
-
-export interface TiledBars {
-  bars: KLineData[]
-  /** Exclusive instant the tiles run to; `[coveredTo, to]` is the caller's to fetch. */
-  coveredTo: number
-}
 
 /** Every bar the manifest's tiles hold in `[from, to)`, or null if any of them will not load.
  * Null is never "no bars": a tile that will not load must fall back for the whole window
@@ -64,7 +59,7 @@ export async function barsFromTiles(
   from: number,
   to: number,
   advertised: (vendor: string) => string[] | null = advertisedBaseIntervals
-): Promise<TiledBars | null> {
+): Promise<Tiled<KLineData> | null> {
   const [vendor, symbol] = vendorSymbol.includes(':')
     ? vendorSymbol.split(':', 2)
     : ['oanda', vendorSymbol]
@@ -80,7 +75,7 @@ export async function barsFromTiles(
     if (span === null) return null
     // The right edge stops at the split boundary rather than at `to`.
     const bars = await barsInWindow(manifest, from, Math.min(to, span.coveredTo))
-    return bars === null ? null : { bars, coveredTo: span.coveredTo }
+    return bars === null ? null : { items: bars, coveredTo: span.coveredTo }
   }
   return foldedFromTiles(vendor, symbol, resolution, from, to, tiled ?? baseIntervalsFor(vendor))
 }
@@ -101,7 +96,7 @@ async function foldedFromTiles(
   from: number,
   to: number,
   bases: string[]
-): Promise<TiledBars | null> {
+): Promise<Tiled<KLineData> | null> {
   const code = sourceInterval(resolution, bases)
   if (code === null) return null
   const manifest = await manifestFor(vendor, symbol, code)
@@ -119,7 +114,7 @@ async function foldedFromTiles(
   // open, and nothing exists in between). Reading past it would refuse the read outright and
   // lose that candle.
   const sourceTo = Math.min(window.to, manifest.coveredTo)
-  if (sourceTo <= window.from) return { bars: [], coveredTo }
+  if (sourceTo <= window.from) return { items: [], coveredTo }
 
   const rows = await barsInWindow(manifest, window.from, sourceTo)
   if (rows === null) return null
@@ -127,5 +122,5 @@ async function foldedFromTiles(
   const bars = fold(resolution, code, rows, tz, day).filter(
     (bar) => bar.timestamp >= from && bar.timestamp < Math.min(to, coveredTo)
   )
-  return { bars, coveredTo }
+  return { items: bars, coveredTo }
 }

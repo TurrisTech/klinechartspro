@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { KLineData } from 'klinecharts'
-import { dropMarketClosedBars, isLegalCandleOpen } from './marketclosed'
+import { isLegalCandleOpen, legalCandleOpens } from './marketclosed'
 import { dayGeometryOf } from './daygeometry'
 import type { MarketHours } from './symbols'
 
@@ -120,7 +120,12 @@ describe('isLegalCandleOpen — US equities', () => {
   })
 })
 
-describe('dropMarketClosedBars', () => {
+describe('legalCandleOpens', () => {
+  const kept = (bars: KLineData[], resolution: string, hours: MarketHours | null | undefined): KLineData[] => {
+    const legal = legalCandleOpens(resolution, hours)
+    return legal === null ? bars : bars.filter(legal)
+  }
+
   test('keeps the legal labels and drops the rest', () => {
     const bars = [
       bar(wireDay('2013-01-31', EST)),
@@ -128,7 +133,7 @@ describe('dropMarketClosedBars', () => {
       bar(wireDay('2013-02-03', EST)), // the Sat 17:00 open, dated Sunday
       bar(wireDay('2013-02-04', EST))
     ]
-    expect(dropMarketClosedBars(bars, '1D', FOREX).map((b) => b.timestamp)).toEqual([
+    expect(kept(bars, '1D', FOREX).map((b) => b.timestamp)).toEqual([
       wireDay('2013-01-31', EST),
       wireDay('2013-02-01', EST),
       wireDay('2013-02-04', EST)
@@ -142,17 +147,12 @@ describe('dropMarketClosedBars', () => {
       bar(wireDay('2026-09-20', UTC)),
       bar(wireDay('2026-09-21', UTC))
     ]
-    expect(dropMarketClosedBars(bars, '1D', CRYPTO)).toHaveLength(4)
+    expect(kept(bars, '1D', CRYPTO)).toHaveLength(4)
   })
 
   test('fails open when the instrument has no schedule', () => {
-    const bars = [bar(wireDay('2013-02-03', EST))]
-    expect(dropMarketClosedBars(bars, '1D', null)).toBe(bars)
-    expect(dropMarketClosedBars(bars, '1D', undefined)).toBe(bars)
-    expect(dropMarketClosedBars(bars, '1D', { timezone: 'UTC', sessions: [] })).toBe(bars)
-  })
-
-  test('an empty window stays empty', () => {
-    expect(dropMarketClosedBars([], '1D', FOREX)).toEqual([])
+    expect(legalCandleOpens('1D', null)).toBeNull()
+    expect(legalCandleOpens('1D', undefined)).toBeNull()
+    expect(legalCandleOpens('1D', { timezone: 'UTC', sessions: [] })).toBeNull()
   })
 })

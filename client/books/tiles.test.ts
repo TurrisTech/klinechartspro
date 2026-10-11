@@ -118,7 +118,7 @@ describe.skipIf(!built)('decode', () => {
         first.to + 1
       )
       expect(answer).not.toBeNull()
-      const points = answer?.points ?? []
+      const points = answer?.items ?? []
       expect(points.length).toBeGreaterThan(0)
       for (const point of points.slice(0, 20) as {
         price: number

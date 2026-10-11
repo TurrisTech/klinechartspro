@@ -133,18 +133,19 @@ describe('a stored source answered from tiles where they cover', () => {
 })
 
 describe('a replay', () => {
-  test('reads through the server, which clamps to the replay cursor', async () => {
-    const c = expected.cases[0]
-    const calls: number[] = []
-    const server = async (range: { from: number; to: number }, _limit: number): Promise<Page<{ date: number }>> => {
-      calls.push(range.from)
+  test('reads the tiles up to the bar forming at the clock and the server from there', async () => {
+    const c = expected.cases.find((x) => x.interval === '1h') as (typeof expected.cases)[number]
+    const calls: { from: number; to: number; limit: number }[] = []
+    const server = async (range: { from: number; to: number }, limit: number): Promise<Page<{ date: number }>> => {
+      calls.push({ ...range, limit })
       return { points: [], nextFrom: null, tiles: hint(c.path) }
     }
-    let replaying = false
-    const fetch = tieredFetch('replay', server, () => replaying)
+    let horizon: number | null = null
+    const fetch = tieredFetch('replay', server, () => horizon)
     await fetch({ from: 0, to: 1 }, 10)
-    replaying = true
-    await fetch({ from: c.points[0].date, to: c.points[10].date }, 10)
-    expect(calls.length).toBe(2)
+    horizon = c.points[5].date
+    const page = await fetch({ from: c.points[0].date, to: c.points[10].date }, 10)
+    expect(page.points).toEqual(c.points.slice(0, 5) as never)
+    expect(calls.at(-1)).toEqual({ from: horizon, to: c.points[10].date, limit: 5 })
   })
 })

@@ -1,6 +1,6 @@
 import type { Page, PluginFacilities, SourceSpec } from '../plugins/types'
-import { isTiledMetric, pointsFromTiles, type TiledPoints } from './tiles'
-import { closedFilter } from '../plugins/bars'
+import { readHorizon, readTiled } from '../tiles/join'
+import { isTiledMetric, pointsFromTiles } from './tiles'
 
 // The client half of the server's `books` plugin (`GET /plugins/books/values`,
 // wdashboard-server services/books.py): OANDA's 20-minute client order/position book
@@ -99,10 +99,11 @@ function fetchBooks<P extends { date: number }>(
   interval: string,
   params: Record<string, unknown>
 ): (range: { from: number; to: number }, limit: number) => Promise<Page<P>> {
+  const vendorSymbol = `${vendor}:${ticker}`
   const fromApi = (range: { from: number; to: number }, limit: number) =>
     facilities.points<P>({
       pluginId: feed.pluginId,
-      vendorSymbol: `${vendor}:${ticker}`,
+      vendorSymbol,
       resolution: interval,
       from: range.from,
       to: range.to,
@@ -116,45 +117,21 @@ function fetchBooks<P extends { date: number }>(
   // rather than half-answering from tiles.
   if (!feed.tiles || !isTiledMetric(metric)) return fromApi
 
-  // Tiles first, the same join `client/history.ts` makes for bars. Tiles hold every closed
-  // period, so they answer the historical part of any window and only the period currently
-  // forming is missing; when the window crosses that boundary the two halves are joined
-  // rather than the whole window being handed back to the API. The split is exact — tiles
-  // run to `coveredTo` exclusive and the API is asked from `coveredTo` — so no point can
-  // be served twice or dropped between them.
-  //
-  // Under a bar replay only the points of bars closed by its clock: a tile holds the snapshot
-  // each bar serves, knowable at that bar's close, and nothing on the server clamps a tile
-  // (plugins/bars.ts). Until 2026-10-11 a replay read every book of the period it stood in.
-  return async (range, limit) => {
-    const [tiled, closed] = await Promise.all([
-      pointsFromTiles<P & (BookTotalsPoint | BookProfilePoint)>(metric, kind, vendor, ticker, interval, range.from, range.to),
-      closedFilter(`${vendor}:${ticker}`, interval)
-    ])
-    if (tiled === null) return fromApi(range, limit)
-    return joinTiled(tiled as unknown as TiledPoints<P>, closed, range, limit, fromApi)
-  }
-}
-
-/** One page of `range` from what the tiles hold (`tiled`, read for that range) and the API for
- * the rest, with `closed` -- under a replay -- deciding which tiled points may be seen. */
-export async function joinTiled<P extends { date: number }>(
-  tiled: TiledPoints<P>,
-  closed: ((date: number) => boolean) | null,
-  range: { from: number; to: number },
-  limit: number,
-  fromApi: (range: { from: number; to: number }, limit: number) => Promise<Page<P>>
-): Promise<Page<P>> {
-  const points = closed === null ? tiled.points : tiled.points.filter((point) => closed(point.date))
-  if (tiled.coveredTo >= range.to) {
-    // `limit` is the server's cap on one page; applying it here keeps a tiled read and an API
-    // read paging identically, and `nextFrom` continues from the last point.
-    const capped = points.slice(0, limit)
-    const more = capped.length < points.length
-    return { points: capped, nextFrom: more ? capped[capped.length - 1].date + 1 : null }
-  }
-  const rest = await fromApi({ from: tiled.coveredTo, to: range.to }, limit)
-  return { ...rest, points: [...points, ...rest.points] }
+  // Tiles first, the join every tile family makes (`tiles/join.ts`): the tiles for the closed
+  // periods, the API from where they stop -- under a bar replay, at the bar forming at its clock,
+  // which nothing on the server clamps in a tile. Until 2026-10-11 a replay read every book of
+  // the period it stood in.
+  return (range, limit) =>
+    readTiled<P>({
+      range,
+      limit,
+      keep: 'first',
+      date: (point) => point.date,
+      tiles: (window) =>
+        pointsFromTiles<P & (BookTotalsPoint | BookProfilePoint)>(metric, kind, vendor, ticker, interval, window.from, window.to),
+      api: (window, n) => fromApi(window, n ?? limit),
+      horizon: readHorizon(vendorSymbol, interval)
+    })
 }
 
 /** The profile source for one kind on one instrument/interval — shared by the depth

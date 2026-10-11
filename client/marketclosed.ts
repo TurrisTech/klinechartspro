@@ -67,37 +67,24 @@ export function isLegalCandleOpen(
   return scheduleIsMarketOpen(at, tz, day) && scheduleIntervalStart(resolution, at, tz, day) === at
 }
 
-/** `bars` without the ones whose label is not a legal candle open for `hours`.
+/** `isLegalCandleOpen` as a test of one bar of `resolution` under `hours`, built once per window
+ * rather than per row (the wire shift parses the interval code). `history.ts` hands it to the tile
+ * join as `admit`, which applies it to both halves of a window before `limit`'s tail -- walking
+ * back from the end, so a widened window does not pay to test every row it will discard: at 5s a
+ * week of tile rows is ~70k bars and each test is a timezone conversion, ~220 ms on the main
+ * thread to keep 500 of them.
  *
- * FAILS OPEN. An instrument with no schedule -- `/instrument` unreachable, an unknown symbol,
- * a schedule with no sessions -- is not filtered at all. Dropping bars on a guess about the
- * week is far worse than drawing a few the indicators cannot annotate, and it is the same
- * choice `tiles/derive.ts` makes when a manifest carries no geometry.
- *
- * `last`, when given, keeps only the newest `last` legal bars -- and finds them walking back
- * from the end, so a widened window does not pay to test every row it will discard. At 5s a
- * week of tile rows is ~70k bars and each test is a timezone conversion: ~220 ms on the main
- * thread to keep 500 of them. */
-export function dropMarketClosedBars(
-  bars: KLineData[],
-  resolution: string,
-  hours: MarketHours | null | undefined,
-  last?: number
-): KLineData[] {
+ * FAILS OPEN: null, keeping every bar, for an instrument with no schedule -- `/instrument`
+ * unreachable, an unknown symbol, a schedule with no sessions. Dropping bars on a guess about the
+ * week is far worse than drawing a few the indicators cannot annotate, and it is the same choice
+ * `tiles/derive.ts` makes when a manifest carries no geometry. */
+export function legalCandleOpens(resolution: string, hours: MarketHours | null | undefined): ((bar: KLineData) => boolean) | null {
   const day = dayGeometryOf(hours)
-  if (day === null || !hours) return last === undefined ? bars : bars.slice(-last)
+  if (day === null || !hours) return null
   const tz = hours.timezone
   const shift = scheduleWireShift(resolution, day)
-  // Inlined rather than calling `isLegalCandleOpen` per bar so the wire shift -- which parses
-  // the interval code -- is computed once for the window rather than once per row.
-  const legal = (bar: KLineData): boolean => {
+  return (bar) => {
     const at = bar.timestamp - shift
     return scheduleIsMarketOpen(at, tz, day) && scheduleIntervalStart(resolution, at, tz, day) === at
   }
-  if (last === undefined) return bars.filter(legal)
-  const kept: KLineData[] = []
-  for (let index = bars.length - 1; index >= 0 && kept.length < last; index--) {
-    if (legal(bars[index])) kept.push(bars[index])
-  }
-  return kept.reverse()
 }

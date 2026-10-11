@@ -2,9 +2,10 @@ import type { KLineData } from 'klinecharts'
 import { capabilities } from './capabilities'
 import { apiGet, OhlcvApiError, type QueryParams } from './config'
 import { instrumentConfig } from './instrumentconfig'
-import { dropMarketClosedBars } from './marketclosed'
+import { legalCandleOpens } from './marketclosed'
 import { barToKLineData, isNoData, type GetBarsResponse, type OHLCVBar } from './ohlcv'
 import { barsFromTiles } from './tiles'
+import { readHorizon, readTiled } from './tiles/join'
 
 // How many times an empty window may be widened before we accept that history really is
 // exhausted. Each attempt DOUBLES the span, so the reach is 2^6 = 64x the chart's own
@@ -22,11 +23,16 @@ const MIN_WIDENING_REACH_MS = 7 * 86_400_000
 const MAX_WIDENING_ATTEMPTS_HARD = 24
 
 /**
- * One window of bars: tiles for the closed part, the API for whatever is left.
+ * One window of bars: tiles for the closed part, the API for whatever is left
+ * (`tiles/join.ts`), the last `limit` of them when given.
  *
- * Exported because the AREV21 MTF overlay needs the same thing for its bar GRID and used to
- * ask `/getbars` directly, which meant panning through tiled history still hit the API once
- * per grid window per source timeframe.
+ * Exported because the plugins' own bar reads (`plugins/bars.ts`) and the AREV21 MTF overlay's
+ * bar GRID need the same thing, and the overlay used to ask `/getbars` directly, which meant
+ * panning through tiled history still hit the API once per grid window per source timeframe.
+ *
+ * Under a bar replay the tiles stop at the bar forming at the clock and the API -- clamped to
+ * it, the forming bar rebuilt from the rows that had closed -- answers from there, for the chart
+ * and for every plugin alike.
  */
 export async function fetchBars(
   vendorSymbol: string,
@@ -35,52 +41,38 @@ export async function fetchBars(
   to: number,
   limit: number | null
 ): Promise<KLineData[]> {
-  // Tiles first. They hold every closed calendar period, so they answer the historical part
-  // of any window; only the period currently forming is missing from them. When the window
-  // crosses that boundary the two halves are joined rather than the whole window being
-  // handed to the API — so a pan into recent history still costs no network for the part
-  // already on disk, and any gap left in the result is a real market gap.
-  //
-  // The split is exact: tiles run to `coveredTo` exclusive and the API is asked from
-  // `coveredTo`, so no bar can be served twice or dropped between them. Tiles reaching `to`
-  // itself answer the window alone (`to` is exclusive): asking the API for `[to, to)` was a
-  // request for nothing, and the volume profile stopped a millisecond short of every tile
-  // edge to avoid it.
-  //
   // The schedule lookup is started alongside the tile read rather than before it: both are
   // cached for the life of the page, so only the first window per instrument pays anything at
   // all, and overlapping them makes that first one cost the larger of the two, not the sum.
   const config = instrumentConfig(vendorSymbol)
-  const tiled = await barsFromTiles(vendorSymbol, resolution, from, to)
-  const hours = (await config)?.marketHours
-  // Market-closed labels are dropped HERE, at the one seam both halves of the window pass
-  // through, and always BEFORE `limit`'s tail: trimming first would hand back fewer than
-  // `limit` bars from an already-trimmed array.
-  const keep = (bars: KLineData[]): KLineData[] =>
-    dropMarketClosedBars(bars, resolution, hours, limit === null ? undefined : limit)
-  if (tiled !== null && tiled.coveredTo >= to) {
-    // `limit` means "the last n bars", which the server would have applied for us.
-    return keep(tiled.bars)
-  }
-
-  const body = await apiGet<GetBarsResponse>('/getbars', {
-    symbol: vendorSymbol,
-    resolution,
-    from: tiled === null ? from : tiled.coveredTo,
-    to,
-    // Bounding the reply by bar count rather than by range is what makes widening safe: a
-    // widened window that turns out to straddle dense data would otherwise blow the
-    // maxBarsPerRequest cap and 413. `limit` keeps the LAST n bars and skips that check --
-    // which only suits a query anchored at `to` (direction: 'older', below). `null` omits
-    // the param outright, relying on the caller having bounded the range itself instead.
-    limit: limit === null ? undefined : Math.min(limit, capabilities().limits.maxBarsPerRequest)
+  const page = await readTiled<KLineData>({
+    range: { from, to },
+    limit,
+    keep: 'last',
+    date: (bar) => bar.timestamp,
+    tiles: (range) => barsFromTiles(vendorSymbol, resolution, range.from, range.to),
+    api: async (range, last) => {
+      const body = await apiGet<GetBarsResponse>('/getbars', {
+        symbol: vendorSymbol,
+        resolution,
+        from: range.from,
+        to: range.to,
+        // Bounding the reply by bar count rather than by range is what makes widening safe: a
+        // widened window that turns out to straddle dense data would otherwise blow the
+        // maxBarsPerRequest cap and 413. `limit` keeps the LAST n bars and skips that check --
+        // which only suits a query anchored at `to` (direction: 'older', below). `null` omits
+        // the param outright, relying on the caller having bounded the range itself instead.
+        limit: last === null ? undefined : Math.min(last, capabilities().limits.maxBarsPerRequest)
+      })
+      // `no_data` is the documented empty answer; `[]` is never sent.
+      return { points: isNoData(body) || !Array.isArray(body) ? [] : body.map(barToKLineData), nextFrom: null }
+    },
+    horizon: readHorizon(vendorSymbol, resolution),
+    // Market-closed labels are dropped from both halves, before `limit`'s tail: trimming first
+    // would hand back fewer than `limit` bars.
+    admit: config.then((c) => legalCandleOpens(resolution, c?.marketHours))
   })
-  // `no_data` is the documented empty answer; `[]` is never sent.
-  const fetched = isNoData(body) || !Array.isArray(body) ? [] : body.map(barToKLineData)
-  if (tiled === null) return keep(fetched)
-  // The forming period can legitimately hold no bars yet (a request landing in a weekend,
-  // or moments after a period opens), which is not a reason to discard the tiled history.
-  return keep(tiled.bars.concat(fetched))
+  return page.points
 }
 
 // A history fetch covers one fixed-size window, and KLineChart Pro treats an empty response

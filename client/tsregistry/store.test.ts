@@ -205,7 +205,7 @@ describe('the registry pane and the MTF overlay read the same series into separa
     expect(overlay?.resolution).toBe(pane.resolution)
   })
 
-  test('the stored source asks the wire the registry gave it', () => {
+  test('the stored source asks the wire the registry gave it', async () => {
     const seen: Array<Record<string, unknown>> = []
     const facilities = {
       points: async (request: Record<string, unknown>) => {
@@ -213,7 +213,7 @@ describe('the registry pane and the MTF overlay read the same series into separa
         return { points: [], nextFrom: null }
       }
     } as unknown as PluginFacilities
-    storedSource(facilities, arev21Entry, ctx('1h')).fetch({ from: 1, to: 2 }, 100)
+    await storedSource(facilities, arev21Entry, ctx('1h')).fetch({ from: 1, to: 2 }, 100)
     expect(seen[0].pluginId).toBe('arev')
     expect(seen[0].variant).toBe('arev21')
   })

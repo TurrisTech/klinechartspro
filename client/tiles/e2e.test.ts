@@ -75,7 +75,7 @@ describe('barsFromTiles over the real tile store', () => {
   test.skipIf(!eurusd)('serves a historical 1m window with correctly unscaled prices', async () => {
     const from = Date.UTC(2024, 2, 4, 0, 0)
     const to = Date.UTC(2024, 2, 4, 8, 0)
-    const { bars } = present(await barsFromTiles('oanda:EURUSD', '1m', from, to), 'tiled bars')
+    const { items: bars } = present(await barsFromTiles('oanda:EURUSD', '1m', from, to), 'tiled bars')
     expect(bars.length).toBeGreaterThan(400)
 
     // In the window, ordered, with sane OHLC relationships and a price magnitude only a
@@ -93,7 +93,7 @@ describe('barsFromTiles over the real tile store', () => {
   })
 
   test.skipIf(!usdjpy)('unscales a 3-decimal instrument by its own precision, not a global one', async () => {
-    const { bars } = present(
+    const { items: bars } = present(
       await barsFromTiles('oanda:USDJPY', '1m', Date.UTC(2024, 2, 4, 0), Date.UTC(2024, 2, 4, 4)),
       'tiled bars'
     )
@@ -103,7 +103,7 @@ describe('barsFromTiles over the real tile store', () => {
   })
 
   test.skipIf(!eurusd)('joins consecutive tiles across a month boundary without a gap or duplicate', async () => {
-    const { bars } = present(
+    const { items: bars } = present(
       await barsFromTiles('oanda:EURUSD', '1m', Date.UTC(2024, 1, 29, 20), Date.UTC(2024, 2, 1, 4)),
       'tiled bars'
     )
@@ -118,7 +118,7 @@ describe('barsFromTiles over the real tile store', () => {
     const tiled = await barsFromTiles('oanda:EURUSD', '1m', edge - 30 * 86_400_000, to)
     // A window reaching past the tiles is answered in part, not refused: tiles carry the
     // closed periods and coveredTo says where /getbars must pick up.
-    const { bars, coveredTo } = present(tiled, 'a partial tiled answer')
+    const { items: bars, coveredTo } = present(tiled, 'a partial tiled answer')
     expect(bars.length).toBeGreaterThan(0)
     expect(coveredTo).toBe(edge)
     expect(coveredTo).toBeLessThan(to)

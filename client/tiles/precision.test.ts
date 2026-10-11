@@ -86,7 +86,7 @@ describe('barsFromTiles unscales by the manifest’s precision', () => {
     const m = manifests.get('XRPUSD') as TileManifest
     const tiled = await barsFromTiles('coinbase:XRPUSD', '1M', ...window(m))
     expect(tiled).not.toBeNull()
-    const bars = tiled?.bars ?? []
+    const bars = tiled?.items ?? []
     expect(bars.length).toBe(62)
     const december2020 = bars.find((b) => new Date(b.timestamp).toISOString().startsWith('2020-12'))
     // The same figure int64volume.test.ts reads straight off decodeTile: the read path adds
@@ -98,8 +98,8 @@ describe('barsFromTiles unscales by the manifest’s precision', () => {
   test('the same bytes under a manifest claiming another precision come back scaled by it', async () => {
     const four = await barsFromTiles('coinbase:XRPUSD', '1M', ...window(manifests.get('XRPUSD') as TileManifest))
     const five = await barsFromTiles('coinbase:XRPUSD5', '1M', ...window(manifests.get('XRPUSD5') as TileManifest))
-    const a = four?.bars ?? []
-    const b = five?.bars ?? []
+    const a = four?.items ?? []
+    const b = five?.items ?? []
     expect(b.length).toBe(a.length)
     expect(a.length).toBeGreaterThan(0)
     // Exactly one power of ten apart on every price, and untouched on what is not a price.

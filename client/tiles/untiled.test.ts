@@ -75,7 +75,7 @@ describe('barsFromTiles asks only for the trees the server says exist', () => {
     const quarters = await barsFromTiles('coinbase:XRPQ', '3M', monthly.coveredFrom, monthly.coveredTo, () => COINBASE)
     expect(manifestsAsked('XRPQ')).toEqual(['XRPQ/1M'])
     // Still answered, folded: every bar opens a calendar quarter.
-    const bars = quarters?.bars ?? []
+    const bars = quarters?.items ?? []
     expect(bars.length).toBeGreaterThan(15)
     for (const bar of bars) {
       const at = new Date(bar.timestamp)
@@ -93,6 +93,6 @@ describe('barsFromTiles asks only for the trees the server says exist', () => {
   test('a tiled interval reads its own tree and nothing else', async () => {
     const months = await barsFromTiles('coinbase:XRPM', '1M', monthly.coveredFrom, monthly.coveredTo, () => COINBASE)
     expect(manifestsAsked('XRPM')).toEqual(['XRPM/1M'])
-    expect(months?.bars.length).toBe(62)
+    expect(months?.items.length).toBe(62)
   })
 })

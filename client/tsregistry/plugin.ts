@@ -1,5 +1,5 @@
 import type { IndicatorGroup } from '../../src'
-import { apiUrl, getReadClock } from '../config'
+import { apiUrl } from '../config'
 import { resolveSeries, type IndicatorPoint, type SeriesDoc } from '../indicators/api'
 import { fetchEnvelope, loadPluginCatalogue, type PluginCatalogue, toPage } from '../plugins/api'
 import type {
@@ -16,6 +16,7 @@ import type {
 import type { Feature } from '../capabilities'
 import type { IndicatorListener, PluginPointListener } from '../stream'
 import { tieredFetch } from '../indicatortiles/source'
+import { readHorizon } from '../tiles/join'
 import { loadRegistry, type RegistryIndicator, type RegistryWire } from './api'
 import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore } from './store'
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
@@ -267,7 +268,7 @@ export function storedSource(
           variant: entry.wire.variant ?? undefined,
           ...(Object.keys(params).length > 0 ? { params } : {})
         }),
-      () => getReadClock() !== null
+      () => readHorizon(`${ctx.vendor}:${ctx.ticker}`, ctx.interval)
     ),
     subscribe: storedSubscribe(f, entry, ctx)
   }
