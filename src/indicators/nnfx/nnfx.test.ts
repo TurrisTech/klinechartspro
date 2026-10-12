@@ -5,6 +5,7 @@ import type { Indicator, IndicatorTemplate, KLineData } from 'klinecharts'
 import { indicatorSettingsFor } from '../../config/indicators'
 import libraryFixture from './fixtures/library_parity.json'
 import fixture from './fixtures/parity.json'
+import wscanFixture from './fixtures/wscan_parity.json'
 import nnfx from './index'
 import { trendAges } from './paint'
 
@@ -64,9 +65,13 @@ function same(actual: number | undefined, expected: number | null): boolean {
 }
 
 describe('parity with the NNFX research ports (notes/research/NoNonSenseForex/nnfx/ports)', () => {
-  test('the fixture is the generated one, and with library_parity.json covers every template', () => {
+  test('the fixture is the generated one, and with library_parity.json and wscan_parity.json covers every template', () => {
     expect(fixture.$comment).toContain('gen_nnfx_chart_parity.py')
-    const covered = new Set([...fixture.cases.map((c) => c.template), ...libraryFixture.cases.map((c) => c.template)])
+    const covered = new Set([
+      ...fixture.cases.map((c) => c.template),
+      ...libraryFixture.cases.map((c) => c.template),
+      ...wscanFixture.cases.map((c) => c.template)
+    ])
     expect(covered).toEqual(new Set(templates.keys()))
   })
 

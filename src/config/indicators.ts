@@ -229,6 +229,72 @@ const builtin = {
     { paramNameKey: 'atr_period', precision: 0, min: 1, default: 14 },
     { paramNameKey: 'atr_method', precision: 0, min: 0, max: 1, default: 0 }
   ],
+  // The windicators NNFX scan's top baseline systems (src/indicators/nnfx/README.md). Each
+  // default is the setting a system ran; `wscan_inverted` 1 is the way round it tested.
+  HWMA: [
+    { paramNameKey: 'hw_na', precision: 3, min: 0.001, max: 0.999, default: 0.3 },
+    { paramNameKey: 'hw_nb', precision: 3, min: 0.001, max: 0.999, default: 0.067 },
+    { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 0.999, default: 0.15 }
+  ],
+  HWC: [
+    { paramNameKey: 'hwc_scalar', precision: 2, min: 0.01, max: 100, default: 1.5 },
+    { paramNameKey: 'hw_na', precision: 3, min: 0.001, max: 1, default: 0.3 },
+    { paramNameKey: 'hw_nb', precision: 3, min: 0.001, max: 1, default: 0.067 },
+    { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 1, default: 0.1 },
+    { paramNameKey: 'hw_nd', precision: 3, min: 0.001, max: 1, default: 0.1 }
+  ],
+  HWC_PCT: [
+    { paramNameKey: 'hwc_scalar', precision: 2, min: 0.01, max: 100, default: 1.5 },
+    { paramNameKey: 'hw_na', precision: 3, min: 0.001, max: 1, default: 0.3 },
+    { paramNameKey: 'hw_nb', precision: 3, min: 0.001, max: 1, default: 0.15 },
+    { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 1, default: 0.225 },
+    { paramNameKey: 'hw_nd', precision: 3, min: 0.001, max: 1, default: 0.175 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 8 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  TCF: [
+    { paramNameKey: 'tcf_n', precision: 0, min: 0, default: 15 },
+    { paramNameKey: 'tcf_t3', precision: 1, min: 0, default: 10 },
+    { paramNameKey: 'tcf_b', precision: 4, min: 0, default: 1.0815 },
+    { paramNameKey: 'tcf_count', precision: 0, min: 1, max: 5000, default: 500 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  VWMACD: [
+    { paramNameKey: 'macd_fast', precision: 0, min: 1, default: 9 },
+    { paramNameKey: 'macd_slow', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'macd_signal', precision: 0, min: 1, default: 9 },
+    { paramNameKey: 'vwmacd_sma', precision: 0, min: 0, max: 1, default: 0 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  MACDEXT: [
+    { paramNameKey: 'macd_fast', precision: 0, min: 2, default: 24 },
+    { paramNameKey: 'macd_slow', precision: 0, min: 2, default: 26 },
+    { paramNameKey: 'macd_signal', precision: 0, min: 1, default: 4 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  BANDPASS_J: [
+    { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 30 },
+    { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.1206 }
+  ],
+  KALMAN: [
+    { paramNameKey: 'kalman_q', precision: 6, min: 0.000001, default: 0.0001 },
+    { paramNameKey: 'kalman_r', precision: 6, min: 0.000001, default: 0.000804 },
+    { paramNameKey: 'kalman_horizon', precision: 0, min: 1, default: 6 }
+  ],
+  KST: [
+    { paramNameKey: 'kst_roc1', precision: 0, min: 1, default: 10 },
+    { paramNameKey: 'kst_roc2', precision: 0, min: 1, default: 15 },
+    { paramNameKey: 'kst_roc3', precision: 0, min: 1, default: 40 },
+    { paramNameKey: 'kst_roc4', precision: 0, min: 1, default: 15 },
+    { paramNameKey: 'kst_sma1', precision: 0, min: 1, default: 11 },
+    { paramNameKey: 'kst_sma2', precision: 0, min: 1, default: 5 },
+    { paramNameKey: 'kst_sma3', precision: 0, min: 1, default: 6 },
+    { paramNameKey: 'kst_sma4', precision: 0, min: 1, default: 30 },
+    { paramNameKey: 'kst_signal', precision: 0, min: 1, default: 4 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 0 }
+  ],
   TRIX: [
     { paramNameKey: 'params_1', precision: 0, min: 1, default: 12 },
     { paramNameKey: 'params_2', precision: 0, min: 1, default: 9 }
