@@ -237,18 +237,18 @@ const builtin = {
     { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 0.999, default: 0.15 }
   ],
   HWC: [
-    { paramNameKey: 'hwc_scalar', precision: 2, min: 0.01, max: 100, default: 1.5 },
+    { paramNameKey: 'hwc_scalar', precision: 2, min: 0.01, max: 100, default: 1 },
     { paramNameKey: 'hw_na', precision: 3, min: 0.001, max: 1, default: 0.3 },
     { paramNameKey: 'hw_nb', precision: 3, min: 0.001, max: 1, default: 0.067 },
-    { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 1, default: 0.1 },
+    { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 1, default: 0.15 },
     { paramNameKey: 'hw_nd', precision: 3, min: 0.001, max: 1, default: 0.1 }
   ],
   HWC_PCT: [
-    { paramNameKey: 'hwc_scalar', precision: 2, min: 0.01, max: 100, default: 1.5 },
+    { paramNameKey: 'hwc_scalar', precision: 2, min: 0.01, max: 100, default: 0.67 },
     { paramNameKey: 'hw_na', precision: 3, min: 0.001, max: 1, default: 0.3 },
     { paramNameKey: 'hw_nb', precision: 3, min: 0.001, max: 1, default: 0.15 },
     { paramNameKey: 'hw_nc', precision: 3, min: 0.001, max: 1, default: 0.225 },
-    { paramNameKey: 'hw_nd', precision: 3, min: 0.001, max: 1, default: 0.175 },
+    { paramNameKey: 'hw_nd', precision: 3, min: 0.001, max: 1, default: 0.165 },
     { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 8 },
     { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
   ],
@@ -275,12 +275,14 @@ const builtin = {
   ],
   BANDPASS_J: [
     { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 30 },
-    { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.1206 }
+    { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.1206 },
+    { paramNameKey: 'bpj_warmup', precision: 0, min: 0, max: 1, default: 1 }
   ],
   BANDPASS_J_RAW: [
     { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 36 },
     { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.2412 },
-    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'bpj_warmup', precision: 0, min: 0, max: 1, default: 1 }
   ],
   IS_CALC: [
     { paramNameKey: 'is_period', precision: 0, min: 1, default: 5 },
@@ -289,9 +291,32 @@ const builtin = {
     { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
   ],
   KALMAN: [
-    { paramNameKey: 'kalman_q', precision: 6, min: 0.000001, default: 0.0001 },
-    { paramNameKey: 'kalman_r', precision: 6, min: 0.000001, default: 0.000804 },
-    { paramNameKey: 'kalman_horizon', precision: 0, min: 1, default: 6 }
+    { paramNameKey: 'kalman_q', precision: 6, min: 0.000001, default: 0.00015 },
+    { paramNameKey: 'kalman_r', precision: 6, min: 0.000001, default: 0.00067 },
+    { paramNameKey: 'kalman_horizon', precision: 0, min: 1, default: 2 }
+  ],
+  TURTLE: [
+    { paramNameKey: 'turtle_trade', precision: 0, min: 1, default: 10 },
+    { paramNameKey: 'turtle_stop', precision: 0, min: 1, default: 5 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  PTL: [
+    { paramNameKey: 'ptl_slow', precision: 0, min: 1, default: 10 },
+    { paramNameKey: 'ptl_fast', precision: 0, min: 1, default: 2 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  VOSS: [
+    { paramNameKey: 'voss_period', precision: 0, min: 1, default: 36 },
+    { paramNameKey: 'voss_predict', precision: 0, min: 0, default: 2 },
+    { paramNameKey: 'voss_bandwidth', precision: 4, min: 0.0001, default: 0.1675 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'voss_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  VP_POC: [
+    { paramNameKey: 'vp_period', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'vp_value_area', precision: 2, min: 0, max: 1, default: 0.63 },
+    { paramNameKey: 'vp_tick', precision: 4, min: 0.0001, default: 0.055 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
   ],
   KST: [
     { paramNameKey: 'kst_roc1', precision: 0, min: 1, default: 10 },

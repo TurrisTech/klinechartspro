@@ -15,7 +15,7 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
 
 import { countParam, realParam, value } from './mt4'
-import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, withAlpha } from './paint'
+import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, warmupMark, withAlpha } from './paint'
 
 /**
  * BANDPASS_J -- Ehlers' band-pass filter as jesse 3.2.4 computes it (windicators
@@ -23,7 +23,7 @@ import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, w
  * scan's systems 3 and 5 and of its best system overall, at period 30, bandwidth 0.1206. Not the
  * BANDPASS template (mladen's MT4 filter, a different formula).
  *
- * Parameters: [period, bandwidth], default [30, 0.1206] (jesse's own: 20, 0.3).
+ * Parameters: [period, bandwidth, warm-up], default [30, 0.1206, 1] (jesse's own: 20, 0.3).
  *
  *   hp      = a one-pole high-pass of the close, period 4 x period / bandwidth
  *   bp      = 0.5 (1 - alpha)(hp - hp[2]) + beta (1 + alpha) bp[1] - alpha bp[2],
@@ -36,10 +36,16 @@ import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, w
  * The C2 reading the scan tested is that signal as it is: it confirms long while +1. The area
  * between the two lines is shaded in the colour of the signal.
  *
- * Mind the warm-up. jesse seeds the high-pass with the close itself, and at the scan's setting its
- * period is 4 x 30 / 0.1206, about 1,000 bars, so the seed rings for several hundred bars after the
- * oldest bar the chart has loaded. The scan computed it from the start of the history (2005 on
- * 1D); trust it only well past the start of the loaded data.
+ * The warm-up. jesse seeds the high-pass with the close itself: the line starts at the price level
+ * and the seed decays by (1 - a) a bar, where a is the high-pass's coefficient at period
+ * 4 x period / bandwidth (about 1,000 bars at the scan's setting). The scan computed it from the
+ * start of the history (2005 on 1D); a chart computes it from the oldest bar it has loaded. With
+ * `warm-up` 1 (the default) the template leaves the first `seedWarmup` bars blank: until the seed
+ * is below 1e-4 of where it started, 1,459 bars at 30 / 0.1206 and 876 at 36 / 0.2412. Measured on
+ * the 28 prod pairs at 1D, 8h, 4h and 1h (2026-10-14), from 252-868 start points each: from there
+ * on the line is within 0.6% of its median size of the line computed from 2005, and the signal
+ * agrees on 99.98% of bars; at bar 500 it disagreed on 18% (BANDPASS_J, 1D). A dashed line marks
+ * the first bar drawn, and a note says how much history is missing. 0 draws from the first bar.
  *
  * Locked to windicators by fixtures/wscan_parity.json.
  */
@@ -89,23 +95,43 @@ export function bandPassJesse(close: readonly number[], period: number, bandwidt
   return { bp, norm, trigger, signal }
 }
 
-function bandPassJSettings(calcParams: readonly unknown[], defaults: readonly number[]): { period: number; bandwidth: number } {
+/**
+ * The bars the seed in jesse's high-pass takes to fall below 1e-4 of where it started: the seed
+ * decays by (1 - a) a bar, a being highPass1Pole's coefficient at period 4 x period / bandwidth.
+ */
+export function seedWarmup(period: number, bandwidth: number): number {
+  const p = (4 * period) / bandwidth
+  const alpha = 1 + (Math.sin((2 * Math.PI) / p) - 1) / Math.cos((2 * Math.PI) / p)
+  if (!(alpha > 0 && alpha < 1)) return 0
+  return Math.ceil(Math.log(1e-4) / Math.log(1 - alpha))
+}
+
+function bandPassJSettings(
+  calcParams: readonly unknown[],
+  defaults: readonly number[],
+  warmAt: number
+): { period: number; bandwidth: number; warm: number } {
   const period = Math.min(100000, countParam(calcParams[0], defaults[0], 2))
   // jesse requires 0 < bandwidth < period / 4.
   const bandwidth = Math.min(period / 4 - 1e-9, realParam(calcParams[1], defaults[1], 1e-6))
-  return { period, bandwidth }
+  const warm = countParam(calcParams[warmAt], 1, 0) >= 1 ? seedWarmup(period, bandwidth) : 0
+  return { period, bandwidth, warm }
 }
 
+const DEFAULTS = [30, 0.1206, 1]
+
 export function bandPassJRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJ[] {
-  const { period, bandwidth } = bandPassJSettings(calcParams, [30, 0.1206])
+  const { period, bandwidth, warm } = bandPassJSettings(calcParams, DEFAULTS, 2)
   const r = bandPassJesse(bars.map((b) => b.close), period, bandwidth)
-  return r.bp.map((b, i) => ({ bp: value(b), norm: value(r.norm[i]), trigger: value(r.trigger[i]), signal: r.signal[i] }))
+  return r.bp.map((b, i) =>
+    i < warm ? {} : { bp: value(b), norm: value(r.norm[i]), trigger: value(r.trigger[i]), signal: r.signal[i] }
+  )
 }
 
 const bandPassJ: IndicatorTemplate<BandPassJ, number> = {
   name: 'BANDPASS_J',
   shortName: 'Band-Pass (jesse)',
-  calcParams: [30, 0.1206],
+  calcParams: DEFAULTS,
   precision: 3,
   figures: [
     { key: 'norm', title: 'BP: ', type: 'line' },
@@ -118,6 +144,7 @@ const bandPassJ: IndicatorTemplate<BandPassJ, number> = {
     fillBetween(ctx, xAxis, yAxis, indicator.result, 'norm', 'trigger', drawRange(chart, indicator.result.length),
       withAlpha(down, 0.2), withAlpha(up, 0.2))
     guide(ctx, bounding, yAxis, 0, guideColor(chart), false)
+    warmupMark(ctx, chart, bounding, xAxis, indicator.result.length, bandPassJSettings(indicator.calcParams, DEFAULTS, 2).warm)
     return false
   }
 }
@@ -128,13 +155,14 @@ export interface BandPassJRaw {
   state?: number
 }
 
-const RAW_DEFAULTS = [36, 0.2412, 1]
+const RAW_DEFAULTS = [36, 0.2412, 1, 1]
 
 export function bandPassJRawRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJRaw[] {
-  const { period, bandwidth } = bandPassJSettings(calcParams, RAW_DEFAULTS)
+  const { period, bandwidth, warm } = bandPassJSettings(calcParams, RAW_DEFAULTS, 3)
   const dir = countParam(calcParams[2], 1, 0) >= 1 ? -1 : 1
   const r = bandPassJesse(bars.map((b) => b.close), period, bandwidth)
-  return r.bp.map((b) => {
+  return r.bp.map((b, i) => {
+    if (i < warm) return {}
     const row: BandPassJRaw = { bp: value(b) }
     if (row.bp !== undefined) row.state = dir * Math.sign(row.bp)
     return row
@@ -146,12 +174,12 @@ export function bandPassJRawRows(bars: readonly KLineData[], calcParams: readonl
  * against zero. This is the C2 of the scan's system 3 (re-ranked, README.md), at period 36,
  * bandwidth 0.2412, inverted.
  *
- * Parameters: [period, bandwidth, inverted], default [36, 0.2412, 1].
+ * Parameters: [period, bandwidth, inverted, warm-up], default [36, 0.2412, 1, 1].
  *
  * `inverted` 1 is the reading the scan tested: it confirms LONG while the raw line is BELOW zero
  * and short while above; 0 is the conventional reading. The line is drawn in the colour of the side
  * it gives. The raw line is in price units (the close high-passed and band-passed), so its scale
- * follows the pair. The warm-up note above applies: the seed rings for hundreds of bars.
+ * follows the pair. The warm-up above applies: blank for the first 876 bars at the default.
  */
 const bandPassJRaw: IndicatorTemplate<BandPassJRaw, number> = {
   name: 'BANDPASS_J_RAW',
@@ -167,8 +195,9 @@ const bandPassJRaw: IndicatorTemplate<BandPassJRaw, number> = {
     }
   ],
   calc: (dataList: KLineData[], indicator) => bandPassJRawRows(dataList, indicator.calcParams),
-  draw: ({ ctx, chart, bounding, yAxis }) => {
+  draw: ({ ctx, chart, indicator, bounding, xAxis, yAxis }) => {
     guide(ctx, bounding, yAxis, 0, guideColor(chart), false)
+    warmupMark(ctx, chart, bounding, xAxis, indicator.result.length, bandPassJSettings(indicator.calcParams, RAW_DEFAULTS, 3).warm)
     return false
   }
 }

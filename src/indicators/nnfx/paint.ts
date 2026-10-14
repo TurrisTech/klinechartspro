@@ -231,3 +231,41 @@ export function trendAges(trends: ReadonlyArray<number | undefined>): Array<numb
     return age
   })
 }
+
+/**
+ * Marks a template's warm-up, the first `warm` bars it leaves blank because they still carry its
+ * seed. With fewer bars loaded than that, a note says how many more it needs; otherwise a dashed
+ * line marks the first bar drawn, and a note stands in while the view is wholly inside the warm-up.
+ */
+export function warmupMark(
+  ctx: CanvasRenderingContext2D,
+  chart: Chart,
+  bounding: Bounding,
+  xAxis: XAxis,
+  n: number,
+  warm: number
+): void {
+  if (warm <= 0 || n === 0) return
+  const range = chart.getVisibleRange()
+  const color = guideColor(chart, 0.85)
+  ctx.save()
+  ctx.font = '11px sans-serif'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = color
+  ctx.strokeStyle = color
+  if (n <= warm) {
+    ctx.fillText(`Warming up: needs ${warm} bars of history, ${n} loaded. Scroll back to load more.`, 6, 4)
+  } else if (range.realTo < warm) {
+    ctx.fillText(`Warming up: the first ${warm} bars loaded are left blank.`, 6, 4)
+  } else if (warm >= range.realFrom) {
+    const x = Math.round(xAxis.convertToPixel(warm) - chart.getBarSpace().bar / 2) + 0.5
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 3])
+    ctx.beginPath()
+    ctx.moveTo(x, 0)
+    ctx.lineTo(x, bounding.height)
+    ctx.stroke()
+    ctx.fillText('warm-up ends', x + 4, 4)
+  }
+  ctx.restore()
+}

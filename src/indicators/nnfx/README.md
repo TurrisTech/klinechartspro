@@ -68,36 +68,49 @@ How each departs from its library:
 - **Linear-regression intercept.** It is the fitted line's value at the **oldest** bar of the
   window, as TA-Lib defines it, so it lags price by design.
 
-## The windicators scan's top baseline systems
+## The windicators scan's top systems
 
-Eleven more templates are the indicators of the best 1D systems with a real baseline from the
-**windicators NNFX scan** (2026-10-11/13): all of the `windicators` library, scanned over the last
-six years on 28 OANDA pairs (workspace repo, `notes/research/NoNonSenseForex/results/windicators-6y/`,
-finding 8). Same caveat as above: in-sample and best-of-grid, by the user's instruction. A "real"
-baseline is one the close is above 30–70% of the time; the scan's raw ranking also held lower bands
-and the Heikin Ashi low, which only switch shorts off. The ranking below is after the scan's
-averaging fix (HWC_PCT, below), which re-ranked it: systems 3 and 4 moved in, and the scan's earlier
-fourth and fifth are now sixth and seventh.
+Fifteen more templates, and `SSL`, are the indicators of the best 1D systems from the **windicators
+NNFX scan**: all of the `windicators` library, scanned over the last six years on 28 OANDA pairs
+(workspace repo, `notes/research/NoNonSenseForex/results/windicators-6y/`, finding 8). Same caveat
+as above: in-sample and best-of-grid, by the user's instruction. A "real" baseline is one the close
+is above 30–70% of the time. The ranking below is the scan's rerun of 2026-10-14, after three fixes
+that changed it: its moving-average forms are exact, it holds only two-sided baselines, and the
+pivot indicators no longer count their blocks from each pair's first bar.
 
 | # | Baseline | C1 | C2 | %/yr per pair | Pairs + |
 |---|---|---|---|---|---|
-| 1 | `HWMA` 0.3 / 0.067 / 0.15 | `HWC_PCT` 1.5 / 0.3 / 0.15 / 0.225 / 0.175, MA 8, inverted | `TCF` 15 / 10 / 1.0815, inverted | +2.60 | 26/28 |
-| 2 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `VWMACD` 9 / 20 / 9, signal vs 0, inverted | +2.14 | 21/28 |
-| 3 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `BANDPASS_J_RAW` 36 / 0.2412, raw line vs 0, inverted | +2.01 | 22/28 |
-| 4 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `IS_CALC` 5 / 22, slope vs 0, inverted | +2.00 | 23/28 |
-| 5 | `HWMA`, as 1 | `MACDEXT` 24 / 26 / 4, MA 3, inverted | `BANDPASS_J` 30 / 0.1206 | +1.98 | 24/28 |
-| 6 | `HWC` middle, 1.5 / 0.3 / 0.067 / 0.1 / 0.1 | `HWC_PCT`, as 1 | `TCF`, as 1 | +1.96 | 25/28 |
-| 7 | `KALMAN` 0.0001 / 0.000804 / 6 | `KST` 10/15/40/15, 11/5/6/30, signal 4, MA 3 | `BANDPASS_J`, as 5 | +1.96 | 25/28 |
+| 1 | `HWMA` 0.3 / 0.067 / 0.15 | `HWC_PCT` 0.67 / 0.3 / 0.15 / 0.225 / 0.165, MA 8, inverted | `TCF` 15 / 10 / 1.0815, inverted | +2.62 | 26/28 |
+| 2 | `KALMAN` 0.00015 / 0.00067 / 2 | `KST` 10/15/40/15, 11/5/6/30, signal 4, MA 3 | `BANDPASS_J` 30 / 0.1206 | +2.26 | 24/28 |
+| 3 | `KALMAN`, as 2 | `SSL` 7, HMA, read inverted | `BANDPASS_J` 30 / 0.1608 | +2.20 | 23/28 |
+| 4 | `KALMAN`, as 2 | `MACDEXT` 24 / 26 / 4, MA 3, inverted | `TURTLE` 10 / 5, inverted | +2.16 | 24/28 |
+| 5 | `KALMAN`, as 2 | `MACDEXT`, as 4 | `PTL` 10 / 2, inverted | +2.16 | 24/28 |
+| 6 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `VOSS` 36 / 2 / 0.1675, inverted | +2.14 | 22/28 |
 
 **Every template's default is the setting a system ran,** so adding it to a chart draws what was
-tested. The best system overall has no baseline: the `MACDEXT` C1 and `BANDPASS_J` C2 above
-(+3.41 together), plus an exit.
+tested. Two exceptions: system 3's `BANDPASS_J` bandwidth (0.1608; the template opens at system 2's
+0.1206) and its `SSL`, which opens at the NNFX discovery's SSL(15) and has no `inverted` setting
+(set length 7 and MA 5, HMA, and read its short as the long). The seventh system, `HWMA` + `HWC_PCT`
++ the Schaff trend cycle on EVWMA (+2.13), has no template.
+
+The scan finds every `HWMA` system twice: `HWC`'s middle line is the HWMA at the same na, nb and nc,
+and the two take the same trades. At its defaults `HWC` draws that line with bands around it.
+
+**The best system overall has no baseline:** `HWC_PCT` + `VOSS`, as above, plus the `VP_POC` exit
+at 3 / 0.63 / 0.055, inverted: +3.56, 27/28 pairs. Without the exit it makes +3.28. The best with no
+exit is `MACDEXT` + `BANDPASS_J` 30 / 0.1206, +3.41.
+
+`VWMACD`, `BANDPASS_J_RAW` and `IS_CALC` were in the scan's first top five and are no longer in a top
+system; they are kept, because removing a template breaks the layouts that saved it.
 
 | Template | Picker label | Pane | Draws |
 |---|---|---|---|
 | `HWMA` | HWMA (Holt-Winters Moving Average) | price | the line, in the up colour while the close is above it |
 | `HWC` | Holt-Winters Channel | price | middle line coloured by the close's side; bands in the neutral colour |
 | `KALMAN` | Kalman Filter Forecast | price | the `horizon`-bar forecast, coloured by the close's side |
+| `TURTLE` | Turtle Trading Channel | price | the channel line, coloured by the side it gives; the stop neutral |
+| `PTL` | Perfect Trend Line | price | the slow line, coloured by the side it gives; the fast line neutral |
+| `VP_POC` | Volume Profile POC and Value Area | price | the value area shaded, the POC, and a dot on each bar where the exit closes a trade |
 | `HWC_PCT` | HWC % | sub | the close's position in the channel (0 lower band, 1 upper) and its MA; shaded by side |
 | `MACDEXT` | MACDEXT (MACD on simple averages) | sub | MACD, signal, the signal's MA, histogram; shaded by side between signal and MA |
 | `KST` | KST (Know Sure Thing) | sub | KST, signal, the signal's MA; shaded by side between signal and MA |
@@ -106,13 +119,16 @@ tested. The best system overall has no baseline: the `MACDEXT` C1 and `BANDPASS_
 | `BANDPASS_J` | Band-Pass Filter, jesse | sub | normalised band-pass and trigger, shaded by the signal |
 | `BANDPASS_J_RAW` | Band-Pass Filter, jesse, raw line | sub | the raw band-pass line, coloured by its side of zero |
 | `IS_CALC` | IS Calculation (EMA slope) | sub | the slope, coloured by its side of zero; the trigger neutral |
+| `VOSS` | Voss Predictive Filter | sub | the band-pass `filt`, coloured by its side of zero; the predictor neutral |
 
 **"Inverted" is how the scan tested them.** Which of two lines counts as "first" is arbitrary, so
-the scan tried every C1 both ways round. Six of these won inverted: `HWC_PCT`, `MACDEXT`, `TCF`,
-`VWMACD`, `BANDPASS_J_RAW` and `IS_CALC` are long while the line is *below* its reference. Their `inverted` setting defaults
-to 1, and the shading and colours follow it; 0 gives the conventional reading. `MACDEXT` inverted
-fades moves: it agreed with the last 10 bars' direction on only 42% of bars. `BANDPASS_J` keeps
-jesse's own sign: +1, long, while the normalised line is below its trigger.
+the scan tried every reading both ways round. Ten of these won inverted: `HWC_PCT`, `MACDEXT`,
+`TCF`, `VWMACD`, `BANDPASS_J_RAW`, `IS_CALC`, `TURTLE`, `PTL`, `VOSS` and `VP_POC`. Their `inverted`
+setting defaults to 1, and the shading and colours follow it; 0 gives the conventional reading. Two
+of them fade moves outright: `MACDEXT` inverted agreed with the last 10 bars' direction on only 42%
+of bars, and `TURTLE` inverted is the channel's own trend reversed (the close is above its line
+exactly while the channel is long), a fade of 10-bar breakouts. `BANDPASS_J` keeps jesse's own
+sign: +1, long, while the normalised line is below its trigger.
 
 Where these depart from the scan or the source:
 
@@ -121,13 +137,12 @@ Where these depart from the scan or the source:
   it in the billions for its first bars. The template leaves it blank until what is left of that
   seed is below 1e-12 (about 120 bars at the defaults), and matches windicators from there. The
   slope, the system's reading, is drawn from its first bar.
-- **`HWC_PCT`'s average is exact; the scan's was not.** The channel has zero width on its first
-  three bars, where pandas-ta's percent divides by epsilon and reaches ~1e13. The scan's
-  moving-average form summed cumulatively, so that spike left errors of up to 0.37 in the 8-bar
-  average for the rest of the history. Its C1 state differed from the exact one on 0.8% of 1D
-  bars. The template leaves those three bars blank and averages exactly. The systems' figures above
-  are recomputed that way (the scan's tables said +2.55, +2.00, +1.93, +1.88, +1.98, +1.97,
-  +1.96), which re-ranked them. The C1 alone makes +2.54, not the scan's +2.67.
+- **`HWC_PCT` starts on bar 4.** The channel has zero width on its first three bars, where
+  pandas-ta's percent divides by epsilon and reaches ~1e13; the template leaves them blank, and its
+  average waits for `ma` values after them. Its `scalar` (0.67, the scan's) does not change the
+  reading: percent is 0.5 + (close − middle) / (2 · scalar · sd), so the line minus its average is
+  one fixed multiple of the same quantity at any scalar. Not one state differs at 0.67, 1.5 or 3 on
+  the 28 pairs' 1D bars.
 - **`TCF` restarts as the MQL source does,** over its last `count` bars at every bar, so each bar
   has the value it had live. When that restart cannot change a value (the T3's weight on the
   dropped bars is below 1e-20, ~1e-66 at the systems' setting), one pass over the history replaces
@@ -137,22 +152,56 @@ Where these depart from the scan or the source:
   type 11, both SMA in TA-Lib; the other MA types were not used.
 - **`KALMAN`'s noises are in price units squared,** and the scan used the same numbers on every
   pair. So the filter follows a JPY cross (~150) far more tightly than EURUSD (~1.1), as tested.
-- **`BANDPASS_J` needs a long history.** jesse seeds its high-pass with the close, and at period
-  30 / bandwidth 0.1206 that high-pass has a ~1,000-bar period, so the seed rings for several
-  hundred bars after the oldest bar loaded. The scan computed it from 2005 on 1D.
+- **`TURTLE` draws nothing before its first breakout,** and nothing on its first two bars, where the
+  source's first pass starts. A close equal to the channel's high or low is not a breakout. The
+  source's `strict` setting (a high or low through the channel also counts) is left off, as the
+  scan ran it; so are `PTL`'s pip displacements, at 0.
+- **`BANDPASS_J` and `BANDPASS_J_RAW` start blank.** jesse seeds its high-pass with the close, so
+  the line starts at the price level and rings down over the high-pass's period (4 × period /
+  bandwidth: ~1,000 bars at 30 / 0.1206, ~600 at 36 / 0.2412). The scan computed it from 2005; a
+  chart computes it from its oldest loaded bar, where the raw line swung to ±0.03 on EURUSD 1D
+  against ±0.005 once settled. Both templates leave the first bars blank until the seed is below
+  1e-4 of where it started: **1,459 bars** for `BANDPASS_J` and **876** for `BANDPASS_J_RAW` at their
+  defaults. Measured on the 28 prod pairs at 1D, 8h, 4h and 1h, from 252–868 start points each:
+  past that point the line is within 0.6% of its median size of the line computed from 2005, and
+  the reading agrees on 99.98% of bars; at bar 500 `BANDPASS_J`'s signal disagreed on 18% of 1D
+  bars. A dashed line marks the first bar drawn; with less history loaded, a note says how much is
+  missing (a 1D chart loads 500 bars at a time, so scroll back). The `warm-up` setting, 0, draws
+  from the first bar.
+- **`VOSS` starts blank too.** Its band-pass starts from zero rather than from the state a longer
+  history would have left it in. Measured on the 28 prod pairs' 1D bars from 1,316 start points
+  (2026-10-14), its sign disagreed with the from-2005 one on 45% of bars at its first bar, 7% a
+  hundred bars later and 0.5% after 250. The template leaves both lines blank until that start-up
+  error is below 1e-4 of where it began, the filter's pole radius to that power: **668 bars** at the
+  defaults, past which the sign disagreed on 3 of 1.5 million bars. The same warm-up mark and
+  `warm-up` setting as the band-pass.
+- **`VP_POC` is an exit, and it closes shorts only.** It reads the profile's low against the value
+  area's low, inverted. The value area never reaches below the profile, so the reading is 0 while
+  the area spans the lowest bin and +1 while it does not, and an exit closes a trade only when its
+  reading is against it. In plain terms it closes a short when one of the last three closes sits
+  alone in a bin below the others: when price has just risen through a multiple of 0.055. That
+  grid is in price, not pips: 5.5 pips on a JPY cross, 550 on EURUSD. So it fires on ~40% of JPY
+  bars and 2–9% elsewhere. The bins are the close rounded up to the grid, so on EURUSD they sit up to
+  550 pips from price; the template keeps them out of the price axis and builds its own legend. Its
+  volume is the bars' (OANDA's tick volume), as the scan's was.
 
 `fixtures/wscan_parity.json` is generated by
 `notes/research/NoNonSenseForex/tests/gen_nnfx_wscan_parity.py` from the windicators snapshot the
 scan ran (`9f7b6c8`), on the same 250 prod EURUSD 1D bars:
 
-- 37 cases;
+- 68 cases;
 - each system's setting, each source's defaults, and settings that reach the branches those miss:
-  TCF's per-bar restart (`count` below 250) and its tie branch (the closes rounded to 3 decimals,
-  where equal closes are common), and the slow-shorter-than-fast swap in MACDEXT and VW-MACD.
+  - TCF's per-bar restart (`count` below 250);
+  - ties, from the bars rounded to 3 decimals: TCF's up/down branch, and the Turtle's and the
+    PTL's strict comparisons;
+  - the slow-shorter-than-fast swap in MACDEXT and VW-MACD;
+  - the volume profile's empty bins (zero volume), a missing volume, and equal bins (every bar
+    weighing 1), where the POC and the value area each break a tie.
 
 `wscan.test.ts` checks every output to 1e-9 relative (IS Calculation's trigger from where the
-template draws it), and the reading each system trades on. Of 23 planted bugs, 21 were caught; the
-other two changed only the trigger bars IS Calculation leaves blank.
+template draws it), and the reading each system trades on. Of 23 bugs planted in the first eleven
+templates, 21 were caught; the other two changed only the trigger bars IS Calculation leaves blank.
+Of 20 planted in `TURTLE`, `PTL`, `VOSS` and `VP_POC`, all 20 were caught.
 
 ## How each one reads
 

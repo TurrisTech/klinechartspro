@@ -21,9 +21,9 @@ import { signLineStyle } from './paint'
  * KALMAN -- a constant-velocity Kalman filter's price forecast on the price pane, as ta4j's
  * KinematicKalmanFilterIndicator and KinematicKalmanPriceForecastIndicator compute it (windicators
  * `kalman_filter_constant_velocity`, the code the windicators NNFX scan ran): the baseline of the
- * scan's system 5, at process noise 0.0001, measurement noise 0.000804, horizon 6.
+ * scan's systems 2-5, at process noise 0.00015, measurement noise 0.00067, horizon 2.
  *
- * Parameters: [q, r, horizon], default [0.0001, 0.000804, 6] (ta4j's own: 0.0001, 0.001, 1).
+ * Parameters: [q, r, horizon], default [0.00015, 0.00067, 2] (ta4j's own: 0.0001, 0.001, 1).
  *
  * The state is the price's position and velocity. Each bar predicts position + velocity, with
  * process noise q added to the covariance, and corrects toward the close by the Kalman gain, the
@@ -55,9 +55,9 @@ function usable(pos: number, vel: number, pp: number, pv: number, vv: number): b
 }
 
 export function kalmanRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Kalman[] {
-  const q = realParam(calcParams[0], 0.0001, 1e-15)
-  const r = realParam(calcParams[1], 0.000804, 1e-15)
-  const h = Math.min(100000, countParam(calcParams[2], 6, 1))
+  const q = realParam(calcParams[0], 0.00015, 1e-15)
+  const r = realParam(calcParams[1], 0.00067, 1e-15)
+  const h = Math.min(100000, countParam(calcParams[2], 2, 1))
   let pos = 0
   let vel = 0
   let pp = 1
@@ -117,7 +117,7 @@ const kalman: IndicatorTemplate<Kalman, number> = {
   name: 'KALMAN',
   shortName: 'Kalman',
   series: 'price',
-  calcParams: [0.0001, 0.000804, 6],
+  calcParams: [0.00015, 0.00067, 2],
   precision: 5,
   figures: [
     {
