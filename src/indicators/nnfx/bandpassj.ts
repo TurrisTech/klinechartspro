@@ -15,7 +15,7 @@
 import type { IndicatorTemplate, KLineData } from 'klinecharts'
 
 import { countParam, realParam, value } from './mt4'
-import { drawRange, fillBetween, guide, guideColor, signColors, withAlpha } from './paint'
+import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, withAlpha } from './paint'
 
 /**
  * BANDPASS_J -- Ehlers' band-pass filter as jesse 3.2.4 computes it (windicators
@@ -89,10 +89,15 @@ export function bandPassJesse(close: readonly number[], period: number, bandwidt
   return { bp, norm, trigger, signal }
 }
 
-export function bandPassJRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJ[] {
-  const period = Math.min(100000, countParam(calcParams[0], 30, 2))
+function bandPassJSettings(calcParams: readonly unknown[], defaults: readonly number[]): { period: number; bandwidth: number } {
+  const period = Math.min(100000, countParam(calcParams[0], defaults[0], 2))
   // jesse requires 0 < bandwidth < period / 4.
-  const bandwidth = Math.min(period / 4 - 1e-9, realParam(calcParams[1], 0.1206, 1e-6))
+  const bandwidth = Math.min(period / 4 - 1e-9, realParam(calcParams[1], defaults[1], 1e-6))
+  return { period, bandwidth }
+}
+
+export function bandPassJRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJ[] {
+  const { period, bandwidth } = bandPassJSettings(calcParams, [30, 0.1206])
   const r = bandPassJesse(bars.map((b) => b.close), period, bandwidth)
   return r.bp.map((b, i) => ({ bp: value(b), norm: value(r.norm[i]), trigger: value(r.trigger[i]), signal: r.signal[i] }))
 }
@@ -117,4 +122,56 @@ const bandPassJ: IndicatorTemplate<BandPassJ, number> = {
   }
 }
 
+export interface BandPassJRaw {
+  [key: string]: number | undefined
+  bp?: number
+  state?: number
+}
+
+const RAW_DEFAULTS = [36, 0.2412, 1]
+
+export function bandPassJRawRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJRaw[] {
+  const { period, bandwidth } = bandPassJSettings(calcParams, RAW_DEFAULTS)
+  const dir = countParam(calcParams[2], 1, 0) >= 1 ? -1 : 1
+  const r = bandPassJesse(bars.map((b) => b.close), period, bandwidth)
+  return r.bp.map((b) => {
+    const row: BandPassJRaw = { bp: value(b) }
+    if (row.bp !== undefined) row.state = dir * Math.sign(row.bp)
+    return row
+  })
+}
+
+/**
+ * BANDPASS_J_RAW -- the same jesse band-pass, read the other way the scan found: its raw line `bp`
+ * against zero. This is the C2 of the scan's system 3 (re-ranked, README.md), at period 36,
+ * bandwidth 0.2412, inverted.
+ *
+ * Parameters: [period, bandwidth, inverted], default [36, 0.2412, 1].
+ *
+ * `inverted` 1 is the reading the scan tested: it confirms LONG while the raw line is BELOW zero
+ * and short while above; 0 is the conventional reading. The line is drawn in the colour of the side
+ * it gives. The raw line is in price units (the close high-passed and band-passed), so its scale
+ * follows the pair. The warm-up note above applies: the seed rings for hundreds of bars.
+ */
+const bandPassJRaw: IndicatorTemplate<BandPassJRaw, number> = {
+  name: 'BANDPASS_J_RAW',
+  shortName: 'Band-Pass (jesse) raw',
+  calcParams: RAW_DEFAULTS,
+  precision: 5,
+  figures: [
+    {
+      key: 'bp',
+      title: 'BP: ',
+      type: 'line',
+      styles: ({ data, indicator, defaultStyles }) => ({ ...signLineStyle(data.current?.state, indicator, defaultStyles), size: 2 })
+    }
+  ],
+  calc: (dataList: KLineData[], indicator) => bandPassJRawRows(dataList, indicator.calcParams),
+  draw: ({ ctx, chart, bounding, yAxis }) => {
+    guide(ctx, bounding, yAxis, 0, guideColor(chart), false)
+    return false
+  }
+}
+
+export { bandPassJRaw }
 export default bandPassJ

@@ -372,7 +372,7 @@
     'SAR', 'SMA', 'ROC', 'PVT', 'BBI', 'AO',
     // NNFX shortlist (src/indicators/nnfx)
     'DODA_STOCH', 'BANDPASS', 'CORR_TREND', 'OSCAR', 'TTF', 'RSX', 'SMI', 'ATR',
-    'HWC_PCT', 'MACDEXT', 'KST', 'TCF', 'VWMACD', 'BANDPASS_J'
+    'HWC_PCT', 'MACDEXT', 'KST', 'TCF', 'VWMACD', 'BANDPASS_J', 'BANDPASS_J_RAW', 'IS_CALC'
   ]
 
   const drawingGroups: DrawingGroup[] = [

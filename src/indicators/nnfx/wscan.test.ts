@@ -4,6 +4,7 @@ import type { Indicator, KLineData } from 'klinecharts'
 
 import fixture from './fixtures/wscan_parity.json'
 import nnfx from './index'
+import { triggerFrom } from './iscalc'
 import { tcfOptions, trendContinuationFactor } from './tcf'
 
 // The indicators of the windicators NNFX scan's top baseline systems, against windicators' own
@@ -43,6 +44,8 @@ const PARAM_ORDER: Record<string, string[]> = {
   VWMACD: ['fast', 'slow', 'signal', 'sma'],
   MACDEXT: ['fast', 'slow', 'signal', 'ma'],
   BANDPASS_J: ['period', 'bandwidth'],
+  BANDPASS_J_RAW: ['period', 'bandwidth'],
+  IS_CALC: ['period', 'nbchandelier', 'lag'],
   KALMAN: ['q', 'r', 'horizon'],
   KST: ['roc1', 'roc2', 'roc3', 'roc4', 'sma1', 'sma2', 'sma3', 'sma4', 'signal', 'ma']
 }
@@ -60,7 +63,7 @@ function near(actual: number | undefined, expected: number): boolean {
 }
 
 describe('parity with windicators, the code the windicators NNFX scan ran', () => {
-  test('the fixture is the generated one, and covers all nine', () => {
+  test('the fixture is the generated one, and covers every template', () => {
     expect(fixture.$comment).toContain('gen_nnfx_wscan_parity.py')
     expect(new Set(fixture.cases.map((c) => c.template))).toEqual(new Set(Object.keys(PARAM_ORDER)))
   })
@@ -82,11 +85,15 @@ describe('parity with windicators, the code the windicators NNFX scan ran', () =
     test(`${c.template}(${p.join(', ')}) -- ${c.source}`, () => {
       const rows = run(c.template, p, data)
       const out = c.out as unknown as Record<string, Array<number | null>>
+      // IS Calculation's trigger is blank while the EMPTY_VALUE seed left in it is above 1e-12 (iscalc.ts).
+      const chart = c.chart as unknown as Record<string, number>
+      const blankUntil = c.template === 'IS_CALC' ? triggerFrom(chart.nbchandelier, chart.period + chart.lag) : 0
       for (const [key, expected] of Object.entries(out)) {
         const bad: Array<{ i: number; actual: number | undefined; expected: number | null }> = []
         expected.forEach((e, i) => {
           const a = rows[i][key]
-          if (e === null ? a !== undefined : !near(a, e)) bad.push({ i, actual: a, expected: e })
+          const blank = e === null || (key === 'trigger' && i < blankUntil)
+          if (blank ? a !== undefined : !near(a, e)) bad.push({ i, actual: a, expected: e })
         })
         expect({ key, bad: bad.slice(0, 5) }).toEqual({ key, bad: [] })
         expect(expected.filter((v) => v !== null).length).toBeGreaterThan(bars.length / 2)
@@ -126,7 +133,12 @@ describe('the readings the systems trade on', () => {
     })
   }
 
-  const zeros: Array<[string, string, number]> = [['TCF', 'plus', 4], ['VWMACD', 'signal', 4]]
+  const zeros: Array<[string, string, number]> = [
+    ['TCF', 'plus', 4],
+    ['VWMACD', 'signal', 4],
+    ['BANDPASS_J_RAW', 'bp', 2],
+    ['IS_CALC', 'slope', 3]
+  ]
   for (const [name, key, invertAt] of zeros) {
     test(`${name}: the state is the ${key} line against zero, flipped by "inverted"`, () => {
       for (const inverted of [0, 1]) {
@@ -141,6 +153,24 @@ describe('the readings the systems trade on', () => {
     })
   }
 
+  test("IS_CALC: the trigger is blank exactly while the source's EMPTY_VALUE seed is above 1e-12", () => {
+    const rows = run('IS_CALC', defaults('IS_CALC'))
+    const from = triggerFrom(22, 5)
+    expect(from).toBeGreaterThan(22 + 100)
+    rows.forEach((r, i) => {
+      if (i < from) expect(r.trigger).toBeUndefined()
+      else expect(Math.abs(r.trigger as number)).toBeLessThan(1)
+    })
+  })
+
+  test('BANDPASS_J_RAW: the raw line is BANDPASS_J\'s bp', () => {
+    const raw = run('BANDPASS_J_RAW', [30, 0.1206, 1])
+    const signal = run('BANDPASS_J', [30, 0.1206])
+    raw.forEach((r, i) => {
+      expect(r.bp).toBe(signal[i].bp as number)
+    })
+  })
+
   test('BANDPASS_J: the signal is +1 while the normalised line is below the trigger', () => {
     const rows = run('BANDPASS_J', defaults('BANDPASS_J'))
     for (const r of rows) {
@@ -149,11 +179,13 @@ describe('the readings the systems trade on', () => {
     }
   })
 
-  test("the scan's tested readings are the defaults: HWC_PCT, MACDEXT, TCF and VW-MACD inverted, KST not", () => {
+  test("the scan's tested readings are the defaults: HWC_PCT, MACDEXT, TCF, VW-MACD, the raw band-pass and IS Calculation inverted, KST not", () => {
     expect(defaults('HWC_PCT')[6]).toBe(1)
     expect(defaults('MACDEXT')[4]).toBe(1)
     expect(defaults('TCF')[4]).toBe(1)
     expect(defaults('VWMACD')[4]).toBe(1)
+    expect(defaults('BANDPASS_J_RAW')[2]).toBe(1)
+    expect(defaults('IS_CALC')[3]).toBe(1)
     expect(defaults('KST')[10]).toBe(0)
   })
 

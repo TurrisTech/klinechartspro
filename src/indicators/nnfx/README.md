@@ -70,20 +70,24 @@ How each departs from its library:
 
 ## The windicators scan's top baseline systems
 
-Nine more templates are the indicators of the five best 1D systems with a real baseline from the
-**windicators NNFX scan** (2026-10-11/12): all of the `windicators` library, scanned over the last
-six years on 28 OANDA pairs (workspace repo, `notes/research/NoNonSenseForex/results/windicators-6y/`).
-Same caveat as above: in-sample and best-of-grid, by the user's instruction. A "real" baseline is
-one the close is above 30–70% of the time; the scan's raw ranking also held lower bands and the
-Heikin Ashi low, which only switch shorts off.
+Eleven more templates are the indicators of the best 1D systems with a real baseline from the
+**windicators NNFX scan** (2026-10-11/13): all of the `windicators` library, scanned over the last
+six years on 28 OANDA pairs (workspace repo, `notes/research/NoNonSenseForex/results/windicators-6y/`,
+finding 8). Same caveat as above: in-sample and best-of-grid, by the user's instruction. A "real"
+baseline is one the close is above 30–70% of the time; the scan's raw ranking also held lower bands
+and the Heikin Ashi low, which only switch shorts off. The ranking below is after the scan's
+averaging fix (HWC_PCT, below), which re-ranked it: systems 3 and 4 moved in, and the scan's earlier
+fourth and fifth are now sixth and seventh.
 
 | # | Baseline | C1 | C2 | %/yr per pair | Pairs + |
 |---|---|---|---|---|---|
 | 1 | `HWMA` 0.3 / 0.067 / 0.15 | `HWC_PCT` 1.5 / 0.3 / 0.15 / 0.225 / 0.175, MA 8, inverted | `TCF` 15 / 10 / 1.0815, inverted | +2.60 | 26/28 |
 | 2 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `VWMACD` 9 / 20 / 9, signal vs 0, inverted | +2.14 | 21/28 |
-| 3 | `HWMA`, as 1 | `MACDEXT` 24 / 26 / 4, MA 3, inverted | `BANDPASS_J` 30 / 0.1206 | +1.98 | 24/28 |
-| 4 | `HWC` middle, 1.5 / 0.3 / 0.067 / 0.1 / 0.1 | `HWC_PCT`, as 1 | `TCF`, as 1 | +1.96 | 25/28 |
-| 5 | `KALMAN` 0.0001 / 0.000804 / 6 | `KST` 10/15/40/15, 11/5/6/30, signal 4, MA 3 | `BANDPASS_J`, as 3 | +1.96 | 25/28 |
+| 3 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `BANDPASS_J_RAW` 36 / 0.2412, raw line vs 0, inverted | +2.01 | 22/28 |
+| 4 | `HWMA`, as 1 | `HWC_PCT`, as 1 | `IS_CALC` 5 / 22, slope vs 0, inverted | +2.00 | 23/28 |
+| 5 | `HWMA`, as 1 | `MACDEXT` 24 / 26 / 4, MA 3, inverted | `BANDPASS_J` 30 / 0.1206 | +1.98 | 24/28 |
+| 6 | `HWC` middle, 1.5 / 0.3 / 0.067 / 0.1 / 0.1 | `HWC_PCT`, as 1 | `TCF`, as 1 | +1.96 | 25/28 |
+| 7 | `KALMAN` 0.0001 / 0.000804 / 6 | `KST` 10/15/40/15, 11/5/6/30, signal 4, MA 3 | `BANDPASS_J`, as 5 | +1.96 | 25/28 |
 
 **Every template's default is the setting a system ran,** so adding it to a chart draws what was
 tested. The best system overall has no baseline: the `MACDEXT` C1 and `BANDPASS_J` C2 above
@@ -100,23 +104,30 @@ tested. The best system overall has no baseline: the `MACDEXT` C1 and `BANDPASS_
 | `TCF` | TCF (Trend Continuation Factor) | sub | TCF+ coloured by side, TCF- neutral |
 | `VWMACD` | VW-MACD (Volume-Weighted MACD) | sub | line, signal coloured by side, histogram |
 | `BANDPASS_J` | Band-Pass Filter, jesse | sub | normalised band-pass and trigger, shaded by the signal |
+| `BANDPASS_J_RAW` | Band-Pass Filter, jesse, raw line | sub | the raw band-pass line, coloured by its side of zero |
+| `IS_CALC` | IS Calculation (EMA slope) | sub | the slope, coloured by its side of zero; the trigger neutral |
 
 **"Inverted" is how the scan tested them.** Which of two lines counts as "first" is arbitrary, so
-the scan tried every C1 both ways round. Four of these won inverted: `HWC_PCT`, `MACDEXT`, `TCF`
-and `VWMACD` are long while the line is *below* its reference. Their `inverted` setting defaults
+the scan tried every C1 both ways round. Six of these won inverted: `HWC_PCT`, `MACDEXT`, `TCF`,
+`VWMACD`, `BANDPASS_J_RAW` and `IS_CALC` are long while the line is *below* its reference. Their `inverted` setting defaults
 to 1, and the shading and colours follow it; 0 gives the conventional reading. `MACDEXT` inverted
 fades moves: it agreed with the last 10 bars' direction on only 42% of bars. `BANDPASS_J` keeps
 jesse's own sign: +1, long, while the normalised line is below its trigger.
 
 Where these depart from the scan or the source:
 
+- **`IS_CALC`'s trigger starts blank.** The source fills the slope buffer with MT4's EMPTY_VALUE
+  (2,147,483,647) before writing it, and iMAOnArray seeds the trigger's EMA with that, so MT4 draws
+  it in the billions for its first bars. The template leaves it blank until what is left of that
+  seed is below 1e-12 (about 120 bars at the defaults), and matches windicators from there. The
+  slope, the system's reading, is drawn from its first bar.
 - **`HWC_PCT`'s average is exact; the scan's was not.** The channel has zero width on its first
   three bars, where pandas-ta's percent divides by epsilon and reaches ~1e13. The scan's
   moving-average form summed cumulatively, so that spike left errors of up to 0.37 in the 8-bar
   average for the rest of the history. Its C1 state differed from the exact one on 0.8% of 1D
   bars. The template leaves those three bars blank and averages exactly. The systems' figures above
-  are recomputed that way: system 1 +2.60 (the scan's table said +2.55), 2 +2.14 (+2.00), 4 +1.96
-  (+1.97). The C1 alone makes +2.54, not the scan's +2.67.
+  are recomputed that way (the scan's tables said +2.55, +2.00, +1.93, +1.88, +1.98, +1.97,
+  +1.96), which re-ranked them. The C1 alone makes +2.54, not the scan's +2.67.
 - **`TCF` restarts as the MQL source does,** over its last `count` bars at every bar, so each bar
   has the value it had live. When that restart cannot change a value (the T3's weight on the
   dropped bars is below 1e-20, ~1e-66 at the systems' setting), one pass over the history replaces
@@ -134,13 +145,14 @@ Where these depart from the scan or the source:
 `notes/research/NoNonSenseForex/tests/gen_nnfx_wscan_parity.py` from the windicators snapshot the
 scan ran (`9f7b6c8`), on the same 250 prod EURUSD 1D bars:
 
-- 30 cases;
+- 37 cases;
 - each system's setting, each source's defaults, and settings that reach the branches those miss:
   TCF's per-bar restart (`count` below 250) and its tie branch (the closes rounded to 3 decimals,
   where equal closes are common), and the slow-shorter-than-fast swap in MACDEXT and VW-MACD.
 
-`wscan.test.ts` checks every output to 1e-9 relative, and the reading each system trades on. Sixteen
-planted bugs were each caught.
+`wscan.test.ts` checks every output to 1e-9 relative (IS Calculation's trigger from where the
+template draws it), and the reading each system trades on. Of 23 planted bugs, 21 were caught; the
+other two changed only the trigger bars IS Calculation leaves blank.
 
 ## How each one reads
 

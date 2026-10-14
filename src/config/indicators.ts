@@ -277,6 +277,17 @@ const builtin = {
     { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 30 },
     { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.1206 }
   ],
+  BANDPASS_J_RAW: [
+    { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 36 },
+    { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.2412 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  IS_CALC: [
+    { paramNameKey: 'is_period', precision: 0, min: 1, default: 5 },
+    { paramNameKey: 'is_nbchandelier', precision: 0, min: 1, default: 22 },
+    { paramNameKey: 'is_lag', precision: 0, min: 0, default: 0 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
   KALMAN: [
     { paramNameKey: 'kalman_q', precision: 6, min: 0.000001, default: 0.0001 },
     { paramNameKey: 'kalman_r', precision: 6, min: 0.000001, default: 0.000804 },
