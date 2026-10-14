@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { Indicator, KLineData } from 'klinecharts'
 
+import { seedWarmup } from './bandpassj'
 import fixture from './fixtures/wscan_parity.json'
 import nnfx from './index'
 import { triggerFrom } from './iscalc'
@@ -58,6 +59,10 @@ function params(template: string, chart: Record<string, number>): number[] {
   return p
 }
 
+// The 250 fixture bars are all inside the band-pass templates' warm-up (bandpassj.ts), so parity
+// is checked with it off; the warm-up itself is tested below.
+const WARMUP_AT: Record<string, number> = { BANDPASS_J: 2, BANDPASS_J_RAW: 3 }
+
 function near(actual: number | undefined, expected: number): boolean {
   return actual !== undefined && Math.abs(actual - expected) <= 1e-9 * Math.max(1, Math.abs(expected))
 }
@@ -79,6 +84,7 @@ describe('parity with windicators, the code the windicators NNFX scan ran', () =
 
   for (const c of fixture.cases) {
     const p = params(c.template, c.chart as unknown as Record<string, number>)
+    if (c.template in WARMUP_AT) p[WARMUP_AT[c.template]] = 0
     // A case may carry its own closes (TCF's tie case); the template reads the close only.
     const own = (c as { close?: number[] }).close
     const data = own === undefined ? bars : bars.map((b, i) => ({ ...b, close: own[i] }))
@@ -144,11 +150,14 @@ describe('the readings the systems trade on', () => {
       for (const inverted of [0, 1]) {
         const p = defaults(name)
         p[invertAt] = inverted
+        if (name in WARMUP_AT) p[WARMUP_AT[name]] = 0
         const dir = inverted === 1 ? -1 : 1
-        for (const r of run(name, p)) {
+        const rows = run(name, p)
+        for (const r of rows) {
           const line = r[key]
           if (line !== undefined) expect(r.state).toBe(dir * Math.sign(line))
         }
+        expect(rows.filter((r) => r[key] !== undefined).length).toBeGreaterThan(bars.length / 2)
       }
     })
   }
@@ -164,15 +173,45 @@ describe('the readings the systems trade on', () => {
   })
 
   test('BANDPASS_J_RAW: the raw line is BANDPASS_J\'s bp', () => {
-    const raw = run('BANDPASS_J_RAW', [30, 0.1206, 1])
-    const signal = run('BANDPASS_J', [30, 0.1206])
+    const raw = run('BANDPASS_J_RAW', [30, 0.1206, 1, 0])
+    const signal = run('BANDPASS_J', [30, 0.1206, 0])
     raw.forEach((r, i) => {
       expect(r.bp).toBe(signal[i].bp as number)
     })
   })
 
+  // The seed's decay at the systems' settings, as measured on the prod pairs (bandpassj.ts), and
+  // a history long enough to leave the warm-up: a deterministic random walk.
+  const long: KLineData[] = (() => {
+    let x = 1.1
+    let seed = 7
+    return Array.from({ length: 2000 }, (_, i) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      x *= 1 + (seed / 2147483648 - 0.5) * 0.01
+      return { timestamp: i * 86400000, open: x, high: x * 1.002, low: x * 0.998, close: x, volume: 1 }
+    })
+  })()
+
+  test('BANDPASS_J / BANDPASS_J_RAW: blank until the seed is below 1e-4, then the line drawn from the first bar', () => {
+    expect(seedWarmup(30, 0.1206)).toBe(1459)
+    expect(seedWarmup(36, 0.2412)).toBe(876)
+    for (const [name, at] of Object.entries(WARMUP_AT)) {
+      const on = run(name, defaults(name), long)
+      const p = defaults(name)
+      p[at] = 0
+      const off = run(name, p, long)
+      const warm = seedWarmup(p[0], p[1])
+      expect(defaults(name)[at]).toBe(1)
+      on.forEach((r, i) => {
+        if (i < warm) expect(r).toEqual({})
+        else expect(r).toEqual(off[i])
+      })
+      expect(off[warm - 1].bp).toBeDefined()
+    }
+  })
+
   test('BANDPASS_J: the signal is +1 while the normalised line is below the trigger', () => {
-    const rows = run('BANDPASS_J', defaults('BANDPASS_J'))
+    const rows = run('BANDPASS_J', [30, 0.1206, 0])
     for (const r of rows) {
       if (r.norm === undefined || r.trigger === undefined) continue
       expect(r.signal).toBe(r.norm < r.trigger ? 1 : r.norm > r.trigger ? -1 : 0)

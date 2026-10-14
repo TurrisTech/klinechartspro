@@ -264,6 +264,7 @@
   "vwmacd_sma": "Signal line: 0 volume-weighted, 1 simple",
   "bpj_period": "Period (bars)",
   "bpj_bandwidth": "Bandwidth",
+  "bpj_warmup": "Warm-up: 0 draw from the first bar, 1 blank until the seed has decayed",
   "kalman_q": "Process noise (price²)",
   "kalman_r": "Measurement noise (price²)",
   "kalman_horizon": "Forecast horizon (bars)",

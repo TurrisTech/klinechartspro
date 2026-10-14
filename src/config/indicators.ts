@@ -275,12 +275,14 @@ const builtin = {
   ],
   BANDPASS_J: [
     { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 30 },
-    { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.1206 }
+    { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.1206 },
+    { paramNameKey: 'bpj_warmup', precision: 0, min: 0, max: 1, default: 1 }
   ],
   BANDPASS_J_RAW: [
     { paramNameKey: 'bpj_period', precision: 0, min: 2, default: 36 },
     { paramNameKey: 'bpj_bandwidth', precision: 4, min: 0.0001, default: 0.2412 },
-    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'bpj_warmup', precision: 0, min: 0, max: 1, default: 1 }
   ],
   IS_CALC: [
     { paramNameKey: 'is_period', precision: 0, min: 1, default: 5 },

@@ -237,6 +237,7 @@
   "vwmacd_sma": "信号线: 0 成交量加权, 1 简单",
   "bpj_period": "周期",
   "bpj_bandwidth": "带宽",
+  "bpj_warmup": "预热: 0 从第一根K线开始绘制, 1 种子衰减前留空",
   "kalman_q": "过程噪声 (价格²)",
   "kalman_r": "测量噪声 (价格²)",
   "kalman_horizon": "预测步数 (K线数)",
