@@ -37,10 +37,11 @@ import { arrowSize, drawRange, guideColor, priceLegends, signColors } from './pa
  * The exit the scan tested is the profile's LOW against the value area's low, with `inverted` 1.
  * The value area never reaches below the profile, so that reading is 0 while the value area spans
  * the lowest bin and +1 while it does not; an exit closes a trade when its reading is against the
- * trade, so this one closes SHORTS only. In plain terms: it closes a short when one of the last
- * `period` closes sits alone in a bin below the rest -- when price has just risen through a
- * multiple of `tick`. The grid is in price, not pips: 0.055 is 5.5 pips on a JPY cross and 550
- * pips on EURUSD, so the exit fires on ~40% of JPY bars and 2-9% elsewhere (prod 1D, 2026-10-14).
+ * trade, so this one closes SHORTS only. In plain terms: it closes a short when the last `period`
+ * closes straddle a multiple of `tick` and more than `value area` of their volume traded above the
+ * lowest one's bin, whichever way the last close went. The grid is in price, not pips: 0.055 is
+ * 5.5 pips on a JPY cross and 550 pips on EURUSD, so the exit fires on ~40% of JPY bars and 2-9%
+ * elsewhere (prod 1D, 2026-10-14).
  *
  * Drawn: the value area shaded between its high and low, the POC as a line, and a dot on each
  * bar whose reading closes a trade (below the bar in the up colour: closes shorts; above it in

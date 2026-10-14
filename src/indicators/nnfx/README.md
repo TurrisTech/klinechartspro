@@ -178,10 +178,12 @@ Where these depart from the scan or the source:
 - **`VP_POC` is an exit, and it closes shorts only.** It reads the profile's low against the value
   area's low, inverted. The value area never reaches below the profile, so the reading is 0 while
   the area spans the lowest bin and +1 while it does not, and an exit closes a trade only when its
-  reading is against it. In plain terms it closes a short when one of the last three closes sits
-  alone in a bin below the others: when price has just risen through a multiple of 0.055. That
-  grid is in price, not pips: 5.5 pips on a JPY cross, 550 on EURUSD. So it fires on ~40% of JPY
-  bars and 2–9% elsewhere. The bins are the close rounded up to the grid, so on EURUSD they sit up to
+  reading is against it. In plain terms it closes a short when the last three closes straddle a
+  multiple of 0.055 and more than 63% of their volume traded above the lowest one's bin, whichever
+  way the last close went. That grid is in price, not pips: 5.5 pips on a JPY cross, 550 on
+  EURUSD. So it fires on ~40% of JPY bars and 2–9% elsewhere. On a dev EURUSD 1D chart with the
+  tick at 0.0055 (EURUSD's equivalent of the JPY grid) the dots fall below bars on rises and falls
+  alike, and only in the up colour. The bins are the close rounded up to the grid, so on EURUSD they sit up to
   550 pips from price; the template keeps them out of the price axis and builds its own legend. Its
   volume is the bars' (OANDA's tick volume), as the scan's was.
 
