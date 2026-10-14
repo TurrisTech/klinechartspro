@@ -72,7 +72,8 @@ describe('parity with the NNFX research ports (notes/research/NoNonSenseForex/nn
       ...libraryFixture.cases.map((c) => c.template),
       ...wscanFixture.cases.map((c) => c.template)
     ])
-    expect(covered).toEqual(new Set(templates.keys()))
+    // wscan_parity.json also checks SSL (src/indicators/ssl.ts), the C1 of the windicators scan's system 3.
+    expect(covered).toEqual(new Set([...templates.keys(), 'SSL']))
   })
 
   for (const c of fixture.cases) {

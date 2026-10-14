@@ -22,11 +22,12 @@ import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, w
  * (windicators `holt_winters_moving_average` / `holt_winters_channel`, the code the windicators
  * NNFX scan ran). Three templates share the recursion:
  *
- *   HWMA     the moving average on the price pane: the baseline of the scan's best 1D systems
- *            with a baseline (systems 1-3; README.md).
- *   HWC      the channel on the price pane: its middle line is system 4's baseline.
+ *   HWMA     the moving average on the price pane: the baseline of the scan's best 1D system
+ *            with a baseline, and of its sixth (README.md).
+ *   HWC      the channel on the price pane. Its middle line is the HWMA at the same na, nb and nc,
+ *            so the scan found each HWMA system twice, once with this line as the baseline.
  *   HWC_PCT  the price's position in the channel against its own `ma`-bar average, in a
- *            sub-pane: the C1 of systems 1, 2 and 4.
+ *            sub-pane: the C1 of systems 1 and 6, and of the best system overall.
  *
  * Per bar, from the previous bar's level F, velocity V and acceleration A (F starting at the
  * first close, V and A at 0, so there is no warm-up):
@@ -127,7 +128,7 @@ export function hwmaRows(bars: readonly KLineData[], o: { na: number; nb: number
 
 /**
  * HWMA -- the Holt-Winters moving average on the price pane, coloured by the close's side: the
- * baseline of the scan's systems 1-3 at na 0.3, nb 0.067, nc 0.15.
+ * baseline of the scan's systems 1 and 6 at na 0.3, nb 0.067, nc 0.15.
  *
  * Parameters: [na, nb, nc], default [0.3, 0.067, 0.15] (pandas-ta's own: 0.2, 0.1, 0.1).
  */
@@ -176,7 +177,7 @@ export function hwcOptions(calcParams: readonly unknown[], defaults: readonly nu
   }
 }
 
-const HWC_DEFAULTS = [1.5, 0.3, 0.067, 0.1, 0.1]
+const HWC_DEFAULTS = [1, 0.3, 0.067, 0.15, 0.1]
 
 export function hwcRows(bars: readonly KLineData[], o: HwcOptions): Hwc[] {
   const hw = holtWinters(bars.map((b) => b.close), o.scalar, o.na, o.nb, o.nc, o.nd)
@@ -190,9 +191,11 @@ export function hwcRows(bars: readonly KLineData[], o: HwcOptions): Hwc[] {
 
 /**
  * HWC -- the Holt-Winters channel on the price pane. The middle line, coloured by the close's
- * side, is the scan's system 4 baseline (scalar 1.5, na 0.3, nb 0.067, nc 0.1, nd 0.1).
+ * side, is the HWMA at the same na, nb and nc: at the defaults, the baseline of the scan's systems
+ * 1 and 6, which the scan also found with this line as their baseline (scalar 1, na 0.3, nb 0.067,
+ * nc 0.15, nd 0.1; scalar and nd move only the bands).
  *
- * Parameters: [scalar, na, nb, nc, nd], default [1.5, 0.3, 0.067, 0.1, 0.1] (pandas-ta's own: 1,
+ * Parameters: [scalar, na, nb, nc, nd], default [1, 0.3, 0.067, 0.15, 0.1] (pandas-ta's own: 1,
  * 0.2, 0.1, 0.1, 0.1).
  */
 const hwc: IndicatorTemplate<Hwc, number> = {
@@ -224,7 +227,7 @@ export interface HwcPct {
   state?: number
 }
 
-const HWC_PCT_DEFAULTS = [1.5, 0.3, 0.15, 0.225, 0.175, 8, 1]
+const HWC_PCT_DEFAULTS = [0.67, 0.3, 0.15, 0.225, 0.165, 8, 1]
 
 export function hwcPctRows(bars: readonly KLineData[], calcParams: readonly unknown[]): HwcPct[] {
   const o = hwcOptions(calcParams, HWC_PCT_DEFAULTS)
@@ -244,10 +247,15 @@ export function hwcPctRows(bars: readonly KLineData[], calcParams: readonly unkn
 
 /**
  * HWC_PCT -- the close's position in the Holt-Winters channel (0 at the lower band, 1 at the
- * upper) and its own `ma`-bar average, in a sub-pane: the C1 of the scan's systems 1, 2 and 4, at
- * scalar 1.5, na 0.3, nb 0.15, nc 0.225, nd 0.175 against its 8-bar average.
+ * upper) and its own `ma`-bar average, in a sub-pane: the C1 of the scan's systems 1 and 6 and of
+ * its best system overall, at scalar 0.67, na 0.3, nb 0.15, nc 0.225, nd 0.165 against its 8-bar
+ * average.
  *
- * Parameters: [scalar, na, nb, nc, nd, ma, inverted], default [1.5, 0.3, 0.15, 0.225, 0.175, 8, 1].
+ * Parameters: [scalar, na, nb, nc, nd, ma, inverted], default [0.67, 0.3, 0.15, 0.225, 0.165, 8, 1].
+ *
+ * `scalar` does not change the reading: percent is 0.5 + (close - middle) / (2 scalar x sd), so the
+ * line minus its average is one fixed multiple of the same thing at any scalar. Checked on the 28
+ * prod pairs' 1D bars at 0.67, 1.5 and 3: not one bar's state differs. It only rescales the line.
  *
  * `inverted` 1 is the reading the scan tested: LONG while the percent line is BELOW its average,
  * short while above. (Which of two lines counts as "first" is arbitrary; the scan tried both and

@@ -364,7 +364,7 @@
     // NNFX shortlist (src/indicators/nnfx)
     'HA_SMOOTHED', 'CHANDELIER', 'TREND_AKKAM', 'KELTNER', 'LINREG',
     // the windicators scan's top baseline systems (src/indicators/nnfx/README.md)
-    'HWMA', 'HWC', 'KALMAN'
+    'HWMA', 'HWC', 'KALMAN', 'TURTLE', 'PTL', 'VP_POC'
   ]
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
@@ -372,7 +372,7 @@
     'SAR', 'SMA', 'ROC', 'PVT', 'BBI', 'AO',
     // NNFX shortlist (src/indicators/nnfx)
     'DODA_STOCH', 'BANDPASS', 'CORR_TREND', 'OSCAR', 'TTF', 'RSX', 'SMI', 'ATR',
-    'HWC_PCT', 'MACDEXT', 'KST', 'TCF', 'VWMACD', 'BANDPASS_J', 'BANDPASS_J_RAW', 'IS_CALC'
+    'HWC_PCT', 'MACDEXT', 'KST', 'TCF', 'VWMACD', 'BANDPASS_J', 'BANDPASS_J_RAW', 'IS_CALC', 'VOSS'
   ]
 
   const drawingGroups: DrawingGroup[] = [
