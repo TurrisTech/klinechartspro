@@ -364,7 +364,9 @@
     // NNFX shortlist (src/indicators/nnfx)
     'HA_SMOOTHED', 'CHANDELIER', 'TREND_AKKAM', 'KELTNER', 'LINREG',
     // the windicators scan's top baseline systems (src/indicators/nnfx/README.md)
-    'HWMA', 'HWC', 'KALMAN', 'TURTLE', 'PTL', 'VP_POC'
+    'HWMA', 'HWC', 'KALMAN', 'TURTLE', 'PTL', 'VP_POC',
+    // the scan after windicators round 3 (2026-10-15)
+    'BANDSTOP', 'PRC', 'ICHIMOKU'
   ]
   const subIndicatorNames = [
     'MA', 'EMA', 'WMA', 'VOL', 'MACD', 'BOLL', 'KDJ', 'RSI', 'BIAS', 'BRAR', 'CCI',
@@ -372,7 +374,10 @@
     'SAR', 'SMA', 'ROC', 'PVT', 'BBI', 'AO',
     // NNFX shortlist (src/indicators/nnfx)
     'DODA_STOCH', 'BANDPASS', 'CORR_TREND', 'OSCAR', 'TTF', 'RSX', 'SMI', 'ATR',
-    'HWC_PCT', 'MACDEXT', 'KST', 'TCF', 'VWMACD', 'BANDPASS_J', 'BANDPASS_J_RAW', 'IS_CALC', 'VOSS'
+    'HWC_PCT', 'MACDEXT', 'KST', 'TCF', 'VWMACD', 'BANDPASS_J', 'BANDPASS_J_RAW', 'IS_CALC', 'VOSS',
+    // the scan after windicators round 3 (2026-10-15)
+    'SWAMI_SWING', 'TRUNC_BP', 'ADAPT_BP', 'ADAPT_BP_CUBE', 'ADAPT_RSI', 'MICD', 'RCCD', 'MACD_BB', 'TMO',
+    'TRENDILO', 'STC_NLMA', 'METRO'
   ]
 
   const drawingGroups: DrawingGroup[] = [

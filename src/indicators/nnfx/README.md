@@ -205,6 +205,79 @@ template draws it), and the reading each system trades on. Of 23 bugs planted in
 templates, 21 were caught; the other two changed only the trigger bars IS Calculation leaves blank.
 Of 20 planted in `TURTLE`, `PTL`, `VOSS` and `VP_POC`, all 20 were caught.
 
+## The windicators scan after round 3
+
+Fifteen more templates are the indicators the scan ranked best once windicators round 3 was added
+(2026-10-15; 845 indicators; workspace repo `notes/research/NoNonSenseForex/results/windicators-6y/`,
+findings 3, 4 and 8, and the "NNFX Scan Leaders" page). With the templates above they cover the
+scan's **20 best 1D C1s**, plus the baseline and C2 of its best real-baseline system. Same caveat:
+in-sample and best-of-grid. **Each default is the setting the scan ranked, and each draws the
+reading the scan tested** (its state is the row's `state`; colours and shading follow it).
+
+| Template | Picker label | Pane | windicators id | 1D rank, reading | %/yr per pair (pairs +) | Draws |
+|---|---|---|---|---|---|---|
+| `SWAMI_SWING` | Swami Swing Wave | sub | `ehlers_swami_swing_wave` | C1 #2: the 33-bar line vs its MA(8); its 36-bar line below zero (delta 0.067) is the best system's C2 | +2.35 (22); system +3.75 (28) | one band-pass line of the swing wave and its `ma`-bar mean, shaded by side; `ma` 0 reads the line against zero. Not the heat map |
+| `TRUNC_BP` | Truncated Band-Pass | sub | `ehlers_truncated_bandpass` | C1 #3: truncated vs standard band-pass, inverted (30 / 0.15 / 11) | +2.31 (22) | both lines, shaded by side |
+| `ICHIMOKU` | Ichimoku (unshifted) | price | `ichimoku` | C1 #6: kijun vs senkou B, inverted (4 / 20 / 21) | +2.21 (21) | kijun coloured by side, senkou B neutral, the area between shaded; tenkan as context. **Spans not shifted forward**, as the scan read them |
+| `TRENDILO` | Trendilo | sub | `trendilo` | C1 #7: the line vs its MA(8); C1 of real-baseline system 1 | +2.20 (20); system +2.92 (26) | the line coloured by side and its 8-bar mean, shaded; the ±RMS band neutral |
+| `STC_NLMA` | Schaff Trend Cycle (NonLag MA) | sub | `schaff_trend_cycle_nlma` | C1 #8: stc vs 50 (16 / 28 / 6.6) | +2.19 (25) | stc coloured by its side of 50 |
+| `MICD` | MICD (TongDaXin) | sub | `micd` | C1 #10: MICD vs its MA(3); C1 of real-baseline systems 2–4 | +2.10 (19); +2.85 | MICD and its 3-bar mean, shaded; DIF neutral |
+| `ADAPT_RSI` | Adaptive RSI | sub | `ehlers_adaptive_rsi` | C1 #11: the RSI vs its MA(8) (36 / 20) | +2.09 (21) | the RSI and its 8-bar mean, shaded; guides 0.3 / 0.7 |
+| `MACD_BB` | MACD Bollinger Bands | sub | `macd_bollinger_bands` | C1 #12: the upper band vs its MA(3) (20 / 7 / 2, type 5) | +2.06 (22) | the upper band and its 3-bar mean, shaded; MACD, signal, lower band neutral |
+| `METRO` | Metro Advanced | sub | `metro_advanced` | C1 #14: level up vs its MA(3), inverted (42 / 2 / 30) | +2.00 (20) | level up and its 3-bar mean, shaded; the RSI and step lines as context |
+| `ADAPT_BP_CUBE` | Adaptive BandPass Cube | sub | `ehlers_adaptive_bandpass_cube` | C1 #17: the cube vs zero, inverted | +1.97 (20) | the cube coloured by side; the signal neutral |
+| `ADAPT_BP` | Adaptive BandPass | sub | `ehlers_adaptive_bandpass` | C1 #18: the signal vs its MA(8), inverted | +1.89 (22) | the band-pass (neutral), its signal and the signal's mean, shaded |
+| `TMO` | True Momentum Oscillator | sub | `true_momentum_oscillator` | C1 #19: TMO vs the signal's momentum, inverted (4) | +1.88 (22) | TMO coloured by side; signal and TMO's momentum neutral |
+| `RCCD` | RCCD (TongDaXin) | sub | `rccd` | C1 #20: DIF vs its MA(3), inverted (5 / 14) | +1.85 (19) | DIF and its 3-bar mean, shaded; RCCD neutral |
+| `BANDSTOP` | Band-Stop Filter | price | `ehlers_band_stop_filter` | the baseline of real-baseline systems 1–7 (period 24; 30 the best standalone, +1.79) | system +2.92 (26) | the line, coloured by the close's side |
+| `PRC` | Polynomial Regression Channel | price | `polynomial_regression_channel` | the C2 of real-baseline systems 1 and 4: the close vs the 300-bar quadratic's end point, inverted | system +2.92 (26) | the middle line coloured by side; two band pairs neutral, the outer dashed |
+
+The other seven of the top 20 were already here: `HWC_PCT` (#1), `MACDEXT` (#4), `BANDPASS_J`
+(#5, there read trigger vs zero at 30 / 0.2412), `KST` (#9), `SSL` (#13, length 7, HMA, inverted),
+`VWMACD` (#15, histogram vs MA(8) at 18 / 20 / 20) and `VOSS` (#16, filt vs MA(8) at 33 / 2 /
+0.18425). Their defaults stay at the systems' settings above; set the rank's setting to see the C1.
+
+Where these depart from windicators, or need a note to read:
+
+- **The `ma3` / `ma8` readings are the scan's exact `vs_sma`:** the mean of the line's distance from
+  each value in the window, so a line held level reads 0 (no signal). The drawn mean is the exact
+  window mean. `pdwindow.ts` holds it (numpy's pairwise summation order, checked bit for bit) and
+  every round-3 template uses it.
+- **Warm-ups, measured on the 28 prod pairs' 1D bars (2026-10-15).** A recursive filter computed
+  from a chart's first loaded bar differs from one computed from 2005, so with `warm-up` 1 each
+  leaves its first bars blank until its reading agrees with the from-2005 one on at least 99.5%
+  of bars: `SWAMI_SWING` 244 (396 at 36 / 0.067), `TRUNC_BP` 297, `BANDSTOP` 659 (823 at period
+  30; its start-up error is the price level, so it needs a 1e-5 bound), `ADAPT_BP` 232,
+  `ADAPT_BP_CUBE` 284, `ADAPT_RSI` 228, `MICD` 109, `RCCD` 69, `STC_NLMA` 230, `METRO` 472 (474 for
+  its reading, so a 1D chart's first 500-bar load shows only 26 bars), `TRENDILO` 37 (the source
+  reads the close before the oldest bar as 0). The warm-up mark and setting are as for `VOSS`.
+  `ICHIMOKU`, `MACD_BB` and `TMO` at their defaults, and `PRC`, are windowed and need none.
+- **`ICHIMOKU` is unshifted.** windicators' spans sit at the bar that computed them
+  (`span_shift` 0), and that is what the scan read; a conventional cloud is drawn `kijun` bars
+  further right. At 20 / 21 kijun and senkou B are equal on 72% of bars, which gives no signal.
+- **`PRC` needs 301 bars** at its default, and with `redraw` 0 its bands stay blank until bar
+  2 × period (Sierra counts the window's undrawn bars as 0 there; windicators' bands are huge).
+  Its cost is 18–40 ms a recalculation at 5,000 bars.
+- **`METRO`'s slow step line never converges** to the from-2005 one: it keeps the side it started
+  on. The reading does not use it. Its levels are blank on the first 49 bars, where windicators
+  carries MT4's EMPTY_VALUE.
+- **`MACD_BB`** matches windicators, which computes in float64; Sierra Chart computes in float32.
+  `ma_type` 1 (linear regression) or a type outside 0–6 is simple, where windicators raises.
+- **`TMO`'s tested reading is TMO against the signal's momentum,** an unusual pair.
+- **`ADAPT_BP` / `ADAPT_BP_CUBE` in Chrome.** V8's `Math.cos`, `sin` and `exp` differ from glibc by
+  one ulp on ~3% of arguments; over 1,120 chart starts no state differed, and the band-pass values
+  by at most 1.6e-6 relative (the cube 1e-4) on 0.1–0.2% of bars.
+- **"Inverted" won** for `TRUNC_BP`, `ICHIMOKU`, `METRO`, `ADAPT_BP`, `ADAPT_BP_CUBE`, `TMO`, `RCCD`
+  and `PRC`: their `inverted` setting defaults to 1.
+
+`fixtures/wscan_r3_{cycle,adaptive,momentum,trend}.json` are generated by
+`notes/research/NoNonSenseForex/tests/gen_nnfx_r3_<group>.py` from the windicators snapshot the
+scan ran (`0b4dcc0`), on the same 250 prod EURUSD 1D bars as `wscan_parity.json`: 111 cases, each
+template at the scan's setting, the source's defaults and settings that reach the branches those
+miss. `wscan_r3_<group>.test.ts` checks every output to 1e-9 relative, the state exactly, blank
+positions, causality on prefixes and the warm-up helpers. Planted bugs: 99 of 101 caught; the two
+missed are equivalent mutants (they change no output on any input).
+
 ## How each one reads
 
 - **Doda Stochastic.** The area between the main and signal lines is shaded up-colour while main

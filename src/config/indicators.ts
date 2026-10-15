@@ -318,6 +318,122 @@ const builtin = {
     { paramNameKey: 'vp_tick', precision: 4, min: 0.0001, default: 0.055 },
     { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
   ],
+  // the windicators scan after round 3 (2026-10-15): its 1D C1 top 20 and its best systems' baseline and C2
+  SWAMI_SWING: [
+    { paramNameKey: 'swami_period', precision: 0, min: 8, max: 48, default: 33 },
+    { paramNameKey: 'swami_delta', precision: 3, min: 0.001, max: 0.999, default: 0.1 },
+    { paramNameKey: 'swami_ma', precision: 0, min: 0, default: 8 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 0 },
+    { paramNameKey: 'swami_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  TRUNC_BP: [
+    { paramNameKey: 'truncbp_period', precision: 1, min: 2, default: 30 },
+    { paramNameKey: 'truncbp_bandwidth', precision: 3, min: 0.001, default: 0.15 },
+    { paramNameKey: 'truncbp_length', precision: 0, min: 1, max: 98, default: 11 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'truncbp_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  BANDSTOP: [
+    { paramNameKey: 'bandstop_period', precision: 1, min: 2, default: 24 },
+    { paramNameKey: 'bandstop_delta', precision: 3, min: 0.001, default: 0.067 },
+    { paramNameKey: 'bandstop_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  PRC: [
+    { paramNameKey: 'prc_degree', precision: 0, min: 1, max: 4, default: 2 },
+    { paramNameKey: 'prc_period', precision: 0, min: 1, max: 10000, default: 300 },
+    { paramNameKey: 'prc_dev1', precision: 5, min: 0, max: 1000, default: 1.08406 },
+    { paramNameKey: 'prc_dev2', precision: 2, min: 0, max: 1000, default: 1.34 },
+    { paramNameKey: 'prc_redraw', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  ADAPT_BP: [
+    { paramNameKey: 'adapt_bandwidth', precision: 4, min: 0.01, max: 1, default: 0.3 },
+    { paramNameKey: 'adapt_avg_length', precision: 0, min: 0, max: 200, default: 6 },
+    { paramNameKey: 'adapt_hp_period', precision: 0, min: 3, max: 200, default: 24 },
+    { paramNameKey: 'adapt_lp_period', precision: 0, min: 5, default: 15 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 8 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'adapt_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  ADAPT_BP_CUBE: [
+    { paramNameKey: 'adapt_bandwidth', precision: 4, min: 0.01, max: 1, default: 0.1608 },
+    { paramNameKey: 'adapt_avg_length', precision: 0, min: 0, max: 200, default: 6 },
+    { paramNameKey: 'adapt_hp_period', precision: 0, min: 3, max: 200, default: 24 },
+    { paramNameKey: 'adapt_lp_period', precision: 0, min: 5, default: 15 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'adapt_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  ADAPT_RSI: [
+    { paramNameKey: 'adapt_avg_length', precision: 0, min: 0, max: 200, default: 3 },
+    { paramNameKey: 'adapt_hp_period', precision: 0, min: 3, max: 200, default: 36 },
+    { paramNameKey: 'adapt_lp_period', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 8 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 0 },
+    { paramNameKey: 'adapt_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  MICD: [
+    { paramNameKey: 'micd_smoothing', precision: 0, min: 1, default: 4 },
+    { paramNameKey: 'macd_fast', precision: 0, min: 1, default: 15 },
+    { paramNameKey: 'macd_slow', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 0 },
+    { paramNameKey: 'micd_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  RCCD: [
+    { paramNameKey: 'rccd_period', precision: 0, min: 1, default: 5 },
+    { paramNameKey: 'macd_fast', precision: 0, min: 1, default: 21 },
+    { paramNameKey: 'macd_slow', precision: 0, min: 1, default: 14 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'rccd_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  MACD_BB: [
+    { paramNameKey: 'macd_fast', precision: 0, min: 1, default: 12 },
+    { paramNameKey: 'macd_slow', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'macdbb_length', precision: 0, min: 1, default: 7 },
+    { paramNameKey: 'macdbb_devs', precision: 0, min: 1, default: 2 },
+    { paramNameKey: 'macdbb_ma_type', precision: 0, min: 0, max: 6, default: 5 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 0 }
+  ],
+  TMO: [
+    { paramNameKey: 'tmo_length', precision: 0, min: 1, default: 14 },
+    { paramNameKey: 'tmo_calc', precision: 0, min: 1, default: 4 },
+    { paramNameKey: 'tmo_smooth', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'tmo_exclusive', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'tmo_mamode', precision: 0, min: 0, max: 2, default: 0 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  ICHIMOKU: [
+    { paramNameKey: 'ichimoku_tenkan', precision: 0, min: 1, default: 4 },
+    { paramNameKey: 'ichimoku_kijun', precision: 0, min: 1, default: 20 },
+    { paramNameKey: 'ichimoku_senkou', precision: 0, min: 1, default: 21 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  TRENDILO: [
+    { paramNameKey: 'trendilo_smooth', precision: 0, min: 1, default: 6 },
+    { paramNameKey: 'trendilo_length', precision: 0, min: 1, default: 25 },
+    { paramNameKey: 'trendilo_offset', precision: 4, min: 0, max: 1, default: 0.5695 },
+    { paramNameKey: 'trendilo_sigma', precision: 0, min: 1, default: 7 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 8 },
+    { paramNameKey: 'trendilo_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  STC_NLMA: [
+    { paramNameKey: 'stc_nlma_schaff', precision: 0, min: 1, default: 16 },
+    { paramNameKey: 'stc_nlma_fast', precision: 0, min: 1, default: 23 },
+    { paramNameKey: 'stc_nlma_slow', precision: 0, min: 1, default: 28 },
+    { paramNameKey: 'stc_nlma_smooth', precision: 1, min: 0, default: 6.6 },
+    { paramNameKey: 'stc_nlma_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
+  METRO: [
+    { paramNameKey: 'metro_period', precision: 0, min: 2, default: 42 },
+    { paramNameKey: 'metro_step_fast', precision: 0, min: 0, max: 100, default: 2 },
+    { paramNameKey: 'metro_step_slow', precision: 0, min: 0, max: 100, default: 30 },
+    { paramNameKey: 'metro_min_max', precision: 0, min: 1, default: 49 },
+    { paramNameKey: 'wscan_ma', precision: 0, min: 1, default: 3 },
+    { paramNameKey: 'wscan_inverted', precision: 0, min: 0, max: 1, default: 1 },
+    { paramNameKey: 'metro_warmup', precision: 0, min: 0, max: 1, default: 1 }
+  ],
   KST: [
     { paramNameKey: 'kst_roc1', precision: 0, min: 1, default: 10 },
     { paramNameKey: 'kst_roc2', precision: 0, min: 1, default: 15 },

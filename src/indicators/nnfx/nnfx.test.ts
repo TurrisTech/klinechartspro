@@ -6,6 +6,10 @@ import { indicatorSettingsFor } from '../../config/indicators'
 import libraryFixture from './fixtures/library_parity.json'
 import fixture from './fixtures/parity.json'
 import wscanFixture from './fixtures/wscan_parity.json'
+import r3Adaptive from './fixtures/wscan_r3_adaptive.json'
+import r3Cycle from './fixtures/wscan_r3_cycle.json'
+import r3Momentum from './fixtures/wscan_r3_momentum.json'
+import r3Trend from './fixtures/wscan_r3_trend.json'
 import nnfx from './index'
 import { trendAges } from './paint'
 
@@ -65,12 +69,14 @@ function same(actual: number | undefined, expected: number | null): boolean {
 }
 
 describe('parity with the NNFX research ports (notes/research/NoNonSenseForex/nnfx/ports)', () => {
-  test('the fixture is the generated one, and with library_parity.json and wscan_parity.json covers every template', () => {
+  test('the fixture is the generated one, and with library_parity.json and the wscan fixtures covers every template', () => {
     expect(fixture.$comment).toContain('gen_nnfx_chart_parity.py')
     const covered = new Set([
       ...fixture.cases.map((c) => c.template),
       ...libraryFixture.cases.map((c) => c.template),
-      ...wscanFixture.cases.map((c) => c.template)
+      ...wscanFixture.cases.map((c) => c.template),
+      // round 3's leaders (2026-10-15): wscan_r3_<group>.test.ts check them
+      ...[r3Cycle, r3Adaptive, r3Momentum, r3Trend].flatMap((f) => f.cases.map((c) => c.template))
     ])
     // wscan_parity.json also checks SSL (src/indicators/ssl.ts), the C1 of the windicators scan's system 3.
     expect(covered).toEqual(new Set([...templates.keys(), 'SSL']))
