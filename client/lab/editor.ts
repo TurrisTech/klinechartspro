@@ -172,11 +172,13 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
         restructure()
       })
       b.setAttribute('aria-pressed', String(on.includes(code)))
-      const n = counts?.(code)
-      if (n !== null && n !== undefined && on.includes(code)) {
+      // A chip switched on carries its count's place before the first run too: a run finishing
+      // must not widen the chips, wrap the row and move every control under it mid-click.
+      if (counts && on.includes(code)) {
+        const n = counts(code)
         const badge = el('span', 'wd-lab-chip-count')
-        badge.textContent = String(n)
-        badge.title = `${n} signal${n === 1 ? '' : 's'} in the last run's window`
+        badge.textContent = n === null ? '·' : String(n)
+        badge.title = n === null ? 'Signals in the window: known after a run' : `${n} signal${n === 1 ? '' : 's'} in the last run's window`
         b.appendChild(badge)
       }
       box.appendChild(b)

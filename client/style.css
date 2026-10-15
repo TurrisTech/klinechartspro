@@ -3653,6 +3653,11 @@ a.wd-rail-button {
   max-width: 24rem;
 }
 
+/* Wide enough for "Running…", so a run starting does not move the switches beside it. */
+.wd-lab-run {
+  min-width: 6.5rem;
+}
+
 .wd-lab-show {
   display: inline-flex;
   flex-wrap: wrap;
@@ -3857,6 +3862,9 @@ a.wd-rail-button {
 }
 
 .wd-lab-chip-count {
+  display: inline-block;
+  min-width: 3ch;
+  text-align: end;
   font-variant-numeric: tabular-nums;
   color: var(--muted-foreground);
 }
@@ -4197,8 +4205,12 @@ a.wd-rail-button {
     flex-direction: column;
   }
 
-  .wd-lab-chart {
+  /* Both classes, to beat the wide layout's `height: 100%` -- a column has no row for 100% to
+     fill, and the chart collapsed to its toolbar. */
+  .wd-lab-chart.klinecharts-pro {
+    flex: none;
     height: 60vh;
+    min-height: 20rem;
   }
 
   .wd-lab-results-body {
