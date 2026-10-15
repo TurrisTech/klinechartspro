@@ -67,9 +67,10 @@ export interface BuiltinInfo {
   defaultParams: number[]
 }
 
-/** A built-in's facts, or null for a name klinecharts does not have. */
-export function builtinInfo(name: string): BuiltinInfo | null {
-  if (!BUILTIN_INDICATORS.includes(name)) return null
+/** A built-in's facts, or null for a name klinecharts does not have -- or one `offered` leaves
+ * out (the alerts offer the built-ins; the Strategy Lab the chart library's templates too). */
+export function builtinInfo(name: string, offered: readonly string[] = BUILTIN_INDICATORS): BuiltinInfo | null {
+  if (!offered.includes(name)) return null
   const Template = getIndicatorClass(name)
   if (!Template) return null
   const instance = new Template()

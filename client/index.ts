@@ -75,7 +75,25 @@ async function bootstrap(): Promise<void> {
     }
   }
 
+  // The Strategy Lab is a page of its own (client/lab/page.ts): `/lab`, which both the dev server
+  // and nginx answer with this same index.html, or `?app=lab` where a path is not available.
+  if (isLabPage()) {
+    const { runLab } = await import('./lab/page')
+    await runLab(appContainer, params)
+    return
+  }
+
   await runWall(appContainer)
+}
+
+function isLabPage(): boolean {
+  return /(^|\/)lab\/?$/.test(window.location.pathname) || params.get('app') === 'lab'
+}
+
+/** Where the Strategy Lab is from the dashboard: `lab` beside the page, under any base path. */
+function labHref(): string {
+  const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname.replace(/[^/]*$/, '')
+  return `${base}lab`
 }
 
 /** A mounted wall's one obligation: give back everything it took when the next one replaces
@@ -677,6 +695,16 @@ function mountChartExtras(
     })
     footer.appendChild(replayButton)
   }
+
+  // The Strategy Lab, in a tab of its own so the wall stays where it is.
+  const labLink = document.createElement('a')
+  labLink.className = 'wd-rail-button'
+  labLink.textContent = 'Lab'
+  labLink.title = 'Strategy Lab: develop entry and exit rules from signals and indicators'
+  labLink.href = labHref()
+  labLink.target = '_blank'
+  labLink.rel = 'noopener'
+  footer.appendChild(labLink)
 
   const status = document.createElement('span')
   status.className = 'wd-status'

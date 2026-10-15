@@ -89,6 +89,7 @@ export function fakePane(id: string, chart: Chart, ticker = 'EURUSD', period: Pe
     getPeriod: () => period,
     setPeriod: () => {},
     getDatafeed: () => null as never,
+    seekTo: () => {},
     isActive: () => false
   }
 }

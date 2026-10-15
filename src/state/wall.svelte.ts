@@ -61,6 +61,10 @@ export interface PaneApi {
   overrideOverlay(patch: Partial<OverlayCreate>): void
   removeDrawings(): void
   screenshot(background: string): string
+  // Reload the pane anchored on `timestamp` (a bar's own timestamp, as the data list holds it),
+  // with that bar `fraction` of the way across -- the sync bus's seek, for a caller that points
+  // at an instant (the Strategy Lab's results).
+  seekTo(timestamp: number, fraction: number): void
 }
 
 // A seed's style overrides, keeping only what the settings dialog could itself have written

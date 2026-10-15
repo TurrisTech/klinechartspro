@@ -539,6 +539,7 @@
       getPeriod: () => pane.period,
       setPeriod: (value: Period) => assignPeriod(pane, value),
       getDatafeed: () => pane.datafeed,
+      seekTo: (timestamp: number) => pane.api?.seekTo(timestamp, 0.6),
       isActive: () => pane.id === wall.activeId
     }
   }

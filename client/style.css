@@ -3551,3 +3551,671 @@ body.wd-has-dock > #app {
 .wd-alert-time {
   width: 6.5rem;
 }
+
+/* -- The Strategy Lab (client/lab/page.ts) -----------------------------------------------------
+   A page of its own: a header, the editor beside the chart, the results under it. The page never
+   scrolls (body), so each column scrolls itself; on a phone the columns stack and the lab
+   scrolls as one. Colours are the library's tokens (src/app.css), dark under `.dark`. */
+
+a.wd-rail-button {
+  text-decoration: none;
+  text-align: center;
+}
+
+.wd-lab {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.wd-lab-loading {
+  padding: 2rem;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 1rem;
+  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-lab-head-left,
+.wd-lab-head-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-lab .kc-button {
+  height: 1.875rem;
+  font-size: 0.8125rem;
+}
+
+.wd-lab .kc-input {
+  height: 1.875rem;
+  padding: 0 0.375rem;
+  font-size: 0.8125rem;
+}
+
+.wd-lab-back {
+  text-decoration: none;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-brand {
+  font-weight: 600;
+  margin-right: 0.25rem;
+}
+
+.wd-lab-picker {
+  max-width: 16rem;
+}
+
+.wd-lab-name {
+  width: 14rem;
+}
+
+.wd-lab-instrument {
+  width: 9.5rem;
+}
+
+.wd-lab-days {
+  width: 4.5rem;
+}
+
+.wd-lab-window {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--muted-foreground);
+}
+
+.wd-lab.is-unsaved .wd-lab-name {
+  border-color: color-mix(in oklab, var(--kc-active-pane) 70%, transparent);
+}
+
+.wd-lab-delete.is-armed {
+  border-color: var(--kc-danger);
+  color: var(--kc-danger);
+}
+
+.wd-lab-save-note {
+  color: var(--kc-danger);
+  max-width: 24rem;
+}
+
+.wd-lab-show {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 1px solid var(--border);
+}
+
+.wd-lab-body {
+  display: grid;
+  grid-template-columns: minmax(22rem, 34rem) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.wd-lab-side {
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+}
+
+.wd-lab-main {
+  display: grid;
+  grid-template-rows: minmax(16rem, 1fr) minmax(12rem, 42%);
+  min-width: 0;
+  min-height: 0;
+}
+
+.wd-lab-chart {
+  position: relative;
+  min-height: 0;
+}
+
+/* The library sizes an embedded chart from its container; this one is the grid row. */
+.wd-lab-chart.klinecharts-pro {
+  height: 100%;
+  min-height: 0;
+}
+
+.wd-lab-results {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.wd-lab-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-lab-tab {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+
+.wd-lab-tab.is-on {
+  color: var(--foreground);
+  border-bottom-color: var(--kc-active-pane);
+}
+
+.wd-lab-tab:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.wd-lab-status {
+  padding: 0.25rem 0.75rem;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.wd-lab-results-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem 0.75rem;
+}
+
+/* -- the editor -- */
+
+.wd-lab-editor {
+  display: flex;
+  flex-direction: column;
+}
+
+.wd-lab-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-lab-section > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.wd-lab-section-title {
+  font-weight: 600;
+}
+
+.wd-lab-section-summary {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wd-lab-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.wd-lab-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.375rem;
+}
+
+.wd-lab-caption {
+  min-width: 6.5rem;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-muted {
+  color: var(--muted-foreground);
+}
+
+.wd-lab-note {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-lab-warning {
+  margin: 0.25rem 0;
+  color: #f59e0b;
+}
+
+.wd-lab-error,
+.wd-lab-problem {
+  color: var(--kc-danger);
+  margin: 0;
+}
+
+.wd-lab-problem {
+  font-size: 0.75rem;
+}
+
+.wd-lab-problems {
+  margin: 0.25rem 0;
+  padding-left: 1.25rem;
+}
+
+.wd-lab-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+
+.wd-lab-check input {
+  accent-color: var(--kc-active-pane);
+}
+
+.wd-lab-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.wd-lab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.0625rem 0.5rem;
+  cursor: pointer;
+}
+
+.wd-lab-chip.is-on {
+  border-color: color-mix(in oklab, var(--kc-active-pane) 70%, transparent);
+  background: color-mix(in oklab, var(--kc-active-pane) 18%, transparent);
+  color: var(--foreground);
+}
+
+.wd-lab-chip-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.wd-lab-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-lab-badge {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-title-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wd-lab-id-input {
+  width: 6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.wd-lab-params,
+.wd-lab-sides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+}
+
+.wd-lab-param {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.wd-lab-number {
+  width: 5.5rem;
+}
+
+.wd-lab-list-input {
+  width: 9rem;
+}
+
+.wd-lab-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.25rem;
+}
+
+.wd-lab-subhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 500;
+}
+
+.wd-lab-conditions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.wd-lab-condition {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.375rem;
+}
+
+.wd-lab-condition input[type='checkbox'] {
+  margin-top: 0.5rem;
+  accent-color: var(--kc-active-pane);
+}
+
+.wd-lab-condition.is-off .wd-lab-expr-input {
+  opacity: 0.5;
+}
+
+.wd-lab-condition-label {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-expr {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.wd-lab .wd-lab-expr-input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.wd-lab-expr-input.is-bad {
+  border-color: var(--kc-danger);
+}
+
+.wd-lab-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-lab-fields > summary {
+  cursor: pointer;
+  color: var(--kc-active-pane);
+  font-size: 0.75rem;
+}
+
+.wd-lab-fields[open] {
+  flex-basis: 100%;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.wd-lab-field-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.125rem 0.75rem;
+  margin: 0.375rem 0 0;
+  font-size: 0.75rem;
+}
+
+.wd-lab-field-list dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.wd-lab-field-list dd {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+.wd-lab-level {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.375rem;
+  flex: 1;
+}
+
+.wd-lab-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.wd-lab-rule .wd-alert-rule {
+  padding-left: 0.5rem;
+  border-left: 2px solid color-mix(in oklab, var(--kc-active-pane) 45%, transparent);
+}
+
+.wd-lab-notes {
+  width: 100%;
+  height: auto !important;
+  padding: 0.375rem !important;
+  resize: vertical;
+}
+
+/* -- the results -- */
+
+.wd-lab-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wd-lab-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.5rem;
+}
+
+.wd-lab-fact-value {
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-lab-fact-label {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-lab-table-wrap {
+  overflow-x: auto;
+}
+
+.wd-lab-table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wd-lab-table th,
+.wd-lab-table td {
+  padding: 0.1875rem 0.625rem 0.1875rem 0;
+  text-align: right;
+}
+
+.wd-lab-table th:first-child,
+.wd-lab-table td:first-child {
+  text-align: left;
+}
+
+.wd-lab-table th {
+  position: sticky;
+  top: 0;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-lab-table tr.is-clickable {
+  cursor: pointer;
+}
+
+.wd-lab-table tr.is-clickable:hover td {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.wd-lab-table tr.is-selected td {
+  background: color-mix(in oklab, var(--kc-active-pane) 18%, transparent);
+}
+
+.wd-lab-table td.is-up {
+  color: #26a69a;
+}
+
+.wd-lab-table td.is-down {
+  color: #ef5350;
+}
+
+.wd-lab-table td.is-muted {
+  color: var(--muted-foreground);
+}
+
+.wd-lab-timing {
+  font-size: 0.6875rem;
+}
+
+.wd-lab-equity {
+  margin: 0;
+  max-width: 60rem;
+}
+
+.wd-lab-equity-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.wd-lab-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.wd-lab-reference {
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.wd-lab-axis {
+  fill: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.wd-lab-equity-line {
+  fill: none;
+  stroke: var(--kc-active-pane);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+
+.wd-lab-cross {
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+}
+
+.wd-lab-equity-dot {
+  fill: var(--kc-active-pane);
+  stroke: var(--background);
+  stroke-width: 2;
+}
+
+.wd-lab-hit {
+  fill: transparent;
+}
+
+.wd-lab-readout {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  min-height: 1.2em;
+}
+
+@media (max-width: 900px) {
+  .wd-lab {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .wd-lab-body {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wd-lab-side {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .wd-lab-main {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .wd-lab-chart {
+    height: 60vh;
+  }
+
+  .wd-lab-results-body {
+    overflow: visible;
+  }
+
+  .wd-lab-name,
+  .wd-lab-picker {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+/* A select names its longest option; in the editor's column it wraps under its caption instead
+   of pushing the column wider than the page. */
+.wd-lab-editor select.kc-input {
+  max-width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
