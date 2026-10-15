@@ -16,6 +16,7 @@ import { resolutionDurationMs } from '../periods'
 import { byInterval, leadInFor, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { type AlertData, type Point, SpanCache } from './data'
+import { StrategyEntryEngine } from '../lab/alertentries'
 import { GraphEntryEngine } from './graphentry'
 import { compile, operandKey } from './rules'
 import { freshRun, type Instant, instants, scan, type Track } from './timeline'
@@ -70,6 +71,8 @@ export class AlertSearch {
   private readonly bars = new Map<string, SpanCache<AlertBar>>()
   private readonly points = new Map<string, SpanCache<Point>>()
   private readonly graphs: GraphEntryEngine
+  /** A saved strategy's entries (client/lab), run over each window. */
+  private readonly strategies = new StrategyEntryEngine()
 
   constructor(
     private readonly data: AlertData,
@@ -189,6 +192,12 @@ export class AlertSearch {
       if (operand.kind === 'graph') {
         // The overlay's own graph over this window (graphentry.ts), entries as points.
         const found = await this.graphs.entries(symbol, operand, window[0].open, ahead)
+        out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
+        continue
+      }
+      if (operand.kind === 'strategy') {
+        // The saved strategy's own run over this window (client/lab/alertentries.ts).
+        const found = await this.strategies.entries(symbol, operand, window[0].open, ahead)
         out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
         continue
       }

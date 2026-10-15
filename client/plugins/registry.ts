@@ -2,6 +2,7 @@ import { createArev21DivergencePlugin } from '../arev21div/plugin'
 import { createArevLabPlugin } from '../arevlab/plugin'
 import { createBidAskPlugin } from '../bidask/plugin'
 import { DEV_BOOKS } from '../books/api'
+import { createLabPlugin } from '../lab/plugin'
 import { createBooksPlugin } from '../books/plugin'
 import { createMtf01Plugin } from '../mtf01/plugin'
 import { createMtfPlugin } from '../mtf/plugin'
@@ -25,7 +26,8 @@ import type { IndicatorPlugin } from './types'
 // arev21's p with the pane's own price swings and draws in both panes; bid/ask, which is not
 // an indicator the server computes but the quote half of the bars themselves; TradeTalk,
 // which is a trading method computed here from daily bars and the bars the pane already holds;
-// and the volume profile, computed here from bars of a lower timeframe than the pane's.
+// the volume profile, computed here from bars of a lower timeframe than the pane's; and a
+// strategy saved in the Strategy Lab, run here over the pane's span (client/lab/plugin.ts).
 //
 // Levels and Zones (`levels`) are the picker's first group -- they were two buttons on the
 // toolbar until 2026-10-03 -- and are built by the caller, which also hands
@@ -44,6 +46,7 @@ export function builtinPlugins(levels: IndicatorPlugin): IndicatorPlugin[] {
     createBooksPlugin(DEV_BOOKS),
     createBidAskPlugin(),
     createTradeTalkPlugin(),
-    createVolumeProfilePlugin()
+    createVolumeProfilePlugin(),
+    createLabPlugin()
   ]
 }

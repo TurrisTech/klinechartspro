@@ -21,6 +21,7 @@ import { loadRegistry, type RegistryIndicator, type RegistrySeries } from '../ts
 import { type Feature, hasFeature } from '../capabilities'
 import { instantiate } from './compute'
 import { graphOverlays } from './graphentry'
+import { savedStrategyName } from '../lab/store'
 import { operandKey } from './rules'
 import type { BarField, Operand } from './types'
 
@@ -67,9 +68,10 @@ export interface BuiltinInfo {
   defaultParams: number[]
 }
 
-/** A built-in's facts, or null for a name klinecharts does not have. */
-export function builtinInfo(name: string): BuiltinInfo | null {
-  if (!BUILTIN_INDICATORS.includes(name)) return null
+/** A built-in's facts, or null for a name klinecharts does not have -- or one `offered` leaves
+ * out (the alerts offer the built-ins; the Strategy Lab the chart library's templates too). */
+export function builtinInfo(name: string, offered: readonly string[] = BUILTIN_INDICATORS): BuiltinInfo | null {
+  if (!offered.includes(name)) return null
   const Template = getIndicatorClass(name)
   if (!Template) return null
   const instance = new Template()
@@ -200,6 +202,8 @@ export function labelOperand(operand: Operand, catalogue: ServerCatalogue | null
     }
     case 'graph':
       return `${graphTitle(operand.overlay)} graph entry`
+    case 'strategy':
+      return `${savedStrategyName(operand.strategy) ?? operand.strategy} entry`
     case 'time':
       return `${operand.field === 'minute' ? 'Time of day' : 'Weekday'} (${zoneLabel(operand.zone)})`
   }

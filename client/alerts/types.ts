@@ -56,6 +56,11 @@ export type Operand =
    * (0-1439), or the `weekday` (`Mon`...`Sun`). What a "time" alert reads -- alone, an alert
    * at a time of day; with other conditions, a window they must fall in. */
   | { kind: 'time'; interval: string; field: 'minute' | 'weekday'; zone: string }
+  /** An ENTRY of a strategy saved in the Strategy Lab (client/lab): the way it trades (`long` /
+   * `short`) on a bar of `interval` where the strategy's own run finds an entry, '' on a bar where
+   * it finds none. Named by id, so refining the strategy in the lab -- and saving it -- refines
+   * the alert. */
+  | { kind: 'strategy'; interval: string; strategy: string }
 
 /** A label right side meaning "any label at all" -- `is any side` on a signal or a graph entry,
  * compiled to "not the empty label" (rules.ts). */

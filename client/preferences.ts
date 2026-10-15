@@ -76,6 +76,16 @@ async function read(): Promise<PreferencesDocument | undefined> {
   }
 }
 
+/** A read past the page's copy: what another tab or device has saved since this page loaded
+ * (client/lab/store.ts, when a dashboard pane is pointed at a strategy saved in the lab). The
+ * copy is replaced only by a successful read, so a failure leaves what was known. A write in
+ * flight is unaffected: it merges its own keys over whichever copy it finds, as it always has. */
+export async function refreshPreferences(): Promise<Record<string, unknown>> {
+  const fresh = await read()
+  if (fresh) known = fresh
+  return known?.data ?? {}
+}
+
 export async function loadStarredTimeframes(): Promise<string[]> {
   return starredTimeframesFrom(await loadPreferences())
 }

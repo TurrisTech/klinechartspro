@@ -1597,7 +1597,8 @@
       createOverlay,
       overrideOverlay,
       removeDrawings,
-      screenshot
+      screenshot,
+      seekTo: (timestamp: number, fraction: number) => seekTo(timestamp, fraction, null)
     } satisfies PaneApi
 
     return () => {

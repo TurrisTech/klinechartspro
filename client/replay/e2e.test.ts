@@ -103,6 +103,7 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
         getPeriod: () => period,
         setPeriod: () => {},
         getDatafeed: () => feed,
+        seekTo: () => {},
         isActive: () => interval === '1h'
       })
       await loadPane(interval)
