@@ -226,3 +226,15 @@ export function sharedStrategyStore(): Promise<StrategyStore> {
   }
   return sharedLoad
 }
+
+/** The page's saved strategies as they stand, without waiting: empty until the shared store has
+ * loaded (`sharedStrategyStore`). What the alert editor offers. */
+export function savedStrategies(): Array<{ id: string; name: string }> {
+  return (shared?.list() ?? []).map((s) => ({ id: s.id, name: s.name || s.id }))
+}
+
+/** A saved strategy's name, or null when the page has not loaded it (or it is gone). */
+export function savedStrategyName(id: string): string | null {
+  const s = shared?.get(id)
+  return s ? s.name || s.id : null
+}

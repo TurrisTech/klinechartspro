@@ -1,3 +1,4 @@
+import { sharedStrategyStore } from '../lab/store'
 import type { KLineChartPro } from '../../src'
 import { attachToSlot } from '../chrome/slot'
 import type { NotificationSink } from '../notifications'
@@ -47,6 +48,9 @@ let runtime: Promise<AlertsRuntime> | null = null
  * same runtime. */
 export function startAlerts(notify: NotificationSink): Promise<AlertsRuntime> {
   runtime ??= (async () => {
+    // The strategies saved in the Strategy Lab first: an alert on a strategy's entries is named by
+    // the strategy's name, and the editor offers them (client/lab/store.ts).
+    await sharedStrategyStore()
     const store = new ClientAlertStore(defaultPersistence())
     await store.load()
     const data = new HttpAlertData()

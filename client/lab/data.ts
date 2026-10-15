@@ -10,10 +10,12 @@
 //            reads (alerts/data.ts, which this reuses)
 //
 // Every read is PAST any replay clock (`asof: null`), like an alert's look-ahead: a run is history.
-// Each series is one contiguous span per key (alerts/data.ts `SpanCache`), extended from either
-// end as windows grow.
+// Each series is one contiguous span per key (`TailCache`), extended from either end as windows
+// grow -- and its last few bars read AGAIN whenever it is extended forward: a span read up to
+// "now" ends on a bar still forming, which a closed-bars read leaves out and a signals read finds
+// no label on, so extending from the old end alone would leave that bar out for good.
 
-import { HttpAlertData, type Point, SpanCache } from '../alerts/data'
+import { HttpAlertData, type Point } from '../alerts/data'
 import type { PointSource } from '../alerts/compute'
 import { capabilities } from '../capabilities'
 import { apiGet } from '../config'
@@ -48,12 +50,60 @@ const PAGE_BARS = 4000
 /** Pages one signals read follows before it stops: a runaway cursor must not crawl forever. */
 const MAX_PAGES = 400
 
+/** Bars at the end of a span read again when it is extended forward. */
+const TAIL_BARS = 4
+
+/** One contiguous run of rows keyed by an ascending number (a bar's open, a point's date), read
+ * on demand from either end; extending it forward reads its last `tailMs` again (see above). A
+ * range that does not touch the run replaces it: two runs with a hole between would read as one
+ * with nothing in the hole. */
+export class TailCache<R> {
+  private rows: R[] = []
+  private lo: number | null = null
+  private hi: number | null = null
+
+  constructor(
+    private readonly fetch: (from: number, to: number) => Promise<R[]>,
+    private readonly keyOf: (row: R) => number,
+    private readonly tailMs: number
+  ) {}
+
+  async ensure(from: number, to: number): Promise<void> {
+    if (to <= from) return
+    if (this.lo === null || this.hi === null || to < this.lo || from > this.hi) {
+      this.rows = await this.fetch(from, to)
+      this.lo = from
+      this.hi = to
+      return
+    }
+    if (from < this.lo) {
+      const lo = this.lo
+      const before = await this.fetch(from, lo)
+      this.rows = [...before.filter((r) => this.keyOf(r) < lo), ...this.rows]
+      this.lo = from
+    }
+    if (to > this.hi) {
+      const edge = Math.max(this.lo, this.hi - this.tailMs)
+      const after = await this.fetch(edge, to)
+      this.rows = [...this.rows.filter((r) => this.keyOf(r) < edge), ...after.filter((r) => this.keyOf(r) >= edge)]
+      this.hi = to
+    }
+  }
+
+  slice(from: number, to: number): R[] {
+    return this.rows.filter((r) => {
+      const key = this.keyOf(r)
+      return key >= from && key < to
+    })
+  }
+}
+
 export class HttpLabData implements LabData {
   private readonly alertData = new HttpAlertData()
   private readonly barSource = new HttpBarSource()
-  private readonly bars_ = new Map<string, SpanCache<ReplayBar>>()
-  private readonly signals_ = new Map<string, SpanCache<SignalPoint>>()
-  private readonly points_ = new Map<string, SpanCache<Point>>()
+  private readonly bars_ = new Map<string, TailCache<ReplayBar>>()
+  private readonly signals_ = new Map<string, TailCache<SignalPoint>>()
+  private readonly points_ = new Map<string, TailCache<Point>>()
   private readonly pips = new Map<string, Promise<number>>()
 
   grid(symbol: string): Promise<CandleGrid | null> {
@@ -78,9 +128,10 @@ export class HttpLabData implements LabData {
     const key = `${symbol}|${interval}|${columns}`
     let cache = this.bars_.get(key)
     if (!cache) {
-      cache = new SpanCache<ReplayBar>(
+      cache = new TailCache<ReplayBar>(
         (a, b) => (columns === 'all' ? this.barSource.fetch(symbol, interval, a, b, 'all', grid) : this.coreBars(symbol, interval, a, b, grid)),
-        (bar) => bar.open
+        (bar) => bar.open,
+        TAIL_BARS * nominalMs(interval)
       )
       this.bars_.set(key, cache)
     }
@@ -110,7 +161,7 @@ export class HttpLabData implements LabData {
     const key = `${request.plugin}|${request.variant}|${JSON.stringify(request.params)}|${symbol}|${interval}`
     let cache = this.signals_.get(key)
     if (!cache) {
-      cache = new SpanCache<SignalPoint>((a, b) => readSignals(request, symbol, interval, a, b), (p) => p.date)
+      cache = new TailCache<SignalPoint>((a, b) => readSignals(request, symbol, interval, a, b), (p) => p.date, TAIL_BARS * nominalMs(interval))
       this.signals_.set(key, cache)
     }
     await cache.ensure(from, to)
@@ -122,7 +173,7 @@ export class HttpLabData implements LabData {
     const key = `${source.plugin}|${source.variant}|${symbol}|${interval}`
     let cache = this.points_.get(key)
     if (!cache) {
-      cache = new SpanCache<Point>((a, b) => this.alertData.points(source, symbol, interval, a, b), (p) => p.date)
+      cache = new TailCache<Point>((a, b) => this.alertData.points(source, symbol, interval, a, b), (p) => p.date, TAIL_BARS * nominalMs(interval))
       this.points_.set(key, cache)
     }
     await cache.ensure(from, to)

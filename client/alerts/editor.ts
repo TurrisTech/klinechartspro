@@ -4,6 +4,7 @@ import { button, el, input, labelled, select } from './dom'
 import { defaultLeaf, fromEditable, type GroupNode, group, toEditable } from './editable'
 import type { GraphSettings } from './graphentry'
 import { compile, describeRule, type Labeller, RuleError } from './rules'
+import { savedStrategies } from '../lab/store'
 import { createRuleTree } from './ruletree'
 import { normaliseSymbol } from './store'
 import type { Alert, AlertDefinition } from './types'
@@ -109,6 +110,7 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
     intervals,
     defaultInterval: () => options.context.interval,
     graphSettings: options.context.graphSettings,
+    strategies: savedStrategies,
     onChange: () => {
       failure = ''
       refreshSummary()

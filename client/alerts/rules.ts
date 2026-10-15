@@ -81,13 +81,15 @@ export function operandKey(operand: Operand): string {
       return `graph:${operand.overlay}[${operand.timeframes.join(',')}|${operand.roots.join(',')}|${operand.maxStep}]@${operand.interval}`
     case 'time':
       return `time:${operand.field}/${operand.zone}@${operand.interval}`
+    case 'strategy':
+      return `strat:${operand.strategy}@${operand.interval}`
   }
 }
 
 /** An operand whose values are labels (a signal's side, a graph entry's, a weekday), compared
  * with `is` / `is not` rather than with numbers. */
 export function isLabelOperand(operand: Operand): boolean {
-  return operand.kind === 'signal' || operand.kind === 'graph' || (operand.kind === 'time' && operand.field === 'weekday')
+  return operand.kind === 'signal' || operand.kind === 'graph' || operand.kind === 'strategy' || (operand.kind === 'time' && operand.field === 'weekday')
 }
 
 /** The weekdays a `weekday` operand reads, in the order the editor offers them. */
@@ -218,6 +220,9 @@ function checkOperand(operand: Operand): void {
       if (!Number.isFinite(operand.maxStep) || operand.maxStep < 2) throw new RuleError('the largest step is at least 2')
       return
     }
+    case 'strategy':
+      if (!operand.strategy) throw new RuleError('choose a saved strategy')
+      return
     case 'time':
       if (operand.field !== 'minute' && operand.field !== 'weekday') throw new RuleError(`not a time field: ${operand.field}`)
       try {
@@ -273,6 +278,8 @@ export function plainLabel(operand: Operand): string {
       return `${operand.overlay} graph entry`
     case 'time':
       return `${operand.field === 'minute' ? 'time of day' : 'weekday'} (${operand.zone})`
+    case 'strategy':
+      return `${operand.strategy} entry`
   }
 }
 

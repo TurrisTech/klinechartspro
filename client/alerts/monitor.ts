@@ -27,6 +27,7 @@ import type { StreamListener } from '../stream'
 import { byInterval, labelOperand, leadInFor, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { evaluate } from './conditions'
+import { StrategyEntryEngine } from '../lab/alertentries'
 import { GraphEntryEngine } from './graphentry'
 import type { AlertData, Point } from './data'
 import { compile, type CompiledRule, operandKey } from './rules'
@@ -352,7 +353,7 @@ class Runner {
       const date = track.dates?.[index]
       for (const [key, values] of track.values) {
         const operand = this.compiled.operands.get(key)
-        if ((operand?.kind !== 'series' && operand?.kind !== 'signal' && operand?.kind !== 'graph') || values[index] !== undefined) continue
+        if ((operand?.kind !== 'series' && operand?.kind !== 'signal' && operand?.kind !== 'graph' && operand?.kind !== 'strategy') || values[index] !== undefined) continue
         // Missing where the source has already served past this bar is final: it wrote nothing
         // here (krev writes only on a fresh extreme). Only a bar after that may still be written.
         const through = this.served.get(key) ?? null
@@ -375,6 +376,14 @@ class Runner {
             // The overlay's graph, its timeframes' tails read again each time: a vote written
             // since the last bar, on any of them, can change what is an entry.
             const found = await this.owner.graphs.entries(this.alert.symbol, operand, bars[0].open, this.owner.now(), true)
+            if (this.disposed) return out
+            indexes.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
+            this.served.set(operandKey(operand), found.through)
+            continue
+          }
+          if (operand.kind === 'strategy') {
+            // The saved strategy's run up to now; its data layer reads only the tail again.
+            const found = await this.owner.strategies.entries(this.alert.symbol, operand, bars[0].open, this.owner.now())
             if (this.disposed) return out
             indexes.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
             this.served.set(operandKey(operand), found.through)
@@ -452,6 +461,8 @@ export class AlertMonitor {
   labelCatalogue: ServerCatalogue | null = null
   /** Graph entries, with each timeframe's tail read again per evaluation. */
   readonly graphs: GraphEntryEngine
+  /** A saved strategy's entries (client/lab). */
+  readonly strategies: StrategyEntryEngine
   private readonly runners = new Map<string, Runner>()
   private readonly feeds = new Map<string, Feed>()
   private readonly pointFeeds = new Map<string, PointFeed>()
@@ -470,6 +481,7 @@ export class AlertMonitor {
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS
     this.graceMs = options.graceMs ?? DEFAULT_GRACE_MS
     this.graphs = new GraphEntryEngine(options.data)
+    this.strategies = new StrategyEntryEngine(undefined, undefined, () => this.clock())
   }
 
   now(): number {

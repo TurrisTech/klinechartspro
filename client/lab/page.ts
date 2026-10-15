@@ -90,6 +90,9 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   }
   const current = (): Strategy => drafts.get(currentId) as Strategy
   const unsaved = (id: string): boolean => signature(drafts.get(id) ?? null) !== signature(store.get(id))
+  /** Drafts the user has edited or created. Only these can hold work worth a "leave the page?"
+   * prompt: the default strategy a first visit opens on is unsaved but holds nothing of theirs. */
+  const touched = new Set<string>()
 
   // -- layout -----------------------------------------------------------------------------------
   const head = el('header', 'wd-lab-head')
@@ -166,6 +169,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       else fresh = value === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
       fresh.instrument = current().instrument
       drafts.set(fresh.id, fresh)
+      touched.add(fresh.id)
       switchTo(fresh.id)
     }
   )
@@ -349,6 +353,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   let timer: ReturnType<typeof setTimeout> | null = null
 
   function edited(rerun = true): void {
+    touched.add(currentId)
     refreshHead()
     if (rerun) scheduleRun()
   }
@@ -413,7 +418,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   })
 
   window.addEventListener('beforeunload', (event) => {
-    if (![...drafts.keys()].some((id) => unsaved(id))) return
+    if (![...touched].some((id) => drafts.has(id) && unsaved(id))) return
     event.preventDefault()
     event.returnValue = ''
   })

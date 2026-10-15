@@ -35,7 +35,9 @@ export interface RuleTreeOptions {
    * copies when it is chosen, and on "Copy from pane". Absent: the overlay's defaults. */
   graphSettings?: (overlayId: string) => GraphSettings
   /** What the source picker offers beyond prices and indicators. Absent: everything. */
-  offer?: { series?: boolean; signals?: boolean; graphs?: boolean; time?: boolean }
+  offer?: { series?: boolean; signals?: boolean; graphs?: boolean; time?: boolean; strategies?: boolean }
+  /** The strategies saved in the Strategy Lab, whose entries a rule may read. */
+  strategies?: () => Array<{ id: string; name: string }>
   /** The indicator templates offered; the alerts' built-ins when absent. */
   indicators?: readonly string[]
   /** After a structural edit. */
@@ -50,7 +52,8 @@ export interface RuleTree {
 export function createRuleTree(options: RuleTreeOptions): RuleTree {
   const { root, catalogue } = options
   const offered = options.indicators ?? BUILTIN_INDICATORS
-  const offer = { series: true, signals: true, graphs: true, time: true, ...options.offer }
+  const offer = { series: true, signals: true, graphs: true, time: true, strategies: true, ...options.offer }
+  const strategies = (): Array<{ id: string; name: string }> => (offer.strategies ? (options.strategies?.() ?? []) : [])
   const element = el('div', 'wd-alert-rule')
   /** Graph entry conditions whose settings are open, by operand. */
   const openGraphs = new Set<string>()
@@ -296,6 +299,10 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
     if (labels) {
       if (offer.signals) optionGroup('Signals', (catalogue?.signals ?? []).map((f) => ({ value: `sig:${f.plugin}/${f.variant}`, label: f.title })))
       if (offer.graphs) optionGroup('Graph entries', graphOverlays().map((o) => ({ value: `gph:${o.id}`, label: `${graphTitle(o.id)} graph entry` })))
+      optionGroup(
+        'Strategy entries',
+        strategies().map((s) => ({ value: `stg:${s.id}`, label: `${s.name} entry` }))
+      )
       if (offer.time) {
         optionGroup('Time', [
           { value: 'tim:minute', label: 'Time of day' },
@@ -308,7 +315,7 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       // A server row this page has no catalogue entry for: keep it, by its own spelling.
       const option = document.createElement('option')
       option.value = current
-      option.textContent = operand.kind === 'series' ? operand.indicator : current
+      option.textContent = operand.kind === 'series' ? operand.indicator : operand.kind === 'strategy' ? `${operand.strategy} entry (not saved here)` : current
       source.prepend(option)
     }
     source.value = current
@@ -393,6 +400,7 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       return withEntry({ kind: 'graph', interval: entry, overlay: rest, ...graphSettingsFor(rest) }, entry)
     }
     if (kind === 'tim') return { kind: 'time', interval, field: rest === 'weekday' ? 'weekday' : 'minute', zone: 'America/New_York' }
+    if (kind === 'stg') return { kind: 'strategy', interval, strategy: rest }
     return null
   }
 
@@ -411,6 +419,13 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       ]
     }
     if (operand.kind === 'time' && operand.field === 'weekday') return WEEKDAYS.map((d) => ({ value: d, label: d }))
+    if (operand.kind === 'strategy') {
+      return [
+        { value: ANY_LABEL, label: 'any side' },
+        { value: 'long', label: 'long' },
+        { value: 'short', label: 'short' }
+      ]
+    }
     return []
   }
 
@@ -509,6 +524,8 @@ function sourceValue(operand: Operand): string {
       return `gph:${operand.overlay}`
     case 'time':
       return `tim:${operand.field}`
+    case 'strategy':
+      return `stg:${operand.strategy}`
   }
 }
 
@@ -522,6 +539,7 @@ function shape(operand: Operand): string {
   if (operand.kind === 'signal') return `signal:${operand.plugin}/${operand.variant}`
   if (operand.kind === 'graph') return 'graph'
   if (operand.kind === 'time') return `time:${operand.field}`
+  if (operand.kind === 'strategy') return 'strategy'
   return 'number'
 }
 

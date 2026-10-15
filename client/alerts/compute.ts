@@ -97,8 +97,11 @@ export async function buildTrack(
       }
       // A graph entry reads like a signal: its points are the entries the engine found
       // (graphentry.ts), each carrying the graph's side as its label.
+      // A strategy's entry too: its points are the entries the strategy's run found
+      // (client/lab/alertentries.ts), each carrying the direction it trades as its label.
       case 'signal':
-      case 'graph': {
+      case 'graph':
+      case 'strategy': {
         const index = points(operand)
         values.set(key, bars.map((bar) => signalValue(index?.rows.get(bar.date), index !== undefined && index.through !== null && bar.date <= index.through)))
         break

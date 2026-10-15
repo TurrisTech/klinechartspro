@@ -340,7 +340,8 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       defaultInterval: opts.defaultInterval,
       selfInterval: opts.self ? { code: SELF_INTERVAL, label: 'its own' } : undefined,
       // A lab rule reads values; the graph entries it would offer are the lab's own job.
-      offer: { graphs: false },
+      // nor another strategy's entries, which its runner does not read.
+      offer: { graphs: false, strategies: false },
       indicators: labIndicators(),
       onChange: () => {
         set(fromEditable(root as GroupNode))

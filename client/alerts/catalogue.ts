@@ -21,6 +21,7 @@ import { loadRegistry, type RegistryIndicator, type RegistrySeries } from '../ts
 import { type Feature, hasFeature } from '../capabilities'
 import { instantiate } from './compute'
 import { graphOverlays } from './graphentry'
+import { savedStrategyName } from '../lab/store'
 import { operandKey } from './rules'
 import type { BarField, Operand } from './types'
 
@@ -201,6 +202,8 @@ export function labelOperand(operand: Operand, catalogue: ServerCatalogue | null
     }
     case 'graph':
       return `${graphTitle(operand.overlay)} graph entry`
+    case 'strategy':
+      return `${savedStrategyName(operand.strategy) ?? operand.strategy} entry`
     case 'time':
       return `${operand.field === 'minute' ? 'Time of day' : 'Weekday'} (${zoneLabel(operand.zone)})`
   }
