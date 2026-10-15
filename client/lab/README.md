@@ -24,7 +24,7 @@ indicator"), with four choices of theirs:
 |---|---|---|
 | `sources` | the **signal pool** | a *published* signal (any `GET /plugins/signals` family, read with the registry row's params — rank 85 is `arev21_outlier_rank` at `q = 0.85`) or a *rule event* (an alert-language rule, fires where it starts to hold), each on chosen timeframes, priced at the candle's body / wick / close, each label mapped to a top or a bottom |
 | `graph` | how signals join | roots and which sources root; what a same-side root does (join / new / ignore); whether a signal stepping in a longer root's graph may root; reach (a graph only goes further); which parent (supersede / recent / nearest / root); the **step test**; when a graph ends early (after N root bars, or a condition at each close of a watched timeframe); read bounds |
-| `entry` | which nodes are entries | the **entry test**; a **filter** (an alert rule read at the entry instant); which way a top / a bottom trades |
+| `entry` | which nodes are entries | the **entry test**; a **filter** (an alert rule read at the entry instant); which way a top / a bottom trades (default **against the signal**: a top sold, a bottom bought) |
 | `exits` | trade management | stop and target (pips, ATR, R, or a price expression), breakeven, trailing stop, exit rules per direction, a time limit, close on an opposite entry |
 | `sizing`, `outcomes`, `pathInterval` | the account and the measures | |
 

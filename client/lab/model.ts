@@ -393,7 +393,8 @@ export function newStrategyId(now = Date.now()): string {
 }
 
 /** The AREV21 outlier rank 85 overlay's graph, every rule at the overlay's own setting: roots on
- * 1D, every timeframe it offers, entries where a 5m or 3m signal steps in. */
+ * 1D, every timeframe it offers, entries where a 5m or 3m signal steps in. An entry trades
+ * AGAINST its signal (user, 2026-10-15): a top -- a `long` label -- is sold, a bottom bought. */
 export function rank85Strategy(now = Date.now()): Strategy {
   return {
     version: STRATEGY_VERSION,
@@ -404,7 +405,7 @@ export function rank85Strategy(now = Date.now()): Strategy {
     window: { kind: 'days', days: 30 },
     sources: [rank85Source()],
     graph: defaultGraph(),
-    entry: { when: defaultGraphEntry(), filter: null, direction: { top: 'long', bottom: 'short' } },
+    entry: { when: defaultGraphEntry(), filter: null, direction: { top: 'short', bottom: 'long' } },
     exits: defaultExits(),
     sizing: defaultSizing(),
     outcomes: defaultOutcomes(),

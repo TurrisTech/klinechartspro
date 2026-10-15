@@ -35,7 +35,8 @@ describe('a graph strategy', () => {
       expect(['3m', '5m']).toContain(entry.signal.interval)
       expect(entry.graph?.nodes[entry.node].parent).toBeGreaterThanOrEqual(0)
       expect(entry.at).toBeGreaterThanOrEqual(window.from)
-      expect(entry.direction).toBe(entry.side === 'top' ? 'long' : 'short')
+      // Against the signal: a top is sold, a bottom bought.
+      expect(entry.direction).toBe(entry.side === 'top' ? 'short' : 'long')
     }
     // The path is 1m: the longest stored timeframe that tiles both 3m and 5m.
     expect(run.pathInterval).toBe('1m')
