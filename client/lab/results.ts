@@ -1,4 +1,5 @@
-import { el } from '../alerts/dom'
+import { button, el } from '../alerts/dom'
+import { resolutionDurationMs } from '../periods'
 import { rootIndex } from './entries'
 import type { Problem } from './model'
 import type { EntryOutcome, OutcomeSummary } from './outcomes'
@@ -11,9 +12,16 @@ import type { ExitReason, LabTrade } from './trades'
 //             short), and the simulated account
 //   Entries   one row per entry, with its outcomes -- a click takes the chart there
 //   Trades    one row per simulated trade -- a click takes the chart there
-//   Equity    the closed-trade balance over time, with a crosshair
+//   Equity    the closed-trade balance over time, with a crosshair; a click takes the chart to
+//             the trade closed there
 //
-// Problems that stop a run are shown in place of all of it, each saying where it is.
+// The Entries and Trades tables sort on a header click (ascending, descending, back to time), and
+// the stepper beside the tabs -- or `[` / `]`, or the arrow keys on a row -- walks the chart through
+// the rows in the order shown, so the worst ten trades are ten key presses once sorted by R.
+//
+// Problems that stop a run are shown in a banner over the LAST run's results, which stay -- dimmed,
+// as they no longer describe the draft -- so a half-typed condition does not take away what the
+// run before it found. Each problem is a link to its slot.
 
 export interface Pick {
   /** The entry the row is about (a trade's entry too). */
@@ -22,18 +30,37 @@ export interface Pick {
   at: number
 }
 
+export interface ResultsHandlers {
+  /** A row (or the stepper, or the equity curve) chose an entry: take the chart there. */
+  onPick(pick: Pick): void
+  /** A problem in the banner was clicked: show its slot. */
+  onProblem?(problem: Problem): void
+}
+
 export interface ResultsView {
   readonly element: HTMLElement
   showRun(run: LabRun): void
+  /** Problems (or a failure, with none) that stop the draft running. The last run stays shown,
+   * marked out of date, under a banner listing them. */
   showProblems(problems: Problem[], message: string): void
+  /** The draft was edited and no run is coming (Auto-run is off): the last run stays shown,
+   * marked out of date, under `text`. */
+  showStale(text: string): void
+  /** A message in place of everything: no run is shown (another strategy, before its first run). */
   showMessage(text: string, kind?: 'info' | 'error'): void
   /** The run's progress, over whatever is shown. */
   progress(text: string | null): void
   /** Mark a row as the chart's selection. */
   select(entryId: string | null): void
+  /** Select the next (+1) or previous (-1) row of the table shown -- the entries in time order on
+   * the Summary and Equity tabs -- and take the chart there. False when there is nothing to step. */
+  step(delta: 1 | -1): boolean
 }
 
 type Tab = 'summary' | 'entries' | 'trades' | 'equity'
+type Sortable = 'entries' | 'trades'
+
+const TAB_KEY = 'wd.lab.tab'
 
 const REASON_WORDS: Record<ExitReason, string> = {
   stop: 'stop',
@@ -46,19 +73,48 @@ const REASON_WORDS: Record<ExitReason, string> = {
   end: 'still open at the end'
 }
 
-export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
+/** One row of a results table. `keys` sort it, one per column (null sorts last either way). */
+interface Row {
+  /** The entry it is about: what selecting it picks. */
+  id: string
+  at: number
+  cells: Array<string | HTMLElement>
+  keys: Array<number | string | null>
+  tone?: string[]
+  /** An entry the filter took out: shown, but not stepped to from the Summary. */
+  muted?: boolean
+}
+
+function storedTab(): Tab {
+  try {
+    const t = window.localStorage.getItem(TAB_KEY)
+    if (t === 'summary' || t === 'entries' || t === 'trades' || t === 'equity') return t
+  } catch {
+    // A per-device convenience only.
+  }
+  return 'summary'
+}
+
+export function createResultsView(handlers: ResultsHandlers): ResultsView {
   const element = el('section', 'wd-lab-results')
-  const tabs = el('div', 'wd-lab-tabs')
+  const bar = el('div', 'wd-lab-tabs')
+  const tabs = el('div', 'wd-lab-tab-list')
   tabs.setAttribute('role', 'tablist')
+  const stepper = el('div', 'wd-lab-stepper')
+  bar.append(tabs, stepper)
   const status = el('div', 'wd-lab-status')
   status.hidden = true
+  const banner = el('div', 'wd-lab-banner')
+  banner.hidden = true
   const body = el('div', 'wd-lab-results-body')
-  element.append(tabs, status, body)
+  element.append(bar, status, banner, body)
 
-  let tab: Tab = 'summary'
+  let tab: Tab = storedTab()
   let run: LabRun | null = null
   let selected: string | null = null
   let side: 'all' | 'long' | 'short' = 'all'
+  /** Per table: the column it is sorted on and which way; null for time order. */
+  const sorts: Record<Sortable, { col: number; desc: boolean } | null> = { entries: null, trades: null }
 
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: 'summary', label: 'Summary' },
@@ -82,6 +138,11 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
       b.disabled = run === null
       b.addEventListener('click', () => {
         tab = t.id
+        try {
+          window.localStorage.setItem(TAB_KEY, tab)
+        } catch {
+          // A per-device convenience only.
+        }
         render()
       })
       tabs.appendChild(b)
@@ -90,6 +151,7 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
 
   function render(): void {
     renderTabs()
+    renderStepper()
     if (!run) return
     body.innerHTML = ''
     if (tab === 'summary') body.appendChild(summaryView(run))
@@ -103,11 +165,17 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
   const fmt = (v: number | null | undefined, digits = 1): string => (v === null || v === undefined || !Number.isFinite(v) ? '–' : v.toFixed(digits))
   const pct = (v: number | null | undefined): string => (v === null || v === undefined ? '–' : `${(v * 100).toFixed(0)}%`)
   const signed = (v: number | null | undefined, digits = 1): string => (v === null || v === undefined || !Number.isFinite(v) ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(digits)}`)
+  /** A whole amount with its thousands grouped: 1,696,969. */
+  const whole = (v: number | null | undefined, sign = false): string =>
+    v === null || v === undefined || !Number.isFinite(v) ? '–' : `${sign && v > 0 ? '+' : ''}${Math.round(v).toLocaleString('en-US')}`
   const time = (ms: number, zone: string): string =>
     new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: '2-digit', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(ms)
   const zoneOf = (r: LabRun): string => r.grid.schedule.timezone
 
-  function table(headers: string[], rows: Array<{ cells: Array<string | HTMLElement>; onClick?: () => void; selected?: boolean; tone?: string[] }>, className = ''): HTMLElement {
+  const tone = (v: number | null | undefined): string => (v === null || v === undefined || !Number.isFinite(v) || v === 0 ? '' : v > 0 ? 'is-up' : 'is-down')
+
+  /** A table of plain rows: the Summary's. */
+  function table(headers: string[], rows: Array<{ cells: string[]; tone?: string[] }>, className = ''): HTMLElement {
     const wrap = el('div', 'wd-lab-table-wrap')
     const t = el('table', `wd-lab-table ${className}`)
     const head = el('thead', '')
@@ -118,31 +186,136 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
       tr.appendChild(th)
     }
     head.appendChild(tr)
-    t.appendChild(head)
     const tbody = el('tbody', '')
     for (const r of rows) {
-      const row = el('tr', `${r.onClick ? 'is-clickable' : ''}${r.selected ? ' is-selected' : ''}`)
+      const row = el('tr', '')
+      r.cells.forEach((cell, i) => {
+        const td = el('td', r.tone?.[i] ?? '')
+        td.textContent = cell
+        row.appendChild(td)
+      })
+      tbody.appendChild(row)
+    }
+    t.append(head, tbody)
+    wrap.appendChild(t)
+    return wrap
+  }
+
+  /** `rows` in the order `which` is sorted in: by the clicked column, else as given (time). */
+  function sorted(which: Sortable, rows: Row[]): Row[] {
+    const sort = sorts[which]
+    if (!sort) return rows
+    const sign = sort.desc ? -1 : 1
+    return rows
+      .map((row, i) => ({ row, i }))
+      .sort((a, b) => {
+        const x = a.row.keys[sort.col]
+        const y = b.row.keys[sort.col]
+        if (x === y || (x === null && y === null)) return a.i - b.i
+        if (x === null) return 1
+        if (y === null) return -1
+        return (x < y ? -1 : 1) * sign
+      })
+      .map((x) => x.row)
+  }
+
+  /** A results table whose rows pick an entry, sorted on a header click. */
+  function pickTable(which: Sortable, headers: string[], rows: Row[], className = ''): HTMLElement {
+    const wrap = el('div', 'wd-lab-table-wrap')
+    const t = el('table', `wd-lab-table is-picking ${className}`)
+    const head = el('thead', '')
+    const tr = el('tr', '')
+    const sort = sorts[which]
+    headers.forEach((h, col) => {
+      const th = el('th', 'is-sortable')
+      const on = sort?.col === col
+      th.textContent = `${h}${on ? (sort?.desc ? ' ▾' : ' ▴') : ''}`
+      th.title = on && sort?.desc ? 'Back to time order' : `Sort by ${h}`
+      th.setAttribute('aria-sort', on ? (sort?.desc ? 'descending' : 'ascending') : 'none')
+      th.addEventListener('click', () => {
+        // Ascending, then descending, then back to time order.
+        sorts[which] = !on ? { col, desc: false } : sort?.desc ? null : { col, desc: true }
+        render()
+      })
+      tr.appendChild(th)
+    })
+    head.appendChild(tr)
+    const tbody = el('tbody', '')
+    for (const r of sorted(which, rows)) {
+      const row = el('tr', `is-clickable${selected === r.id ? ' is-selected' : ''}`)
+      row.dataset.id = r.id
+      row.tabIndex = 0
       r.cells.forEach((cell, i) => {
         const td = el('td', r.tone?.[i] ?? '')
         if (typeof cell === 'string') td.textContent = cell
         else td.appendChild(cell)
         row.appendChild(td)
       })
-      if (r.onClick) {
-        row.tabIndex = 0
-        row.addEventListener('click', r.onClick)
-        row.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') r.onClick?.()
-        })
-      }
+      row.addEventListener('click', () => pick(r.id, r.at))
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') pick(r.id, r.at)
+        else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault()
+          if (step(e.key === 'ArrowDown' ? 1 : -1)) (body.querySelector('tr.is-selected') as HTMLElement | null)?.focus()
+        }
+      })
       tbody.appendChild(row)
     }
-    t.appendChild(tbody)
+    t.append(head, tbody)
     wrap.appendChild(t)
     return wrap
   }
 
-  const tone = (v: number | null | undefined): string => (v === null || v === undefined || !Number.isFinite(v) || v === 0 ? '' : v > 0 ? 'is-up' : 'is-down')
+  // -- selecting ------------------------------------------------------------------------------------
+
+  function pick(id: string, at: number): void {
+    selected = id
+    markSelected()
+    handlers.onPick({ entryId: id, at })
+  }
+
+  /** The selection's row(s) marked in place -- a re-render would lose the table's scroll. */
+  function markSelected(): void {
+    for (const row of body.querySelectorAll<HTMLElement>('tr[data-id]')) row.classList.toggle('is-selected', row.dataset.id === selected)
+    body.querySelector('tr.is-selected')?.scrollIntoView({ block: 'nearest' })
+    renderStepper()
+  }
+
+  /** What the stepper walks: the shown table's rows in their order, else the entries in time. */
+  function stepList(): { noun: string; rows: Row[] } {
+    if (!run) return { noun: 'entry', rows: [] }
+    if (tab === 'trades') return { noun: 'trade', rows: sorted('trades', tradeRows(run)) }
+    if (tab === 'entries') return { noun: 'entry', rows: sorted('entries', entryRows(run)) }
+    return { noun: 'entry', rows: entryRows(run).filter((r) => !r.muted) }
+  }
+
+  function step(delta: 1 | -1): boolean {
+    const { rows } = stepList()
+    if (rows.length === 0) return false
+    const at = rows.findIndex((r) => r.id === selected)
+    const next = at < 0 ? (delta > 0 ? 0 : rows.length - 1) : at + delta
+    if (next < 0 || next >= rows.length) return false
+    pick(rows[next].id, rows[next].at)
+    return true
+  }
+
+  function renderStepper(): void {
+    stepper.innerHTML = ''
+    const { noun, rows } = stepList()
+    if (!run || rows.length === 0) return
+    const at = rows.findIndex((r) => r.id === selected)
+    const prev = button('kc-button wd-lab-step', '‹', () => step(-1))
+    prev.title = `Previous ${noun} ([)`
+    prev.setAttribute('aria-label', `Previous ${noun}`)
+    prev.disabled = at === 0
+    const next = button('kc-button wd-lab-step', '›', () => step(1))
+    next.title = `Next ${noun} (])`
+    next.setAttribute('aria-label', `Next ${noun}`)
+    next.disabled = at === rows.length - 1
+    const label = el('span', 'wd-lab-step-label')
+    label.textContent = at < 0 ? `${rows.length} ${noun === 'entry' ? 'entries' : 'trades'}` : `${noun} ${at + 1} / ${rows.length}`
+    stepper.append(prev, label, next)
+  }
 
   // -- views --------------------------------------------------------------------------------------
 
@@ -150,9 +323,9 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
     const box = el('div', 'wd-lab-summary')
     const longs = r.entries.filter((e) => e.direction === 'long').length
     const facts = el('div', 'wd-lab-facts')
-    const fact = (value: string, label: string, title = ''): void => {
+    const fact = (value: string, label: string, title = '', valueTone = ''): void => {
       const f = el('div', 'wd-lab-fact')
-      const v = el('div', 'wd-lab-fact-value')
+      const v = el('div', `wd-lab-fact-value ${valueTone}`)
       v.textContent = value
       const l = el('div', 'wd-lab-fact-label')
       l.textContent = label
@@ -161,15 +334,15 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
       facts.appendChild(f)
     }
     const inWindow = r.signals.filter((s) => s.knownAt >= r.from && s.knownAt <= r.to).length
-    fact(String(inWindow), 'signals', 'Signals of the pool in the window (more are read before it, for the graphs in force at its start)')
+    fact(whole(inWindow), 'signals', 'Signals of the pool in the window (more are read before it, for the graphs in force at its start)')
     if (r.strategy.graph.enabled) fact(String(r.graphs.length), 'graphs')
     fact(String(r.entries.length), 'entries', `${longs} long, ${r.entries.length - longs} short`)
     if (r.filtered.length > 0) fact(String(r.filtered.length), 'filtered out')
     if (r.sim) {
       fact(String(r.sim.stats.trades), 'trades')
       fact(pct(r.sim.stats.winRate), 'won')
-      fact(signed(r.sim.stats.totalR, 1), 'R in all')
-      fact(signed(r.sim.stats.netPips, 0), 'pips')
+      fact(signed(r.sim.stats.totalR, 1), 'R in all', '', tone(r.sim.stats.totalR))
+      fact(signed(r.sim.stats.netPips, 0), 'pips', '', tone(r.sim.stats.netPips))
     }
     box.appendChild(facts)
 
@@ -225,10 +398,10 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
       box.appendChild(simHead)
       box.appendChild(
         table(
-          ['trades', 'won', 'net pips', 'R', 'avg R', 'profit factor', 'max drawdown', `net (${r.symbol.split(':')[1]?.slice(3) || 'quote'})`, 'avg bars'],
+          ['trades', 'won', 'net pips', 'R', 'avg R', 'profit factor', 'max drawdown', `net (${quoteOf(r)})`, 'avg bars'],
           [
             {
-              cells: [String(s.trades), pct(s.winRate), signed(s.netPips, 0), signed(s.totalR, 1), signed(s.avgR, 2), fmt(s.profitFactor, 2), pct(s.maxDrawdown), signed(s.netPnl, 0), fmt(s.avgBarsHeld, 0)],
+              cells: [String(s.trades), pct(s.winRate), signed(s.netPips, 0), signed(s.totalR, 1), signed(s.avgR, 2), fmt(s.profitFactor, 2), pct(s.maxDrawdown), whole(s.netPnl, true), fmt(s.avgBarsHeld, 0)],
               tone: ['', '', tone(s.netPips), tone(s.totalR), tone(s.avgR), '', '', tone(s.netPnl), '']
             }
           ]
@@ -261,90 +434,108 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
     return box
   }
 
-  function entriesView(r: LabRun): HTMLElement {
-    if (r.entries.length === 0 && r.filtered.length === 0) return message('No entries in this window.')
+  /** Entries and the filter's rejects, in time. */
+  function entryRows(r: LabRun): Row[] {
     const zone = zoneOf(r)
     const horizons = [...r.strategy.outcomes.horizons].sort((a, b) => a - b)
     const touches = r.strategy.outcomes.touches
     const all = [...r.entries.map((e) => ({ e, filtered: false })), ...r.filtered.map((e) => ({ e, filtered: true }))].sort((a, b) => a.e.at - b.e.at)
-    return table(
-      ['#', 'at', 'tf', 'trade', 'price', 'root', 'depth', ...horizons.map((h) => `+${h}`), ...touches.map((k) => `±${k}`), 'MFE/MAE ATR'],
-      all.map(({ e, filtered }, i) => {
-        const o: EntryOutcome | undefined = r.outcomes.get(e.id)
-        const root = e.graph ? (e.graph.nodes[rootIndex(e.graph, e.node)] ?? null) : null
-        const depth = e.graph ? String(e.graph.nodes[e.node].depth) : ''
-        const cells = [
+    const touchKey = (t: string | undefined): number | null => (t === 'win' ? 1 : t === 'loss' ? -1 : t === 'open' ? 0 : null)
+    return all.map(({ e, filtered }, i) => {
+      const o: EntryOutcome | undefined = r.outcomes.get(e.id)
+      const root = e.graph ? (e.graph.nodes[rootIndex(e.graph, e.node)] ?? null) : null
+      const depth = e.graph ? e.graph.nodes[e.node].depth : null
+      return {
+        id: e.id,
+        at: e.at,
+        muted: filtered,
+        cells: [
           String(i + 1),
           time(e.at, zone),
           e.signal.interval,
           filtered ? `${e.direction} (filtered)` : e.direction,
           e.signal.price.toFixed(5),
           root ? `${e.graph?.root} ${time(root.signal.knownAt, zone)}` : '',
-          depth,
+          depth === null ? '' : String(depth),
           ...horizons.map((_, h) => signed(o?.forward[h]?.pips)),
           ...touches.map((_, t) => {
             const result = o?.touches[t]?.result
             return result === 'win' ? 'for' : result === 'loss' ? 'against' : result === 'open' ? '–' : ''
           }),
           o ? `${fmt(o.mfeAtr, 2)} / ${fmt(o.maeAtr, 2)}` : ''
-        ]
-        return {
-          cells,
-          tone: ['', '', '', filtered ? 'is-muted' : '', '', '', '', ...horizons.map((_, h) => tone(o?.forward[h]?.pips)), ...touches.map((_, t) => (o?.touches[t]?.result === 'win' ? 'is-up' : o?.touches[t]?.result === 'loss' ? 'is-down' : '')), ''],
-          selected: selected === e.id,
-          onClick: () => {
-            selected = e.id
-            onPick({ entryId: e.id, at: e.at })
-            render()
-          }
-        }
-      }),
-      'is-entries'
-    )
+        ],
+        keys: [
+          i,
+          e.at,
+          resolutionDurationMs(e.signal.interval),
+          `${filtered ? 'z' : ''}${e.direction}`,
+          e.signal.price,
+          root?.signal.knownAt ?? null,
+          depth,
+          ...horizons.map((_, h) => o?.forward[h]?.pips ?? null),
+          ...touches.map((_, t) => touchKey(o?.touches[t]?.result)),
+          o?.mfeAtr !== undefined && o?.maeAtr !== undefined ? o.mfeAtr - o.maeAtr : null
+        ],
+        tone: ['', '', '', filtered ? 'is-muted' : '', '', '', '', ...horizons.map((_, h) => tone(o?.forward[h]?.pips)), ...touches.map((_, t) => (o?.touches[t]?.result === 'win' ? 'is-up' : o?.touches[t]?.result === 'loss' ? 'is-down' : '')), '']
+      }
+    })
+  }
+
+  function entriesView(r: LabRun): HTMLElement {
+    if (r.entries.length === 0 && r.filtered.length === 0) return message('No entries in this window.')
+    const horizons = [...r.strategy.outcomes.horizons].sort((a, b) => a - b)
+    const touches = r.strategy.outcomes.touches
+    return pickTable('entries', ['#', 'at', 'tf', 'trade', 'price', 'root', 'depth', ...horizons.map((h) => `+${h}`), ...touches.map((k) => `±${k}`), 'MFE/MAE ATR'], entryRows(r), 'is-entries')
+  }
+
+  function tradeRows(r: LabRun): Row[] {
+    if (!r.sim) return []
+    const zone = zoneOf(r)
+    return r.sim.trades.map((t: LabTrade, i) => ({
+      id: t.entry.id,
+      at: t.openedAt,
+      cells: [
+        String(i + 1),
+        time(t.openedAt, zone),
+        t.direction,
+        whole(t.units),
+        t.openPrice.toFixed(5),
+        t.stop === null ? '–' : t.stop.toFixed(5),
+        t.target === null ? '–' : t.target.toFixed(5),
+        t.closedAt === null ? '' : time(t.closedAt, zone),
+        t.reason ? REASON_WORDS[t.reason] : '',
+        t.closePrice === null ? '' : t.closePrice.toFixed(5),
+        signed(t.pips),
+        signed(t.r, 2),
+        whole(t.pnl, true),
+        String(t.barsHeld)
+      ],
+      keys: [i, t.openedAt, t.direction, t.units, t.openPrice, t.stop, t.target, t.closedAt, t.reason, t.closePrice, t.pips, t.r, t.pnl, t.barsHeld],
+      tone: ['', '', '', '', '', '', '', '', '', '', tone(t.pips), tone(t.r), tone(t.pnl), '']
+    }))
   }
 
   function tradesView(r: LabRun): HTMLElement {
     if (!r.sim) return message(r.entries.length === 0 ? 'No entries, so no trades.' : 'No trades were simulated.')
     if (r.sim.trades.length === 0) return message('No trades: every entry was refused (see the Summary).')
-    const zone = zoneOf(r)
-    return table(
-      ['#', 'opened', 'trade', 'in', 'stop', 'target', 'closed', 'by', 'out', 'pips', 'R', 'P&L', 'bars'],
-      r.sim.trades.map((t: LabTrade, i) => ({
-        cells: [
-          String(i + 1),
-          time(t.openedAt, zone),
-          `${t.direction} ${t.units}`,
-          t.openPrice.toFixed(5),
-          t.stop === null ? '–' : t.stop.toFixed(5),
-          t.target === null ? '–' : t.target.toFixed(5),
-          t.closedAt === null ? '' : time(t.closedAt, zone),
-          t.reason ? REASON_WORDS[t.reason] : '',
-          t.closePrice === null ? '' : t.closePrice.toFixed(5),
-          signed(t.pips),
-          signed(t.r, 2),
-          signed(t.pnl, 0),
-          String(t.barsHeld)
-        ],
-        tone: ['', '', '', '', '', '', '', '', '', tone(t.pips), tone(t.r), tone(t.pnl), ''],
-        selected: selected === t.entry.id,
-        onClick: () => {
-          selected = t.entry.id
-          onPick({ entryId: t.entry.id, at: t.openedAt })
-          render()
-        }
-      }))
-    )
+    return pickTable('trades', ['#', 'opened', 'trade', 'units', 'in', 'stop', 'target', 'closed', 'by', 'out', 'pips', 'R', `P&L (${quoteOf(r)})`, 'bars'], tradeRows(r))
   }
 
   function equityView(r: LabRun): HTMLElement {
     if (!r.sim || r.sim.trades.length === 0) return message('No trades, so no equity curve.')
-    return equityChart(r, zoneOf(r), time)
+    return equityChart(r, zoneOf(r), time, (trade) => pick(trade.entry.id, trade.openedAt))
   }
 
   function message(text: string, kind: 'info' | 'error' = 'info'): HTMLElement {
     const p = el('p', kind === 'error' ? 'wd-lab-error' : 'wd-lab-note')
     p.textContent = text
     return p
+  }
+
+  function hideBanner(): void {
+    banner.hidden = true
+    banner.innerHTML = ''
+    body.classList.remove('is-stale')
   }
 
   renderTabs()
@@ -354,27 +545,52 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
     element,
     showRun(next) {
       run = next
+      hideBanner()
       if (selected && !next.entries.some((e) => e.id === selected) && !next.filtered.some((e) => e.id === selected)) selected = null
       render()
+      markSelected()
     },
     showProblems(problems, text) {
-      run = null
-      renderTabs()
-      body.innerHTML = ''
-      body.appendChild(message(text, 'error'))
-      const list = el('ul', 'wd-lab-problems')
-      for (const p of problems) {
-        const li = el('li', '')
-        const where = el('strong', '')
-        where.textContent = `${p.where}: `
-        li.append(where, document.createTextNode(p.message))
-        list.appendChild(li)
+      banner.innerHTML = ''
+      const head = el('p', 'wd-lab-error')
+      head.textContent = run ? `${text} -- the results below are the last run's` : text
+      banner.appendChild(head)
+      if (problems.length > 0) {
+        const list = el('ul', 'wd-lab-problems')
+        for (const p of problems) {
+          const li = el('li', '')
+          const where = el('strong', '')
+          where.textContent = `${p.where}: `
+          if (handlers.onProblem) {
+            const link = button('wd-lab-problem-link', '', () => handlers.onProblem?.(p))
+            link.title = 'Show it in the editor'
+            link.append(where, document.createTextNode(p.message))
+            li.appendChild(link)
+          } else li.append(where, document.createTextNode(p.message))
+          list.appendChild(li)
+        }
+        banner.appendChild(list)
       }
-      body.appendChild(list)
+      banner.hidden = false
+      body.classList.toggle('is-stale', run !== null)
+      if (!run) {
+        renderTabs()
+        renderStepper()
+        body.innerHTML = ''
+      }
+    },
+    showStale(text) {
+      if (!run) return
+      banner.innerHTML = ''
+      banner.appendChild(message(text))
+      banner.hidden = false
+      body.classList.add('is-stale')
     },
     showMessage(text, kind = 'info') {
       run = null
+      hideBanner()
       renderTabs()
+      renderStepper()
       body.innerHTML = ''
       body.appendChild(message(text, kind))
     },
@@ -384,9 +600,15 @@ export function createResultsView(onPick: (pick: Pick) => void): ResultsView {
     },
     select(entryId) {
       selected = entryId
-      if (run && (tab === 'entries' || tab === 'trades')) render()
-    }
+      markSelected()
+    },
+    step
   }
+}
+
+/** The instrument's quote currency (what P&L is counted in): EURUSD's USD. */
+function quoteOf(r: LabRun): string {
+  return r.symbol.split(':')[1]?.slice(3) || 'quote'
 }
 
 // -- the equity curve -------------------------------------------------------------------------------
@@ -400,9 +622,10 @@ function svg<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string,
 }
 
 /** The closed-trade balance as a step line over time, the opening balance as a reference, and a
- * crosshair that reads the balance under the pointer. One series, so no legend: the title names
- * it. Inline SVG drawn with the page's tokens, so it follows the theme. */
-function equityChart(r: LabRun, zone: string, time: (ms: number, zone: string) => string): HTMLElement {
+ * crosshair that reads the balance under the pointer -- and the trade that set it, which a click
+ * takes the chart to. One series, so no legend: the title names it. Inline SVG drawn with the
+ * page's tokens, so it follows the theme. */
+function equityChart(r: LabRun, zone: string, time: (ms: number, zone: string) => string, onTrade: (trade: LabTrade) => void): HTMLElement {
   const sim = r.sim as NonNullable<LabRun['sim']>
   const box = el('figure', 'wd-lab-equity')
   const caption = el('figcaption', 'wd-lab-subhead')
@@ -457,13 +680,25 @@ function equityChart(r: LabRun, zone: string, time: (ms: number, zone: string) =
   const readout = el('div', 'wd-lab-readout')
   readout.hidden = true
   const hit = svg('rect', { x: pad.l, y: pad.t, width: W - pad.l - pad.r, height: H - pad.t - pad.b, class: 'wd-lab-hit' })
-  hit.addEventListener('pointermove', (event) => {
+  // The closed trades in the order the balance moved: point i (i >= 1) is after closed[i - 1].
+  const closed = sim.trades.filter((t) => t.closedAt !== null).sort((a, b) => (a.closedAt as number) - (b.closedAt as number))
+  /** The point in force at the pointer: the balance after the last close at or before it. */
+  const pointAt = (event: PointerEvent | MouseEvent): { t: number; i: number } => {
     const rect = chart.getBoundingClientRect()
     const px = ((event.clientX - rect.left) / rect.width) * W
     const t = t0 + ((px - pad.l) / (W - pad.l - pad.r)) * (t1 - t0)
     let i = 0
     while (i + 1 < points.length && points[i + 1].t <= t) i++
+    return { t, i }
+  }
+  hit.addEventListener('click', (event) => {
+    const trade = closed[Math.max(0, pointAt(event).i - 1)]
+    if (trade) onTrade(trade)
+  })
+  hit.addEventListener('pointermove', (event) => {
+    const { t, i } = pointAt(event)
     const p = points[i]
+    const trade = i > 0 ? closed[i - 1] : undefined
     cross.setAttribute('x1', String(x(t)))
     cross.setAttribute('x2', String(x(t)))
     dot.setAttribute('cx', String(x(t)))
@@ -471,7 +706,8 @@ function equityChart(r: LabRun, zone: string, time: (ms: number, zone: string) =
     cross.setAttribute('visibility', 'visible')
     dot.setAttribute('visibility', 'visible')
     readout.hidden = false
-    readout.textContent = `${time(t, zone)} · ${Math.round(p.balance).toLocaleString()} (${p.balance >= start ? '+' : ''}${Math.round(p.balance - start).toLocaleString()})`
+    const after = trade ? ` after the ${trade.direction} opened ${time(trade.openedAt, zone)} (${trade.r === null ? '' : `${trade.r > 0 ? '+' : ''}${trade.r.toFixed(2)} R`}) -- click to see it` : ''
+    readout.textContent = `${time(t, zone)} · ${Math.round(p.balance).toLocaleString()} (${p.balance >= start ? '+' : ''}${Math.round(p.balance - start).toLocaleString()})${after}`
   })
   hit.addEventListener('pointerleave', () => {
     cross.setAttribute('visibility', 'hidden')

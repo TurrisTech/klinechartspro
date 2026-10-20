@@ -202,8 +202,8 @@ export interface ChartProPane {
   setPeriod(period: Period): void
   getDatafeed(): Datafeed
   /** Bring `timestamp` (a bar's own, on this pane's period) on screen, reloading the history
-   * around it however far back it is. */
-  seekTo(timestamp: number): void
+   * around it however far back it is, at `fraction` of the width from the left (default 0.6). */
+  seekTo(timestamp: number, fraction?: number): void
   isActive(): boolean
 }
 

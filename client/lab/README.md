@@ -77,6 +77,28 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `plugin.ts` | a saved strategy on a dashboard pane | — |
 | `alertentries.ts` | a saved strategy's entries as an alert operand | — |
 
+## Using the page
+
+- **Window**: the last N days, or **from / to** two dates (UTC days, the last one included) -- the
+  model's `range` window.
+- **Editor**: a bar at the top names the sections (a click opens one and scrolls to it) and counts
+  each one's problems, so a problem in a closed section is not hidden; *Expand / Collapse all*. In
+  any expression slot's **Fields**, a click on a name writes it into the slot's field last typed
+  in, at the cursor (a function up to its bracket).
+- **Results**: the Entries and Trades tables sort on a header click (ascending, descending, back to
+  time). The **stepper** beside the tabs -- or `[` / `]`, or the arrow keys on a row -- walks the
+  chart through the rows in the order shown (on Summary / Equity: the entries in time), so the
+  worst trades are a few key presses once sorted by R; a picked entry lands 40% across the chart, so
+  what price did next is on screen. A click on the equity curve picks the trade closed there.
+- **Problems** never wipe the last run: they show in a banner over its results, which stay, dimmed,
+  and each problem links to its slot (the section opens, the field is focused). With Auto-run off,
+  an edit marks the results out of date the same way; **Stop** (the Run button while a run is going)
+  abandons a long run and keeps the last one.
+- The bar between the chart and the results **drags** (arrow keys when focused; double-click for
+  the default 42%), kept per device. Keys: `Ctrl+Enter` runs, `Ctrl+S` saves.
+- A draft never saved is **Discarded**, not Deleted -- the same button, which is off for a fresh
+  default nobody has touched.
+
 ## Decisions worth not re-deriving
 
 - **Knowable at the close.** A signal is placed at its candle's close (`get_interval_end`), where
