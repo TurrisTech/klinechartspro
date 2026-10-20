@@ -15,13 +15,13 @@
 // PURE, but for the run it is handed.
 
 import { type Figures, figuresOf } from './figures'
-import type { Level, Strategy } from './model'
+import { type Level, ruleLabel, type Strategy, type StrategyRule } from './model'
 import type { LabRun } from './runner'
 
 export interface SweepTarget {
   /** Stable for a strategy: what the sweep panel remembers the choice by. */
   id: string
-  /** The section it belongs to, for grouping: Signals, Graph, Entries, Exits, Costs. */
+  /** The section it belongs to, for grouping: Signals, Long rules, Short rules, Exits, Costs. */
   section: string
   label: string
   value: number
@@ -87,14 +87,14 @@ export function sweepTargets(strategy: Strategy, paramInfo: ParamInfo = () => nu
   })
 
   /** Every number in a condition list's enabled conditions. */
-  const conditions = (section: string, where: string, pick: (s: Strategy) => Array<{ expr: string; enabled: boolean }>): void => {
+  const conditions = (section: string, where: string, pick: (s: Strategy) => Array<{ expr: string; enabled: boolean }>, key: string): void => {
     pick(strategy).forEach((condition, c) => {
       if (!condition.enabled) return
       exprNumbers(condition.expr).forEach((n, k) => {
         out.push({
-          id: `${where}:${c}:${k}`,
+          id: `${key}:${c}:${k}`,
           section,
-          label: `${section} · ${where} ${c + 1} · ${formatNumber(n.value)} in ${condition.expr}`,
+          label: `${where} ${c + 1} · ${formatNumber(n.value)} in ${condition.expr}`,
           value: n.value,
           integer: Number.isInteger(n.value),
           min: null,
@@ -106,26 +106,44 @@ export function sweepTargets(strategy: Strategy, paramInfo: ParamInfo = () => nu
       })
     })
   }
-  if (strategy.graph.enabled) conditions('Graph', 'step test', (s) => s.graph.step)
-  conditions('Entries', 'test', (s) => s.entry.when)
-  if (strategy.graph.enabled) {
-    exprNumbers(strategy.graph.end.when).forEach((n, k) => {
-      out.push({
-        id: `end:${k}`,
-        section: 'Graph',
-        label: `Graph · ends when · ${formatNumber(n.value)} in ${strategy.graph.end.when}`,
-        value: n.value,
-        integer: Number.isInteger(n.value),
-        min: null,
-        apply: (s, v) => {
-          s.graph.end.when = setExprNumber(s.graph.end.when, k, v)
-        }
-      })
-    })
-    if (strategy.graph.end.rootBars !== null) {
-      out.push({ id: 'end:rootBars', section: 'Graph', label: 'Graph · ends after (root bars)', value: strategy.graph.end.rootBars, integer: true, min: 1, apply: (s, v) => (s.graph.end.rootBars = v) })
+  // Each enabled rule's numbers, by its name: its longest step, when it ends, and every number in
+  // its own conditions.
+  strategy.rules.forEach((rule, r) => {
+    if (!rule.enabled) return
+    const name = ruleLabel(strategy, rule)
+    const section = rule.direction === 'long' ? 'Long rules' : 'Short rules'
+    const at = (s: Strategy): StrategyRule | undefined => s.rules.find((x) => x.id === rule.id) ?? s.rules[r]
+    if (rule.steps.length > 0 && rule.maxStep !== null) {
+      out.push({ id: `rule:${rule.id}:maxStep`, section, label: `${name} · at most N× shorter a step`, value: rule.maxStep, integer: false, min: 1, apply: (s, v) => {
+        const target = at(s)
+        if (target) target.maxStep = v
+      } })
     }
-  }
+    if (rule.steps.length > 0 && rule.end.rootBars !== null) {
+      out.push({ id: `rule:${rule.id}:endBars`, section, label: `${name} · ends after (root bars)`, value: rule.end.rootBars, integer: true, min: 1, apply: (s, v) => {
+        const target = at(s)
+        if (target) target.end.rootBars = v
+      } })
+    }
+    if (rule.steps.length > 0) conditions(section, `${name} · step condition`, (s) => at(s)?.stepIf ?? [], `rule:${rule.id}:step`)
+    conditions(section, `${name} · entry condition`, (s) => at(s)?.entryIf ?? [], `rule:${rule.id}:entry`)
+    if (rule.steps.length > 0) {
+      exprNumbers(rule.end.when).forEach((n, k) => {
+        out.push({
+          id: `rule:${rule.id}:end:${k}`,
+          section,
+          label: `${name} · ends when · ${formatNumber(n.value)} in ${rule.end.when}`,
+          value: n.value,
+          integer: Number.isInteger(n.value),
+          min: null,
+          apply: (s, v) => {
+            const target = at(s)
+            if (target) target.end.when = setExprNumber(target.end.when, k, v)
+          }
+        })
+      })
+    }
+  })
 
   /** A stop's, target's or trail's numbers. */
   const level = (role: string, label: string, get: (s: Strategy) => Level | null | undefined): void => {

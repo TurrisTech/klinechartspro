@@ -10,8 +10,8 @@ const { fakeChart, fakeFacilities, fakeIndicator, flush } = await import('../plu
 const { createLabPlugin, RunStore } = await import('./plugin')
 const { LAB_TEMPLATE, publishedRun } = await import('./overlay')
 const { StrategyStore } = await import('./store')
-const { rank85Strategy, defaultStep } = await import('./model')
-const { FakeData, NOW, D } = await import('./testdata')
+const { rank85Strategy } = await import('./model')
+const { FakeData, NOW, D, withRules } = await import('./testdata')
 const { FX_DAY, FX_GRID } = await import('../replay/timeframes')
 const { peekStore } = await import('../plugins/store')
 
@@ -45,9 +45,7 @@ test('a pane carrying LAB:strategy runs the latest saved strategy over its span'
   await store.load()
   const strategy = rank85Strategy(NOW)
   strategy.name = 'Rank 85, 1h + 4h roots'
-  strategy.sources[0].timeframes = ['3m', '5m', '15m', '1h', '4h']
-  strategy.graph.roots = ['4h', '1h']
-  strategy.graph.step = defaultStep(8)
+  withRules(strategy, ['4h', '1h'], ['3m', '5m', '15m', '1h', '4h'])
   store.save(strategy, NOW)
 
   const plugin = createLabPlugin({ store: async () => store, data: new FakeData(), now: () => NOW })

@@ -3,42 +3,56 @@ import { button, el, iconButton, input, select } from '../alerts/dom'
 import { compile, RuleError } from '../alerts/rules'
 import { createRuleTree } from '../alerts/ruletree'
 import type { Rule } from '../alerts/types'
-import { resolutionDurationMs } from '../periods'
 import { defaultSide, labIndicators, type LabCatalogue, type LabSignalFamily } from './catalogue'
 import { exprProblem } from './expr'
 import {
-  defaultGraphEntry,
-  defaultStep,
+  byLength,
+  defaultEntryOn,
+  defaultRule,
+  type Direction,
+  followsFor,
   type Level,
+  newRuleId,
   type ParentRule,
   type PriceAnchor,
   type Problem,
   type PublishedSource,
   RANK_TIMEFRAMES,
+  ROOT_TIMEFRAMES,
   type RootJoin,
   type RuleSource,
+  ruleLabel,
   SCOPES,
   scopeFunctions,
   SELF_INTERVAL,
+  type Side,
   type SignalSource,
   type SlotCondition,
   type SlotScope,
   type Strategy,
+  type StrategyRule,
+  stepsBelow,
   withInterval
 } from './model'
 
-// GLUE (DOM). The Strategy Lab's editor: every slot of a strategy (model.ts), in the order a run
-// reads them -- the signal pool, the graph, the entries, the exits, the account, the outcomes.
+// GLUE (DOM). The Strategy Lab's editor: a strategy (model.ts) as its RULES first -- the long ones,
+// then the short ones -- then the exits, and below them, closed until wanted, the signals the
+// rules follow, the account and the outcomes measured.
+//
+// A rule is a card that reads as a sentence (user, 2026-10-20: "simpler easier to understand
+// rules"): from this root, following these signals, stepping down through these timeframes,
+// buying (or selling) at these. What the overlay's graph has beyond that -- the longest step,
+// "beyond every signal before it", where a signal hangs from, a same-side root, an early end, and
+// conditions written in the expression language -- is behind the card's "More".
 //
 // It edits the strategy it is handed IN PLACE and calls `onChange` after every edit; the page
 // decides what an edit means (a draft that differs from the saved strategy, and a re-run). A
 // structural edit re-renders the form; a typed expression or number moves the model as it is
 // typed and is checked on the spot, so a keystroke never takes the focus away.
 //
-// An expression slot shows the condition the preset wrote ("goes further its graph's way") until
-// its text is edited, the problem with it as it is typed, and -- behind "Fields" -- every name and
-// function that slot can read (model.ts `SCOPES`); a click on one writes it into the slot's field
-// last typed in, at the cursor.
+// An expression slot shows the problem with it as it is typed, and -- behind "Fields" -- every
+// name and function that slot can read (model.ts `SCOPES`); a click on one writes it into the
+// slot's field last typed in, at the cursor.
 //
 // Above the sections, a bar that stays in view names them -- a click opens one and brings it on
 // screen -- each with the count of problems in it, so a problem in a closed section is not hidden.
@@ -67,10 +81,10 @@ export interface StrategyEditor {
 
 /** The editor's sections, in order: key, title, and the word a problem's `where` starts with. */
 const SECTIONS: Array<{ key: string; title: string; short: string; where: string[] }> = [
-  { key: 'pool', title: 'Signals', short: 'Signals', where: ['Signals'] },
-  { key: 'graph', title: 'Graph', short: 'Graph', where: ['Graph'] },
-  { key: 'entry', title: 'Entries', short: 'Entries', where: ['Entries'] },
+  { key: 'long', title: 'Long rules', short: 'Long', where: ['Long', 'Rules'] },
+  { key: 'short', title: 'Short rules', short: 'Short', where: ['Short'] },
   { key: 'exits', title: 'Exits', short: 'Exits', where: ['Exits'] },
+  { key: 'pool', title: 'Signals', short: 'Signals', where: ['Signals'] },
   { key: 'sizing', title: 'Account, costs & simulation', short: 'Account', where: ['Sizing', 'Costs', 'Simulation'] },
   { key: 'outcomes', title: 'Outcomes', short: 'Outcomes', where: ['Outcomes'] },
   { key: 'notes', title: 'Notes', short: 'Notes', where: [] }
@@ -107,7 +121,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
 
   function render(): void {
     form.innerHTML = ''
-    form.append(poolSection(), graphSection(), entrySection(), exitSection(), sizingSection(), outcomeSection(), notesSection())
+    form.append(rulesSection('long'), rulesSection('short'), exitSection(), poolSection(), sizingSection(), outcomeSection(), notesSection())
     renderNav()
     showProblemCounts()
   }
@@ -167,8 +181,14 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     if (!key) return false
     const details = openSection(key)
     if (!details) return false
-    // The slot it names, when the editor marked one; else the section.
-    const target = [...details.querySelectorAll<HTMLElement>('[data-where]')].find((n) => n.dataset.where === problem.where) ?? details
+    // The slot it names, when the editor marked one -- else the nearest that holds it ("Long · 1D"
+    // for "Long · 1D · ends") -- else the section. A closed "More" around it opens.
+    const marked = [...details.querySelectorAll<HTMLElement>('[data-where]')]
+    const target =
+      marked.find((n) => n.dataset.where === problem.where) ??
+      marked.filter((n) => problem.where.startsWith(`${n.dataset.where} · `)).sort((a, b) => (b.dataset.where?.length ?? 0) - (a.dataset.where?.length ?? 0))[0] ??
+      details
+    for (let n: HTMLElement | null = target; n && n !== details; n = n.parentElement) if (n instanceof HTMLDetailsElement) n.open = true
     target.scrollIntoView({ block: 'center' })
     const field = target.querySelector<HTMLElement>('.is-bad') ?? target.querySelector<HTMLElement>('input:not([type="checkbox"]), select, textarea')
     field?.focus({ preventScroll: true })
@@ -201,6 +221,21 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     head.append(t, s, p)
     details.appendChild(head)
     const box = el('div', 'wd-lab-section-body')
+    body(box)
+    details.appendChild(box)
+    return details
+  }
+
+  /** A disclosure inside a card or a section, kept open or closed across re-renders by `key`. */
+  function more(key: string, label: string, body: (box: HTMLElement) => void): HTMLElement {
+    const details = document.createElement('details')
+    details.className = 'wd-lab-more'
+    details.open = open.get(key) ?? false
+    details.addEventListener('toggle', () => open.set(key, details.open))
+    const head = document.createElement('summary')
+    head.textContent = label
+    details.appendChild(head)
+    const box = el('div', 'wd-lab-more-body')
     body(box)
     details.appendChild(box)
     return details
@@ -302,8 +337,6 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     return box
   }
 
-  const byLength = (codes: Iterable<string>): string[] => [...new Set(codes)].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))
-
   // -- expressions ------------------------------------------------------------------------------
 
   /** A text field holding an expression for `scope`, checked as it is typed. */
@@ -377,7 +410,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
 
   let conditionCounter = 0
   /** A slot of several conditions, all of which must hold. */
-  function conditionList(key: string, where: string, conditions: SlotCondition[], scope: SlotScope, presets: () => SlotCondition[], presetName: string): HTMLElement {
+  function conditionList(key: string, where: string, conditions: SlotCondition[], scope: SlotScope, presets: (() => SlotCondition[]) | null, presetName: string): HTMLElement {
     const box = el('div', 'wd-lab-conditions')
     conditions.forEach((condition, i) => {
       const line = el('div', `wd-lab-condition${condition.enabled ? '' : ' is-off'}`)
@@ -412,20 +445,24 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       line.append(on, body, remove)
       box.appendChild(line)
     })
-    if (conditions.length === 0) box.appendChild(note('No conditions: every one passes.'))
+    if (conditions.length === 0) box.appendChild(note(presetName))
     const actions = el('div', 'wd-lab-actions')
     actions.append(
       button('kc-button wd-alert-link', '+ Condition', () => {
         conditionCounter++
         conditions.push({ id: `c${Date.now().toString(36)}${conditionCounter}`, expr: '', enabled: true })
         restructure()
-      }),
-      button('kc-button wd-alert-link', `Reset to ${presetName}`, () => {
-        conditions.splice(0, conditions.length, ...presets())
-        restructure()
-      }),
-      fieldHelp(`${key}:fields`, scope)
+      })
     )
+    if (presets) {
+      actions.appendChild(
+        button('kc-button wd-alert-link', 'Reset', () => {
+          conditions.splice(0, conditions.length, ...presets())
+          restructure()
+        })
+      )
+    }
+    actions.appendChild(fieldHelp(`${key}:fields`, scope))
     box.appendChild(actions)
     return box
   }
@@ -534,34 +571,304 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
 
   // -- sections ---------------------------------------------------------------------------------
 
-  function poolSection(): HTMLElement {
-    const n = strategy.sources.length
-    return section('pool', 'Signals', `${n} source${n === 1 ? '' : 's'}`, (box) => {
-      box.appendChild(note('The signal pool: what graphs are built from, or -- with the graph off -- the events entries are chosen among. Each source is read on the timeframes switched on.'))
-      strategy.sources.forEach((source, i) => {
-        box.appendChild(sourceCard(source, i))
-      })
+  // -- rules ------------------------------------------------------------------------------------
+
+  /** The timeframes a source can be read on for the strategy's instrument: the outlier overlay's
+   * for an outlier signal, every one the server offers otherwise. */
+  function offeredFor(source: SignalSource | undefined): string[] {
+    const all = byLength(context.intervals())
+    if (source?.kind === 'published' && source.plugin === 'arev21_outlier') {
+      const ranked = all.filter((c) => RANK_TIMEFRAMES.includes(c))
+      return ranked.length > 0 ? ranked : [...RANK_TIMEFRAMES]
+    }
+    return all.length > 0 ? all : [...RANK_TIMEFRAMES]
+  }
+
+  const sourceOf = (rule: StrategyRule): SignalSource | undefined => strategy.sources.find((s) => s.id === rule.source)
+
+  /** What a side of a source's signals is called: "bottoms (short)" -- its labels on that side. */
+  function sideWords(source: SignalSource | undefined, side: Side): string {
+    const noun = side === 'top' ? 'tops' : 'bottoms'
+    if (source?.kind !== 'published') return noun
+    const labels = Object.entries(source.sides)
+      .filter(([, s]) => s === side)
+      .map(([label]) => label)
+    return labels.length > 0 ? `${noun} (${labels.join(', ')})` : noun
+  }
+
+  function rulesSection(direction: Direction): HTMLElement {
+    const mine = strategy.rules.filter((r) => r.direction === direction)
+    const on = mine.filter((r) => r.enabled)
+    const verb = direction === 'long' ? 'Buy' : 'Sell'
+    const summary = on.length === 0 ? 'none' : on.map((r) => ruleLabel(strategy, r).replace(/^(Long|Short) · /, '')).join(' · ')
+    return section(direction, direction === 'long' ? 'Long rules' : 'Short rules', summary, (box) => {
+      const intro = note(
+        direction === 'long'
+          ? `${verb}. Each rule follows one root timeframe's signals down to an entry, on its own: the results show each rule alone and all of them together.`
+          : `${verb}. The same, the other way; a short rule is independent of the long ones.`
+      )
+      // "Switch on at least one rule" is taken here.
+      box.appendChild(direction === 'long' ? slot('Rules', intro) : intro)
+      for (const rule of mine) box.appendChild(ruleCard(rule))
       const actions = el('div', 'wd-lab-actions')
-      actions.append(
-        button('kc-button kc-button-outline', '+ Published signal', () => {
-          strategy.sources.push(publishedFromFamily(context.catalogue?.signals[0] ?? null, freshId('sig')))
-          restructure()
-        }),
-        button('kc-button kc-button-outline', '+ Rule event', () => {
-          strategy.sources.push({
-            kind: 'rule',
-            id: freshId('rule'),
-            title: 'Rule event',
-            timeframes: [context.intervals().includes('1h') ? '1h' : (context.intervals()[0] ?? '1h')],
-            top: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_below', right: { value: 70 } },
-            bottom: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_above', right: { value: 30 } },
-            price: 'close'
-          })
+      actions.appendChild(
+        button('kc-button kc-button-outline', `+ ${direction === 'long' ? 'Long' : 'Short'} rule`, () => {
+          const source = strategy.sources[0]
+          const offered = offeredFor(source)
+          const used = new Set(mine.map((r) => r.root))
+          const root = ROOT_TIMEFRAMES.find((tf) => !used.has(tf) && offered.includes(tf)) ?? offered[offered.length - 1] ?? '1h'
+          const graphless = source?.kind === 'rule'
+          strategy.rules.push(defaultRule(direction, root, graphless ? [] : offered, source?.id ?? 'rank85', newRuleId(strategy, direction, root)))
           restructure()
         })
       )
       box.appendChild(actions)
     })
+  }
+
+  function ruleCard(rule: StrategyRule): HTMLElement {
+    const name = ruleLabel(strategy, rule)
+    const card = slot(name, el('div', `wd-lab-card wd-lab-rule-card is-${rule.direction}${rule.enabled ? '' : ' is-off'}`))
+    const source = sourceOf(rule)
+    const offered = offeredFor(source)
+
+    // The head: on/off, its name, copy, remove.
+    const head = el('div', 'wd-lab-card-head')
+    const toggle = document.createElement('input')
+    toggle.type = 'checkbox'
+    toggle.checked = rule.enabled
+    toggle.title = rule.enabled ? 'Switch this rule off' : 'Switch this rule on'
+    toggle.setAttribute('aria-label', `${name}: on`)
+    toggle.addEventListener('change', () => {
+      rule.enabled = toggle.checked
+      restructure()
+    })
+    const title = el('span', 'wd-lab-rule-name')
+    title.textContent = name
+    const copy = iconButton('⧉', 'Copy this rule', () => {
+      const twin: StrategyRule = { ...structuredClone(rule), id: newRuleId(strategy, rule.direction, rule.root) }
+      strategy.rules.splice(strategy.rules.indexOf(rule) + 1, 0, twin)
+      restructure()
+    })
+    const remove = iconButton('×', 'Remove this rule', () => {
+      strategy.rules.splice(strategy.rules.indexOf(rule), 1)
+      restructure()
+    })
+    head.append(toggle, title, copy, remove)
+    card.appendChild(head)
+    if (!rule.enabled) return card
+
+    // From: the root, the side it follows, and -- with more than one -- whose signals.
+    const roots = byLength([...offered, rule.root]).reverse()
+    const rootPick = select(
+      roots.map((c) => ({ value: c, label: c })),
+      rule.root,
+      (value) => {
+        rule.root = value
+        // Keep the steps still under the new root; with none left, all of them.
+        const under = stepsBelow(value, offered)
+        const kept = rule.steps.filter((tf) => under.includes(tf))
+        rule.steps = rule.steps.length === 0 ? [] : kept.length > 0 ? kept : under
+        const entries = rule.entryOn.filter((tf) => (rule.steps.length > 0 ? rule.steps : [value]).includes(tf))
+        rule.entryOn = entries.length > 0 ? entries : defaultEntryOn(value, rule.steps)
+        restructure()
+      }
+    )
+    rootPick.setAttribute('aria-label', 'Root timeframe')
+    const followPick = select(
+      (['bottom', 'top'] as const).map((side) => ({ value: side, label: sideWords(source, side) })),
+      rule.follows,
+      (value) => {
+        rule.follows = value === 'top' ? 'top' : 'bottom'
+        restructure()
+      }
+    )
+    followPick.setAttribute('aria-label', 'Signals it follows')
+    const against = el('span', 'wd-lab-muted')
+    against.textContent = rule.follows === followsFor(rule.direction) ? 'against the signal' : 'with the signal'
+    const from: Array<HTMLElement | string> = [rootPick, followPick]
+    if (strategy.sources.length > 1 || !source) {
+      const sourcePick = select(
+        [...(source ? [] : [{ value: rule.source, label: `${rule.source} (missing)` }]), ...strategy.sources.map((s) => ({ value: s.id, label: s.title || s.id }))],
+        rule.source,
+        (value) => {
+          rule.source = value
+          restructure()
+        }
+      )
+      sourcePick.setAttribute('aria-label', 'Signal')
+      from.push('of', slot(`${name} · signal`, sourcePick))
+    }
+    from.push(against)
+    card.appendChild(slot(`${name} · root`, row('From', ...from)))
+
+    // Steps: the shorter timeframes a graph steps down through.
+    const counts = context.counts()
+    const countOf = (code: string): number | null => counts?.get(`${rule.source}|${code}`) ?? null
+    const under = stepsBelow(rule.root, byLength([...offered, ...rule.steps]))
+    if (under.length > 0) {
+      card.appendChild(
+        slot(
+          `${name} · steps`,
+          row(
+            'Steps',
+            chips(
+              under,
+              rule.steps,
+              (code, on) => {
+                rule.steps = on ? byLength([...rule.steps, code]) : rule.steps.filter((c) => c !== code)
+                const entries = rule.entryOn.filter((tf) => (rule.steps.length > 0 ? rule.steps : [rule.root]).includes(tf))
+                rule.entryOn = entries.length > 0 ? entries : defaultEntryOn(rule.root, rule.steps)
+              },
+              countOf
+            )
+          )
+        )
+      )
+    }
+
+    // Entries: which of the steps it trades at -- or, with none, its root's signals.
+    const verb = rule.direction === 'long' ? 'Buys at' : 'Sells at'
+    if (rule.steps.length > 0) {
+      card.appendChild(
+        slot(
+          `${name} · entries`,
+          row(
+            verb,
+            chips(rule.steps, rule.entryOn, (code, on) => {
+              rule.entryOn = on ? byLength([...rule.entryOn, code]) : rule.entryOn.filter((c) => c !== code)
+            })
+          )
+        )
+      )
+    } else {
+      card.appendChild(slot(`${name} · entries`, row(verb, `every ${rule.follows === 'top' ? 'top' : 'bottom'} on ${rule.root} -- no graph`)))
+    }
+
+    card.appendChild(
+      ruleSlot(`rule:${rule.id}:filter`, rule.filter, (r) => (rule.filter = r), { label: 'Only when this holds at the entry', defaultInterval: () => '1D' })
+    )
+
+    // Everything else the overlay's graph has, behind More.
+    card.appendChild(
+      more(`rule:${rule.id}:more`, 'More', (box) => {
+        if (rule.steps.length > 0) {
+          box.appendChild(
+            slot(
+              `${name} · steps`,
+              row(
+                'A step is at most',
+                num(rule.maxStep, (v) => (rule.maxStep = v === null ? null : Math.max(1, v)), { min: 1, empty: true, width: '4.5rem' }),
+                '× shorter than the one before (blank: any)'
+              )
+            )
+          )
+          box.appendChild(checkbox('Each signal goes beyond every one before it (off: beyond the one it hangs from)', rule.reach, (on) => (rule.reach = on)))
+          box.appendChild(
+            row(
+              'A signal hangs from',
+              select(
+                [
+                  { value: 'supersede', label: "its timeframe's last node if it goes further, else the latest longer one (overlay)" },
+                  { value: 'recent', label: 'the most recent node it may step from' },
+                  { value: 'nearest', label: 'the node nearest it in price' },
+                  { value: 'root', label: 'the latest root' }
+                ],
+                rule.parent,
+                (value) => {
+                  rule.parent = value as ParentRule
+                  changed()
+                }
+              )
+            )
+          )
+          box.appendChild(
+            row(
+              `Another ${rule.follows} on ${rule.root}`,
+              select(
+                [
+                  { value: 'join', label: 'joins the open graph (overlay)' },
+                  { value: 'new', label: 'starts a new graph' },
+                  { value: 'ignore', label: 'is ignored' }
+                ],
+                rule.rootJoin,
+                (value) => {
+                  rule.rootJoin = value as RootJoin
+                  changed()
+                }
+              )
+            )
+          )
+          const end = slot(`${name} · ends when`, el('div', 'wd-lab-subsection'))
+          const endHead = el('div', 'wd-lab-subhead')
+          endHead.textContent = `A graph ends when ${rule.root} turns the other way, and also`
+          end.appendChild(endHead)
+          end.appendChild(
+            slot(
+              `${name} · ends`,
+              row('after', num(rule.end.rootBars, (v) => (rule.end.rootBars = v === null ? null : Math.max(1, Math.round(v))), { min: 1, step: '1', empty: true, width: '5rem' }), `${rule.root} bars (blank: never)`)
+            )
+          )
+          const watch = select([{ value: '', label: 'its shortest timeframe' }, ...byLength([rule.root, ...rule.steps]).map((c) => ({ value: c, label: c }))], rule.end.watch ?? '', (value) => {
+            rule.end.watch = value || null
+            changed()
+          })
+          end.appendChild(row('at the first close of', watch, 'where'))
+          end.appendChild(exprField(rule.end.when, SCOPES.end, (text) => (rule.end.when = text), 'never (e.g. (bar.close - root.price) * dir < 0)'))
+          end.appendChild(fieldHelp(`rule:${rule.id}:end:fields`, SCOPES.end))
+          box.appendChild(end)
+          box.appendChild(condSub(`rule:${rule.id}:step`, `${name} · step condition`, 'A signal may also step only when', rule.stepIf, SCOPES.step))
+        }
+        box.appendChild(condSub(`rule:${rule.id}:entry`, `${name} · entry condition`, rule.steps.length > 0 ? 'A node on those timeframes is an entry only when' : 'A signal is an entry only when', rule.entryIf, SCOPES.entry))
+      })
+    )
+    return card
+  }
+
+  /** A titled list of a rule's own conditions, empty by default. */
+  function condSub(key: string, where: string, title: string, conditions: SlotCondition[], scope: SlotScope): HTMLElement {
+    const box = el('div', 'wd-lab-subsection')
+    const head = el('div', 'wd-lab-subhead')
+    head.textContent = title
+    box.append(head, conditionList(key, where, conditions, scope, null, 'Nothing more: none written.'))
+    return box
+  }
+
+  // -- signals ----------------------------------------------------------------------------------
+
+  function poolSection(): HTMLElement {
+    const summary = strategy.sources.map((s) => s.title || s.id).join(' · ') || 'none'
+    return section(
+      'pool',
+      'Signals',
+      summary,
+      (box) => {
+        box.appendChild(note('What the rules follow. A rule reads its signal on its own root and steps.'))
+        strategy.sources.forEach((source, i) => {
+          box.appendChild(sourceCard(source, i))
+        })
+        const actions = el('div', 'wd-lab-actions')
+        actions.append(
+          button('kc-button kc-button-outline', '+ Published signal', () => {
+            strategy.sources.push(publishedFromFamily(context.catalogue?.signals[0] ?? null, freshId('sig')))
+            restructure()
+          }),
+          button('kc-button kc-button-outline', '+ Rule event', () => {
+            strategy.sources.push({
+              kind: 'rule',
+              id: freshId('rule'),
+              title: 'Rule event',
+              top: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_below', right: { value: 70 } },
+              bottom: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_above', right: { value: 30 } },
+              price: 'close'
+            })
+            restructure()
+          })
+        )
+        box.appendChild(actions)
+      },
+      false
+    )
   }
 
   function freshId(prefix: string): string {
@@ -579,60 +886,49 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     })
     title.classList.add('wd-lab-title-input')
     title.setAttribute('aria-label', 'Source title')
-    const id = input('text', source.id, (value) => {
-      // Renaming a source renames it where the graph names it.
-      const before = source.id
-      source.id = value.trim()
-      if (strategy.graph.rootSources) strategy.graph.rootSources = strategy.graph.rootSources.map((s) => (s === before ? source.id : s))
-      changed()
-    })
-    id.classList.add('wd-lab-id-input')
-    id.title = 'Its id: what node.source reads, and what the graph names it by'
-    id.setAttribute('aria-label', 'Source id')
-    const remove = iconButton('×', 'Remove this source', () => {
+    const users = strategy.rules.filter((r) => r.source === source.id)
+    const remove = iconButton('×', users.length > 0 ? `Remove this signal (${users.length} rule${users.length === 1 ? ' follows' : 's follow'} it)` : 'Remove this signal', () => {
       strategy.sources.splice(index, 1)
-      if (strategy.graph.rootSources) strategy.graph.rootSources = strategy.graph.rootSources.filter((s) => s !== source.id)
       restructure()
     })
     const kind = el('span', 'wd-lab-badge')
     kind.textContent = source.kind === 'published' ? 'signal' : 'rule'
-    head.append(kind, title, id, remove)
+    head.append(kind, title, remove)
     card.appendChild(head)
-
-    const counts = context.counts()
-    const countOf = (code: string): number | null => counts?.get(`${source.id}|${code}`) ?? null
-    const offered = byLength([...context.intervals(), ...source.timeframes])
-    card.appendChild(
-      row(
-        'Timeframes',
-        chips(
-          source.kind === 'published' && source.plugin === 'arev21_outlier' ? offered.filter((c) => RANK_TIMEFRAMES.includes(c) || source.timeframes.includes(c)) : offered,
-          source.timeframes,
-          (code, on) => {
-            source.timeframes = on ? byLength([...source.timeframes, code]) : source.timeframes.filter((c) => c !== code)
-          },
-          countOf
-        )
-      )
-    )
     if (source.kind === 'published') publishedFields(card, source)
     else ruleFields(card, source)
     card.appendChild(
-      row(
-        'Priced at',
-        select(
-          [
-            { value: 'body', label: "its candle's body (top for a top, bottom for a bottom)" },
-            { value: 'wick', label: "its candle's high (top) or low (bottom)" },
-            { value: 'close', label: "its candle's close" }
-          ],
-          source.price,
-          (value) => {
-            source.price = value as PriceAnchor
-            changed()
-          }
+      more(`source:${source.id}:more`, 'More', (box) => {
+        const id = input('text', source.id, (value) => {
+          // Renaming a source renames it where the rules name it.
+          const before = source.id
+          source.id = value.trim()
+          for (const r of strategy.rules) if (r.source === before) r.source = source.id
+          changed()
+        })
+        id.classList.add('wd-lab-id-input')
+        id.title = 'Its id: what node.source reads'
+        id.setAttribute('aria-label', 'Source id')
+        box.appendChild(row('Id', id))
+        if (source.kind === 'published') box.appendChild(labelsRow(source))
+        box.appendChild(
+          row(
+            'Priced at',
+            select(
+              [
+                { value: 'body', label: "its candle's body (top for a top, bottom for a bottom)" },
+                { value: 'wick', label: "its candle's high (top) or low (bottom)" },
+                { value: 'close', label: "its candle's close" }
+              ],
+              source.price,
+              (value) => {
+                source.price = value as PriceAnchor
+                changed()
+              }
+            )
+          )
         )
-      )
+      })
     )
     return card
   }
@@ -650,7 +946,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
           const family = families.find((f) => familyKey(f) === value)
           if (!family) return
           const fresh = publishedFromFamily(family, source.id)
-          Object.assign(source, { ...fresh, timeframes: source.timeframes, price: source.price })
+          Object.assign(source, { ...fresh, price: source.price })
           restructure()
         })
       )
@@ -669,6 +965,11 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       }
       card.appendChild(row('Read with', box))
     }
+  }
+
+  /** Which side of a graph each of a published signal's labels is. */
+  function labelsRow(source: PublishedSource): HTMLElement {
+    const current = context.catalogue?.signals.find((f) => f.plugin === source.plugin && f.variant === source.variant)
     const labels = current?.labels ?? Object.keys(source.sides).map((id) => ({ id, label: id, side: null }))
     const sides = el('div', 'wd-lab-sides')
     for (const label of labels) {
@@ -682,151 +983,21 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
         (value) => {
           if (value === 'top' || value === 'bottom') source.sides[label.id] = value
           else delete source.sides[label.id]
-          changed()
+          restructure()
         }
       )
       const l = el('label', 'wd-lab-param')
       l.append(document.createTextNode(`${label.label} is`), pick)
       sides.appendChild(l)
     }
-    card.appendChild(row('Labels', sides))
+    return row('Labels', sides)
   }
 
   function ruleFields(card: HTMLElement, source: RuleSource): void {
-    const defaultInterval = (): string => source.timeframes[0] ?? '1h'
+    const defaultInterval = (): string => strategy.rules.find((r) => r.source === source.id)?.root ?? '1h'
     card.appendChild(ruleSlot(`${source.id}:top`, source.top, (rule) => (source.top = rule), { label: 'A top where this starts to hold', self: true, defaultInterval }))
     card.appendChild(ruleSlot(`${source.id}:bottom`, source.bottom, (rule) => (source.bottom = rule), { label: 'A bottom where this starts to hold', self: true, defaultInterval }))
-    card.appendChild(note("'its own' is the event's timeframe: one rule, read on every timeframe switched on above."))
-  }
-
-  function graphSection(): HTMLElement {
-    const g = strategy.graph
-    const summary = g.enabled ? `from ${g.roots.join(' ') || '—'} · ${g.step.filter((c) => c.enabled).length} step conditions` : 'off: entries straight from the events'
-    return section('graph', 'Graph', summary, (box) => {
-      box.appendChild(checkbox('Build graphs from the signals', g.enabled, (on) => (g.enabled = on), 'Off: every event of the pool is a candidate entry, read by the entry test alone'))
-      if (!g.enabled) return
-      const pool = byLength(strategy.sources.flatMap((s) => s.timeframes))
-      box.appendChild(
-        slot(
-          'Graph · roots',
-          row(
-          'Roots',
-          chips(pool, g.roots, (code, on) => {
-            g.roots = on ? byLength([...g.roots, code]).reverse() : g.roots.filter((c) => c !== code)
-          })
-          )
-        )
-      )
-      if (strategy.sources.length > 1) {
-        const which = el('span', 'wd-lab-chips')
-        const any = g.rootSources === null
-        which.appendChild(checkbox('any source', any, (on) => (g.rootSources = on ? null : strategy.sources.map((s) => s.id))))
-        if (!any) {
-          for (const s of strategy.sources) {
-            which.appendChild(
-              checkbox(s.title || s.id, g.rootSources?.includes(s.id) ?? false, (on) => {
-                const list = g.rootSources ?? []
-                g.rootSources = on ? [...list, s.id] : list.filter((x) => x !== s.id)
-              })
-            )
-          }
-        }
-        box.appendChild(row('Rooted by', which))
-      }
-      box.appendChild(
-        row(
-          'A same-side root',
-          select(
-            [
-              { value: 'join', label: 'joins the open graph as another root (overlay)' },
-              { value: 'new', label: 'starts a new graph' },
-              { value: 'ignore', label: 'is ignored: the first root of a run is the only one' }
-            ],
-            g.rootJoin,
-            (value) => {
-              g.rootJoin = value as RootJoin
-              changed()
-            }
-          )
-        )
-      )
-      box.appendChild(checkbox("A signal already stepping in a longer root's graph roots nothing", g.takenDontRoot, (on) => (g.takenDontRoot = on)))
-      box.appendChild(checkbox('A graph only goes further: each node beyond every node before it', g.reach, (on) => (g.reach = on)))
-      box.appendChild(
-        row(
-          'A signal hangs from',
-          select(
-            [
-              { value: 'supersede', label: "its timeframe's last node if it goes further, else the latest longer-timeframe node (overlay)" },
-              { value: 'recent', label: 'the most recent node it may step from' },
-              { value: 'nearest', label: 'the node nearest it in price' },
-              { value: 'root', label: "the graph's latest root" }
-            ],
-            g.parent,
-            (value) => {
-              g.parent = value as ParentRule
-              changed()
-            }
-          )
-        )
-      )
-      const step = el('div', 'wd-lab-subsection')
-      const stepHead = el('div', 'wd-lab-subhead')
-      stepHead.textContent = 'Step test -- a signal may hang from a node when all of these hold (and it is the same side, and strictly later)'
-      step.append(stepHead, conditionList('step', 'Graph · step test', g.step, SCOPES.step, () => defaultStep(), "the overlay's"))
-      box.appendChild(step)
-
-      const end = slot('Graph · ends when', el('div', 'wd-lab-subsection'))
-      const endHead = el('div', 'wd-lab-subhead')
-      endHead.textContent = 'A graph also ends -- besides its root switching side'
-      end.appendChild(endHead)
-      end.appendChild(row('after', num(g.end.rootBars, (v) => (g.end.rootBars = v === null ? null : Math.max(1, Math.round(v))), { min: 1, step: '1', empty: true, width: '5rem' }), 'bars of its root timeframe (blank: never)'))
-      const watch = select([{ value: '', label: 'the shortest pooled timeframe' }, ...pool.map((c) => ({ value: c, label: c }))], g.end.watch ?? '', (value) => {
-        g.end.watch = value || null
-        changed()
-      })
-      end.appendChild(row('at the first close of', watch, 'where'))
-      end.appendChild(exprField(g.end.when, SCOPES.end, (text) => (g.end.when = text), 'never (e.g. (bar.close - root.price) * dir < 0)'))
-      end.appendChild(fieldHelp('end:fields', SCOPES.end))
-      box.appendChild(end)
-
-      box.appendChild(
-        slot(
-          'Graph · history',
-          row(
-          'History',
-          'a root reads back',
-          num(g.lookback.rootBars, (v) => (g.lookback.rootBars = Math.max(1, Math.round(v ?? 300))), { min: 1, step: '1', width: '5rem' }),
-          'of its bars; any other timeframe at most',
-          num(g.lookback.maxBars, (v) => (g.lookback.maxBars = Math.max(1, Math.round(v ?? 10000))), { min: 1, step: '1', width: '6rem' })
-          )
-        )
-      )
-    })
-  }
-
-  function entrySection(): HTMLElement {
-    const e = strategy.entry
-    const summary = `${e.when.filter((c) => c.enabled).length} conditions${e.filter ? ' · filtered' : ''} · tops ${e.direction.top}, bottoms ${e.direction.bottom}`
-    return section('entry', 'Entries', summary, (box) => {
-      const head = el('div', 'wd-lab-subhead')
-      head.textContent = strategy.graph.enabled ? 'A node is an entry when all of these hold, as it joins its graph' : 'An event is an entry when all of these hold'
-      box.append(head, conditionList('entry', 'Entries · test', e.when, SCOPES.entry, () => (strategy.graph.enabled ? defaultGraphEntry() : []), strategy.graph.enabled ? "the overlay's stars" : 'none'))
-      box.appendChild(ruleSlot('filter', e.filter, (rule) => (e.filter = rule), { label: 'Only where this holds at the entry (each timeframe at its latest close)', defaultInterval: () => '1D' }))
-      const dir = (side: 'top' | 'bottom'): HTMLSelectElement =>
-        select(
-          [
-            { value: 'long', label: 'long' },
-            { value: 'short', label: 'short' }
-          ],
-          e.direction[side],
-          (value) => {
-            e.direction[side] = value === 'short' ? 'short' : 'long'
-            changed()
-          }
-        )
-      box.appendChild(row('A top entry goes', dir('top'), 'and a bottom entry', dir('bottom')))
-    })
+    card.appendChild(note("'its own' is the event's timeframe: one rule, read on every timeframe a rule follows it on."))
   }
 
   function exitSection(): HTMLElement {
@@ -835,21 +1006,6 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     return section('exits', 'Exits', bits.join(' · ') || 'none', (box) => {
       box.appendChild(slot('Exits · stop', row('Stop', levelEditor('stop', x.stop, 'stop', (l) => (x.stop = l)))))
       box.appendChild(slot('Exits · target', row('Target', levelEditor('target', x.target, 'target', (l) => (x.target = l)))))
-      box.appendChild(
-        row(
-          '',
-          checkbox('Breakeven once', x.breakevenAtR !== null, (on) => (x.breakevenAtR = on ? 1 : null)),
-          ...(x.breakevenAtR !== null ? [num(x.breakevenAtR, (v) => (x.breakevenAtR = v ?? 1), { min: 0, width: '4.5rem' }), 'R in'] : [])
-        )
-      )
-      box.appendChild(checkbox('Trailing stop', x.trail !== null, (on) => (x.trail = on ? { distance: { kind: 'atr', mult: 1.5, period: 14, interval: null }, activateR: 1 } : null)))
-      if (x.trail) {
-        const trail = x.trail
-        box.appendChild(row('behind the best close by', levelEditor('trail', trail.distance, 'trail', (l) => (trail.distance = l ?? trail.distance))))
-        box.appendChild(row('once', num(trail.activateR, (v) => (trail.activateR = v ?? 0), { min: 0, width: '4.5rem' }), 'R in (0: at once)'))
-      }
-      box.appendChild(ruleSlot('exit-long', x.ruleLong, (rule) => (x.ruleLong = rule), { label: 'Close a long where this holds', defaultInterval: () => context.intervals()[0] ?? '1h' }))
-      box.appendChild(ruleSlot('exit-short', x.ruleShort, (rule) => (x.ruleShort = rule), { label: 'Close a short where this holds', defaultInterval: () => context.intervals()[0] ?? '1h' }))
       box.appendChild(checkbox('Time limit', x.maxBars !== null, (on) => (x.maxBars = on ? { count: 48, interval: null } : null)))
       if (x.maxBars) {
         const limit = x.maxBars
@@ -857,9 +1013,31 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
           limit.interval = value || null
           changed()
         })
-        box.appendChild(row('close after', num(limit.count, (v) => (limit.count = Math.max(1, Math.round(v ?? 1))), { min: 1, step: '1', width: '5rem' }), 'bars of', tf))
+        box.appendChild(slot('Exits · time', row('close after', num(limit.count, (v) => (limit.count = Math.max(1, Math.round(v ?? 1))), { min: 1, step: '1', width: '5rem' }), 'bars of', tf)))
       }
-      box.appendChild(checkbox('An entry the other way closes what is open first', x.onOpposite, (on) => (x.onOpposite = on)))
+      box.appendChild(
+        more('exits:more', 'More: breakeven, trailing, rule exits', (more) => {
+          more.appendChild(
+            slot(
+              'Exits · breakeven',
+              row(
+                '',
+                checkbox('Breakeven once', x.breakevenAtR !== null, (on) => (x.breakevenAtR = on ? 1 : null)),
+                ...(x.breakevenAtR !== null ? [num(x.breakevenAtR, (v) => (x.breakevenAtR = v ?? 1), { min: 0, width: '4.5rem' }), 'R in'] : [])
+              )
+            )
+          )
+          more.appendChild(checkbox('Trailing stop', x.trail !== null, (on) => (x.trail = on ? { distance: { kind: 'atr', mult: 1.5, period: 14, interval: null }, activateR: 1 } : null)))
+          if (x.trail) {
+            const trail = x.trail
+            more.appendChild(slot('Exits · trailing stop', row('behind the best close by', levelEditor('trail', trail.distance, 'trail', (l) => (trail.distance = l ?? trail.distance)))))
+            more.appendChild(row('once', num(trail.activateR, (v) => (trail.activateR = v ?? 0), { min: 0, width: '4.5rem' }), 'R in (0: at once)'))
+          }
+          more.appendChild(ruleSlot('exit-long', x.ruleLong, (rule) => (x.ruleLong = rule), { label: 'Close a long where this holds', defaultInterval: () => context.intervals()[0] ?? '1h' }))
+          more.appendChild(ruleSlot('exit-short', x.ruleShort, (rule) => (x.ruleShort = rule), { label: 'Close a short where this holds', defaultInterval: () => context.intervals()[0] ?? '1h' }))
+          more.appendChild(checkbox('An entry the other way closes what is open first', x.onOpposite, (on) => (x.onOpposite = on)))
+        })
+      )
     })
   }
 
@@ -935,6 +1113,19 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
         })
         box.appendChild(row('Path bars', tf))
         box.appendChild(note('Trades and outcomes are walked on the path bars, with bid/ask where the store has it. An entry no path bar closes at is refused, never moved.'))
+        const lb = strategy.lookback
+        box.appendChild(
+          slot(
+            'Simulation',
+            row(
+              'History',
+              'a root reads back',
+              num(lb.rootBars, (v) => (lb.rootBars = Math.max(1, Math.round(v ?? 300))), { min: 1, step: '1', width: '5rem' }),
+              'of its bars for the graph in force at the start; a step at most',
+              num(lb.maxBars, (v) => (lb.maxBars = Math.max(1, Math.round(v ?? 10000))), { min: 1, step: '1', width: '6rem' })
+            )
+          )
+        )
       },
       false
     )
@@ -1009,7 +1200,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
 
 /** A published source reading `family` with its registry defaults and default sides. */
 export function publishedFromFamily(family: LabSignalFamily | null, id: string): PublishedSource {
-  if (!family) return { kind: 'published', id, title: 'Signal', plugin: '', variant: '', params: {}, timeframes: ['1h'], sides: {}, price: 'body' }
+  if (!family) return { kind: 'published', id, title: 'Signal', plugin: '', variant: '', params: {}, sides: {}, price: 'body' }
   const params: Record<string, number> = {}
   for (const p of family.params) params[p.name] = p.default
   const sides: Record<string, 'top' | 'bottom'> = {}
@@ -1024,7 +1215,6 @@ export function publishedFromFamily(family: LabSignalFamily | null, id: string):
     plugin: family.plugin,
     variant: family.variant,
     params,
-    timeframes: ['1h'],
     sides,
     price: 'body'
   }

@@ -5,6 +5,7 @@ import type { ReplayBar } from '../replay/cache'
 import { FX_GRID } from '../replay/timeframes'
 import type { LabData, SignalRequest } from './data'
 import type { SignalPoint } from './events'
+import { defaultRule, type Strategy, type StrategyRule } from './model'
 
 const H = 3_600_000
 export const D = 24 * H
@@ -64,3 +65,12 @@ export class FakeData implements LabData {
   }
 }
 
+
+/** `strategy` with a long and a short rule from each of `roots` (longest first), each stepping
+ * through the shorter of `timeframes` -- what a version-1 strategy with those roots over a pool on
+ * those timeframes became. */
+export function withRules(strategy: Strategy, roots: readonly string[], timeframes: readonly string[], patch: Partial<StrategyRule> = {}): Strategy {
+  const source = strategy.sources[0]?.id ?? 'rank85'
+  strategy.rules = roots.flatMap((root) => (['long', 'short'] as const).map((dir) => ({ ...defaultRule(dir, root, timeframes, source, `${dir}${root}`), ...patch })))
+  return strategy
+}

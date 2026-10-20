@@ -24,7 +24,9 @@ import { StrategyStore } from './store'
 // graph that joins signals into cascades, which of its nodes are entries, and what happens after
 // them -- against history, where the dashboard is for watching the market.
 //
-//   header   which strategy, Save / Revert, the instrument and window it runs on, Run
+//   header   which strategy, Save, the instrument and window it runs on, Run -- and two menus:
+//            "⋯" (new, export, revert, delete) and Options (auto-run, a holdout, what the chart
+//            shows), so the row holds what is used on every visit and nothing else
 //   editor   every slot of the strategy (./editor.ts)
 //   chart    the instrument, with the run drawn on it (./overlay.ts, the `LAB:draft` template)
 //   results  what the run found (./results.ts); a row takes the chart there. The bar between
@@ -185,7 +187,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   const sweepPanel = createSweepPanel({
     strategy: () => current(),
     paramInfo,
-    run: (strategy, isCancelled) => runStrategy(strategy, data, { catalogue: catalogue?.server ?? null, isCancelled }),
+    // A sweep compares whole runs: no rule needs an account of its own.
+    run: (strategy, isCancelled) => runStrategy(strategy, data, { catalogue: catalogue?.server ?? null, isCancelled, perRule: false }),
     use: (target, value) => {
       target.apply(current(), value)
       editor.render()
@@ -200,7 +203,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     // The lab's own instrument reads through the page's data; any other through a data layer of
     // its own, dropped with its run, so a basket of 28 never holds 28 instruments' bars at once.
     run: (strategy, symbol, isCancelled) =>
-      runStrategy(strategy, symbol === current().instrument ? data : new HttpLabData(), { symbol, catalogue: catalogue?.server ?? null, isCancelled }),
+      runStrategy(strategy, symbol === current().instrument ? data : new HttpLabData(), { symbol, catalogue: catalogue?.server ?? null, isCancelled, perRule: false }),
     open: (symbol) => {
       current().instrument = symbol
       editor.render()
@@ -248,34 +251,16 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   nameInput.className = 'kc-input wd-lab-name'
   nameInput.setAttribute('aria-label', 'Name')
 
-  const newPicker = select(
-    [
-      { value: '', label: 'New…' },
-      { value: 'rank85', label: 'AREV21 rank 85 graph (the overlay’s)' },
-      { value: 'rule', label: 'Rule events, no graph' },
-      { value: 'copy', label: 'A copy of this one' },
-      { value: 'import', label: 'From a file…' }
-    ],
-    '',
-    (value) => {
-      newPicker.value = ''
-      if (!value) return
-      const now = Date.now()
-      let fresh: Strategy
-      if (value === 'import') {
-        importFile.click()
-        return
-      }
-      if (value === 'copy') fresh = { ...structuredClone(current()), id: newStrategyId(now), name: `${current().name} copy`, createdAt: now, updatedAt: now }
-      else fresh = value === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
-      fresh.instrument = current().instrument
-      drafts.set(fresh.id, fresh)
-      touched.add(fresh.id)
-      switchTo(fresh.id)
-    }
-  )
-  newPicker.classList.add('wd-lab-new')
-  newPicker.setAttribute('aria-label', 'New strategy')
+  /** A new draft: the rank 85 rules, the rule-event pair, or a copy of this one. */
+  function createNew(kind: 'rank85' | 'rule' | 'copy'): void {
+    const now = Date.now()
+    const fresh: Strategy =
+      kind === 'copy' ? { ...structuredClone(current()), id: newStrategyId(now), name: `${current().name} copy`, createdAt: now, updatedAt: now } : kind === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
+    fresh.instrument = current().instrument
+    drafts.set(fresh.id, fresh)
+    touched.add(fresh.id)
+    switchTo(fresh.id)
+  }
 
   // A strategy to or from a file: how one moves between the dev and prod dashboards.
   const importFile = document.createElement('input')
@@ -296,8 +281,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       saveNote.textContent = `Could not import ${file.name}: ${err instanceof ImportError ? err.message : String(err)}`
     }
   })
-  const exportButton = button('kc-button kc-button-outline', 'Export', () => download(`${fileStem(current().name)}.strategy.json`, strategyJson(current()), 'application/json'))
-  exportButton.title = 'Save this strategy (the draft, as it stands) as a file; New… ▸ From a file reads it back, here or on another dashboard'
+  const exportButton = button('wd-lab-menu-item', 'Export to a file', () => download(`${fileStem(current().name)}.strategy.json`, strategyJson(current()), 'application/json'))
+  exportButton.title = 'This strategy (the draft, as it stands) as a file; New from a file reads it back, here or on another dashboard'
 
   const save = button('kc-button kc-button-primary', 'Save', () => {
     try {
@@ -310,7 +295,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     refreshHead()
   })
   save.title = 'Keep this strategy. A dashboard pane or an alert reads what is saved.'
-  const revert = button('kc-button kc-button-outline', 'Revert', () => {
+  const revert = button('wd-lab-menu-item', 'Revert to the saved version', () => {
     const saved = store.get(currentId)
     if (!saved) return
     drafts.set(currentId, structuredClone(saved))
@@ -328,7 +313,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     remove.textContent = removeWord()
     remove.classList.remove('is-armed')
   }
-  const remove = button('kc-button kc-button-outline wd-lab-delete', 'Delete', () => {
+  const remove = button('wd-lab-menu-item wd-lab-delete', 'Delete', () => {
     if (!deleteArmed) {
       remove.textContent = `${removeWord()}?`
       remove.classList.add('is-armed')
@@ -336,6 +321,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       return
     }
     disarm()
+    closePops()
     try {
       if (store.get(currentId)) store.remove(currentId)
     } catch (err) {
@@ -528,11 +514,53 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     showBox.appendChild(l)
   }
 
+  // The "⋯" menu: everything about the strategy that is not Save.
+  const menuItem = (label: string, onClick: () => void, title = ''): HTMLButtonElement => {
+    const b = button('wd-lab-menu-item', label, () => {
+      onClick()
+      closePops()
+    })
+    if (title) b.title = title
+    return b
+  }
+  const strategyMenu = popover('⋯', 'New, export, revert or delete', (panel) => {
+    const newHead = el('div', 'wd-lab-menu-head')
+    newHead.textContent = 'New'
+    panel.append(
+      newHead,
+      menuItem('AREV21 rank 85 rules (the overlay’s 1D graph)', () => createNew('rank85')),
+      menuItem('Rule events, no graph', () => createNew('rule')),
+      menuItem('A copy of this one', () => createNew('copy')),
+      menuItem('From a file…', () => importFile.click(), 'A strategy file exported here or on another dashboard, as a new strategy'),
+      el('hr', 'wd-lab-menu-rule'),
+      exportButton,
+      revert,
+      remove
+    )
+  })
+  exportButton.addEventListener('click', () => closePops())
+  revert.addEventListener('click', () => closePops())
+
+  // Options: what changes how a run is read, and what the chart draws.
+  const optionsMenu = popover('Options', 'Auto-run, a holdout, and what the chart shows', (panel) => {
+    const showHead = el('div', 'wd-lab-menu-head')
+    showHead.textContent = 'On the chart'
+    const holdHead = el('div', 'wd-lab-menu-head')
+    holdHead.textContent = 'Hold out'
+    panel.append(autoLabel, holdHead, holdoutLabel, showHead, showBox)
+  })
+
   const left = el('div', 'wd-lab-head-left')
-  left.append(back, brand, picker, nameInput, newPicker, importFile, save, revert, remove, exportButton, saveNote)
+  left.append(back, brand, picker, nameInput, save, strategyMenu, importFile, saveNote)
   const right = el('div', 'wd-lab-head-right')
-  right.append(instrument, symbols, daysLabel, holdoutLabel, runButton, autoLabel, showBox)
+  right.append(instrument, symbols, daysLabel, runButton, optionsMenu)
   head.append(left, right)
+  document.addEventListener('click', (event) => {
+    for (const pop of head.querySelectorAll<HTMLDetailsElement>('details.wd-lab-pop[open]')) if (!pop.contains(event.target as Node)) pop.open = false
+  })
+  function closePops(): void {
+    for (const pop of head.querySelectorAll<HTMLDetailsElement>('details.wd-lab-pop[open]')) pop.open = false
+  }
 
   function refreshHead(): void {
     picker.innerHTML = ''
@@ -568,6 +596,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     save.disabled = !dirty || !!store.loadError
     revert.disabled = !dirty || !saved
     save.textContent = saved ? 'Save' : 'Save new'
+    revert.hidden = !saved
     if (!deleteArmed) remove.textContent = removeWord()
     remove.title = saved ? 'Delete this strategy (press twice)' : 'Discard this draft, never saved (press twice)'
     // A fresh default nobody has touched holds nothing to discard.
@@ -724,6 +753,30 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     chartBox.appendChild(failed)
   }
   scheduleRun(0)
+}
+
+// -- a header menu ------------------------------------------------------------------------------------
+
+/** A button that opens a small panel under it (a `details`, so it needs no dialog and Escape-free
+ * code: a click outside or on an item closes it). */
+function popover(label: string, title: string, build: (panel: HTMLElement) => void): HTMLDetailsElement {
+  const details = document.createElement('details')
+  details.className = 'wd-lab-pop'
+  const summary = document.createElement('summary')
+  summary.className = 'kc-button kc-button-outline wd-lab-pop-button'
+  summary.textContent = label
+  summary.title = title
+  summary.setAttribute('aria-label', title)
+  const panel = el('div', 'wd-lab-pop-panel')
+  build(panel)
+  details.append(summary, panel)
+  details.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      details.open = false
+      summary.focus()
+    }
+  })
+  return details
 }
 
 // -- the split ----------------------------------------------------------------------------------------

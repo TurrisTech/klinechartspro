@@ -6,10 +6,14 @@
 //      bars (for the candles signals are priced on, and for `atr()` / `ind()`), the bars and
 //      points its rules read -- each back as far as the graph in force at the window's start
 //      needs it, and no further
-//   3. signals -> graphs -> entries -> filter (events.ts, graph.ts, entries.ts)
+//   3. RULE BY RULE (rules.ts): its signals -> its graphs -> its entries -> its filter
+//      (events.ts, graph.ts, entries.ts). A rule is independent of the others; the strategy's
+//      entries are every rule's, a signal taken once -- by the first rule listed that enters on
+//      it, long rules before short ones, as the editor lists them
 //   4. what happened after each entry (outcomes.ts) and the entries as trades (trades.ts), on
 //      the PATH timeframe: the longest stored one that divides every entry's, so each entry's
-//      close is a path bar's close
+//      close is a path bar's close -- for the rules together on one account, and for each rule
+//      alone, so the results can say which rule earns
 //
 // Reads go through `LabData`, which holds them for the page: a second run with an edited rule
 // reads nothing new.
@@ -27,8 +31,9 @@ import type { LabData } from './data'
 import { applyFilter, entriesOfEvents, entriesOfGraphs, graphStateAt, type LabEntry, RuleAtInstant, rootIndex } from './entries'
 import { type Ast, compileExpr, type ExprEnv } from './expr'
 import { publishedSignals, ruleOperands, ruleSignals } from './events'
-import { buildRootGraphs, compileGraph, graphStarts, type LabGraph, type LabSignal, slotEnv } from './graph'
-import { type Problem, SCOPES, type Strategy, strategyProblems } from './model'
+import { buildRootGraphs, type CompiledGraph, compileGraph, graphStart, type LabGraph, type LabSignal, slotEnv } from './graph'
+import { type Problem, ruleLabel, SCOPES, type Strategy, type StrategyRule, strategyProblems } from './model'
+import { ruleEntryTest, ruleGraphSpec, ruleSignals as signalsOfRule, ruleTimeframes, ruleWatchInterval } from './rules'
 import { type EntryOutcome, measureOutcome, type OutcomeSummary, pathIndex, summariseOutcomes } from './outcomes'
 import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings } from './readings'
 import { type SimResult, simulate } from './trades'
@@ -60,6 +65,9 @@ export interface RunOptions {
   catalogue: ServerCatalogue | null
   /** Skip the simulated trades (a wall pane draws the graph and entries only). */
   simulate?: boolean
+  /** Measure each rule alone too (outcomes and an account of its own); default true when the
+   * trades are simulated. A sweep or a basket, which compare whole runs, can leave it off. */
+  perRule?: boolean
   onProgress?: (stage: string) => void
   /** Asked between stages: true abandons the run (it throws `RunCancelled`). */
   isCancelled?: () => boolean
@@ -70,6 +78,22 @@ export interface SourceCount {
   source: string
   interval: string
   signals: number
+}
+
+/** One rule of a run, measured alone. */
+export interface RuleRun {
+  rule: StrategyRule
+  /** What the page calls it: "Long · 1D". */
+  label: string
+  graphs: LabGraph[]
+  /** Its entries in `[from, to]` that passed its filter -- the same signal may be another
+   * rule's too, which the strategy's own entries take once. */
+  entries: LabEntry[]
+  filtered: LabEntry[]
+  outcomes: Map<string, EntryOutcome>
+  summary: OutcomeSummary | null
+  /** Its entries alone on an account of their own; null when not simulated. */
+  sim: SimResult | null
 }
 
 export interface LabRun {
@@ -83,10 +107,12 @@ export interface LabRun {
   signals: LabSignal[]
   counts: SourceCount[]
   graphs: LabGraph[]
-  /** Entries in `[from, to]` that passed the filter. */
+  /** Entries in `[from, to]` that passed their rule's filter: every rule's, a signal once. */
   entries: LabEntry[]
-  /** Entries the filter took out. */
+  /** Entries a filter took out. */
   filtered: LabEntry[]
+  /** Each enabled rule, alone, in the strategy's order. */
+  rules: RuleRun[]
   outcomes: Map<string, EntryOutcome>
   summary: { all: OutcomeSummary; long: OutcomeSummary; short: OutcomeSummary }
   sim: SimResult | null
@@ -141,8 +167,14 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   if (!grid) throw new RunError(`${symbol} has no market hours on the server, so its bars have no closes to evaluate at`)
 
   // -- compile -------------------------------------------------------------------------------
-  const spec = strategy.graph
-  const compiledGraph = compileGraph(spec, strategy.entry.when)
+  // In the editor's order -- the long rules, then the short ones -- which is also the order that
+  // decides which rule takes a signal two of them enter on.
+  const rules = [...strategy.rules.filter((r) => r.enabled && r.direction === 'long'), ...strategy.rules.filter((r) => r.enabled && r.direction === 'short')]
+  const compiled = new Map<string, { graph: CompiledGraph; entry: ReturnType<typeof ruleEntryTest> }>()
+  for (const rule of rules) {
+    const entry = ruleEntryTest(rule)
+    compiled.set(rule.id, { graph: compileGraph(ruleGraphSpec(rule, strategy.lookback), entry), entry })
+  }
   const level = (expr: string | undefined) => (expr ? compileExpr(expr, SCOPES.level) : undefined)
   const levels = {
     stop: strategy.exits.stop?.kind === 'expr' ? level(strategy.exits.stop.expr) : undefined,
@@ -151,17 +183,28 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   }
 
   // -- what to read ---------------------------------------------------------------------------
-  const pool = [...new Set(strategy.sources.flatMap((s) => s.timeframes))]
-  const watchInterval = spec.end.watch ?? [...pool].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))[0]
+  /** Every timeframe some rule reads, and per source the ones its rules read it on. */
+  const pool = [...new Set(rules.flatMap(ruleTimeframes))]
+  const sourceTimeframes = new Map<string, Set<string>>()
+  for (const rule of rules) {
+    const set = sourceTimeframes.get(rule.source) ?? new Set<string>()
+    for (const tf of ruleTimeframes(rule)) set.add(tf)
+    sourceTimeframes.set(rule.source, set)
+  }
   const needs: ReadingNeed[] = []
   const addNeeds = (ast: Ast | undefined, self: readonly string[]): void => {
     if (ast) needs.push(...needsOf(ast, self))
   }
-  if (spec.enabled) {
-    for (const c of compiledGraph.step) addNeeds(c.ast, pool)
-    if (compiledGraph.end) addNeeds(compiledGraph.end.ast, [watchInterval])
+  for (const rule of rules) {
+    const c = compiled.get(rule.id)
+    if (!c) continue
+    const own = ruleTimeframes(rule)
+    if (rule.steps.length > 0) {
+      for (const step of c.graph.step) addNeeds(step.ast, own)
+      if (c.graph.end) addNeeds(c.graph.end.ast, [ruleWatchInterval(rule)])
+    }
+    for (const e of c.graph.entry) addNeeds(e.ast, own)
   }
-  for (const c of compiledGraph.entry) addNeeds(c.ast, pool)
   for (const c of Object.values(levels)) addNeeds(c?.ast, pool)
   const atrLevel = (l: Strategy['exits']['stop']): void => {
     if (l?.kind !== 'atr') return
@@ -172,18 +215,19 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   atrLevel(strategy.exits.trail?.distance ?? null)
   for (const interval of pool) needs.push({ kind: 'atr', period: strategy.outcomes.atrPeriod, interval })
 
-  // The rules' operands: rule sources, the filter, the exit rules.
+  // The rules' operands: rule sources on the timeframes rules follow them on, the filters, the
+  // exit rules.
   const ruleOps: Operand[] = []
-  for (const source of strategy.sources) if (source.kind === 'rule') for (const tf of source.timeframes) ruleOps.push(...ruleOperands(source, tf))
-  const filterOps = strategy.entry.filter ? RuleAtInstant.operands(strategy.entry.filter) : []
+  for (const source of strategy.sources) if (source.kind === 'rule') for (const tf of sourceTimeframes.get(source.id) ?? []) ruleOps.push(...ruleOperands(source, tf))
+  const filterOps = rules.flatMap((r) => (r.filter ? RuleAtInstant.operands(r.filter) : []))
   const exitOps = [strategy.exits.ruleLong, strategy.exits.ruleShort].flatMap((r) => (r ? RuleAtInstant.operands(r) : []))
   const operands = [...ruleOps, ...filterOps, ...exitOps]
 
-  // How far back each pool timeframe is read. A root: its lookback, for the graph in force at
-  // `from`. Every other timeframe: back to where the earliest such graph began (found once the
-  // roots are read), capped at `lookback.maxBars` of its own -- the overlay's own bounds.
-  const roots = spec.enabled ? spec.roots.filter((r) => pool.includes(r)) : []
-  const lookbackOf = (root: string): number => spec.lookback.rootBars * resolutionDurationMs(root)
+  // How far back each rule's timeframes are read. Its root: its lookback, for the graph in force
+  // at `from`. Its steps: back to where that graph began (found once the root is read), capped at
+  // `lookback.maxBars` of their own -- the overlay's own bounds. A rule with no steps reads its
+  // root from `from`.
+  const lookbackOf = (root: string): number => strategy.lookback.rootBars * resolutionDurationMs(root)
 
   // -- read ------------------------------------------------------------------------------------
   const now = options.now ?? Date.now()
@@ -204,37 +248,31 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   const leadInOf = (interval: string): number =>
     Math.max(2, leadInFor(operands, interval), ...needs.filter((n) => n.interval === interval).map(leadIn))
 
-  const signals: LabSignal[] = []
-  const counts: SourceCount[] = []
-  const signalStart = new Map<string, number>()
-
-  const readPool = async (intervals: readonly string[], startOf: (interval: string) => number): Promise<void> => {
-    for (const source of strategy.sources) {
-      for (const interval of source.timeframes) {
-        if (!intervals.includes(interval)) continue
-        const start = startOf(interval)
-        signalStart.set(interval, Math.min(signalStart.get(interval) ?? start, start))
-        progress(`Reading ${source.title} ${interval}`)
-        const bars = await readBars(interval, start - leadInOf(interval) * nominalMs(interval))
-        let found: LabSignal[] = []
-        if (source.kind === 'published') {
-          const points = await data.signals(
-            { plugin: source.plugin, variant: source.variant, params: source.params },
-            symbol,
-            interval,
-            grid.toWire(interval, start),
-            grid.toWire(interval, to)
-          )
-          found = publishedSignals(source, interval, points, bars)
-        } else {
-          for (const op of ruleOperands(source, interval)) await readOperand(op, start)
-          found = await ruleSignals({ source, interval, bars: barsOf, points: pointsOf, from: start })
-        }
-        signals.push(...found)
-        counts.push({ source: source.id, interval, signals: found.filter((s) => s.knownAt >= from && s.knownAt <= to).length })
-      }
+  /** What each source has been read on: from where, and what it found. */
+  const held = new Map<string, { start: number; signals: LabSignal[] }>()
+  const readSignals = async (sourceId: string, interval: string, start: number): Promise<void> => {
+    const key = `${sourceId}|${interval}`
+    const source = strategy.sources.find((s) => s.id === sourceId)
+    if (!source) return
+    progress(`Reading ${source.title} ${interval}`)
+    const bars = await readBars(interval, start - leadInOf(interval) * nominalMs(interval))
+    let found: LabSignal[] = []
+    if (source.kind === 'published') {
+      const points = await data.signals(
+        { plugin: source.plugin, variant: source.variant, params: source.params },
+        symbol,
+        interval,
+        grid.toWire(interval, start),
+        grid.toWire(interval, to)
+      )
+      found = publishedSignals(source, interval, points, bars)
+    } else {
+      for (const op of ruleOperands(source, interval)) await readOperand(op, start)
+      found = await ruleSignals({ source, interval, bars: barsOf, points: pointsOf, from: start })
     }
+    held.set(key, { start, signals: found })
   }
+  const heldSignals = (): LabSignal[] => [...held.values()].flatMap((h) => h.signals)
 
   // Server points for series and signal operands of the rules.
   const pointIndex = new Map<string, PointIndex>()
@@ -255,66 +293,109 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
     pointIndex.set(key, indexPoints(points, source.foldBy))
   }
 
-  // Roots first: where their graphs in force began decides how far back everything else reads.
-  // A longer root may start from its run in force at a shorter root's start rather than at
-  // `from` (graph.ts `graphStarts`), so each is read back past every shorter root's bound too.
-  const shorterBound = (root: string): number =>
-    roots.filter((r) => resolutionDurationMs(r) < resolutionDurationMs(root)).reduce((sum, r) => sum + lookbackOf(r), 0)
-  if (roots.length > 0) await readPool(roots, (root) => from - lookbackOf(root) - shorterBound(root) - BACK_PAD_MS)
-  let graphFrom = from
-  for (const start of graphStarts({ signals, spec, from }).values()) graphFrom = Math.min(graphFrom, start)
-  await readPool(
-    pool.filter((tf) => !roots.includes(tf)),
-    (tf) => (spec.enabled ? Math.max(graphFrom, from - spec.lookback.maxBars * resolutionDurationMs(tf)) : from) - BACK_PAD_MS
+  // Longest timeframe first, each (source, timeframe) once, from the earliest instant a rule needs
+  // it: as a root, its lookback; as a step, where the graph in force at `from` of the rule it is a
+  // step of began -- known by then, that rule's root being longer.
+  const graphFrom = new Map<string, number>()
+  const plan = [...new Set(rules.flatMap((r) => ruleTimeframes(r).map((tf) => `${r.source}|${tf}`)))].sort(
+    (a, b) => resolutionDurationMs(b.split('|')[1]) - resolutionDurationMs(a.split('|')[1])
   )
+  for (const key of plan) {
+    const [sourceId, tf] = key.split('|')
+    const starts: number[] = []
+    for (const rule of rules) {
+      if (rule.source !== sourceId) continue
+      if (rule.root === tf) starts.push(rule.steps.length > 0 ? from - lookbackOf(tf) : from)
+      if (rule.steps.includes(tf)) starts.push(Math.max(graphFrom.get(rule.id) ?? from, from - strategy.lookback.maxBars * resolutionDurationMs(tf)))
+    }
+    await readSignals(sourceId, tf, Math.min(...starts) - BACK_PAD_MS)
+    for (const rule of rules) {
+      if (rule.source !== sourceId || rule.root !== tf || rule.steps.length === 0) continue
+      const rootSignals = (held.get(key)?.signals ?? []).filter((s) => s.interval === tf)
+      graphFrom.set(rule.id, graphStart(rootSignals, from, lookbackOf(tf)))
+    }
+  }
+  const signals = heldSignals()
+  const counts: SourceCount[] = [...held.entries()].map(([key, h]) => {
+    const [source, interval] = key.split('|')
+    return { source, interval, signals: h.signals.filter((s) => s.knownAt >= from && s.knownAt <= to).length }
+  })
   // The filter is read inside the window; an exit rule as long as a trade can run past it.
   const simEnd = Math.min(now, to + 60 * DAY)
   for (const op of filterOps) await readOperand(op, from)
   for (const op of exitOps) await readOperand(op, from, simEnd)
-  // Readings on timeframes no source reads (an `atr(14, '4h')` on a 1h pool).
+  // Readings on timeframes no rule reads (an `atr(14, '4h')` on a 1h pool).
   for (const need of needs) if (!barsHeld.has(need.interval)) await readBars(need.interval, from - BACK_PAD_MS - leadIn(need) * nominalMs(need.interval))
-  if (spec.enabled && compiledGraph.end && !barsHeld.has(watchInterval)) await readBars(watchInterval, graphFrom - BACK_PAD_MS)
+  for (const rule of rules) {
+    const watch = ruleWatchInterval(rule)
+    if (rule.steps.length > 0 && compiled.get(rule.id)?.graph.end && !barsHeld.has(watch)) await readBars(watch, (graphFrom.get(rule.id) ?? from) - BACK_PAD_MS)
+  }
   stage('read')
 
   const readings = await computeReadings(needs, barsOf, pip)
   stage('readings')
 
-  // -- graphs and entries ------------------------------------------------------------------------
+  // -- graphs and entries, rule by rule ------------------------------------------------------------
   progress('Building graphs')
-  let graphs: LabGraph[] = []
-  let candidates: LabEntry[]
-  if (spec.enabled) {
-    graphs = buildRootGraphs(
-      {
-        signals,
-        spec,
-        entry: strategy.entry.when,
-        from,
+  const ruleRuns: RuleRun[] = []
+  for (const rule of rules) {
+    const c = compiled.get(rule.id)
+    if (!c) continue
+    const own = signalsOfRule(rule, signals)
+    let graphs: LabGraph[] = []
+    let candidates: LabEntry[]
+    if (rule.steps.length > 0) {
+      const watch = ruleWatchInterval(rule)
+      graphs = buildRootGraphs(
+        {
+          signals: own,
+          spec: ruleGraphSpec(rule, strategy.lookback),
+          entry: c.entry,
+          from,
+          readings,
+          rootCloses: (root) => barsOf(root).map((b) => b.end),
+          watchBars: barsOf(watch).map((b) => ({ end: b.end, o: b.o, h: b.h, l: b.l, c: b.c })),
+          watchInterval: watch
+        },
+        c.graph
+      ).filter((g) => g.side === rule.follows)
+      candidates = entriesOfGraphs(graphs, rule.direction, rule.id)
+    } else {
+      candidates = entriesOfEvents(
+        own.filter((s) => s.knownAt >= from && s.interval === rule.root && s.side === rule.follows),
+        c.entry,
+        rule.direction,
         readings,
-        rootCloses: (root) => barsOf(root).map((b) => b.end),
-        watchBars: barsOf(watchInterval).map((b) => ({ end: b.end, o: b.o, h: b.h, l: b.l, c: b.c })),
-        watchInterval
-      },
-      compiledGraph
-    )
-    candidates = entriesOfGraphs(graphs, strategy.entry.direction)
-  } else {
-    candidates = entriesOfEvents(
-      signals.filter((s) => s.knownAt >= from),
-      strategy.entry.when,
-      strategy.entry.direction,
-      readings
-    )
+        rule.id
+      )
+    }
+    candidates = candidates.filter((e) => e.at >= from && e.at <= to)
+    const filter = rule.filter ? await RuleAtInstant.build(rule.filter, barsOf, pointsOf) : null
+    const { kept, filtered } = applyFilter(candidates, filter)
+    ruleRuns.push({ rule, label: ruleLabel(strategy, rule), graphs, entries: kept, filtered, outcomes: new Map(), summary: null, sim: null })
   }
-  candidates = candidates.filter((e) => e.at >= from && e.at <= to)
-  const filter = strategy.entry.filter ? await RuleAtInstant.build(strategy.entry.filter, barsOf, pointsOf) : null
-  const { kept: entries, filtered } = applyFilter(candidates, filter)
+  // The strategy's entries: every rule's, a signal taken once -- by the first rule listed.
+  const taken = new Set<string>()
+  const entries: LabEntry[] = []
+  for (const rr of ruleRuns) for (const e of rr.entries) if (!taken.has(e.id)) {
+    taken.add(e.id)
+    entries.push(e)
+  }
+  entries.sort((a, b) => a.at - b.at)
+  const filtered: LabEntry[] = []
+  for (const rr of ruleRuns) for (const e of rr.filtered) if (!taken.has(e.id)) {
+    taken.add(e.id)
+    filtered.push(e)
+  }
+  filtered.sort((a, b) => a.at - b.at)
+  const graphs = ruleRuns.flatMap((rr) => rr.graphs)
   stage('graphs')
 
   // -- path: outcomes and trades --------------------------------------------------------------
   const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval))
   const outcomes = new Map<string, EntryOutcome>()
   let sim: SimResult | null = null
+  const perRule = options.perRule ?? options.simulate !== false
   if (pathInterval && entries.length > 0) {
     const pathMs = nominalMs(pathInterval)
     const longestEntry = Math.max(...entries.map((e) => e.signal.durationMs))
@@ -324,11 +405,23 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
     progress(`Reading ${pathInterval} path bars`)
     const pathBars = await data.bars(symbol, pathInterval, pathFrom, pathTo, 'core')
     const path = pathIndex(pathBars, pathMs)
+    const measure = (entry: LabEntry): EntryOutcome | null => measureOutcome(entry, path, strategy.outcomes, pip, readings.atr(strategy.outcomes.atrPeriod, entry.signal.interval, entry.at))
     for (const entry of entries) {
-      const outcome = measureOutcome(entry, path, strategy.outcomes, pip, readings.atr(strategy.outcomes.atrPeriod, entry.signal.interval, entry.at))
+      const outcome = measure(entry)
       if (outcome) outcomes.set(entry.id, outcome)
     }
     if (outcomes.size < entries.length) warnings.push(`${entries.length - outcomes.size} entries have no ${pathInterval} bar closing at them, so no outcome`)
+    if (perRule) {
+      for (const rr of ruleRuns) {
+        for (const entry of rr.entries) {
+          // The strategy's own measure when it took this signal the same way.
+          const mine = entries.find((e) => e.id === entry.id)
+          const outcome = mine && mine.direction === entry.direction ? outcomes.get(entry.id) : measure(entry)
+          if (outcome) rr.outcomes.set(entry.id, outcome)
+        }
+        rr.summary = summariseOutcomes([...rr.outcomes.values()], strategy.outcomes)
+      }
+    }
     stage('outcomes')
 
     if (options.simulate !== false) {
@@ -340,24 +433,30 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
         long: strategy.exits.ruleLong ? await RuleAtInstant.build(strategy.exits.ruleLong, barsOf, pointsOf) : null,
         short: strategy.exits.ruleShort ? await RuleAtInstant.build(strategy.exits.ruleShort, barsOf, pointsOf) : null
       }
-      sim = simulate({
-        symbol,
-        entries,
-        bars: simBars,
-        pathMs,
-        exits: strategy.exits,
-        sizing: strategy.sizing,
-        costs: strategy.costs,
-        grid,
-        pip,
-        readings,
-        levels,
-        levelEnv: (entry, reference) => levelEnv(entry, reference, readings),
-        exitRule: (direction) => {
-          const rule = direction === 'long' ? exitRules.long : exitRules.short
-          return rule ? (t) => rule.holdsAt(t) : null
-        }
-      })
+      const simulateEntries = (list: readonly LabEntry[]): SimResult =>
+        simulate({
+          symbol,
+          entries: list,
+          bars: simBars,
+          pathMs,
+          exits: strategy.exits,
+          sizing: strategy.sizing,
+          costs: strategy.costs,
+          grid,
+          pip,
+          readings,
+          levels,
+          levelEnv: (entry, reference) => levelEnv(entry, reference, readings),
+          exitRule: (direction) => {
+            const rule = direction === 'long' ? exitRules.long : exitRules.short
+            return rule ? (t) => rule.holdsAt(t) : null
+          }
+        })
+      sim = simulateEntries(entries)
+      if (perRule) {
+        // A rule that is the whole strategy is its account; any other trades alone.
+        for (const rr of ruleRuns) rr.sim = ruleRuns.length === 1 ? sim : rr.entries.length > 0 ? simulateEntries(rr.entries) : null
+      }
       stage('trades')
     }
   }
@@ -376,6 +475,7 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
     graphs,
     entries,
     filtered,
+    rules: ruleRuns,
     outcomes,
     summary: {
       all: summariseOutcomes(outcomeList(), strategy.outcomes),

@@ -163,9 +163,10 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
       })
     }
   }
-  // Without a graph, entries are events: a star each.
-  if (show.entries && !run.strategy.graph.enabled) {
+  // A rule without a graph enters on events: a star each.
+  if (show.entries) {
     for (const entry of [...run.entries, ...run.filtered]) {
+      if (entry.graph) continue
       const i = at(entry.at)
       if (i < 0) continue
       values[i].dots ??= []

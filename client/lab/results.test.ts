@@ -11,8 +11,8 @@ afterAll(() => GlobalRegistrator.unregister())
 const { createResultsView } = await import('./results')
 const { runStrategy } = await import('./runner')
 const { figuresOf } = await import('./figures')
-const { rank85Strategy, defaultStep } = await import('./model')
-const { FakeData, NOW, D } = await import('./testdata')
+const { rank85Strategy } = await import('./model')
+const { FakeData, NOW, D, withRules } = await import('./testdata')
 
 import type { Problem } from './model'
 import type { Pick } from './results'
@@ -22,8 +22,7 @@ let run: LabRun
 
 beforeAll(async () => {
   const s = rank85Strategy(NOW)
-  s.sources[0].timeframes = ['3m', '5m', '15m', '1h', '4h']
-  s.graph = { ...s.graph, roots: ['4h', '1h'], step: defaultStep(8) }
+  withRules(s, ['4h', '1h'], ['3m', '5m', '15m', '1h', '4h'])
   run = await runStrategy(s, new FakeData(), { from: NOW - 10 * D, to: NOW, catalogue: null, now: NOW })
 })
 
@@ -175,7 +174,8 @@ describe('the results view', () => {
     const { view, tab } = mount()
     view.showRun(run)
     tab('Trades')
-    const units = [...view.element.querySelectorAll('tbody tr')].map((tr) => tr.children[3]?.textContent ?? '')
+    // #, opened, rule, trade, units
+    const units = [...view.element.querySelectorAll('tbody tr')].map((tr) => tr.children[4]?.textContent ?? '')
     const big = run.sim?.trades.filter((t) => t.units >= 1000) ?? []
     expect(big.length).toBeGreaterThan(0)
     for (const text of units) expect(text).toMatch(/^\d{1,3}(,\d{3})*$/)

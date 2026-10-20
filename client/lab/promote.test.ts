@@ -43,7 +43,7 @@ describe('the saved strategies', () => {
     const again = new StrategyStore(persistence)
     await again.load()
     expect(again.list().map((s) => s.id)).toEqual([a.id])
-    expect(again.get(a.id)?.graph.step.map((c) => c.expr)).toEqual(a.graph.step.map((c) => c.expr))
+    expect(again.get(a.id)?.rules).toEqual(a.rules)
     again.remove(a.id)
     expect(Object.keys(persistence.data)).toEqual(['strategies'])
     store.dispose()

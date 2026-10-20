@@ -8,7 +8,7 @@
 // PURE but for `download`.
 
 import { rootIndex } from './entries'
-import { newStrategyId, readStrategy, type Strategy } from './model'
+import { newStrategyId, readStrategy, ruleLabel, type Strategy } from './model'
 import type { LabRun } from './runner'
 
 const iso = (ms: number | null | undefined): string => (ms === null || ms === undefined ? '' : new Date(ms).toISOString())
@@ -32,6 +32,7 @@ export function entriesCsv(run: LabRun): string {
   const header = [
     'symbol',
     'at_utc',
+    'rule',
     'interval',
     'side',
     'direction',
@@ -56,6 +57,7 @@ export function entriesCsv(run: LabRun): string {
     return [
       run.symbol,
       iso(e.at),
+      ruleName(run, e.rule),
       e.signal.interval,
       e.side,
       e.direction,
@@ -78,11 +80,18 @@ export function entriesCsv(run: LabRun): string {
   return csv(header, rows)
 }
 
+/** A rule's name in `run` ("Long · 1D"), by its id. */
+function ruleName(run: LabRun, id: string): string {
+  const rule = run.strategy.rules.find((r) => r.id === id)
+  return rule ? ruleLabel(run.strategy, rule) : id
+}
+
 /** The simulated trades, in the order they opened. */
 export function tradesCsv(run: LabRun): string {
   const header = [
     'symbol',
     'opened_utc',
+    'rule',
     'direction',
     'units',
     'capped',
@@ -105,6 +114,7 @@ export function tradesCsv(run: LabRun): string {
   const rows = (run.sim?.trades ?? []).map((t) => [
     run.symbol,
     iso(t.openedAt),
+    ruleName(run, t.entry.rule),
     t.direction,
     t.units,
     t.capped,

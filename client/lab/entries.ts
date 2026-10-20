@@ -1,12 +1,12 @@
-// WHICH SIGNALS ARE ENTRIES, and which way each trades.
+// WHICH SIGNALS ARE ENTRIES of one rule (model.ts `StrategyRule`), and which way they trade.
 //
-//   graph on    the nodes that passed the entry test as they joined their graph (graph.ts),
-//               once per signal however many graphs it is in
-//   graph off   every event of the pool that passes the entry test, read with no graph -- a
-//               node then has no parent and is its own root
+//   with steps   the nodes that passed the rule's entry test as they joined its graphs
+//                (graph.ts), once per signal however many graphs it is in
+//   no steps     every signal of its side on its root that passes the entry test, read with no
+//                graph -- a node then has no parent and is its own root
 //
-// then the FILTER -- an alert rule (client/alerts) read at the entry instant, each operand on its
-// own timeframe at its latest bar CLOSED by then -- and the direction each side trades.
+// then the rule's FILTER -- an alert rule (client/alerts) read at the entry instant, each operand
+// on its own timeframe at its latest bar CLOSED by then. Every entry trades the rule's way.
 //
 // PURE but for the filter's indicators, which klinecharts' templates compute.
 
@@ -18,7 +18,7 @@ import type { Operand, Rule } from '../alerts/types'
 import type { ReplayBar } from '../replay/cache'
 import { compileExpr } from './expr'
 import { graphEntries, type GraphState, type LabGraph, type LabSignal, type Readings, slotEnv } from './graph'
-import { type Direction, type EntrySpec, SCOPES, type Side, type SlotCondition } from './model'
+import { type Direction, SCOPES, type Side, type SlotCondition } from './model'
 
 export interface LabEntry {
   /** The signal's key: one entry per signal. */
@@ -28,6 +28,8 @@ export interface LabEntry {
   at: number
   side: Side
   direction: Direction
+  /** The id of the rule that found it (model.ts `StrategyRule`). */
+  rule: string
   /** The graph it was found in and its node index, or null / -1 without a graph. */
   graph: LabGraph | null
   node: number
@@ -52,21 +54,22 @@ export function rootIndex(graph: LabGraph, index: number): number {
   return i
 }
 
-/** The entries of a graph run. */
-export function entriesOfGraphs(graphs: readonly LabGraph[], direction: Record<Side, Direction>): LabEntry[] {
+/** A rule's entries from its graphs, each traded `direction`. */
+export function entriesOfGraphs(graphs: readonly LabGraph[], direction: Direction, rule: string): LabEntry[] {
   return graphEntries(graphs).map(({ graph, node, index }) => ({
     id: node.signal.key,
     signal: node.signal,
     at: node.signal.knownAt,
     side: graph.side,
-    direction: direction[graph.side],
+    direction,
+    rule,
     graph,
     node: index
   }))
 }
 
-/** The entries of a run with the graph off: the events passing the test. */
-export function entriesOfEvents(events: readonly LabSignal[], when: readonly SlotCondition[], direction: Record<Side, Direction>, readings: Readings): LabEntry[] {
+/** A rule's entries with no graph: the events passing its test, each traded `direction`. */
+export function entriesOfEvents(events: readonly LabSignal[], when: readonly SlotCondition[], direction: Direction, readings: Readings, rule: string): LabEntry[] {
   const tests = when.filter((c) => c.enabled).map((c) => compileExpr(c.expr, SCOPES.entry))
   const out: LabEntry[] = []
   const seen = new Set<string>()
@@ -82,7 +85,7 @@ export function entriesOfEvents(events: readonly LabSignal[], when: readonly Slo
     })
     if (!tests.every((t) => t.holds(env))) continue
     seen.add(signal.key)
-    out.push({ id: signal.key, signal, at: signal.knownAt, side: signal.side, direction: direction[signal.side], graph: null, node: -1 })
+    out.push({ id: signal.key, signal, at: signal.knownAt, side: signal.side, direction, rule, graph: null, node: -1 })
   }
   return out
 }
@@ -152,4 +155,3 @@ export function applyFilter(entries: readonly LabEntry[], filter: RuleAtInstant 
   return { kept, filtered }
 }
 
-export type { EntrySpec }
