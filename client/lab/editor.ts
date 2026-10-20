@@ -12,6 +12,7 @@ import {
   type Level,
   type ParentRule,
   type PriceAnchor,
+  type Problem,
   type PublishedSource,
   RANK_TIMEFRAMES,
   type RootJoin,
@@ -36,7 +37,12 @@ import {
 //
 // An expression slot shows the condition the preset wrote ("goes further its graph's way") until
 // its text is edited, the problem with it as it is typed, and -- behind "Fields" -- every name and
-// function that slot can read (model.ts `SCOPES`).
+// function that slot can read (model.ts `SCOPES`); a click on one writes it into the slot's field
+// last typed in, at the cursor.
+//
+// Above the sections, a bar that stays in view names them -- a click opens one and brings it on
+// screen -- each with the count of problems in it, so a problem in a closed section is not hidden.
+// `reveal` takes the page to one problem's slot (the results' problem list links there).
 
 export interface EditorContext {
   catalogue: LabCatalogue | null
@@ -51,15 +57,45 @@ export interface StrategyEditor {
   render(): void
   /** Edit another strategy (or a reverted one). */
   setStrategy(strategy: Strategy): void
+  /** The draft's problems (model.ts `strategyProblems`), counted on the section bar and in each
+   * section's heading. */
+  markProblems(problems: Problem[]): void
+  /** Open the section a problem is in and bring its slot on screen, focused. False when the
+   * problem is not the editor's (the instrument and the window are the page header's). */
+  reveal(problem: Problem): boolean
+}
+
+/** The editor's sections, in order: key, title, and the word a problem's `where` starts with. */
+const SECTIONS: Array<{ key: string; title: string; short: string; where: string[] }> = [
+  { key: 'pool', title: 'Signals', short: 'Signals', where: ['Signals'] },
+  { key: 'graph', title: 'Graph', short: 'Graph', where: ['Graph'] },
+  { key: 'entry', title: 'Entries', short: 'Entries', where: ['Entries'] },
+  { key: 'exits', title: 'Exits', short: 'Exits', where: ['Exits'] },
+  { key: 'sizing', title: 'Account & simulation', short: 'Account', where: ['Sizing', 'Simulation'] },
+  { key: 'outcomes', title: 'Outcomes', short: 'Outcomes', where: ['Outcomes'] },
+  { key: 'notes', title: 'Notes', short: 'Notes', where: [] }
+]
+
+/** The section a problem belongs to, by the first word of its `where`. */
+export function sectionOf(problem: Problem): string | null {
+  const head = problem.where.split(' · ')[0]
+  return SECTIONS.find((s) => s.where.includes(head))?.key ?? null
 }
 
 export function createStrategyEditor(initial: Strategy, context: EditorContext, onChange: () => void): StrategyEditor {
   let strategy = initial
   const element = el('div', 'wd-lab-editor')
+  const nav = el('nav', 'wd-lab-nav')
+  nav.setAttribute('aria-label', 'Sections')
+  const form = el('div', 'wd-lab-form')
+  element.append(nav, form)
   /** Sections and sub-panels the user opened or closed, by key. */
   const open = new Map<string, boolean>()
   /** Editable rule trees, by slot, so an unfinished condition survives a re-render. */
   const trees = new Map<string, GroupNode>()
+  /** Each scope's expression field last focused: where a click in its "Fields" list writes. */
+  const lastField = new Map<SlotScope, HTMLInputElement>()
+  let problems: Problem[] = []
 
   const changed = (): void => {
     onChange()
@@ -70,10 +106,77 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
   }
 
   function render(): void {
-    const scroll = element.scrollTop
-    element.innerHTML = ''
-    element.append(poolSection(), graphSection(), entrySection(), exitSection(), sizingSection(), outcomeSection(), notesSection())
-    element.scrollTop = scroll
+    form.innerHTML = ''
+    form.append(poolSection(), graphSection(), entrySection(), exitSection(), sizingSection(), outcomeSection(), notesSection())
+    renderNav()
+    showProblemCounts()
+  }
+
+  const sectionEl = (key: string): HTMLDetailsElement | null => form.querySelector<HTMLDetailsElement>(`details[data-section="${key}"]`)
+
+  /** Open a section (it stays open across re-renders) and bring it on screen. */
+  function openSection(key: string): HTMLDetailsElement | null {
+    open.set(key, true)
+    const details = sectionEl(key)
+    if (details && !details.open) details.open = true
+    return details
+  }
+
+  function renderNav(): void {
+    nav.innerHTML = ''
+    for (const s of SECTIONS) {
+      const b = button('wd-lab-nav-link', s.short, () => {
+        openSection(s.key)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      })
+      b.dataset.section = s.key
+      b.title = `Open ${s.title}`
+      nav.appendChild(b)
+    }
+    const allOpen = SECTIONS.every((s) => sectionEl(s.key)?.open ?? false)
+    const fold = button('wd-lab-nav-link wd-lab-nav-fold', allOpen ? 'Collapse all' : 'Expand all', () => {
+      for (const s of SECTIONS) open.set(s.key, !allOpen)
+      render()
+    })
+    nav.appendChild(fold)
+  }
+
+  /** Problem counts on the bar and in each section's heading. */
+  function showProblemCounts(): void {
+    const counts = new Map<string, number>()
+    for (const p of problems) {
+      const key = sectionOf(p)
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    for (const link of nav.querySelectorAll<HTMLElement>('[data-section]')) {
+      const n = counts.get(link.dataset.section ?? '') ?? 0
+      link.classList.toggle('has-problems', n > 0)
+      link.dataset.count = n > 0 ? String(n) : ''
+      link.setAttribute('aria-label', n > 0 ? `${link.textContent}, ${n} problem${n === 1 ? '' : 's'}` : (link.textContent ?? ''))
+    }
+    for (const s of SECTIONS) {
+      const badge = sectionEl(s.key)?.querySelector<HTMLElement>(':scope > summary .wd-lab-section-problems')
+      if (!badge) continue
+      const n = counts.get(s.key) ?? 0
+      badge.textContent = n > 0 ? `${n} problem${n === 1 ? '' : 's'}` : ''
+      badge.hidden = n === 0
+    }
+  }
+
+  function reveal(problem: Problem): boolean {
+    const key = sectionOf(problem)
+    if (!key) return false
+    const details = openSection(key)
+    if (!details) return false
+    // The slot it names, when the editor marked one; else the section.
+    const target = [...details.querySelectorAll<HTMLElement>('[data-where]')].find((n) => n.dataset.where === problem.where) ?? details
+    target.scrollIntoView({ block: 'center' })
+    const field = target.querySelector<HTMLElement>('.is-bad') ?? target.querySelector<HTMLElement>('input:not([type="checkbox"]), select, textarea')
+    field?.focus({ preventScroll: true })
+    target.classList.remove('is-flash')
+    // A reflow between the two restarts the animation when the same slot is revealed twice.
+    void target.offsetWidth
+    target.classList.add('is-flash')
+    return true
   }
 
   // -- layout helpers -------------------------------------------------------------------------
@@ -81,14 +184,21 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
   function section(key: string, title: string, summary: string, body: (box: HTMLElement) => void, openByDefault = true): HTMLElement {
     const details = document.createElement('details')
     details.className = 'wd-lab-section'
+    details.dataset.section = key
     details.open = open.get(key) ?? openByDefault
-    details.addEventListener('toggle', () => open.set(key, details.open))
+    details.addEventListener('toggle', () => {
+      open.set(key, details.open)
+      renderNav()
+      showProblemCounts()
+    })
     const head = document.createElement('summary')
     const t = el('span', 'wd-lab-section-title')
     t.textContent = title
     const s = el('span', 'wd-lab-section-summary')
     s.textContent = summary
-    head.append(t, s)
+    const p = el('span', 'wd-lab-section-problems')
+    p.hidden = true
+    head.append(t, s, p)
     details.appendChild(head)
     const box = el('div', 'wd-lab-section-body')
     body(box)
@@ -111,6 +221,12 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       } else r.appendChild(c)
     }
     return r
+  }
+
+  /** `node`, marked as the slot a problem's `where` names (model.ts `strategyProblems`). */
+  function slot<T extends HTMLElement>(where: string, node: T): T {
+    node.dataset.where = where
+    return node
   }
 
   function words(text: string): HTMLElement {
@@ -212,9 +328,24 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       check()
       changed()
     })
+    field.addEventListener('focus', () => lastField.set(scope, field))
     check()
     box.append(field, problem)
     return box
+  }
+
+  /** Write `text` into the scope's field last typed in, at its cursor. */
+  function insertInto(scope: SlotScope, text: string): void {
+    const field = lastField.get(scope)
+    if (!field?.isConnected) return
+    const start = field.selectionStart ?? field.value.length
+    const end = field.selectionEnd ?? start
+    // A space between it and a word or a closing bracket before it, so `a` + `b` is not `ab`.
+    const before = field.value.slice(0, start)
+    const pad = before && /[\w).'"]$/.test(before) ? ' ' : ''
+    field.setRangeText(`${pad}${text}`, start, end, 'end')
+    field.focus()
+    field.dispatchEvent(new Event('input', { bubbles: true }))
   }
 
   /** The names and functions a slot can read. */
@@ -226,32 +357,32 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     const head = document.createElement('summary')
     head.textContent = 'Fields'
     details.appendChild(head)
-    details.appendChild(note(scope.note))
+    details.appendChild(note(`${scope.note} Click a name to write it into the field you last typed in.`))
     const table = el('dl', 'wd-lab-field-list')
-    for (const f of scope.fields) {
+    const entry = (label: string, insert: string, doc: string): void => {
       const dt = el('dt', '')
-      dt.textContent = f.name
+      const b = button('wd-lab-field-name', label, () => insertInto(scope, insert))
+      b.title = `Write ${insert} at the cursor`
+      dt.appendChild(b)
       const dd = el('dd', '')
-      dd.textContent = f.doc
+      dd.textContent = doc
       table.append(dt, dd)
     }
-    for (const f of scopeFunctions(scope)) {
-      const dt = el('dt', '')
-      dt.textContent = f.signature
-      const dd = el('dd', '')
-      dd.textContent = f.doc
-      table.append(dt, dd)
-    }
+    for (const f of scope.fields) entry(f.name, f.name, f.doc)
+    // A function writes as far as its opening bracket: the arguments are the user's.
+    for (const f of scopeFunctions(scope)) entry(f.signature, `${f.name}(`, f.doc)
     details.appendChild(table)
     return details
   }
 
   let conditionCounter = 0
   /** A slot of several conditions, all of which must hold. */
-  function conditionList(key: string, conditions: SlotCondition[], scope: SlotScope, presets: () => SlotCondition[], presetName: string): HTMLElement {
+  function conditionList(key: string, where: string, conditions: SlotCondition[], scope: SlotScope, presets: () => SlotCondition[], presetName: string): HTMLElement {
     const box = el('div', 'wd-lab-conditions')
     conditions.forEach((condition, i) => {
       const line = el('div', `wd-lab-condition${condition.enabled ? '' : ' is-off'}`)
+      // What model.ts `strategyProblems` calls it, so a problem can be taken to it.
+      line.dataset.where = `${where} ${i + 1}`
       const on = document.createElement('input')
       on.type = 'checkbox'
       on.checked = condition.enabled
@@ -440,6 +571,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
 
   function sourceCard(source: SignalSource, index: number): HTMLElement {
     const card = el('div', 'wd-lab-card')
+    card.dataset.where = `Signals · ${source.title || source.id}`
     const head = el('div', 'wd-lab-card-head')
     const title = input('text', source.title, (value) => {
       source.title = value
@@ -575,11 +707,14 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       if (!g.enabled) return
       const pool = byLength(strategy.sources.flatMap((s) => s.timeframes))
       box.appendChild(
-        row(
+        slot(
+          'Graph · roots',
+          row(
           'Roots',
           chips(pool, g.roots, (code, on) => {
             g.roots = on ? byLength([...g.roots, code]).reverse() : g.roots.filter((c) => c !== code)
           })
+          )
         )
       )
       if (strategy.sources.length > 1) {
@@ -638,10 +773,10 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       const step = el('div', 'wd-lab-subsection')
       const stepHead = el('div', 'wd-lab-subhead')
       stepHead.textContent = 'Step test -- a signal may hang from a node when all of these hold (and it is the same side, and strictly later)'
-      step.append(stepHead, conditionList('step', g.step, SCOPES.step, () => defaultStep(), "the overlay's"))
+      step.append(stepHead, conditionList('step', 'Graph · step test', g.step, SCOPES.step, () => defaultStep(), "the overlay's"))
       box.appendChild(step)
 
-      const end = el('div', 'wd-lab-subsection')
+      const end = slot('Graph · ends when', el('div', 'wd-lab-subsection'))
       const endHead = el('div', 'wd-lab-subhead')
       endHead.textContent = 'A graph also ends -- besides its root switching side'
       end.appendChild(endHead)
@@ -656,12 +791,15 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       box.appendChild(end)
 
       box.appendChild(
-        row(
+        slot(
+          'Graph · history',
+          row(
           'History',
           'a root reads back',
           num(g.lookback.rootBars, (v) => (g.lookback.rootBars = Math.max(1, Math.round(v ?? 300))), { min: 1, step: '1', width: '5rem' }),
           'of its bars; any other timeframe at most',
           num(g.lookback.maxBars, (v) => (g.lookback.maxBars = Math.max(1, Math.round(v ?? 10000))), { min: 1, step: '1', width: '6rem' })
+          )
         )
       )
     })
@@ -673,7 +811,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     return section('entry', 'Entries', summary, (box) => {
       const head = el('div', 'wd-lab-subhead')
       head.textContent = strategy.graph.enabled ? 'A node is an entry when all of these hold, as it joins its graph' : 'An event is an entry when all of these hold'
-      box.append(head, conditionList('entry', e.when, SCOPES.entry, () => (strategy.graph.enabled ? defaultGraphEntry() : []), strategy.graph.enabled ? "the overlay's stars" : 'none'))
+      box.append(head, conditionList('entry', 'Entries · test', e.when, SCOPES.entry, () => (strategy.graph.enabled ? defaultGraphEntry() : []), strategy.graph.enabled ? "the overlay's stars" : 'none'))
       box.appendChild(ruleSlot('filter', e.filter, (rule) => (e.filter = rule), { label: 'Only where this holds at the entry (each timeframe at its latest close)', defaultInterval: () => '1D' }))
       const dir = (side: 'top' | 'bottom'): HTMLSelectElement =>
         select(
@@ -695,8 +833,8 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     const x = strategy.exits
     const bits = [x.stop ? 'stop' : '', x.target ? 'target' : '', x.breakevenAtR !== null ? 'breakeven' : '', x.trail ? 'trail' : '', x.ruleLong || x.ruleShort ? 'rule' : '', x.maxBars ? `${x.maxBars.count} bars` : ''].filter(Boolean)
     return section('exits', 'Exits', bits.join(' · ') || 'none', (box) => {
-      box.appendChild(row('Stop', levelEditor('stop', x.stop, 'stop', (l) => (x.stop = l))))
-      box.appendChild(row('Target', levelEditor('target', x.target, 'target', (l) => (x.target = l))))
+      box.appendChild(slot('Exits · stop', row('Stop', levelEditor('stop', x.stop, 'stop', (l) => (x.stop = l)))))
+      box.appendChild(slot('Exits · target', row('Target', levelEditor('target', x.target, 'target', (l) => (x.target = l)))))
       box.appendChild(
         row(
           '',
@@ -823,7 +961,12 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       strategy = next
       trees.clear()
       render()
-    }
+    },
+    markProblems(next) {
+      problems = next
+      showProblemCounts()
+    },
+    reveal
   }
 }
 

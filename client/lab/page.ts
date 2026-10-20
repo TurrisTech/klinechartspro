@@ -10,7 +10,7 @@ import { fetchSymbolInfo, fetchSymbols } from '../symbols'
 import { loadLabCatalogue, labIntervals, type LabCatalogue } from './catalogue'
 import { HttpLabData } from './data'
 import { createStrategyEditor } from './editor'
-import { newStrategyId, rank85Strategy, ruleStrategy, type Strategy, strategyProblems } from './model'
+import { newStrategyId, type Problem, rank85Strategy, ruleStrategy, type Strategy, strategyProblems } from './model'
 import { DEFAULT_SHOW, LAB_DRAFT_TEMPLATE, type LabExtendData, publishRun, registerLabTemplate, type ShowOptions } from './overlay'
 import { createResultsView } from './results'
 import { type LabRun, RunCancelled, RunError, runStrategy } from './runner'
@@ -23,17 +23,28 @@ import { StrategyStore } from './store'
 //   header   which strategy, Save / Revert, the instrument and window it runs on, Run
 //   editor   every slot of the strategy (./editor.ts)
 //   chart    the instrument, with the run drawn on it (./overlay.ts, the `LAB:draft` template)
-//   results  what the run found (./results.ts); a row takes the chart there
+//   results  what the run found (./results.ts); a row takes the chart there. The bar between
+//            the chart and the results drags (double-click: back to the default split)
 //
 // Editing is a DRAFT: nothing is kept until Save (./store.ts), and a dashboard pane or an alert
 // reading a strategy reads what is saved. With Auto-run on, an edit that leaves the strategy
 // runnable runs it again; the data layer holds what it has read, so a re-run fetches nothing.
+// With it off, the results say they are out of date until Run.
+//
+// Keys: Ctrl+Enter runs, Ctrl+S saves, `[` / `]` step the chart through the entries (or the
+// trades, on that tab) -- the last two anywhere but in a text field.
 
 const RUN_KEY = 'lab-page'
 const CURRENT_KEY = 'wd.lab.current'
 const AUTO_KEY = 'wd.lab.autorun'
+const SPLIT_KEY = 'wd.lab.split'
 const AUTO_DELAY_MS = 700
 const DEFAULT_PERIOD = '5m'
+const DAY_MS = 86_400_000
+/** Where a picked entry lands across the chart: 40% from the left, 60% of the view after it. */
+const SEEK_FRACTION = 0.4
+/** The results' share of the main column's height, by default and at the drag's two ends. */
+const SPLIT = { default: 0.42, min: 0.12, max: 0.85 }
 
 function storageGet(key: string): string | null {
   try {
@@ -49,6 +60,22 @@ function storageSet(key: string, value: string): void {
   } catch {
     // A per-device convenience only.
   }
+}
+
+/** A `yyyy-mm-dd` day of a range window, which counts in UTC days, the last one included. */
+function dayOf(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10)
+}
+
+function dayStart(day: string): number | null {
+  const ms = Date.parse(`${day}T00:00:00Z`)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/** Whether a key press belongs to a field being typed in rather than to the page. */
+function typing(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  return target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(target.type))
 }
 
 /** A strategy as compared for "unsaved": everything but when it was saved. */
@@ -100,16 +127,20 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   const editorBox = el('aside', 'wd-lab-side')
   const main = el('main', 'wd-lab-main')
   const chartBox = el('div', 'wd-lab-chart')
-  main.append(chartBox)
+  const split = splitter(main)
+  main.append(chartBox, split)
   bodyBox.append(editorBox, main)
   root.append(head, bodyBox)
 
   let lastRun: LabRun | null = null
   let selected: string | null = null
-  const results = createResultsView((pick) => {
-    selected = pick.entryId
-    chart?.select(pick.entryId)
-    if (lastRun) chart?.seek(pick.at, lastRun.grid)
+  const results = createResultsView({
+    onPick: (pick) => {
+      selected = pick.entryId
+      chart?.select(pick.entryId)
+      if (lastRun) chart?.seek(pick.at, lastRun.grid)
+    },
+    onProblem: (problem) => reveal(problem)
   })
   main.appendChild(results.element)
 
@@ -197,23 +228,24 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   })
   revert.title = 'Discard the changes since the last Save'
   let deleteArmed: ReturnType<typeof setTimeout> | null = null
+  /** A saved strategy is deleted; a draft never saved is discarded -- the same button. */
+  const removeWord = (): string => (store.get(currentId) ? 'Delete' : 'Discard')
+  const disarm = (): void => {
+    if (deleteArmed) clearTimeout(deleteArmed)
+    deleteArmed = null
+    remove.textContent = removeWord()
+    remove.classList.remove('is-armed')
+  }
   const remove = button('kc-button kc-button-outline wd-lab-delete', 'Delete', () => {
     if (!deleteArmed) {
-      remove.textContent = 'Delete?'
+      remove.textContent = `${removeWord()}?`
       remove.classList.add('is-armed')
-      deleteArmed = setTimeout(() => {
-        deleteArmed = null
-        remove.textContent = 'Delete'
-        remove.classList.remove('is-armed')
-      }, 3000)
+      deleteArmed = setTimeout(disarm, 3000)
       return
     }
-    clearTimeout(deleteArmed)
-    deleteArmed = null
-    remove.textContent = 'Delete'
-    remove.classList.remove('is-armed')
+    disarm()
     try {
-      store.remove(currentId)
+      if (store.get(currentId)) store.remove(currentId)
     } catch (err) {
       saveNote.textContent = err instanceof Error ? err.message : String(err)
       return
@@ -228,6 +260,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     }
   })
   remove.title = 'Delete this strategy (press twice)'
+  remove.addEventListener('blur', disarm)
   const saveNote = el('span', 'wd-lab-save-note')
 
   // The run's instrument and window.
@@ -256,6 +289,29 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     edited()
   })
 
+  // The window: the last N days, or a range of UTC days with the last one included.
+  const windowKind = select(
+    [
+      { value: 'days', label: 'last' },
+      { value: 'range', label: 'from' }
+    ],
+    'days',
+    (value) => {
+      const w = current().window
+      if (value === 'range' && w.kind === 'days') {
+        // The same span, as dates: from N days ago through today.
+        const today = dayStart(dayOf(Date.now())) as number
+        current().window = { kind: 'range', from: today - (w.days - 1) * DAY_MS, to: today + DAY_MS }
+      } else if (value === 'days' && w.kind === 'range') {
+        current().window = { kind: 'days', days: Math.max(1, Math.round((w.to - w.from) / DAY_MS)) }
+      }
+      refreshHead()
+      edited()
+    }
+  )
+  windowKind.classList.add('wd-lab-window-kind')
+  windowKind.setAttribute('aria-label', 'Window')
+  windowKind.title = 'Run over the last N days, or between two dates'
   const days = document.createElement('input')
   days.type = 'number'
   days.min = '1'
@@ -268,10 +324,39 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     current().window = { kind: 'days', days: n }
     edited()
   })
-  const daysLabel = el('label', 'wd-lab-window')
-  daysLabel.append(document.createTextNode('last'), days, document.createTextNode('days'))
+  const daysWord = el('span', '')
+  daysWord.textContent = 'days'
+  const dateInput = (label: string): HTMLInputElement => {
+    const i = document.createElement('input')
+    i.type = 'date'
+    i.className = 'kc-input wd-lab-date'
+    i.setAttribute('aria-label', label)
+    i.title = `${label} (a UTC day; the last day is included)`
+    i.addEventListener('change', () => {
+      const from = dayStart(fromDate.value)
+      const to = dayStart(toDate.value)
+      if (from === null || to === null) return
+      current().window = { kind: 'range', from, to: to + DAY_MS }
+      edited()
+    })
+    return i
+  }
+  const fromDate = dateInput('First day')
+  const toDate = dateInput('Last day')
+  const toWord = el('span', '')
+  toWord.textContent = 'to'
+  const daysLabel = el('div', 'wd-lab-window')
+  daysLabel.append(windowKind, days, daysWord, fromDate, toWord, toDate)
 
-  const runButton = button('kc-button kc-button-primary wd-lab-run', 'Run', () => void run())
+  let running = false
+  const runButton = button('kc-button kc-button-primary wd-lab-run', 'Run', () => {
+    if (!running) {
+      void run()
+      return
+    }
+    stop()
+    if (lastRun) results.showStale('Stopped: these are the last finished run’s results. Run (Ctrl+Enter) to try again.')
+  })
   runButton.title = 'Run the strategy over its window (Ctrl+Enter)'
   const auto = document.createElement('input')
   auto.type = 'checkbox'
@@ -322,12 +407,35 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     if (document.activeElement !== nameInput) nameInput.value = current().name
     instrument.value = current().instrument
     const w = current().window
+    windowKind.value = w.kind
     days.value = w.kind === 'days' ? String(w.days) : ''
+    if (w.kind === 'range') {
+      if (document.activeElement !== fromDate) fromDate.value = dayOf(w.from)
+      if (document.activeElement !== toDate) toDate.value = dayOf(w.to - DAY_MS)
+    }
+    for (const n of [days, daysWord]) n.hidden = w.kind !== 'days'
+    for (const n of [fromDate, toWord, toDate]) n.hidden = w.kind !== 'range'
     const dirty = unsaved(currentId)
+    const saved = !!store.get(currentId)
     save.disabled = !dirty || !!store.loadError
-    revert.disabled = !dirty || !store.get(currentId)
-    save.textContent = store.get(currentId) ? 'Save' : 'Save new'
+    revert.disabled = !dirty || !saved
+    save.textContent = saved ? 'Save' : 'Save new'
+    if (!deleteArmed) remove.textContent = removeWord()
+    remove.title = saved ? 'Delete this strategy (press twice)' : 'Discard this draft, never saved (press twice)'
+    // A fresh default nobody has touched holds nothing to discard.
+    remove.disabled = !saved && !touched.has(currentId)
     root.classList.toggle('is-unsaved', dirty)
+    editor.markProblems(strategyProblems(current()))
+  }
+
+  /** Take the page to a problem's slot: the editor's, or the header's instrument and window. */
+  function reveal(problem: Problem): void {
+    if (editor.reveal(problem)) return
+    const field = problem.where === 'Instrument' ? instrument : current().window.kind === 'days' ? days : fromDate
+    field.focus()
+    field.classList.remove('is-flash')
+    void field.offsetWidth
+    field.classList.add('is-flash')
   }
 
   function switchTo(id: string): void {
@@ -336,6 +444,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       if (!saved) return
       drafts.set(id, structuredClone(saved))
     }
+    stop()
+    disarm()
     currentId = id
     storageSet(CURRENT_KEY, id)
     lastRun = null
@@ -355,7 +465,15 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   function edited(rerun = true): void {
     touched.add(currentId)
     refreshHead()
-    if (rerun) scheduleRun()
+    if (!rerun) return
+    if (auto.checked) {
+      scheduleRun()
+      return
+    }
+    // No run is coming: say so, and what stops one.
+    const problems = strategyProblems(current())
+    if (problems.length > 0) results.showProblems(problems, `${problems.length} problem${problems.length === 1 ? '' : 's'} to fix before it can run`)
+    else if (lastRun) results.showStale('Edited since this run: Run (Ctrl+Enter) to see the change')
   }
 
   function scheduleRun(delay = AUTO_DELAY_MS): void {
@@ -373,11 +491,24 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     }, delay)
   }
 
+  /** Abandon the run in progress; what the last one found stays shown. */
+  function stop(): void {
+    token++
+    running = false
+    results.progress(null)
+    runButton.textContent = 'Run'
+    runButton.title = 'Run the strategy over its window (Ctrl+Enter)'
+  }
+
   async function run(): Promise<void> {
+    if (timer) clearTimeout(timer)
+    timer = null
     const mine = ++token
     const strategy = structuredClone(current())
+    running = true
     results.progress('Running…')
-    runButton.textContent = 'Running…'
+    runButton.textContent = 'Stop'
+    runButton.title = 'Stop this run'
     try {
       const result = await runStrategy(strategy, data, {
         catalogue: catalogue?.server ?? null,
@@ -400,20 +531,24 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       if (err instanceof RunError) results.showProblems(err.problems, err.message)
       else {
         console.error('[lab] run failed', err)
-        results.showMessage(`The run failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
+        results.showProblems([], `The run failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     } finally {
-      if (mine === token) {
-        results.progress(null)
-        runButton.textContent = 'Run'
-      }
+      if (mine === token) stop()
     }
   }
 
-  root.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+  window.addEventListener('keydown', (event) => {
+    const mod = event.ctrlKey || event.metaKey
+    if (mod && event.key === 'Enter') {
       event.preventDefault()
       void run()
+    } else if (mod && (event.key === 's' || event.key === 'S')) {
+      // The page's Save, not the browser's "save this page".
+      event.preventDefault()
+      if (!save.disabled) save.click()
+    } else if (!mod && !event.altKey && (event.key === '[' || event.key === ']') && !typing(event.target)) {
+      if (results.step(event.key === ']' ? 1 : -1)) event.preventDefault()
     }
   })
 
@@ -435,6 +570,55 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     chartBox.appendChild(failed)
   }
   scheduleRun(0)
+}
+
+// -- the split ----------------------------------------------------------------------------------------
+
+/** The bar between the chart and the results: dragged (or the arrow keys) it moves the split, a
+ * double-click puts it back. The results' share is kept per device, as a fraction of the column,
+ * so a window of another height splits the same way. */
+function splitter(main: HTMLElement): HTMLElement {
+  const bar = el('div', 'wd-lab-split')
+  bar.setAttribute('role', 'separator')
+  bar.setAttribute('aria-orientation', 'horizontal')
+  bar.setAttribute('aria-label', 'Resize the chart and the results')
+  bar.title = 'Drag to resize; double-click for the default'
+  bar.tabIndex = 0
+  const set = (share: number, keep = true): void => {
+    const clamped = Math.min(SPLIT.max, Math.max(SPLIT.min, share))
+    main.style.setProperty('--wd-lab-results', `${(clamped * 100).toFixed(1)}%`)
+    bar.setAttribute('aria-valuenow', String(Math.round(clamped * 100)))
+    if (keep) storageSet(SPLIT_KEY, String(clamped))
+    current = clamped
+  }
+  let current = SPLIT.default
+  const stored = Number(storageGet(SPLIT_KEY))
+  set(stored > 0 ? stored : SPLIT.default, false)
+  bar.addEventListener('pointerdown', (event) => {
+    event.preventDefault()
+    bar.setPointerCapture(event.pointerId)
+    bar.classList.add('is-dragging')
+    const move = (e: PointerEvent): void => {
+      const rect = main.getBoundingClientRect()
+      if (rect.height > 0) set((rect.bottom - e.clientY) / rect.height)
+    }
+    const up = (): void => {
+      bar.classList.remove('is-dragging')
+      bar.removeEventListener('pointermove', move)
+      bar.removeEventListener('pointerup', up)
+      bar.removeEventListener('pointercancel', up)
+    }
+    bar.addEventListener('pointermove', move)
+    bar.addEventListener('pointerup', up)
+    bar.addEventListener('pointercancel', up)
+  })
+  bar.addEventListener('dblclick', () => set(SPLIT.default))
+  bar.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    event.preventDefault()
+    set(current + (event.key === 'ArrowUp' ? 0.05 : -0.05))
+  })
+  return bar
 }
 
 // -- the chart ----------------------------------------------------------------------------------------
@@ -543,8 +727,9 @@ async function mountLabChart(
       if (!p) return
       const interval = periodToResolution(p.getPeriod() as Period)
       // The bar in force at the instant -- where the overlay draws what became knowable then --
-      // by its own timestamp on the pane's clock.
-      p.seekTo(grid.toWire(interval, grid.start(interval, at)))
+      // by its own timestamp on the pane's clock; left of the middle, as what price did NEXT is
+      // what a reviewed entry is about.
+      p.seekTo(grid.toWire(interval, grid.start(interval, at)), SEEK_FRACTION)
     }
   }
 }
