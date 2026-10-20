@@ -8,8 +8,10 @@
 //   entry     which graph nodes (or, without a graph, which events) are entries, a filter rule
 //             read at the entry instant, and which way each side trades
 //   exits     stop, target, breakeven, trailing, rule exits, a time limit
-//   sizing    the simulated account
+//   sizing    the simulated account, its leverage cap included
+//   costs     what a trade pays beyond the spread: commission, slippage, overnight financing
 //   outcomes  what is measured after every entry
+//   holdout   the end of the window kept back: the results show it beside the rest
 //
 // Every graph rule the AREV21 outlier rank 85 overlay hard-codes (client/mtf/graph.ts) is a SLOT
 // here, with that overlay's rule as its default, so `rank85Strategy()` draws the graphs the
@@ -163,7 +165,29 @@ export interface Sizing {
   riskPercent: number
   /** At most this many trades open at once. */
   maxOpen: number
+  /** A position is cut to at most this multiple of the balance in notional (units x price, in
+   * the quote currency); null for no cap. OANDA's retail limit on the majors is 50. Risk sizing
+   * on a stop of a pip or two otherwise opens ~60:1. */
+  maxLeverage: number | null
 }
+
+/** What a trade pays beyond the bid/ask spread the fill engine already charges. */
+export interface CostSpec {
+  /** Quote currency per million units, on each side (OANDA quotes commission per million). */
+  commission: number
+  /** Pips worse on every fill that is not a limit: the market entry, a stop, a rule or time exit.
+   * A target is a limit and fills at its price. */
+  slippagePips: number
+  /** Percent a year of the notional, charged at each daily close a trade is held through, for
+   * the calendar days until the next close (so a Friday close carries the weekend). Positive
+   * pays, negative earns; null for none. OANDA books the FX weekend on Wednesday instead -- the
+   * same total over any whole week. */
+  financing: { long: number; short: number } | null
+}
+
+/** The end of the window held back from fitting: the last `percent` of it, or from an instant.
+ * Everything runs over the whole window; the results show the two parts side by side. */
+export type HoldoutSpec = { kind: 'percent'; percent: number } | { kind: 'from'; at: number }
 
 export interface OutcomeSpec {
   /** Forward returns after this many bars of the entry's own timeframe. */
@@ -189,7 +213,9 @@ export interface Strategy {
   entry: EntrySpec
   exits: ExitSpec
   sizing: Sizing
+  costs: CostSpec
   outcomes: OutcomeSpec
+  holdout: HoldoutSpec | null
   /** The bars trades are simulated and outcomes measured on; null for the longest timeframe
    * that divides every entry's (`runner.ts`). */
   pathInterval: string | null
@@ -379,7 +405,11 @@ export function defaultExits(): ExitSpec {
 }
 
 export function defaultSizing(): Sizing {
-  return { balance: 100_000, mode: 'risk', units: 10_000, riskPercent: 1, maxOpen: 1 }
+  return { balance: 100_000, mode: 'risk', units: 10_000, riskPercent: 1, maxOpen: 1, maxLeverage: 50 }
+}
+
+export function defaultCosts(): CostSpec {
+  return { commission: 0, slippagePips: 0, financing: null }
 }
 
 export function defaultOutcomes(): OutcomeSpec {
@@ -408,7 +438,9 @@ export function rank85Strategy(now = Date.now()): Strategy {
     entry: { when: defaultGraphEntry(), filter: null, direction: { top: 'short', bottom: 'long' } },
     exits: defaultExits(),
     sizing: defaultSizing(),
+    costs: defaultCosts(),
     outcomes: defaultOutcomes(),
+    holdout: null,
     pathInterval: null,
     createdAt: now,
     updatedAt: now
@@ -545,6 +577,14 @@ export function strategyProblems(strategy: Strategy): Problem[] {
   if (strategy.sizing.mode === 'units' && !(strategy.sizing.units > 0)) add('Sizing', 'units are more than 0')
   if (strategy.sizing.mode === 'risk' && !(strategy.sizing.riskPercent > 0)) add('Sizing', 'the risk is more than 0%')
   if (!(strategy.sizing.maxOpen >= 1)) add('Sizing', 'at least one trade may be open')
+  if (strategy.sizing.maxLeverage !== null && !(strategy.sizing.maxLeverage > 0)) add('Sizing', 'the leverage cap is more than 0')
+  if (!(strategy.costs.commission >= 0)) add('Costs', 'commission is 0 or more')
+  if (!(strategy.costs.slippagePips >= 0)) add('Costs', 'slippage is 0 or more pips')
+  const financing = strategy.costs.financing
+  if (financing && (!Number.isFinite(financing.long) || !Number.isFinite(financing.short))) add('Costs', 'a financing rate is not a number')
+  const holdout = strategy.holdout
+  if (holdout?.kind === 'percent' && !(holdout.percent > 0 && holdout.percent < 100)) add('Window', 'the holdout is between 0 and 100% of the window')
+  if (holdout?.kind === 'from' && !Number.isFinite(holdout.at)) add('Window', 'the holdout has no start')
   if (strategy.outcomes.horizons.some((h) => !(h >= 1))) add('Outcomes', 'a horizon is at least one bar')
   if (strategy.pathInterval !== null && !INTERVAL.test(strategy.pathInterval)) add('Simulation', `not a timeframe: '${strategy.pathInterval}'`)
   return out
@@ -568,7 +608,9 @@ export function readStrategy(raw: unknown): Strategy | null {
     entry: { ...base.entry, ...(isRecord(raw.entry) ? raw.entry : {}) },
     exits: { ...base.exits, ...(isRecord(raw.exits) ? raw.exits : {}) },
     sizing: { ...base.sizing, ...(isRecord(raw.sizing) ? raw.sizing : {}) },
-    outcomes: { ...base.outcomes, ...(isRecord(raw.outcomes) ? raw.outcomes : {}) }
+    costs: { ...base.costs, ...(isRecord(raw.costs) ? raw.costs : {}) },
+    outcomes: { ...base.outcomes, ...(isRecord(raw.outcomes) ? raw.outcomes : {}) },
+    holdout: isRecord(raw.holdout) ? (raw.holdout as HoldoutSpec) : null
   } as Strategy
   merged.graph.end = { ...base.graph.end, ...(isRecord(merged.graph.end) ? merged.graph.end : {}) }
   merged.graph.lookback = { ...base.graph.lookback, ...(isRecord(merged.graph.lookback) ? merged.graph.lookback : {}) }

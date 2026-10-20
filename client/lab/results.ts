@@ -1,6 +1,10 @@
 import { button, el } from '../alerts/dom'
 import { resolutionDurationMs } from '../periods'
 import { rootIndex } from './entries'
+import { download, entriesCsv, fileStem, tradesCsv } from './export'
+import { figuresTable, type FigureRow } from './figtable'
+import { describeMean, type Figures, figuresOf } from './figures'
+import { meanStats } from './stats'
 import type { Problem } from './model'
 import type { EntryOutcome, OutcomeSummary } from './outcomes'
 import type { LabRun } from './runner'
@@ -22,6 +26,12 @@ import type { ExitReason, LabTrade } from './trades'
 // Problems that stop a run are shown in a banner over the LAST run's results, which stay -- dimmed,
 // as they no longer describe the draft -- so a half-typed condition does not take away what the
 // run before it found. Each problem is a link to its slot.
+//
+// The Summary's first table is the run's figures (figures.ts) -- beside the fitting part and the
+// holdout when the window has one, and beside the BASELINE run when one is pinned, each change
+// coloured by whether it is better. Under them: how sure the mean R and the forward pips are
+// (stats.ts), the trades month by month, and what the costs came to. Panels the page adds (the
+// run history, a sweep, a basket) are tabs after these four, and work without a run.
 
 export interface Pick {
   /** The entry the row is about (a trade's entry too). */
@@ -55,10 +65,24 @@ export interface ResultsView {
   /** Select the next (+1) or previous (-1) row of the table shown -- the entries in time order on
    * the Summary and Equity tabs -- and take the chart there. False when there is nothing to step. */
   step(delta: 1 | -1): boolean
+  /** A tab after the run's own four, shown with or without a run. */
+  addPanel(panel: ResultsPanel): void
+  /** Re-read the panels' tab labels (a count changed). */
+  refreshTabs(): void
+  /** The run the Summary compares with, and what to call it; null for none. */
+  setBaseline(baseline: { figures: Figures; label: string } | null): void
 }
 
-type Tab = 'summary' | 'entries' | 'trades' | 'equity'
+export interface ResultsPanel {
+  id: string
+  label(): string
+  element: HTMLElement
+}
+
+/** The run's own tabs; panels' ids are theirs. */
+type Tab = string
 type Sortable = 'entries' | 'trades'
+const RUN_TABS = new Set(['summary', 'entries', 'trades', 'equity'])
 
 const TAB_KEY = 'wd.lab.tab'
 
@@ -83,16 +107,16 @@ interface Row {
   tone?: string[]
   /** An entry the filter took out: shown, but not stepped to from the Summary. */
   muted?: boolean
+  /** In the holdout. */
+  holdout?: boolean
 }
 
 function storedTab(): Tab {
   try {
-    const t = window.localStorage.getItem(TAB_KEY)
-    if (t === 'summary' || t === 'entries' || t === 'trades' || t === 'equity') return t
+    return window.localStorage.getItem(TAB_KEY) ?? 'summary'
   } catch {
-    // A per-device convenience only.
+    return 'summary'
   }
-  return 'summary'
 }
 
 export function createResultsView(handlers: ResultsHandlers): ResultsView {
@@ -101,7 +125,11 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
   const tabs = el('div', 'wd-lab-tab-list')
   tabs.setAttribute('role', 'tablist')
   const stepper = el('div', 'wd-lab-stepper')
-  bar.append(tabs, stepper)
+  const csv = button('kc-button wd-lab-mini wd-lab-csv', 'CSV', () => exportCsv())
+  csv.title = 'Save this table as a CSV file (raw values, UTC times)'
+  const tools = el('div', 'wd-lab-tools')
+  tools.append(csv, stepper)
+  bar.append(tabs, tools)
   const status = el('div', 'wd-lab-status')
   status.hidden = true
   const banner = el('div', 'wd-lab-banner')
@@ -115,6 +143,10 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
   let side: 'all' | 'long' | 'short' = 'all'
   /** Per table: the column it is sorted on and which way; null for time order. */
   const sorts: Record<Sortable, { col: number; desc: boolean } | null> = { entries: null, trades: null }
+  const panels: ResultsPanel[] = []
+  let baseline: { figures: Figures; label: string } | null = null
+  /** The results no longer describe the draft (a banner says why). */
+  let stale = false
 
   const TABS: Array<{ id: Tab; label: string }> = [
     { id: 'summary', label: 'Summary' },
@@ -123,19 +155,24 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     { id: 'equity', label: 'Equity' }
   ]
 
+  const isPanel = (id: Tab): boolean => panels.some((p) => p.id === id)
+  /** The tab to show: the chosen one when it exists, else the Summary. */
+  const shown = (): Tab => (RUN_TABS.has(tab) || isPanel(tab) ? tab : 'summary')
+
   function renderTabs(): void {
     tabs.innerHTML = ''
-    for (const t of TABS) {
+    const current = shown()
+    for (const t of [...TABS, ...panels.map((p) => ({ id: p.id, label: p.label() }))]) {
       const b = document.createElement('button')
       b.type = 'button'
-      b.className = `wd-lab-tab${t.id === tab ? ' is-on' : ''}`
+      b.className = `wd-lab-tab${t.id === current ? ' is-on' : ''}${isPanel(t.id) ? ' is-panel' : ''}`
       b.setAttribute('role', 'tab')
-      b.setAttribute('aria-selected', String(t.id === tab))
+      b.setAttribute('aria-selected', String(t.id === current))
       let count = ''
       if (run && t.id === 'entries') count = ` ${run.entries.length}`
       if (run?.sim && t.id === 'trades') count = ` ${run.sim.trades.length}`
       b.textContent = `${t.label}${count}`
-      b.disabled = run === null
+      b.disabled = run === null && !isPanel(t.id)
       b.addEventListener('click', () => {
         tab = t.id
         try {
@@ -152,12 +189,32 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
   function render(): void {
     renderTabs()
     renderStepper()
-    if (!run) return
+    const current = shown()
+    const panel = panels.find((p) => p.id === current)
+    csv.hidden = !run || !(current === 'entries' || current === 'trades')
+    // Out of date describes the run, not a panel.
+    body.classList.toggle('is-stale', stale && !panel)
+    if (panel) {
+      if (panel.element.parentElement !== body || body.childElementCount !== 1) body.replaceChildren(panel.element)
+      return
+    }
+    if (!run) {
+      // A panel was shown before any run; the run's own tabs have nothing to show yet.
+      if (body.firstElementChild && panels.some((p) => p.element === body.firstElementChild)) body.replaceChildren(message('Press Run to evaluate the strategy over its window.'))
+      return
+    }
     body.innerHTML = ''
-    if (tab === 'summary') body.appendChild(summaryView(run))
-    if (tab === 'entries') body.appendChild(entriesView(run))
-    if (tab === 'trades') body.appendChild(tradesView(run))
-    if (tab === 'equity') body.appendChild(equityView(run))
+    if (current === 'summary') body.appendChild(summaryView(run))
+    if (current === 'entries') body.appendChild(entriesView(run))
+    if (current === 'trades') body.appendChild(tradesView(run))
+    if (current === 'equity') body.appendChild(equityView(run))
+  }
+
+  function exportCsv(): void {
+    if (!run) return
+    const stem = `${fileStem(run.strategy.name)}-${run.symbol.replace(':', '-')}`
+    if (shown() === 'trades') download(`${stem}-trades.csv`, tradesCsv(run), 'text/csv')
+    else download(`${stem}-entries.csv`, entriesCsv(run), 'text/csv')
   }
 
   // -- formatting --------------------------------------------------------------------------------
@@ -242,7 +299,8 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     head.appendChild(tr)
     const tbody = el('tbody', '')
     for (const r of sorted(which, rows)) {
-      const row = el('tr', `is-clickable${selected === r.id ? ' is-selected' : ''}`)
+      const row = el('tr', `is-clickable${selected === r.id ? ' is-selected' : ''}${r.holdout ? ' is-holdout' : ''}`)
+      if (r.holdout) row.title = 'In the holdout'
       row.dataset.id = r.id
       row.tabIndex = 0
       r.cells.forEach((cell, i) => {
@@ -283,7 +341,8 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
 
   /** What the stepper walks: the shown table's rows in their order, else the entries in time. */
   function stepList(): { noun: string; rows: Row[] } {
-    if (!run) return { noun: 'entry', rows: [] }
+    const tab = shown()
+    if (!run || isPanel(tab)) return { noun: 'entry', rows: [] }
     if (tab === 'trades') return { noun: 'trade', rows: sorted('trades', tradeRows(run)) }
     if (tab === 'entries') return { noun: 'entry', rows: sorted('entries', entryRows(run)) }
     return { noun: 'entry', rows: entryRows(run).filter((r) => !r.muted) }
@@ -346,6 +405,25 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     }
     box.appendChild(facts)
 
+    // The run beside its parts and the baseline.
+    const figureRows: FigureRow[] = []
+    const all = figuresOf(r)
+    if (r.split !== null || baseline) {
+      figureRows.push({ label: 'this run', figures: all, compareTo: baseline?.figures ?? null, className: 'is-current' })
+      if (r.split !== null) {
+        const at = time(r.split, zoneOf(r))
+        figureRows.push({ label: `fitting, to ${at}`, figures: figuresOf(r, 'fit'), className: 'is-part' })
+        figureRows.push({ label: `holdout, from ${at}`, figures: figuresOf(r, 'holdout'), className: 'is-part is-holdout' })
+      }
+      if (baseline) figureRows.push({ label: `baseline: ${baseline.label}`, figures: baseline.figures, className: 'is-baseline' })
+      box.appendChild(figuresTable(figureRows, { first: '' }))
+      if (baseline) {
+        const note = el('p', 'wd-lab-note')
+        note.textContent = 'Under each figure of this run: its change from the baseline, green where better. Pin a different baseline on the Runs tab.'
+        box.appendChild(note)
+      }
+    }
+
     // Signals per source and timeframe.
     const counts = r.counts.filter((c) => c.signals >= 0)
     if (counts.length > 0) {
@@ -372,13 +450,31 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     head.appendChild(sides)
     box.appendChild(head)
     const summary: OutcomeSummary = r.summary[side]
+    // How sure each mean is: forward pips per entry on this side, horizon by horizon.
+    const sideEntries = r.entries.filter((e) => side === 'all' || e.direction === side)
+    const forwardStats = summary.horizons.map((_, h) => meanStats(sideEntries.flatMap((e) => {
+      const pips = r.outcomes.get(e.id)?.forward[h]?.pips
+      return pips === undefined || !Number.isFinite(pips) ? [] : [pips]
+    })))
     box.appendChild(
       table(
-        ['after', 'n', 'mean pips', 'median pips', 'its way', 'mean ATR'],
-        summary.horizons.map((h) => ({
-          cells: [`${h.bars} bar${h.bars === 1 ? '' : 's'}`, String(h.n), signed(h.meanPips), signed(h.medianPips), pct(h.positive), signed(h.meanAtr, 2)],
-          tone: ['', '', tone(h.meanPips), tone(h.medianPips), '', tone(h.meanAtr)]
-        }))
+        ['after', 'n', 'mean pips', 't', '95% CI', 'median pips', 'its way', 'mean ATR'],
+        summary.horizons.map((h, i) => {
+          const st = forwardStats[i]
+          return {
+            cells: [
+              `${h.bars} bar${h.bars === 1 ? '' : 's'}`,
+              String(h.n),
+              signed(h.meanPips),
+              st.t === null ? '–' : signed(st.t, 1),
+              st.ci ? `${signed(st.ci[0])} to ${signed(st.ci[1])}` : '–',
+              signed(h.medianPips),
+              pct(h.positive),
+              signed(h.meanAtr, 2)
+            ],
+            tone: ['', '', tone(h.meanPips), Math.abs(st.t ?? 0) >= 2 ? tone(st.t) : '', '', tone(h.medianPips), '', tone(h.meanAtr)]
+          }
+        })
       )
     )
     box.appendChild(
@@ -407,6 +503,35 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
           ]
         )
       )
+      const sure = el('p', 'wd-lab-note wd-lab-significance')
+      sure.textContent = `Mean R per trade: ${describeMean(meanStats(s.rs), 2)}. The t and the interval treat trades as independent; trades close together are not, so read them as the least doubt there is. |t| under 2 is noise.`
+      box.appendChild(sure)
+      const paid = s.costs.commission + s.costs.financing + s.costs.slippage
+      if (paid !== 0 || s.capped > 0) {
+        const p = el('p', 'wd-lab-note')
+        const parts = [
+          s.costs.commission ? `commission ${whole(s.costs.commission)}` : '',
+          s.costs.financing ? `financing ${whole(s.costs.financing, true)}` : '',
+          s.costs.slippage ? `slippage ${whole(s.costs.slippage)}` : ''
+        ].filter(Boolean)
+        p.textContent = `${parts.length > 0 ? `Costs beyond the spread (${quoteOf(r)}, in the P&L and R above): ${parts.join(' · ')}.` : ''}${s.capped > 0 ? ` ${s.capped} trade${s.capped === 1 ? '' : 's'} cut to the ${r.strategy.sizing.maxLeverage}:1 leverage cap.` : ''}`.trim()
+        box.appendChild(p)
+      }
+      const months = monthly(r)
+      if (months.length > 1) {
+        const mHead = el('div', 'wd-lab-subhead')
+        mHead.textContent = 'Month by month -- by when each trade closed'
+        box.appendChild(mHead)
+        box.appendChild(
+          table(
+            ['month', 'trades', 'won', 'R', 'avg R', 'pips', `net (${quoteOf(r)})`],
+            months.map((m) => ({
+              cells: [m.month, String(m.trades), pct(m.trades > 0 ? m.wins / m.trades : null), signed(m.r, 1), signed(m.trades > 0 ? m.r / m.trades : null, 2), signed(m.pips, 0), whole(m.pnl, true)],
+              tone: ['', '', '', tone(m.r), tone(m.r), tone(m.pips), tone(m.pnl)]
+            }))
+          )
+        )
+      }
       const reasons = Object.entries(s.byReason)
         .map(([reason, n]) => `${REASON_WORDS[reason as ExitReason] ?? reason} ${n}`)
         .join(' · ')
@@ -449,6 +574,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         id: e.id,
         at: e.at,
         muted: filtered,
+        holdout: r.split !== null && e.at >= r.split,
         cells: [
           String(i + 1),
           time(e.at, zone),
@@ -494,11 +620,12 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     return r.sim.trades.map((t: LabTrade, i) => ({
       id: t.entry.id,
       at: t.openedAt,
+      holdout: r.split !== null && t.openedAt >= r.split,
       cells: [
         String(i + 1),
         time(t.openedAt, zone),
         t.direction,
-        whole(t.units),
+        t.capped ? `${whole(t.units)} (cap)` : whole(t.units),
         t.openPrice.toFixed(5),
         t.stop === null ? '–' : t.stop.toFixed(5),
         t.target === null ? '–' : t.target.toFixed(5),
@@ -508,17 +635,18 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         signed(t.pips),
         signed(t.r, 2),
         whole(t.pnl, true),
+        whole(t.commission + t.financing + t.slippage),
         String(t.barsHeld)
       ],
-      keys: [i, t.openedAt, t.direction, t.units, t.openPrice, t.stop, t.target, t.closedAt, t.reason, t.closePrice, t.pips, t.r, t.pnl, t.barsHeld],
-      tone: ['', '', '', '', '', '', '', '', '', '', tone(t.pips), tone(t.r), tone(t.pnl), '']
+      keys: [i, t.openedAt, t.direction, t.units, t.openPrice, t.stop, t.target, t.closedAt, t.reason, t.closePrice, t.pips, t.r, t.pnl, t.commission + t.financing + t.slippage, t.barsHeld],
+      tone: ['', '', '', '', '', '', '', '', '', '', tone(t.pips), tone(t.r), tone(t.pnl), '', '']
     }))
   }
 
   function tradesView(r: LabRun): HTMLElement {
     if (!r.sim) return message(r.entries.length === 0 ? 'No entries, so no trades.' : 'No trades were simulated.')
     if (r.sim.trades.length === 0) return message('No trades: every entry was refused (see the Summary).')
-    return pickTable('trades', ['#', 'opened', 'trade', 'units', 'in', 'stop', 'target', 'closed', 'by', 'out', 'pips', 'R', `P&L (${quoteOf(r)})`, 'bars'], tradeRows(r))
+    return pickTable('trades', ['#', 'opened', 'trade', 'units', 'in', 'stop', 'target', 'closed', 'by', 'out', 'pips', 'R', `P&L (${quoteOf(r)})`, 'costs', 'bars'], tradeRows(r))
   }
 
   function equityView(r: LabRun): HTMLElement {
@@ -535,8 +663,11 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
   function hideBanner(): void {
     banner.hidden = true
     banner.innerHTML = ''
+    stale = false
     body.classList.remove('is-stale')
   }
+
+  const onPanel = (): boolean => isPanel(shown())
 
   renderTabs()
   body.appendChild(message('Press Run to evaluate the strategy over its window.'))
@@ -572,11 +703,12 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         banner.appendChild(list)
       }
       banner.hidden = false
-      body.classList.toggle('is-stale', run !== null)
+      stale = run !== null
+      body.classList.toggle('is-stale', stale && !onPanel())
       if (!run) {
         renderTabs()
         renderStepper()
-        body.innerHTML = ''
+        if (!onPanel()) body.innerHTML = ''
       }
     },
     showStale(text) {
@@ -584,13 +716,16 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
       banner.innerHTML = ''
       banner.appendChild(message(text))
       banner.hidden = false
-      body.classList.add('is-stale')
+      stale = true
+      body.classList.toggle('is-stale', !onPanel())
     },
     showMessage(text, kind = 'info') {
       run = null
       hideBanner()
       renderTabs()
       renderStepper()
+      csv.hidden = true
+      if (onPanel()) return
       body.innerHTML = ''
       body.appendChild(message(text, kind))
     },
@@ -602,8 +737,39 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
       selected = entryId
       markSelected()
     },
-    step
+    step,
+    addPanel(panel) {
+      panels.push(panel)
+      render()
+    },
+    refreshTabs() {
+      renderTabs()
+    },
+    setBaseline(next) {
+      baseline = next
+      if (run && shown() === 'summary') render()
+    }
   }
+}
+
+/** The closed trades by the month they closed in, on the instrument's clock. */
+function monthly(r: LabRun): Array<{ month: string; trades: number; wins: number; r: number; pips: number; pnl: number }> {
+  const zone = r.grid.schedule.timezone
+  const key = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit' })
+  const name = new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: 'short' })
+  const out = new Map<string, { month: string; trades: number; wins: number; r: number; pips: number; pnl: number }>()
+  for (const t of r.sim?.trades ?? []) {
+    if (t.closedAt === null || t.pnl === null) continue
+    const k = key.format(t.closedAt)
+    const m = out.get(k) ?? { month: name.format(t.closedAt), trades: 0, wins: 0, r: 0, pips: 0, pnl: 0 }
+    m.trades++
+    if (t.pnl > 0) m.wins++
+    m.r += t.r ?? 0
+    m.pips += t.pips ?? 0
+    m.pnl += t.pnl
+    out.set(k, m)
+  }
+  return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, m]) => m)
 }
 
 /** The instrument's quote currency (what P&L is counted in): EURUSD's USD. */
@@ -668,6 +834,13 @@ function equityChart(r: LabRun, zone: string, time: (ms: number, zone: string) =
   }
   // The opening balance.
   chart.appendChild(svg('line', { x1: pad.l, x2: W - pad.r, y1: y(start), y2: y(start), class: 'wd-lab-reference' }))
+  // Where the holdout begins.
+  if (r.split !== null && r.split > t0 && r.split < t1) {
+    chart.appendChild(svg('line', { x1: x(r.split), x2: x(r.split), y1: pad.t, y2: H - pad.b, class: 'wd-lab-split-line' }))
+    const label = svg('text', { x: x(r.split) + 4, y: pad.t + 10, class: 'wd-lab-axis' })
+    label.textContent = 'holdout →'
+    chart.appendChild(label)
+  }
   // A step line: the balance holds between closes.
   let d = `M${x(points[0].t)},${y(points[0].balance)}`
   for (let i = 1; i < points.length; i++) d += `H${x(points[i].t)}V${y(points[i].balance)}`

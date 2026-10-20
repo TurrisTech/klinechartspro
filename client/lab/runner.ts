@@ -91,6 +91,8 @@ export interface LabRun {
   summary: { all: OutcomeSummary; long: OutcomeSummary; short: OutcomeSummary }
   sim: SimResult | null
   pathInterval: string | null
+  /** Where the holdout begins: entries at or after it are held back from fitting. Null: none. */
+  split: number | null
   readings: SeriesReadings
   warnings: string[]
   timings: Array<{ stage: string; ms: number }>
@@ -344,6 +346,8 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
         pathMs,
         exits: strategy.exits,
         sizing: strategy.sizing,
+        costs: strategy.costs,
+        grid,
         pip,
         readings,
         levels,
@@ -379,10 +383,19 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
     },
     sim,
     pathInterval,
+    split: holdoutStart(strategy, from, to),
     readings,
     warnings,
     timings
   }
+}
+
+/** Where the window's holdout begins, or null for none (or one outside the window). */
+export function holdoutStart(strategy: Pick<Strategy, 'holdout'>, from: number, to: number): number | null {
+  const h = strategy.holdout
+  if (!h) return null
+  const at = h.kind === 'percent' ? Math.round(to - ((to - from) * h.percent) / 100) : h.at
+  return at > from && at < to ? at : null
 }
 
 /** A level expression's environment for one entry. */

@@ -71,7 +71,7 @@ const SECTIONS: Array<{ key: string; title: string; short: string; where: string
   { key: 'graph', title: 'Graph', short: 'Graph', where: ['Graph'] },
   { key: 'entry', title: 'Entries', short: 'Entries', where: ['Entries'] },
   { key: 'exits', title: 'Exits', short: 'Exits', where: ['Exits'] },
-  { key: 'sizing', title: 'Account & simulation', short: 'Account', where: ['Sizing', 'Simulation'] },
+  { key: 'sizing', title: 'Account, costs & simulation', short: 'Account', where: ['Sizing', 'Costs', 'Simulation'] },
   { key: 'outcomes', title: 'Outcomes', short: 'Outcomes', where: ['Outcomes'] },
   { key: 'notes', title: 'Notes', short: 'Notes', where: [] }
 ]
@@ -866,10 +866,12 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
   function sizingSection(): HTMLElement {
     const s = strategy.sizing
     const path = strategy.pathInterval
+    const c = strategy.costs
+    const costWords = [c.commission ? `${c.commission}/M` : '', c.slippagePips ? `${c.slippagePips} pip slip` : '', c.financing ? 'financing' : ''].filter(Boolean)
     return section(
       'sizing',
-      'Account & simulation',
-      `${s.mode === 'risk' ? `${s.riskPercent}% risk` : `${s.units} units`} · ${s.maxOpen} open · path ${path ?? 'auto'}`,
+      'Account, costs & simulation',
+      `${s.mode === 'risk' ? `${s.riskPercent}% risk` : `${s.units} units`}${s.maxLeverage !== null ? ` · ≤${s.maxLeverage}:1` : ''} · ${s.maxOpen} open${costWords.length ? ` · ${costWords.join(', ')}` : ''} · path ${path ?? 'auto'}`,
       (box) => {
         box.appendChild(row('Opening balance', num(s.balance, (v) => (s.balance = v ?? 100_000), { min: 0, width: '8rem' }), 'in the quote currency'))
         const mode = select(
@@ -892,6 +894,41 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
           )
         )
         box.appendChild(row('At most', num(s.maxOpen, (v) => (s.maxOpen = Math.max(1, Math.round(v ?? 1))), { min: 1, step: '1', width: '4rem' }), 'trades open at once'))
+        box.appendChild(
+          row(
+            '',
+            checkbox('Leverage cap', s.maxLeverage !== null, (on) => (s.maxLeverage = on ? 50 : null), 'Cut a position to at most this multiple of the balance in notional'),
+            ...(s.maxLeverage !== null ? [num(s.maxLeverage, (v) => (s.maxLeverage = v ?? 50), { min: 1, width: '4.5rem' }), ':1 of the balance (OANDA’s retail limit on the majors is 50)'] : [])
+          )
+        )
+
+        const costs = el('div', 'wd-lab-subsection')
+        const costHead = el('div', 'wd-lab-subhead')
+        costHead.textContent = 'Costs beyond the spread -- the fill engine already pays the bid/ask'
+        costs.appendChild(costHead)
+        costs.appendChild(row('Commission', num(c.commission, (v) => (c.commission = v ?? 0), { min: 0, width: '5.5rem' }), 'per million units, each side, in the quote currency'))
+        costs.appendChild(row('Slippage', num(c.slippagePips, (v) => (c.slippagePips = v ?? 0), { min: 0, width: '5.5rem' }), 'pips worse on the entry, a stop and a market exit (a target fills at its price)'))
+        costs.appendChild(
+          checkbox('Overnight financing', c.financing !== null, (on) => (c.financing = on ? { long: 0, short: 0 } : null), 'Charged at each daily close a trade is held through')
+        )
+        if (c.financing) {
+          const f = c.financing
+          costs.appendChild(
+            row(
+              'a long pays',
+              num(f.long, (v) => (f.long = v ?? 0), { width: '5rem' }),
+              '% a year, a short pays',
+              num(f.short, (v) => (f.short = v ?? 0), { width: '5rem' }),
+              '% (negative: earns)'
+            )
+          )
+          costs.appendChild(
+            note(
+              'Of the notional, at each daily close held through, for the days until the next close (a Friday close carries the weekend; OANDA books the FX weekend on a Wednesday -- the same over a week). Take the rates from OANDA’s financing page for the instrument: they are today’s, applied to all of history.'
+            )
+          )
+        }
+        box.appendChild(slot('Costs', costs))
         const tf = select([{ value: '', label: "auto: the longest stored timeframe tiling every entry's" }, ...['5s', '1m', '1h', '1D'].map((c) => ({ value: c, label: c }))], path ?? '', (value) => {
           strategy.pathInterval = value || null
           changed()
