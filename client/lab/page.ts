@@ -8,12 +8,16 @@ import { builtinPlugins, createFacilities, createPluginHost } from '../plugins'
 import type { CandleGrid } from '../replay/timeframes'
 import { fetchSymbolInfo, fetchSymbols } from '../symbols'
 import { loadLabCatalogue, labIntervals, type LabCatalogue } from './catalogue'
+import { createBasketPanel } from './basketview'
 import { HttpLabData } from './data'
+import { download, fileStem, ImportError, readStrategyFile, strategyJson } from './export'
 import { createStrategyEditor } from './editor'
 import { newStrategyId, type Problem, rank85Strategy, ruleStrategy, type Strategy, strategyProblems } from './model'
 import { DEFAULT_SHOW, LAB_DRAFT_TEMPLATE, type LabExtendData, publishRun, registerLabTemplate, type ShowOptions } from './overlay'
 import { createResultsView } from './results'
-import { type LabRun, RunCancelled, RunError, runStrategy } from './runner'
+import { createRunsPanel, type RunRecord, RunHistory } from './runs'
+import { createSweepPanel } from './sweepview'
+import { type LabRun, RunCancelled, RunError, runStrategy, runWindow } from './runner'
 import { StrategyStore } from './store'
 
 // THE STRATEGY LAB: a page of the dashboard (`/lab`) for developing a strategy's rules -- the
@@ -24,7 +28,10 @@ import { StrategyStore } from './store'
 //   editor   every slot of the strategy (./editor.ts)
 //   chart    the instrument, with the run drawn on it (./overlay.ts, the `LAB:draft` template)
 //   results  what the run found (./results.ts); a row takes the chart there. The bar between
-//            the chart and the results drags (double-click: back to the default split)
+//            the chart and the results drags (double-click: back to the default split). After
+//            the run's own tabs: Runs (this session's runs and the baseline, ./runs.ts), Sweep
+//            (one number over a range, ./sweepview.ts) and Basket (many instruments,
+//            ./basketview.ts)
 //
 // Editing is a DRAFT: nothing is kept until Save (./store.ts), and a dashboard pane or an alert
 // reading a strategy reads what is saved. With Auto-run on, an edit that leaves the strategy
@@ -144,6 +151,64 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   })
   main.appendChild(results.element)
 
+  // -- this session's runs, a sweep, a basket ------------------------------------------------------
+  const history = new RunHistory()
+  /** The run on the chart, as the history keeps it. */
+  let currentRecord: RunRecord | null = null
+  const runLabel = (r: RunRecord): string => {
+    const n = history.list(r.strategy.id).indexOf(r) + 1
+    return `run ${n}, ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(r.ranAt)}`
+  }
+  const runsPanel = createRunsPanel({
+    onPin: (record) => {
+      history.pin(currentId, record?.id ?? null)
+      showHistory()
+    },
+    onRestore: (record) => {
+      drafts.set(currentId, { ...structuredClone(record.strategy), id: currentId })
+      editor.setStrategy(current())
+      edited()
+    }
+  })
+  results.addPanel({ id: 'runs', label: () => `Runs ${history.list(currentId).length || ''}`.trim(), element: runsPanel.element })
+  function showHistory(): void {
+    const baseline = history.baseline(currentId)
+    runsPanel.render(history.list(currentId), baseline, currentRecord?.strategy.id === currentId ? currentRecord.id : null)
+    results.setBaseline(baseline && baseline.id !== currentRecord?.id ? { figures: baseline.figures, label: runLabel(baseline) } : null)
+    results.refreshTabs()
+  }
+
+  const paramInfo = (plugin: string, variant: string, name: string) => {
+    const p = catalogue?.signals.find((f) => f.plugin === plugin && f.variant === variant)?.params.find((x) => x.name === name)
+    return p ? { type: p.type, min: p.min, max: p.max } : null
+  }
+  const sweepPanel = createSweepPanel({
+    strategy: () => current(),
+    paramInfo,
+    run: (strategy, isCancelled) => runStrategy(strategy, data, { catalogue: catalogue?.server ?? null, isCancelled }),
+    use: (target, value) => {
+      target.apply(current(), value)
+      editor.render()
+      edited()
+    }
+  })
+  results.addPanel({ id: 'sweep', label: () => 'Sweep', element: sweepPanel.element })
+
+  const basketPanel = createBasketPanel({
+    strategy: () => current(),
+    symbols: () => fetchSymbols('').then((list) => list.map((s) => `${s.exchange ?? 'oanda'}:${s.ticker}`)),
+    // The lab's own instrument reads through the page's data; any other through a data layer of
+    // its own, dropped with its run, so a basket of 28 never holds 28 instruments' bars at once.
+    run: (strategy, symbol, isCancelled) =>
+      runStrategy(strategy, symbol === current().instrument ? data : new HttpLabData(), { symbol, catalogue: catalogue?.server ?? null, isCancelled }),
+    open: (symbol) => {
+      current().instrument = symbol
+      editor.render()
+      edited()
+    }
+  })
+  results.addPanel({ id: 'basket', label: () => 'Basket', element: basketPanel.element })
+
   const editor = createStrategyEditor(
     current(),
     {
@@ -188,7 +253,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       { value: '', label: 'New…' },
       { value: 'rank85', label: 'AREV21 rank 85 graph (the overlay’s)' },
       { value: 'rule', label: 'Rule events, no graph' },
-      { value: 'copy', label: 'A copy of this one' }
+      { value: 'copy', label: 'A copy of this one' },
+      { value: 'import', label: 'From a file…' }
     ],
     '',
     (value) => {
@@ -196,6 +262,10 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       if (!value) return
       const now = Date.now()
       let fresh: Strategy
+      if (value === 'import') {
+        importFile.click()
+        return
+      }
       if (value === 'copy') fresh = { ...structuredClone(current()), id: newStrategyId(now), name: `${current().name} copy`, createdAt: now, updatedAt: now }
       else fresh = value === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
       fresh.instrument = current().instrument
@@ -206,6 +276,28 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   )
   newPicker.classList.add('wd-lab-new')
   newPicker.setAttribute('aria-label', 'New strategy')
+
+  // A strategy to or from a file: how one moves between the dev and prod dashboards.
+  const importFile = document.createElement('input')
+  importFile.type = 'file'
+  importFile.accept = '.json,application/json'
+  importFile.hidden = true
+  importFile.addEventListener('change', async () => {
+    const file = importFile.files?.[0]
+    importFile.value = ''
+    if (!file) return
+    try {
+      const fresh = readStrategyFile(await file.text())
+      drafts.set(fresh.id, fresh)
+      touched.add(fresh.id)
+      saveNote.textContent = ''
+      switchTo(fresh.id)
+    } catch (err) {
+      saveNote.textContent = `Could not import ${file.name}: ${err instanceof ImportError ? err.message : String(err)}`
+    }
+  })
+  const exportButton = button('kc-button kc-button-outline', 'Export', () => download(`${fileStem(current().name)}.strategy.json`, strategyJson(current()), 'application/json'))
+  exportButton.title = 'Save this strategy (the draft, as it stands) as a file; New… ▸ From a file reads it back, here or on another dashboard'
 
   const save = button('kc-button kc-button-primary', 'Save', () => {
     try {
@@ -348,6 +440,56 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   const daysLabel = el('div', 'wd-lab-window')
   daysLabel.append(windowKind, days, daysWord, fromDate, toWord, toDate)
 
+  // The holdout: the end of the window kept back from fitting (model.ts `HoldoutSpec`).
+  const holdoutKind = select(
+    [
+      { value: '', label: 'no holdout' },
+      { value: 'percent', label: 'hold out the last' },
+      { value: 'from', label: 'hold out from' }
+    ],
+    '',
+    (value) => {
+      if (value === 'percent') current().holdout = { kind: 'percent', percent: 30 }
+      else if (value === 'from') {
+        const { from, to } = runWindow(current())
+        current().holdout = { kind: 'from', at: dayStart(dayOf(to - (to - from) * 0.3)) as number }
+      } else current().holdout = null
+      refreshHead()
+      edited()
+    }
+  )
+  holdoutKind.classList.add('wd-lab-window-kind')
+  holdoutKind.setAttribute('aria-label', 'Holdout')
+  holdoutKind.title = 'Keep the end of the window back: the results show it beside the rest, so a rule tuned on one part is checked on the other'
+  const holdoutPercent = document.createElement('input')
+  holdoutPercent.type = 'number'
+  holdoutPercent.min = '1'
+  holdoutPercent.max = '99'
+  holdoutPercent.step = '1'
+  holdoutPercent.className = 'kc-input wd-lab-days'
+  holdoutPercent.setAttribute('aria-label', 'Holdout percent')
+  holdoutPercent.addEventListener('input', () => {
+    const n = Number(holdoutPercent.value)
+    if (!(n > 0 && n < 100)) return
+    current().holdout = { kind: 'percent', percent: n }
+    edited()
+  })
+  const holdoutPercentWord = el('span', '')
+  holdoutPercentWord.textContent = '%'
+  const holdoutDate = document.createElement('input')
+  holdoutDate.type = 'date'
+  holdoutDate.className = 'kc-input wd-lab-date'
+  holdoutDate.setAttribute('aria-label', 'Holdout from')
+  holdoutDate.title = 'The first day held out (UTC)'
+  holdoutDate.addEventListener('change', () => {
+    const at = dayStart(holdoutDate.value)
+    if (at === null) return
+    current().holdout = { kind: 'from', at }
+    edited()
+  })
+  const holdoutLabel = el('div', 'wd-lab-window')
+  holdoutLabel.append(holdoutKind, holdoutPercent, holdoutPercentWord, holdoutDate)
+
   let running = false
   const runButton = button('kc-button kc-button-primary wd-lab-run', 'Run', () => {
     if (!running) {
@@ -387,9 +529,9 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   }
 
   const left = el('div', 'wd-lab-head-left')
-  left.append(back, brand, picker, nameInput, newPicker, save, revert, remove, saveNote)
+  left.append(back, brand, picker, nameInput, newPicker, importFile, save, revert, remove, exportButton, saveNote)
   const right = el('div', 'wd-lab-head-right')
-  right.append(instrument, symbols, daysLabel, runButton, autoLabel, showBox)
+  right.append(instrument, symbols, daysLabel, holdoutLabel, runButton, autoLabel, showBox)
   head.append(left, right)
 
   function refreshHead(): void {
@@ -415,6 +557,12 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     }
     for (const n of [days, daysWord]) n.hidden = w.kind !== 'days'
     for (const n of [fromDate, toWord, toDate]) n.hidden = w.kind !== 'range'
+    const h = current().holdout
+    holdoutKind.value = h?.kind ?? ''
+    if (h?.kind === 'percent' && document.activeElement !== holdoutPercent) holdoutPercent.value = String(h.percent)
+    if (h?.kind === 'from' && document.activeElement !== holdoutDate) holdoutDate.value = dayOf(h.at)
+    for (const n of [holdoutPercent, holdoutPercentWord]) n.hidden = h?.kind !== 'percent'
+    holdoutDate.hidden = h?.kind !== 'from'
     const dirty = unsaved(currentId)
     const saved = !!store.get(currentId)
     save.disabled = !dirty || !!store.loadError
@@ -426,12 +574,14 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     remove.disabled = !saved && !touched.has(currentId)
     root.classList.toggle('is-unsaved', dirty)
     editor.markProblems(strategyProblems(current()))
+    sweepPanel.refresh()
   }
 
   /** Take the page to a problem's slot: the editor's, or the header's instrument and window. */
   function reveal(problem: Problem): void {
     if (editor.reveal(problem)) return
-    const field = problem.where === 'Instrument' ? instrument : current().window.kind === 'days' ? days : fromDate
+    const holdout = /holdout/.test(problem.message) ? (current().holdout?.kind === 'from' ? holdoutDate : holdoutPercent) : null
+    const field = holdout ?? (problem.where === 'Instrument' ? instrument : current().window.kind === 'days' ? days : fromDate)
     field.focus()
     field.classList.remove('is-flash')
     void field.offsetWidth
@@ -449,9 +599,11 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     currentId = id
     storageSet(CURRENT_KEY, id)
     lastRun = null
+    currentRecord = null
     editor.setStrategy(current())
     refreshHead()
     results.showMessage('Press Run to evaluate the strategy over its window.')
+    showHistory()
     publishRun(RUN_KEY, null)
     chart?.draw()
     void chart?.setInstrument(current().instrument)
@@ -519,7 +671,9 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       })
       if (mine !== token) return
       lastRun = result
+      currentRecord = history.add(result)
       publishRun(RUN_KEY, result)
+      showHistory()
       results.showRun(result)
       if (selected) results.select(selected)
       await chart?.setInstrument(result.symbol)

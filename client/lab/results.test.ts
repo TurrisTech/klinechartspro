@@ -10,6 +10,7 @@ afterAll(() => GlobalRegistrator.unregister())
 
 const { createResultsView } = await import('./results')
 const { runStrategy } = await import('./runner')
+const { figuresOf } = await import('./figures')
 const { rank85Strategy, defaultStep } = await import('./model')
 const { FakeData, NOW, D } = await import('./testdata')
 
@@ -137,6 +138,36 @@ describe('the results view', () => {
 
     view.showMessage('Press Run to evaluate the strategy over its window.')
     expect(rows().length).toBe(0)
+    expect(view.step(1)).toBe(false)
+  })
+
+  test('a pinned baseline: the Summary shows this run beside it, each change under its figure', () => {
+    const { view } = mount()
+    view.showRun(run)
+    expect(view.element.querySelector('.wd-lab-figures')).toBeNull()
+    const worse = { ...figuresOf(run), avgR: (figuresOf(run).avgR ?? 0) - 0.5, maxDrawdown: 0.9 }
+    view.setBaseline({ figures: worse, label: 'run 1, 10:00' })
+    const rows = [...view.element.querySelectorAll('.wd-lab-figures tbody tr')].map((tr) => tr.textContent ?? '')
+    expect(rows[0]).toStartWith('this run')
+    expect(rows.at(-1)).toStartWith('baseline: run 1, 10:00')
+    // A better average R and a smaller drawdown than the baseline's: both marked better.
+    expect(view.element.querySelectorAll('.wd-lab-figures .wd-lab-delta.is-better').length).toBeGreaterThanOrEqual(2)
+    view.setBaseline(null)
+    expect(view.element.querySelector('.wd-lab-figures')).toBeNull()
+  })
+
+  test('a panel is a tab after the run’s own, there before any run and never dimmed', () => {
+    const { view } = mount()
+    const panel = document.createElement('div')
+    panel.textContent = 'the sweep'
+    view.addPanel({ id: 'sweep', label: () => 'Sweep', element: panel })
+    const tab = [...view.element.querySelectorAll<HTMLButtonElement>('.wd-lab-tab')].find((b) => b.textContent === 'Sweep') as HTMLButtonElement
+    expect(tab.disabled).toBe(false)
+    tab.click()
+    expect(view.element.querySelector('.wd-lab-results-body')?.firstElementChild).toBe(panel)
+    view.showRun(run)
+    view.showProblems([{ where: 'Exits · stop', message: 'x' }], '1 problem')
+    expect(view.element.querySelector('.wd-lab-results-body')?.classList.contains('is-stale')).toBe(false)
     expect(view.step(1)).toBe(false)
   })
 

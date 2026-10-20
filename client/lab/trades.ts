@@ -16,14 +16,22 @@
 // Levels are computed from the entry bar's close (mid), then handed to the engine, which fills
 // on the bid/ask -- so a long pays the spread on the way in and is stopped on the bid.
 //
+// COSTS beyond the spread (model.ts `CostSpec`) are this module's too: slippage moves every fill
+// that is not a limit (the entry, a stop, a market exit) the trade's wrong way; commission is per
+// million units each side; financing is charged at each daily close held through. A trade's P&L
+// and R are net of all three, its pips of slippage only (commission and financing are money, not
+// price). The balance -- what risk sizing reads -- is the net one. And a position is cut to the
+// leverage cap (`Sizing.maxLeverage`) of that balance.
+//
 // PURE.
 
 import type { ReplayBar } from '../replay/cache'
 import { type BidAskBar, Engine, type Event, SimError } from '../replay/engine'
+import type { CandleGrid } from '../replay/timeframes'
 import type { LabEntry } from './entries'
 import type { Compiled } from './expr'
 import type { Readings } from './graph'
-import type { Direction, ExitSpec, Level, Sizing } from './model'
+import type { CostSpec, Direction, ExitSpec, Level, Sizing } from './model'
 import { lastAtOrBefore } from './sorted'
 
 export type ExitReason = 'stop' | 'target' | 'breakeven' | 'trail' | 'rule' | 'time' | 'opposite' | 'end'
@@ -33,19 +41,30 @@ export interface LabTrade {
   entry: LabEntry
   direction: Direction
   units: number
+  /** The leverage cap cut the size the sizing rule asked for. */
+  capped: boolean
   openedAt: number
+  /** The fill, slippage included. */
   openPrice: number
   stop: number | null
   target: number | null
   /** The stop's distance at entry, in price: what one R is. Null without a stop. */
   risk: number | null
   closedAt: number | null
+  /** The fill, slippage included (a target has none). */
   closePrice: number | null
   reason: ExitReason | null
-  /** Quote currency, as the engine counts it. */
+  /** Quote currency, net of commission and financing. */
   pnl: number | null
+  /** Price pips, slippage included. */
   pips: number | null
+  /** Net of every cost, against the stop's distance from the fill. */
   r: number | null
+  /** Quote currency each: commission both sides, financing (negative: earned), and what the
+   * slippage cost -- already in the prices, so in `pnl` once, reported here to say how much. */
+  commission: number
+  financing: number
+  slippage: number
   barsHeld: number
 }
 
@@ -60,6 +79,12 @@ export interface EquityPoint {
 }
 
 export interface TradeStats {
+  /** Every closed trade's R, in close order: what the significance figures read. */
+  rs: number[]
+  /** Totals in the quote currency, as on each trade. */
+  costs: { commission: number; financing: number; slippage: number }
+  /** Trades the leverage cap cut. */
+  capped: number
   trades: number
   wins: number
   losses: number
@@ -121,6 +146,33 @@ export interface SimInput {
   levelEnv: LevelEnv
   /** Whether the exit rule for a direction holds at a close; null for none. */
   exitRule: (direction: Direction) => ((t: number) => boolean) | null
+  /** Beyond the spread; none when absent. */
+  costs?: CostSpec
+  /** The instrument's candle grid: where its daily closes fall, for financing. */
+  grid?: CandleGrid | null
+}
+
+const DAY_MS = 86_400_000
+
+/** The daily closes in `(from, to]` -- the instants a position held through them is financed --
+ * each with the calendar days until the next close, which it pays for: 1 on a weekday, 3 on an
+ * FX Friday (the weekend), 1 every day for crypto. */
+export function financedCloses(grid: CandleGrid, from: number, to: number): Array<{ at: number; days: number }> {
+  const out: Array<{ at: number; days: number }> = []
+  // The close after `at`. A close instant opens the next candle (half-open), so that candle's
+  // end is the next close -- except at the week's last close, which opens nothing: an instant in
+  // the closed window floors to the candle that just closed.
+  const after = (at: number): number => {
+    const end = grid.end('1D', at)
+    return end > at ? end : grid.end('1D', grid.nextStart('1D', at))
+  }
+  let close = after(from)
+  for (let guard = 0; close <= to && guard < 10_000; guard++) {
+    const next = after(close)
+    out.push({ at: close, days: Math.max(1, Math.round((next - close) / DAY_MS)) })
+    close = next
+  }
+  return out
 }
 
 interface Open {
@@ -178,6 +230,20 @@ export function simulate(input: SimInput): SimResult {
   const entries = [...input.entries].sort((a, b) => a.at - b.at)
   const ends = input.bars.map((b) => b.end)
   let next = 0
+  const costs = input.costs ?? { commission: 0, slippagePips: 0, financing: null }
+  const slip = costs.slippagePips * input.pip
+  /** The account net of every cost: what sizing reads and the equity curve draws. The engine's
+   * own balance knows only the spread. */
+  let cash = sizing.balance
+  const commissionOf = (units: number): number => (units * costs.commission) / 1_000_000
+  /** What holding `trade` from its open to `at` costs in financing (negative: earns). */
+  const financingOf = (trade: LabTrade, at: number): number => {
+    if (!costs.financing || !input.grid) return 0
+    const rate = trade.direction === 'long' ? costs.financing.long : costs.financing.short
+    if (rate === 0) return 0
+    const days = financedCloses(input.grid, trade.openedAt, at).reduce((a, c) => a + c.days, 0)
+    return (trade.units * trade.openPrice * rate * days) / 100 / 365
+  }
 
   // Entries no path bar closes at are refused, not moved: taking one at a later close would be a
   // different trade, and at an earlier one a trade on information that did not exist yet.
@@ -188,17 +254,26 @@ export function simulate(input: SimInput): SimResult {
     else skipped.push({ entry, reason: lastAtOrBefore(ends, entry.at) < 0 || entry.at > (ends.at(-1) ?? 0) ? 'outside the simulated bars' : 'no path bar closes at the entry' })
   }
 
-  const record = (state: Open, price: number, at: number, reason: ExitReason, pnl: number): void => {
+  const record = (state: Open, price: number, at: number, reason: ExitReason): void => {
     const t = state.trade
     const dir = t.direction === 'long' ? 1 : -1
+    // A target is a limit: it fills at its price. Everything else is at the market.
+    const close = reason === 'target' || slip === 0 ? price : price - dir * slip
     t.closedAt = at
-    t.closePrice = price
+    t.closePrice = close
     t.reason = reason
-    t.pnl = pnl
-    t.pips = ((price - t.openPrice) * dir) / input.pip
-    t.r = t.risk ? ((price - t.openPrice) * dir) / t.risk : null
+    if (close !== price) t.slippage += slip * t.units
+    t.commission += commissionOf(t.units)
+    t.financing = financingOf(t, at)
+    const delta = dir > 0 ? close - t.openPrice : t.openPrice - close
+    // As the engine counts it (replay/engine.ts `pnl`), less what is paid on top.
+    const fees = t.commission + t.financing
+    t.pnl = delta * t.units - fees
+    t.pips = delta / input.pip
+    t.r = t.risk ? (fees === 0 ? delta / t.risk : (delta - fees / t.units) / t.risk) : null
+    cash += t.pnl
     open.delete(state.engineId)
-    equity.push({ t: at, balance: engine.balance })
+    equity.push({ t: at, balance: cash })
   }
 
   const closed = (events: Event[], reasonFor: (state: Open, event: Event) => ExitReason): void => {
@@ -206,8 +281,7 @@ export function simulate(input: SimInput): SimResult {
       if (event.kind !== 'close' || !event.tradeId) continue
       const state = open.get(event.tradeId)
       if (!state) continue
-      const engineTrade = engine.trades.get(event.tradeId)
-      record(state, event.price ?? 0, event.time, reasonFor(state, event), engineTrade?.realizedPnl ?? 0)
+      record(state, event.price ?? 0, event.time, reasonFor(state, event))
     }
   }
 
@@ -301,8 +375,11 @@ export function simulate(input: SimInput): SimResult {
         skipped.push({ entry, reason: 'the target could not be computed' })
         continue
       }
-      const units =
-        sizing.mode === 'risk' && risk !== null && risk > 0 ? Math.max(1, Math.floor((engine.balance * sizing.riskPercent) / 100 / risk)) : sizing.units
+      const asked = sizing.mode === 'risk' && risk !== null && risk > 0 ? Math.max(1, Math.floor((cash * sizing.riskPercent) / 100 / risk)) : sizing.units
+      // The notional (units x price, in the quote currency the balance is counted in) at most
+      // `maxLeverage` times the balance.
+      const cap = sizing.maxLeverage !== null && mid > 0 ? Math.max(1, Math.floor((sizing.maxLeverage * Math.max(cash, 0)) / mid)) : Number.POSITIVE_INFINITY
+      const units = Math.min(asked, cap)
       let order: ReturnType<Engine['submit']>
       try {
         order = engine.submit({ symbol, side: entry.direction === 'long' ? 'buy' : 'sell', type: 'market', units, stopLoss: stop, takeProfit: target, label: entry.id })
@@ -317,12 +394,14 @@ export function simulate(input: SimInput): SimResult {
         skipped.push({ entry, reason: 'the order did not fill' })
         continue
       }
-      const openPrice = fill.price ?? mid
+      const dir = entry.direction === 'long' ? 1 : -1
+      const openPrice = (fill.price ?? mid) + dir * slip
       const trade: LabTrade = {
         id: engineId,
         entry,
         direction: entry.direction,
         units,
+        capped: units < asked,
         openedAt: t,
         openPrice,
         stop,
@@ -334,6 +413,9 @@ export function simulate(input: SimInput): SimResult {
         pnl: null,
         pips: null,
         r: null,
+        commission: commissionOf(units),
+        financing: 0,
+        slippage: slip * units,
         barsHeld: 0
       }
       trades.push(trade)
@@ -379,7 +461,11 @@ export function tradeStats(trades: readonly LabTrade[], balance: number): TradeS
   }
   const byReason: Partial<Record<ExitReason, number>> = {}
   for (const t of done) if (t.reason) byReason[t.reason] = (byReason[t.reason] ?? 0) + 1
+  const sum = (f: (t: LabTrade) => number): number => done.reduce((a, t) => a + f(t), 0)
   return {
+    rs: [...done].sort((a, b) => (a.closedAt as number) - (b.closedAt as number)).flatMap((t) => (t.r === null ? [] : [t.r])),
+    costs: { commission: sum((t) => t.commission), financing: sum((t) => t.financing), slippage: sum((t) => t.slippage) },
+    capped: done.filter((t) => t.capped).length,
     trades: done.length,
     wins: wins.length,
     losses: losses.length,
