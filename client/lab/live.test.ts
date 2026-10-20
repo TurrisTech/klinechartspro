@@ -1,14 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 
-// THE LAB AGAINST THE OVERLAY'S OWN CODE, on a real server: a strategy's 5m and 3m entries, with
+// THE LAB AGAINST THE OVERLAY'S GRAPH, on a real server: a strategy's 5m and 3m entries, with
 // every graph slot at the rank 85 overlay's setting, must be exactly the entries the alert
-// manager's graph-entry engine finds -- which reads the overlay's own fetch (`/values` plus each
-// timeframe's bar grid, knowable at the next bar's open) and runs its own `buildRootGraphs`. The
-// lab reads `/signals` and its candles and knows a signal at its close: two data paths, one answer.
+// manager's graph-entry engine finds -- which reads the overlay's graph as the server builds it
+// (`GET /mtf/graph`, wdashboard-server 0.56.0). The lab reads `/signals` and its candles and
+// builds in the browser: two implementations, one answer.
 //
 // Opt-in, like client/replay/e2e.test.ts: `LAB_LIVE=http://127.0.0.1:20002 bun test client/lab/live.test.ts`
 // against a wdashboard-server with arev21 rows (the dev stack). Passed 2026-10-15 on dev EURUSD,
-// 30 days, three root sets (28/3, 4/3 and 28/3 entries).
+// 30 days, three root sets (28/3, 4/3 and 28/3 entries) against the client-built graph, and again
+// 2026-10-20 against the server's.
 
 const BASE_URL = process.env.LAB_LIVE
 
