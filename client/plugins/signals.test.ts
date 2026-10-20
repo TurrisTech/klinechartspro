@@ -1,15 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from './testing'
 
-// The published-signals contract as the client consumes it: the AREV pane and the MTF overlay
-// read the server's label rather than restating its rule -- except where a
-// pre-`plugins.signals` server sends the old boolean, which `arevSignal` maps with that rule,
-// once.
+// The published-signals contract as the client consumes it: the AREV pane reads the server's
+// label rather than restating its rule -- except where a pre-`plugins.signals` server sends the
+// old boolean, which `arevSignal` maps with that rule, once. (The MTF overlays read the label off
+// `GET /mtf/graph`, where the server put it: client/mtf/values.test.ts.)
 installWindow()
 const { arevSignal } = await import('../arev/api')
 const { matches } = await import('../tsregistry/api')
-const { shiftSignals } = await import('../mtf/shift')
-const { FX_GRID } = await import('../replay/timeframes')
 
 import type { ArevPoint } from '../arev/api'
 
@@ -46,19 +44,5 @@ describe('the label is read, not re-derived', () => {
     expect(matches(down, point({ p: 0.4, signal: 'short' }))).toBe(true)
     expect(matches(up, undefined)).toBe(false)
   })
-  test('the MTF overlay places a labelled vote and takes its direction from the label', () => {
-    const H = 3_600_000
-    const grid = [0, 4 * H, 8 * H, 12 * H]
-    const chartBars = Array.from({ length: 13 }, (_, i) => ({ timestamp: i * H }) as never)
-    const placed = shiftSignals({
-      clock: FX_GRID,
-      sourceInterval: '4h',
-      chartInterval: '1h',
-      points: [point({ date: 0, p: 0.4, signal: 'short' }), point({ date: 4 * H, p: 0.6, signal: null })],
-      grid,
-      chartBars
-    })
-    expect([...placed.keys()]).toEqual([4 * H])
-    expect(placed.get(4 * H)?.[0]).toMatchObject({ sourceDate: 0, knownAt: 4 * H, up: false })
-  })
+
 })

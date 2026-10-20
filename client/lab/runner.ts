@@ -27,7 +27,7 @@ import type { LabData } from './data'
 import { applyFilter, entriesOfEvents, entriesOfGraphs, graphStateAt, type LabEntry, RuleAtInstant, rootIndex } from './entries'
 import { type Ast, compileExpr, type ExprEnv } from './expr'
 import { publishedSignals, ruleOperands, ruleSignals } from './events'
-import { buildRootGraphs, compileGraph, graphStart, type LabGraph, type LabSignal, slotEnv } from './graph'
+import { buildRootGraphs, compileGraph, graphStarts, type LabGraph, type LabSignal, slotEnv } from './graph'
 import { type Problem, SCOPES, type Strategy, strategyProblems } from './model'
 import { type EntryOutcome, measureOutcome, type OutcomeSummary, pathIndex, summariseOutcomes } from './outcomes'
 import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings } from './readings'
@@ -256,12 +256,13 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   }
 
   // Roots first: where their graphs in force began decides how far back everything else reads.
-  if (roots.length > 0) await readPool(roots, (root) => from - lookbackOf(root) - BACK_PAD_MS)
+  // A longer root may start from its run in force at a shorter root's start rather than at
+  // `from` (graph.ts `graphStarts`), so each is read back past every shorter root's bound too.
+  const shorterBound = (root: string): number =>
+    roots.filter((r) => resolutionDurationMs(r) < resolutionDurationMs(root)).reduce((sum, r) => sum + lookbackOf(r), 0)
+  if (roots.length > 0) await readPool(roots, (root) => from - lookbackOf(root) - shorterBound(root) - BACK_PAD_MS)
   let graphFrom = from
-  for (const root of roots) {
-    const rootSignals = signals.filter((s) => s.interval === root && (spec.rootSources === null || spec.rootSources.includes(s.source)))
-    graphFrom = Math.min(graphFrom, graphStart(rootSignals, from, lookbackOf(root)))
-  }
+  for (const start of graphStarts({ signals, spec, from }).values()) graphFrom = Math.min(graphFrom, start)
   await readPool(
     pool.filter((tf) => !roots.includes(tf)),
     (tf) => (spec.enabled ? Math.max(graphFrom, from - spec.lookback.maxBars * resolutionDurationMs(tf)) : from) - BACK_PAD_MS

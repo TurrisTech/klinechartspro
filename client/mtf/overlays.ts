@@ -1,17 +1,14 @@
 import type { Feature } from '../capabilities'
-import type { PluginFacilities } from '../plugins/types'
-import { registrySourceKey } from '../tsregistry/store'
-import { MTF_GENERATION, type ArevPoint, fetchMtfPoints, type MtfInterval } from './api'
+import { MTF_GENERATION } from './api'
 
-// WHICH votes a multi-timeframe overlay draws. Everything else the overlay does -- the bar
-// grid, the one-source-bar shift (shift.ts), the per-timeframe lanes and styles, the per-pane
-// settings -- is the same whichever signal it is placing, so that machinery takes one of these
-// and the overlays differ only here.
+// WHICH signals a multi-timeframe overlay draws. Everything else -- reading them, placing each at
+// the instant it became knowable, the graph between them, the per-timeframe lanes and styles,
+// the per-pane settings -- is the same whichever family it is, so that machinery takes one of
+// these and the overlays differ only here.
 //
-// Every overlay reads a series of `ArevPoint`-shaped rows whose `signal` is the server's
-// published label; `shiftSignals` reads `date`, `p` and `signal` and nothing else. The
-// arev21_outlier rows carry those three (plus their own `centre`/`hi`/`lo`/`side`), so they
-// place exactly as arev21's do.
+// A family is named as the server publishes it (`plugin:variant`, the producer of the signal
+// labels) and read through `GET /mtf/graph`, which builds every overlay's markers and graph from
+// the producer's own published labels (wdashboard-server services/mtfgraph.py).
 
 export interface MtfOverlay {
   /** Plugin id, and the key its per-pane settings are filed under (`host.paneState`). */
@@ -25,7 +22,7 @@ export interface MtfOverlay {
   groupLabel: string
   /** The picker entry's description. */
   description: string
-  /** The server capability this overlay's votes need. */
+  /** The server capability its signal family needs, beside `mtf_graph` itself. */
   feature: Feature
   /** The registry entry whose live wire says a source timeframe has a new bar -- the entry
    * itself where its own plugin pushes, else the first dependency that does (`liveWire`).
@@ -37,26 +34,17 @@ export interface MtfOverlay {
    * bottom-zone (short) one below the low. The arrow keeps pointing the signal's way either
    * way, so a long is still an up arrow -- only its position moves. */
   placement?: 'direction' | 'zone'
-  /** Whether it offers the signal graph (graph.ts): lines from a higher timeframe's signal
-   * down to lower timeframes' signals that went further the same way. Only on a `'zone'`
+  /** Whether it offers the signal graph (built by the server): lines from a higher timeframe's
+   * signal down to lower timeframes' signals that went further the same way. Only on a `'zone'`
    * overlay, whose top signals sit over the price and bottom ones under it -- which is what
    * lets a graph of top signals climb over the candles and one of bottom signals fall under
    * them, rather than cross through. */
   graph?: boolean
-  /** The series' identity for one source timeframe -- the key the registry sub-pane for the
-   * same series uses. The overlay's store is this plus `|mtf` (plugin.ts says why it must not
-   * be the sub-pane's own). */
-  sourceKey(vendor: string, ticker: string, interval: MtfInterval): string
-  /** The votes for one source timeframe over `[from, to)`, in that timeframe's wire dates.
-   * `nextFrom` is set when the answer was capped short of `to`. */
-  fetchPoints(
-    f: PluginFacilities,
-    vendorSymbol: string,
-    interval: MtfInterval,
-    from: number,
-    to: number,
-    limit: number
-  ): Promise<{ points: ArevPoint[]; nextFrom: number | null }>
+  /** The signal family, as the server publishes it: `plugin:variant`. */
+  source: string
+  /** The family's params, in its registry row's declared order: they are part of what the
+   * server is asked and therefore of the store's identity. */
+  params?: Record<string, number>
 }
 
 /** arev21's published signal: `|p - 0.5| >= 0.075` on a sample bar. The original overlay; its
@@ -68,15 +56,10 @@ export const AREV21_MTF: MtfOverlay = {
   groupLabel: 'AREV21 multi-timeframe · price pane',
   description:
     'arev21 signals from several timeframes at once, each drawn one bar of its own timeframe forward. Timeframes, colours and sizes are on the gear.',
-  // Reads the same `/arev/values` the AREV panes do, which is why it gates on 'arev'.
+  // arev21's published label, which the server reads from the AREV plugin.
   feature: 'arev',
   liveEntry: MTF_GENERATION,
-  sourceKey: (vendor, ticker, interval) => registrySourceKey(MTF_GENERATION, vendor, ticker, interval),
-  fetchPoints: async (_f, vendorSymbol, interval, from, to, limit) => ({
-    points: await fetchMtfPoints(vendorSymbol, interval, from, to, limit),
-    // The legacy path reports no cursor; a chunk is sized well under the server's cap.
-    nextFrom: null
-  })
+  source: `arev:${MTF_GENERATION}`
 }
 
 /** The server's arev21_outlier plugin and its rank variant (wdashboard-server
@@ -91,9 +74,7 @@ const OUTLIER_RANK = 'arev21_outlier_rank'
  * The params are sent in full and in the registry row's declared order (`bars`, `q`,
  * `samples_only` -- wtradingindicators tsregistry `_OUTLIER_PARAMS`), with the row's defaults
  * for the two this overlay does not vary, so the answer does not move if the server's defaults
- * ever do. `sourceKey` is then the series identity `storedSource` gives a
- * `TS:arev21_outlier_rank` sub-pane set to the same numbers; the overlay's store is kept apart
- * from that sub-pane's all the same (plugin.ts).
+ * ever do.
  */
 export function outlierRankMtf(
   percent: number,
@@ -101,7 +82,6 @@ export function outlierRankMtf(
   graph = false
 ): MtfOverlay {
   const params = { bars: 200, q: percent / 100, samples_only: 0 }
-  const tuned = `|${JSON.stringify(params)}`
   const name = `arev21_outlier_rank_${percent}`
   return {
     id: `mtf_${name}`,
@@ -114,20 +94,8 @@ export function outlierRankMtf(
     liveEntry: OUTLIER_RANK,
     placement,
     graph,
-    sourceKey: (vendor, ticker, interval) => `${registrySourceKey(OUTLIER_RANK, vendor, ticker, interval)}${tuned}`,
-    fetchPoints: async (f, vendorSymbol, interval, from, to, limit) => {
-      const page = await f.points<ArevPoint>({
-        pluginId: OUTLIER_PLUGIN,
-        vendorSymbol,
-        resolution: interval,
-        from,
-        to,
-        limit,
-        variant: OUTLIER_RANK,
-        params
-      })
-      return { points: page.points, nextFrom: page.nextFrom }
-    }
+    source: `${OUTLIER_PLUGIN}:${OUTLIER_RANK}`,
+    params
   }
 }
 

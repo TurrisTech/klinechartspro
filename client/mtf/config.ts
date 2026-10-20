@@ -38,7 +38,7 @@ export function isGraphRoot(code: unknown): code is GraphRoot {
   return (GRAPH_ROOTS as readonly unknown[]).includes(code)
 }
 
-/** The signal graphs drawn over the markers (graph.ts), on an overlay that offers them. */
+/** The signal graphs drawn over the markers (built by the server), on an overlay that offers them. */
 export interface MtfGraphConfig {
   /** The timeframes graphs start from. Any number may be on at once (user, 2026-09-21): each
    * builds and resets its own graphs, and they are drawn together, crossing where they cross.
@@ -52,7 +52,7 @@ export interface MtfGraphConfig {
   onlyGraph: boolean
   /** The graph's line width, in pixels. */
   lineWidth: number
-  /** Fill an entry's star (graph.ts `isEntry`) with its timeframe's colour, as every other
+  /** Fill an entry's star (a node the server marks `entry`) with its timeframe's colour, as every other
    * graph node is. Off, it takes `starColor`. */
   starTimeframeColour: boolean
   /** An entry star's fill while `starTimeframeColour` is off. */
@@ -220,7 +220,7 @@ export const MTF_GRAPH_FIELDS: SettingsField[] = [
       { kind: 'number', key: 'graph.maxStep', label: 'Largest step (×)', min: 2, max: 480, step: 1 },
       { kind: 'switch', key: 'graph.onlyGraph', label: 'Hide signals outside the graph' },
       { kind: 'number', key: 'graph.lineWidth', label: 'Line width', min: 0.5, max: 6, step: 0.5 },
-      // An entry is a step on 5m or below (graph.ts `isEntry`), drawn as a star.
+      // An entry is a step on 5m or below (the server marks it), drawn as a star.
       { kind: 'switch', key: 'graph.starTimeframeColour', label: 'Entry star in timeframe colour' },
       {
         kind: 'color',

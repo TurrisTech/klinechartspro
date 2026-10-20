@@ -464,19 +464,43 @@ export function buildGraphs(
 }
 
 /**
- * Every root's graphs (graph.ts `buildRootGraphs`): longest root first, each from the start of
- * its own graph in force at `from`, and -- with `takenDontRoot` -- a signal that steps in a
- * longer root's graph roots nothing here.
+ * Where each root's walk begins for a window starting at `from` -- the server's `walk_starts`
+ * (wdashboard-server services/mtfgraph.py), within the strategy's read bound.
+ *
+ * A root's own graphs need only its run in force at `from`: a side switch resets everything a
+ * graph carries. But which of its signals may ROOT a graph depends on the longer roots' steps,
+ * so every longer root starts from its run in force at the earliest start of the shorter ones.
+ * Shortest root first, each pulling the edge the next one is read at back to its own start. With
+ * a bound that reaches every run's start this is the overlay's graph exactly; where a run began
+ * before the bound it is cut there (`lookback.rootBars`).
+ */
+export function graphStarts(input: Pick<GraphInput, 'signals' | 'spec' | 'from'>): Map<string, number> {
+  const out = new Map<string, number>()
+  let edge = input.from
+  for (const root of [...input.spec.roots].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))) {
+    const rootMs = resolutionDurationMs(root)
+    if (!Number.isFinite(rootMs)) continue
+    const rootSignals = input.signals.filter((s) => s.interval === root && (input.spec.rootSources === null || input.spec.rootSources.includes(s.source)))
+    const start = graphStart(rootSignals, edge, input.spec.lookback.rootBars * rootMs)
+    out.set(root, start)
+    edge = Math.min(edge, start)
+  }
+  return out
+}
+
+/**
+ * Every root's graphs (the server's `build_root_graphs`): longest root first, each from where
+ * `graphStarts` says, and -- with `takenDontRoot` -- a signal that steps in a longer root's graph
+ * roots nothing here.
  */
 export function buildRootGraphs(input: GraphInput, compiled: CompiledGraph = compileGraph(input.spec, input.entry)): LabGraph[] {
   const out: LabGraph[] = []
   const taken = new Set<string>()
+  const starts = graphStarts(input)
   const roots = [...input.spec.roots].sort((a, b) => resolutionDurationMs(b) - resolutionDurationMs(a))
   for (const root of roots) {
-    const rootMs = resolutionDurationMs(root)
-    if (!Number.isFinite(rootMs)) continue
-    const rootSignals = input.signals.filter((s) => s.interval === root && (input.spec.rootSources === null || input.spec.rootSources.includes(s.source)))
-    const from = graphStart(rootSignals, input.from, input.spec.lookback.rootBars * rootMs)
+    const from = starts.get(root)
+    if (from === undefined) continue
     const built = buildGraphs(input, root, from, compiled, input.spec.takenDontRoot ? taken : new Set())
     out.push(...built)
     if (input.spec.takenDontRoot) for (const graph of built) for (const node of graph.nodes) if (node.parent >= 0) taken.add(node.signal.key)
@@ -484,8 +508,8 @@ export function buildRootGraphs(input: GraphInput, compiled: CompiledGraph = com
   return out
 }
 
-/** graph.ts `graphStart`: the first signal of the run of same-side root signals in force at
- * `from`, within `lookbackMs` of it; `from` when none falls there. */
+/** The first signal of the run of same-side root signals in force at `from`, within
+ * `lookbackMs` of it; `from` when none falls there (the server's `run_start`, bounded). */
 export function graphStart(rootSignals: readonly LabSignal[], from: number, lookbackMs: number): number {
   const earliest = from - lookbackMs
   const inSpan = rootSignals.filter((s) => s.knownAt >= earliest && s.knownAt <= from).sort((a, b) => a.knownAt - b.knownAt)

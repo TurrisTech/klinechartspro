@@ -42,8 +42,8 @@ class FakeData implements AlertData {
     this.barReads++
     return (this.series.get(interval) ?? []).filter((b) => b.open >= from && b.open < to)
   }
-  async votes() {
-    return []
+  async graph() {
+    return { signals: [], nodes: [], nextFrom: null, computedThrough: null }
   }
   async points(_source: unknown, _symbol: string, _interval: string, from: number, to: number): Promise<Point[]> {
     this.pointReads++

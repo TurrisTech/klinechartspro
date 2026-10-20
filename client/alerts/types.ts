@@ -35,10 +35,10 @@ export type Operand =
   /** A plugin's published signal labels (`GET /plugins/signals`): the label on a bar
    * (`long`, `top`), or '' on a bar that carries none. */
   | { kind: 'signal'; interval: string; plugin: string; variant: string }
-  /** An ENTRY of a multi-timeframe overlay's signal graph (client/mtf/graph.ts `isEntry`): the
+  /** An ENTRY of a multi-timeframe overlay's signal graph (the server's, `GET /mtf/graph`): the
    * graph's side (`top`/`bottom`) on a bar of `interval` whose signal the overlay would draw as
-   * a star, '' on a bar whose signal is not one. The graph is built by the overlay's own code
-   * from the settings stored here -- copied from a pane when the alert is written, so changing
+   * a star, '' on a bar whose signal is not one. The graph is the server's, built for the
+   * settings stored here -- copied from a pane when the alert is written, so changing
    * the pane later does not change what the alert means. */
   | {
       kind: 'graph'

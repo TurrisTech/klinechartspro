@@ -1,45 +1,62 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 
-// What one `calc` produces from real stores: the markers, the graphs over them, and the
-// "hide signals outside the graph" filter -- the path the pane actually renders, driven here
-// end to end rather than through its pieces.
+// What one `calc` produces from the store the server's answer lands in: the markers on the bars
+// that were open when each signal became knowable, the graph's dots, rings, stars and edges, and
+// the "hide signals outside the graph" filter -- the path the pane actually renders, driven here
+// end to end. What a graph IS is the server's (services/mtfgraph.py) and tested there.
 installWindow()
 const { calc, computeValues } = await import('./templates')
 import type { ExtendData, Value } from './templates'
 const { MTF_DEFAULTS } = await import('./config')
-const { GRID_ARRAY, RegistryStore } = await import('../tsregistry/store')
-const { storeFor } = await import('../plugins/store')
+const { storeFor, dropStore } = await import('../plugins/store')
+const { createMtfGraphStore, NODES_ARRAY } = await import('./store')
 const { FX_SCHEDULE } = await import('../replay/timeframes')
 
-import type { ArevPoint } from '../arev/api'
 import type { Indicator, KLineData } from 'klinecharts'
 import type { MtfConfig } from './config'
+import type { MtfInterval, MtfNodeRow, MtfSignalRow } from './api'
 
-const H = 3_600_000
+const M = 60_000
+const H = 60 * M
 // A synthetic instrument, so these stores cannot collide with another test file's: bun shares
 // the module registry across files, and the store map is module state.
-const SYM = 'oanda:ZZZGRAPH'
+const KEY = 'mtf|test|oanda:ZZZGRAPH'
+afterAll(() => dropStore(KEY))
 
-const point = (date: number, signal: 'long' | 'short'): ArevPoint =>
-  ({ date, prediction: 0, n: 200, p: signal === 'long' ? 0.7 : 0.3, confidence: 0.2, atCross: true, signal }) as ArevPoint
+const signal = (interval: string, date: number, knownAt: number, price: number, signal: 'long' | 'short', inGraph = false): MtfSignalRow => ({
+  interval,
+  date,
+  knownAt,
+  price,
+  signal,
+  side: signal === 'long' ? 'top' : 'bottom',
+  p: signal === 'long' ? 0.7 : 0.3,
+  inGraph
+})
 
-/** A store of one timeframe's signals, on a grid of `bars` bodies rising then falling. */
-function store(key: string, bars: Array<{ date: number; open: number; close: number }>, signals: Array<[number, 'long' | 'short']>) {
-  const s = storeFor(key, (k) => new RegistryStore<ArevPoint>(k, (p) => p as ArevPoint))
-  s.ingest(
-    signals.map(([date, side]) => point(date, side)),
-    { from: 0, to: 1e13 },
-    { [GRID_ARRAY]: bars }
-  )
-  return s
+const node = (s: MtfSignalRow, root: string, parent: MtfSignalRow | null, entry = false): MtfNodeRow => ({
+  interval: s.interval,
+  date: s.date,
+  knownAt: s.knownAt,
+  price: s.price,
+  root,
+  graph: 0,
+  side: s.side,
+  entry,
+  parent: parent && { interval: parent.interval, date: parent.date, knownAt: parent.knownAt, price: parent.price }
+})
+
+function seed(signals: MtfSignalRow[], nodes: MtfNodeRow[]): void {
+  dropStore(KEY)
+  storeFor(KEY, createMtfGraphStore).ingest(signals, { from: -1e13, to: 1e13 }, { [NODES_ARRAY]: nodes })
 }
 
-/** An hourly chart of `n` bars from 0, which every timeframe below is aligned to. */
-const chartBars = (n: number): KLineData[] =>
-  Array.from({ length: n }, (_, i) => ({ timestamp: i * H, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 1 }) as KLineData)
+/** An hourly chart of `n` bars from 0. */
+const chartBars = (n: number, step = H): KLineData[] =>
+  Array.from({ length: n }, (_, i) => ({ timestamp: i * step, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 1 }) as KLineData)
 
-function config(over: (c: MtfConfig) => void): MtfConfig {
+function config(over: (c: MtfConfig) => void = () => {}): MtfConfig {
   const c = structuredClone(MTF_DEFAULTS)
   c.timeframes['1h'].enabled = true
   c.timeframes['4h'].enabled = true
@@ -48,134 +65,106 @@ function config(over: (c: MtfConfig) => void): MtfConfig {
   return c
 }
 
-describe('one calc, from the stores to the markers', () => {
-  // (keys are declared below; the hook runs after the file, when they are bound)
-  afterAll(async () => {
-    const { dropStore } = await import('../plugins/store')
-    dropStore(key4h)
-    dropStore(key1h)
+const extend = (c: MtfConfig, intervals: MtfInterval[] = ['1h', '4h'], graphRoots: MtfInterval[] = ['4h'], chartInterval = '1h'): ExtendData => ({
+  seriesKeys: { graph: KEY },
+  rev: 1,
+  chartInterval,
+  schedule: FX_SCHEDULE,
+  config: c,
+  graphRoots,
+  intervals
+})
+
+// A 4h root top cast on bar 0 (known at 4h, body top 1.10); a 1h top above it, cast at 5h and
+// known at 6h (in the graph); a 1h top below it, known at 8h (outside).
+const ROOT = signal('4h', 0, 4 * H, 1.1, 'long', true)
+const STEP = signal('1h', 5 * H, 6 * H, 1.12, 'long', true)
+const OUTSIDE = signal('1h', 7 * H, 8 * H, 1.09, 'long')
+const marksOf = (values: Value[]) => values.flatMap((v, i) => (v.marks ?? []).map((m) => `${m.interval}@bar${i}`))
+const dotsOf = (values: Value[]) =>
+  values.flatMap((v, i) => (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}${d.entry ? ' entry' : ''}`))
+
+describe('one calc, from the store to the markers', () => {
+  test('every signal on the bar open when it became knowable, and the graph the server built', () => {
+    seed([ROOT, STEP, OUTSIDE], [node(ROOT, '4h', null), node(STEP, '4h', ROOT)])
+    const values = computeValues(chartBars(12), extend(config()))
+    expect(marksOf(values)).toEqual(['4h@bar4', '1h@bar6', '1h@bar8'])
+    expect(dotsOf(values)).toEqual(['4h@bar4 root', '1h@bar6'])
+    expect(values[6].edges).toEqual([{ fromIndex: 4, fromPrice: 1.1, toPrice: 1.12, root: '4h', interval: '1h' }])
   })
 
-  // A 4h root top at bar 0 (body top 1.10), one 1h top ABOVE it (1.12, in the graph) and one
-  // 1h top below it (1.09, outside). Both are markers; only the first is in the graph.
-  const key4h = `arev21_outlier_rank|${SYM}|4h|{"bars":200,"q":0.85,"samples_only":0}|mtf`
-  const key1h = `arev21_outlier_rank|${SYM}|1h|{"bars":200,"q":0.85,"samples_only":0}|mtf`
-
-  const extend = (c: MtfConfig) => ({
-    seriesKeys: { '4h': key4h, '1h': key1h },
-    rev: 1,
-    chartInterval: '1h',
-    schedule: FX_SCHEDULE,
-    config: c,
-    graphRoots: ['4h' as const]
+  test('with "hide signals outside the graph" on, only the graph\'s own markers are left', () => {
+    seed([ROOT, STEP, OUTSIDE], [node(ROOT, '4h', null), node(STEP, '4h', ROOT)])
+    const values = computeValues(chartBars(12), extend(config((c) => (c.graph.onlyGraph = true))))
+    expect(marksOf(values)).toEqual(['4h@bar4', '1h@bar6'])
+    // ...and with no root drawn there is nothing to judge by: every marker stays.
+    const rootless = computeValues(chartBars(12), extend(config((c) => (c.graph.onlyGraph = true)), ['1h', '4h'], []))
+    expect(marksOf(rootless)).toEqual(['4h@bar4', '1h@bar6', '1h@bar8'])
+    expect(dotsOf(rootless)).toEqual([])
   })
 
-  const seed = (): void => {
-    store(
-      key4h,
-      [
-        { date: 0, open: 1.09, close: 1.1 },
-        { date: 4 * H, open: 1.1, close: 1.1 },
-        { date: 8 * H, open: 1.1, close: 1.1 }
-      ],
-      [[0, 'long']]
-    )
-    store(
-      key1h,
-      Array.from({ length: 12 }, (_, i) => ({ date: i * H, open: 1.1, close: i === 5 ? 1.12 : 1.09 })),
-      [
-        [5 * H, 'long'],
-        [7 * H, 'long']
-      ]
-    )
-  }
+  test("a bar's marks stack shortest timeframe first, whatever order they were known in", () => {
+    // Both known at 4h, so both on bar 4: the 1h one is the nearer to the candle.
+    seed([ROOT, signal('1h', 3 * H, 4 * H, 1.105, 'long')], [])
+    const values = computeValues(chartBars(12), extend(config(), ['1h', '4h'], []))
+    expect(values[4].marks?.map((m) => `${m.interval}/${m.lane}`)).toEqual(['1h/0', '4h/1'])
+  })
 
-  test('both signals are drawn, and the graph holds only the one that went further', () => {
-    seed()
-    const values = computeValues(chartBars(12), extend(config(() => {})))
-    const marks = values.flatMap((v, i) => (v.marks ?? []).map((m) => `${m.interval}@bar${i}`))
-    expect(marks).toEqual(['4h@bar4', '1h@bar6', '1h@bar8'])
-    // The 4h root and the 1h signal above it; the 1h signal at 1.09 is not beyond the root.
-    const dots = values.flatMap((v, i) => (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}`))
-    expect(dots).toEqual(['4h@bar4 root', '1h@bar6'])
+  test('a timeframe the pane does not draw is not drawn, and nothing past the loaded bars is', () => {
+    seed([ROOT, signal('15m', 0, 15 * M, 1.11, 'long'), signal('1h', 20 * H, 21 * H, 1.2, 'long')], [])
+    expect(marksOf(computeValues(chartBars(12), extend(config(), ['1h', '4h'], [])))).toEqual(['4h@bar4'])
   })
 
   test('a tick that only moves the forming bar reuses the last result; anything else recomputes', () => {
-    seed()
+    seed([ROOT, STEP, OUTSIDE], [node(ROOT, '4h', null), node(STEP, '4h', ROOT)])
     const data = chartBars(12)
     // Only `extendData` is read, and the object's identity is what the reuse is keyed on.
-    const indicator = { extendData: extend(config(() => {})) } as unknown as Indicator<Value, number, ExtendData>
+    const indicator = { extendData: extend(config()) } as unknown as Indicator<Value, number, ExtendData>
     const first = calc(data, indicator)
     // The forming bar's prices change in place, as klinecharts applies a tick: same result.
     data[11] = { ...data[11], high: 1.2, close: 1.2 }
     expect(calc(data, indicator)).toBe(first)
-    expect(first).toEqual(computeValues(data, extend(config(() => {}))))
+    expect(first).toEqual(computeValues(data, extend(config())))
     // A new bar: klinecharts appends to the same array.
     data.push({ timestamp: 12 * H, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 1 } as KLineData)
     const appended = calc(data, indicator)
     expect(appended).not.toBe(first)
     expect(appended.length).toBe(13)
     // A store update reaches the template as a new extendData with the host's new rev.
-    indicator.extendData = { ...extend(config(() => {})), rev: 2 }
+    indicator.extendData = { ...extend(config()), rev: 2 }
     const restored = calc(data, indicator)
     expect(restored).not.toBe(appended)
     // A reload or a page of history: klinecharts replaces the array.
     expect(calc([...data], indicator)).not.toBe(restored)
   })
-
-  test('with "hide signals outside the graph" on, only the graph\'s own markers are left', () => {
-    seed()
-    const values = computeValues(
-      chartBars(12),
-      extend(
-        config((c) => {
-          c.graph.onlyGraph = true
-        })
-      )
-    )
-    const marks = values.flatMap((v, i) => (v.marks ?? []).map((m) => `${m.interval}@bar${i}`))
-    expect(marks).toEqual(['4h@bar4', '1h@bar6'])
-  })
 })
 
 describe('entries: a graph that reaches 5m draws a star there', () => {
-  const M = 60_000
-  const ESYM = 'oanda:ZZZENTRY'
-  const key = (interval: string) => `arev21_outlier_rank|${ESYM}|${interval}|{"bars":200,"q":0.85,"samples_only":0}|mtf`
-  const keys = { '1h': key('1h'), '15m': key('15m'), '5m': key('5m') }
-
-  afterAll(async () => {
-    const { dropStore } = await import('../plugins/store')
-    for (const k of Object.values(keys)) dropStore(k)
-  })
-
-  /** `n` bars of `step` from 0, each body flat at 1.09 except the ones `tops` raises. */
-  const grid = (step: number, n: number, tops: Record<number, number>) =>
-    Array.from({ length: n }, (_, i) => ({ date: i * step, open: 1.09, close: tops[i] ?? 1.09 }))
-
   test('a 1h root -> 15m -> 5m -> 5m path: both 5m steps are stars, nothing above them is', () => {
-    // 1h root top at 0 (body top 1.10), known at 1h; a 15m top at 1.11 known at 105m; a 5m top
-    // at 1.12 known at 130m, and a second at 1.13 known at 155m that supersedes it.
-    store(keys['1h'], grid(H, 4, { 0: 1.1 }), [[0, 'long']])
-    store(keys['15m'], grid(15 * M, 16, { 6: 1.11 }), [[6 * 15 * M, 'long']])
-    store(keys['5m'], grid(5 * M, 48, { 25: 1.12, 30: 1.13 }), [
-      [25 * 5 * M, 'long'],
-      [30 * 5 * M, 'long']
-    ])
+    // 1h root top cast at 0 (known at 1h); a 15m top known at 105m; a 5m top known at 130m, and a
+    // second known at 155m that supersedes it -- the server marks both entries.
+    const root = signal('1h', 0, H, 1.1, 'long', true)
+    const m15 = signal('15m', 90 * M, 105 * M, 1.11, 'long', true)
+    const e1 = signal('5m', 125 * M, 130 * M, 1.12, 'long', true)
+    const e2 = signal('5m', 150 * M, 155 * M, 1.13, 'long', true)
+    seed([root, m15, e1, e2], [node(root, '1h', null), node(m15, '1h', root), node(e1, '1h', m15, true), node(e2, '1h', e1, true)])
     const c = structuredClone(MTF_DEFAULTS)
     for (const interval of ['1h', '15m', '5m'] as const) c.timeframes[interval].enabled = true
     c.graph.roots = { '1D': false, '8h': false, '4h': false, '2h': false, '1h': true }
-    const bars = Array.from(
-      { length: 48 },
-      (_, i) => ({ timestamp: i * 5 * M, open: 1.1, high: 1.1, low: 1.1, close: 1.1, volume: 1 }) as KLineData
-    )
-    const values = computeValues(
-      bars,
-      { seriesKeys: keys, rev: 1, chartInterval: '5m', schedule: FX_SCHEDULE, config: c, graphRoots: ['1h'] },
-    )
-    const dots = values.flatMap((v, i) =>
-      (v.dots ?? []).map((d) => `${d.interval}@bar${i}${d.root ? ' root' : ''}${d.entry ? ' entry' : ''}`)
-    )
-    expect(dots).toEqual(['1h@bar12 root', '15m@bar21', '5m@bar26 entry', '5m@bar31 entry'])
+    const values = computeValues(chartBars(48, 5 * M), extend(c, ['5m', '15m', '1h'], ['1h'], '5m'))
+    expect(dotsOf(values)).toEqual(['1h@bar12 root', '15m@bar21', '5m@bar26 entry', '5m@bar31 entry'])
+  })
+
+  test('an edge from a parent older than the loaded bars comes in from the left', () => {
+    const root = signal('1h', -3 * H, -2 * H, 1.1, 'long', true)
+    const step = signal('5m', 5 * M, 10 * M, 1.12, 'long', true)
+    seed([root, step], [node(root, '1h', null), node(step, '1h', root, true)])
+    const c = structuredClone(MTF_DEFAULTS)
+    c.timeframes['5m'].enabled = true
+    const values = computeValues(chartBars(12, 5 * M), extend(c, ['5m', '1h'], ['1h'], '5m'))
+    const edge = values[2].edges?.[0]
+    // Two hours before the first bar, at the loaded bars' own spacing: 24 bars to the left.
+    expect(edge?.fromIndex).toBe(-24)
+    expect(dotsOf(values)).toEqual(['5m@bar2 entry'])
   })
 })

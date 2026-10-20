@@ -125,8 +125,8 @@ and the second silently gets it. Two rules follow, and both are load-bearing:
 - **Name the same factory.** Not an equivalent closure — the same module-level function, so
   there is one place to look. `arev/store.ts`'s `arevStore` is the pattern.
 - **Write the same row.** Anything a source needs that is *not* that row is an auxiliary
-  array on the same window (`Page.arrays`), never a second kind of value. The AREV21 MTF
-  overlay ships its bar grid that way; mtf01 ships its trades that way.
+  array on the same window (`Page.arrays`), never a second kind of value. mtf01 ships its
+  trades that way, and the MTF overlays their graph nodes (in a store of their own class).
 
 Break either and the failure is silent and order-dependent: the overlay's rows overwrote the
 sub-pane's votes with rows carrying no `p`, so the sub-pane drew gaps, and the overlay then
@@ -190,7 +190,7 @@ rule). Tests: `signals.test.ts`.
 | plugin | templates | sources | notes |
 |---|---|---|---|
 | `tsregistry/plugin.ts` (`registry`) | one per enabled row of `GET /indicators/registry`: `S:…`, `AREV:…`, `KREV:krev01:p`, `TS:…` | one per binding, on the wire its row names | every server indicator; see "The registry plugin" below |
-| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per enabled source timeframe, in its own `\|mtf` store (votes + the bar grid as an auxiliary array) | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay |
+| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per binding: the server's answer (`GET /mtf/graph`) for the timeframes drawn, the roots and the largest step -- every signal at the instant it became knowable, and the graph's nodes and entry stars as an auxiliary array -- in an `MtfGraphStore` keyed by those settings, its windows absolute instants | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay; the server builds and caches signals and graphs (wdashboard-server 0.56.0), the template only places them on the chart's bars |
 | `mtf01/plugin.ts` | `MTF01:mtf01` | one: the cascade's events with its trades as an auxiliary array | |
 | `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, reaching back exactly the rule's window), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed level or a client-side rank/median/prior over a window of DAYS; every bar with a usable `p` is compared unless `samplesOnly`; per-pane settings, own panel; the quantile, the band and the entry rule are locked to the server's by `arevlab/fixtures/rules_parity.json` |
 | `arev21div/plugin.ts` | `DIV:arev21` (sub-pane), `DIV:arev21:price` (price pane) | one: the registry's own arev21 `storedSource`, unmodified -- the AREV21 pane's store, key and all, so beside one it costs no request | where price and arev21's `p` disagree at a swing (a lower low with a higher `p` is `bull`, a higher high with a lower `p` `bear`; the hidden pair on param `hidden`), computed entirely in the browser from the pane's own bars in `calc`; swings strict on `left` (10, arev21's lookback, so every swing is a sample bar) and confirmed by `right` (5), each compared with the swing immediately before it; the arrow is on the CONFIRMING bar and a line joins the two swings in each pane (thick dotted by default); rule, line style, width and colours are one per-pane config (`paneConfigs`), shared by both templates and persisted as `PersistedPane.dv`, so an edit recomputes or redraws without refetching; calcParams stay empty; no server change |
@@ -250,7 +250,7 @@ Three klinecharts facts the row is turned into, each of which cost a bug before:
   raw bar live.
 
 **The shared store.** `tsregistry/store.ts` holds the one class every registry-driven source
-uses. It always carries the auxiliary bar grid, and `storeFactory(foldBy)` is **memoised** —
-so the AREV21 pane and the MTF overlay pass the identical factory reference for the key they
-share, and `storeFor`'s first-binding-wins cannot make the class depend on mount order. See
-`store.test.ts`, which is the test that invariant came with.
+uses. It still carries an auxiliary bar grid (the MTF overlay's, until it moved to
+`GET /mtf/graph`), and `storeFactory(foldBy)` is **memoised** -- so two sources that share a key
+pass the identical factory reference, and `storeFor`'s first-binding-wins cannot make the class
+depend on mount order. See `store.test.ts`, which is the test that invariant came with.
