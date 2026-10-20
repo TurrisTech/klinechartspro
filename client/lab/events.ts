@@ -56,7 +56,7 @@ function signalOf(source: { id: string; price: PriceAnchor }, interval: string, 
 
 /** A published source's signals on one timeframe. `bars` are that timeframe's, keyed by the wire
  * date the points carry; a point whose candle is not held is left out rather than guessed, as the
- * overlay does (`storeGraphSignals`). */
+ * server does for the overlay (wdashboard-server services/mtfgraph.py). */
 export function publishedSignals(source: PublishedSource, interval: string, points: readonly SignalPoint[], bars: readonly ReplayBar[]): LabSignal[] {
   const byDate = new Map(bars.map((bar) => [bar.date, bar]))
   const out: LabSignal[] = []
