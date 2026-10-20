@@ -1,8 +1,6 @@
 import type { IndicatorGroup } from '../../src'
 import { type PaneConfig, paneConfig } from '../plugins/paneconfig'
-import { peekStore } from '../plugins/store'
-import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire, subscribeLive } from '../tsregistry/plugin'
-import { GRID_ARRAY, type RegistryStore, storeFactory } from '../tsregistry/store'
+import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire } from '../tsregistry/plugin'
 import type {
   BindContext,
   BindingSpec,
@@ -10,9 +8,12 @@ import type {
   IndicatorPlugin,
   PluginFacilities,
   Range,
-  SourceSpec
+  SourceNotify,
+  SourceSpec,
+  SourceStore
 } from '../plugins/types'
-import { type ArevPoint, fetchMtfBarGrid, type MtfInterval } from './api'
+import type { PluginPointListener } from '../stream'
+import { fetchMtfGraph, type MtfInterval, type MtfSignalRow } from './api'
 import {
   MTF_DEFAULTS,
   MTF_FIELDS,
@@ -24,55 +25,42 @@ import {
   type MtfConfig,
   toStoredMtfConfig
 } from './config'
-import { graphStart, rootLookbackMs, storeGraphSignals } from './graph'
 import { type CandleGrid, gridFor } from '../replay/timeframes'
-import { fromAbsolute, isFinerThan, toAbsolute } from './shift'
+import { isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
 import { phaseLabel } from '../plugins/legend'
 import { registerMtfIndicators } from './templates'
+import { createMtfGraphStore, type MtfGraphStore, NODES_ARRAY } from './store'
 
 // A multi-timeframe signal overlay as a client plugin -- AREV21 MTF, and the arev21_outlier
-// rank overlays built on the same machinery (overlays.ts says what differs between them). Where the AREV plugin binds one
-// source per pane, this binds N -- one per source timeframe the pane's settings switch on
-// -- and each source fetches a BAR GRID as well as the votes, because placing a vote one
-// source bar forward is a question about that timeframe's candle boundaries (shift.ts).
+// rank overlays (overlays.ts says what differs between them). Each binding reads ONE source: the
+// server's answer for the pane's instrument and settings (`GET /mtf/graph`) -- every signal on
+// the timeframes the pane draws, each at the instant it became knowable, and, where the overlay
+// offers it, the signal graph between them with its entry stars. The server builds and caches
+// all of it (wdashboard-server services/mtfgraph.py, 0.56.0); the template places it on the
+// chart's own bars and draws it.
+//
+// Until then each binding bound one source per timeframe, fetched every timeframe's votes and
+// its bar grid, sized each window from the graph roots' stores, and built the graph in `calc`.
 //
 // Settings are per pane (`mtfPaneConfig`), kept by the host and stored in that pane's own entry
 // of the wall document: `PersistedPane.mtf` for AREV21 MTF, `PersistedPane.mx[<id>]` for the
-// others. An edit rebinds: sources newly switched on are fetched, and the template repaints off
-// the config in extendData.
+// others. An edit rebinds, and the settings that decide the data -- the timeframes drawn, the
+// roots, the largest step -- are the source's key, so a different combination is a different
+// store and the same one shared.
 //
-// LIVE, one subscription per source timeframe: the research feed writes arev21 as each bar
-// closes and the server relays it (`plugins.live`), and a relayed point makes that timeframe
-// re-read its tail -- votes AND grid, since one fetch fills both. A pushed point is never
-// filed as a vote, even where it is one (AREV21 MTF's own wire): it carries no grid bar, and
-// the outlier overlays' votes are computed per read and are not the pushed row at all. Until
-// 2026-10-01 nothing was subscribed (the comment here still said the rows were written by
-// hand-run scripts): the store filed its whole padded window, a week past the newest bar, as
-// fetched, so a vote written after the chart loaded never arrived until a reload, while the
-// sub-pane on the same series showed it (user, 2026-10-01).
+// LIVE, one subscription per timeframe drawn: the research feed writes arev21 as each bar closes
+// and the server relays it (`plugins.live`); a relayed point on a timeframe makes the binding
+// re-read everything knowable from that bar's close on, which is all a new bar can change. A
+// pushed point is never filed: it carries none of what the overlay draws.
 
-// A fetch is widened past the chart's own span at both ends, and neither end is optional.
-// FORWARD, because the newest vote in the window can only be placed once its successor bar
-// is known, and that bar lies beyond the window by definition. BACKWARD, because a vote
-// cast just before the window shifts INTO it. The floor covers the market's longest routine
-// gap -- an FX weekend is ~65h, and a holiday can stretch it -- so a Friday vote's successor
-// is always in reach.
-const WINDOW_PAD_BARS = 4
-const WINDOW_PAD_FLOOR_MS = 7 * 86_400_000
+/** The source's id in `extendData.seriesKeys`. */
+export const GRAPH_SOURCE = 'graph'
 
-// With the signal graphs on, every timeframe below a root is fetched back to the start of that
-// root's graph in force at the chart's loaded left edge (graph.ts `graphStart`), because what a
-// node hangs from can lie anywhere between there and the node. Bounded, so a 1D root's months-long
-// graph cannot pull months of 3m votes: past this many of its own bars a timeframe's oldest
-// nodes are missing, which changes only where a node of a still-shorter timeframe hangs from.
-const GRAPH_LOOKBACK_MAX_BARS = 10_000
-
-// `/getbars` is bounded by range, not by count, and 413s past the server's per-request bar
-// cap. A gap is therefore fetched in chunks of at most this many NOMINAL source bars --
-// nominal overcounts (the market is shut about a third of the week), so the real reply is
-// always comfortably under the 5000 cap.
-const GRID_CHUNK_BARS = 4000
+/** How far before the chart's first bar a read starts: a signal that became knowable inside
+ * the market-closed gap before it is drawn ON that bar, and the longest routine gap is an FX
+ * weekend (~65 h; a holiday can stretch it). */
+const WINDOW_BACK_PAD_MS = 4 * 86_400_000
 
 /** One overlay's per-pane settings: which timeframes it draws and each one's colour and sizes,
  * and the graph's where it offers one. A diff from the defaults in the wall document, under the
@@ -93,11 +81,10 @@ export function mtfPaneConfig(overlay: MtfOverlay): PaneConfig {
   })
 }
 
-/** The wire that tells one of an overlay's source timeframes it has a new bar: its
- * `liveEntry`'s, ALWAYS as a cue to re-read (`direct: false`), never as a value to file -- the
- * store holds the bar grid beside the votes, and a pushed point brings no grid bar. Null where
- * nothing pushes (no `plugins.live`, or a server whose arev wire is not live), which leaves
- * the overlay as it was: new votes on a reload or a range change. */
+/** The wire that tells the overlay one of its timeframes has a new bar: its `liveEntry`'s,
+ * ALWAYS as a cue to re-read (`direct: false`), never as a value to file. Null where nothing
+ * pushes (no `plugins.live`, or a server whose arev wire is not live), which leaves the overlay
+ * as it was: new signals on a reload or a range change. */
 export async function mtfLiveWire(
   f: Pick<PluginFacilities, 'hasFeature'>,
   overlay: MtfOverlay,
@@ -108,14 +95,71 @@ export async function mtfLiveWire(
   return found && { ...found, direct: false }
 }
 
+/** The store identity: everything that decides the answer, and nothing else. */
+export function graphSourceKey(
+  overlay: MtfOverlay,
+  symbol: string,
+  timeframes: readonly string[],
+  roots: readonly string[],
+  maxStep: number
+): string {
+  return `mtf|${overlay.source}|${JSON.stringify(overlay.params ?? {})}|${symbol}|${timeframes.join(',')}|${roots.join(',')}|${maxStep}`
+}
+
+/**
+ * The live half: one subscription per timeframe drawn. A point on a timeframe is that bar's
+ * close, and everything knowable from then on may have changed -- a new signal, a node that now
+ * joins, a graph a new root signal ends -- so the store forgets from there and the host reads it
+ * again. Each subscription's ack does the same from the newest row held, because a point sent
+ * while the socket was down is not replayed.
+ */
+export function graphSubscribe(
+  f: PluginFacilities,
+  ctx: Pick<BindContext, 'vendor' | 'ticker'>,
+  overlay: MtfOverlay,
+  intervals: readonly string[],
+  clock: CandleGrid,
+  load: LiveLoaders = LIVE_LOADERS
+) {
+  return (store: SourceStore<MtfSignalRow>, notify: SourceNotify): (() => void) => {
+    const s = store as MtfGraphStore
+    let disposed = false
+    const offs: Array<() => void> = []
+    const rereadFrom = (from: number | null) => {
+      const latest = s.latest()
+      if (latest === null && from === null) return
+      const start = latest === null ? (from as number) : from === null ? latest + 1 : Math.min(from, latest + 1)
+      s.forgetAfter(start)
+      notify.refetch()
+    }
+    mtfLiveWire(f, overlay, load)
+      .then((found) => {
+        if (disposed || found === null) return
+        const variant = found.wire.variant ?? null
+        for (const interval of intervals) {
+          const listener: PluginPointListener = {
+            onPoint: (point) => rereadFrom(clock.end(interval, clock.fromWire(interval, point.date))),
+            onSubscribed: () => rereadFrom(null)
+          }
+          f.stream.subscribePlugin(found.wire.plugin, variant, ctx.vendor, ctx.ticker, interval, listener)
+          offs.push(() => f.stream.unsubscribePlugin(found.wire.plugin, variant, ctx.vendor, ctx.ticker, interval, listener))
+        }
+      })
+      .catch((err) => console.warn(`[mtf] no live signals for ${overlay.title}`, err))
+    return () => {
+      disposed = true
+      for (const off of offs) off()
+    }
+  }
+}
+
 export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoaders = LIVE_LOADERS): IndicatorPlugin {
   const title = overlay.title
   let facilities: PluginFacilities | null = null
 
-  /** A source timeframe finer than the chart's is refused rather than drawn: hundreds of
-   * sub-bar votes collapsing onto one candle reads as noise, not as context. Named in the
-   * legend, because silently drawing nothing is indistinguishable from a timeframe no run
-   * has ever written. */
+  /** A timeframe finer than the chart's is refused rather than drawn: hundreds of sub-bar
+   * signals collapsing onto one candle reads as noise, not as context. Named in the legend,
+   * because silently drawing nothing is indistinguishable from a timeframe no run has written. */
   const drawable = (config: MtfConfig, chartInterval: string): MtfInterval[] =>
     enabledIntervals(config).filter((interval) => !isFinerThan(interval, chartInterval))
 
@@ -128,90 +172,43 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
     return graphRoots(config).filter((root) => shown.includes(root))
   }
 
-  // The series' key plus `|mtf`: the overlay's OWN store, never the registry sub-pane's.
-  // A store keeps one record of which ranges have been fetched, and a sub-pane fetches no
-  // bar grid -- so sharing its store meant a window the sub-pane loaded first counted as
-  // covered, the overlay never fetched that window's grid, and every vote in it was dropped
-  // as not yet closed (a 1h chart drew only the 8h lane: the one timeframe no pane on the
-  // wall had a sub-pane at). The price is fetching the votes twice when both are on a wall.
-  const storeKey = (ctx: BindContext, interval: MtfInterval): string =>
-    `${overlay.sourceKey(ctx.vendor, ctx.ticker, interval)}|mtf`
-
   const source = (
     f: PluginFacilities,
     ctx: BindContext,
-    interval: MtfInterval,
+    shown: readonly MtfInterval[],
     roots: readonly MtfInterval[],
+    maxStep: number,
     clock: CandleGrid
-  ): SourceSpec<ArevPoint> => {
-    const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
-    const durationMs = f.resolutionDurationMs(interval)
-    const chunk = GRID_CHUNK_BARS * durationMs
-    // How much further back than the chart the graphs need this timeframe, from the chart's
-    // loaded left edge (absolute) -- 0 when it takes part in no graph.
-    //
-    // A root looks back a fixed number of its own bars, to find the run of same-side root
-    // signals in force at the left edge. Every timeframe under a root then reaches back to where
-    // that run began, which it reads off the root's store -- the furthest any root above it
-    // asks, since one timeframe serves every graph it is a node of (an 8h source is the 8h
-    // graphs' root AND a node of the 1D graph). The host covers a binding's sources in order and
-    // awaits each, and they are listed longest first when graphs are on (`bind`), so every
-    // root above a timeframe has been fetched by the time its window is sized.
-    const graphReach = (loadedFrom: number): number => {
-      let reach = roots.includes(interval) ? rootLookbackMs(interval) : 0
-      for (const root of roots) {
-        if (!(durationMs < f.resolutionDurationMs(root))) continue
-        const rootStore = peekStore<RegistryStore<ArevPoint>>(storeKey(ctx, root))
-        if (!rootStore) continue
-        const start = graphStart(storeGraphSignals(root, rootStore, clock), loadedFrom, rootLookbackMs(root))
-        reach = Math.max(reach, Math.min(Math.max(0, loadedFrom - start), GRAPH_LOOKBACK_MAX_BARS * durationMs))
-      }
-      return reach
-    }
+  ): SourceSpec<MtfSignalRow> => {
+    const symbol = `${ctx.vendor}:${ctx.ticker}`
     return {
-      id: interval,
-      key: storeKey(ctx, interval),
-      // The SOURCE timeframe, not the chart's: this is what its points are dated on. The
-      // AREV sub-pane's spec for this key says the same, so a replay step forgets one
-      // amount rather than two (plugins/horizon.ts).
-      resolution: interval,
-      createStore: storeFactory(null),
-      /** The chart's loaded span, converted out of the chart's wire clock and into the
-       * source timeframe's, padded at both ends. Both conversions are needed and they
-       * differ whenever exactly one of the two intervals is daily-or-coarser. */
-      window: (chartRange: Range): Range => {
-        const pad = Math.max(WINDOW_PAD_BARS * f.resolutionDurationMs(interval), WINDOW_PAD_FLOOR_MS)
-        const loadedFrom = toAbsolute(ctx.interval, chartRange.from, clock)
-        const absFrom = loadedFrom - graphReach(loadedFrom) - pad
-        const absTo = toAbsolute(ctx.interval, chartRange.to - 1, clock) + pad
-        return { from: fromAbsolute(interval, absFrom, clock), to: fromAbsolute(interval, absTo, clock) }
-      },
-      // Votes and grid together, over one chunk, so a single range covers both in the
-      // store. Concurrently, because neither depends on the other.
-      //
-      // The votes are the page's POINTS -- the same `ArevPoint` the sub-pane on this key
-      // stores -- and the grid rides beside them as an auxiliary array, which is what that
-      // mechanism is for: a different kind of row on the same window, not more of the same
-      // one. It therefore has no cursor of its own; `nextFrom` is driven by the chunk.
+      id: GRAPH_SOURCE,
+      key: graphSourceKey(overlay, symbol, shown, roots, maxStep),
+      // No `resolution`: the rows are instants, not bars of one interval, and the store's windows
+      // are absolute -- so a replay step forgets from the cursor itself (plugins/horizon.ts),
+      // which is exactly when each row came to exist.
+      createStore: createMtfGraphStore,
+      /** The chart's loaded bars as instants: from the first one's open (less the gap before
+       * it) to the last one's close. */
+      window: (chartRange: Range): Range => ({
+        from: toAbsolute(ctx.interval, chartRange.from, clock) - WINDOW_BACK_PAD_MS,
+        to: clock.end(ctx.interval, toAbsolute(ctx.interval, chartRange.to - 1, clock))
+      }),
       fetch: async (range, limit) => {
-        const to = Math.min(range.to, range.from + chunk)
-        const [votes, grid] = await Promise.all([
-          overlay.fetchPoints(f, vendorSymbol, interval, range.from, to, limit),
-          fetchMtfBarGrid(vendorSymbol, interval, range.from, to)
-        ])
-        // A vote page capped short of the chunk resumes where it stopped; the grid for the
-        // rest of the chunk is fetched again then, which the store's grid set absorbs.
-        const capped = votes.nextFrom !== null && votes.nextFrom < to ? votes.nextFrom : null
-        return {
-          points: votes.points,
-          nextFrom: capped ?? (to < range.to ? to : null),
-          arrays: { [GRID_ARRAY]: grid }
-        }
+        const answer = await fetchMtfGraph({
+          symbol,
+          source: overlay.source,
+          params: overlay.params,
+          timeframes: shown,
+          roots,
+          maxStep,
+          from: range.from,
+          to: range.to,
+          limit
+        })
+        return { points: answer.signals, nextFrom: answer.nextFrom, arrays: { [NODES_ARRAY]: answer.nodes } }
       },
-      // At the SOURCE interval: that is the series whose new bar matters, whatever the chart's.
-      subscribe: subscribeLive(f, { vendor: ctx.vendor, ticker: ctx.ticker, interval }, `${title} ${interval}`, () =>
-        mtfLiveWire(f, overlay, load)
-      )
+      subscribe: graphSubscribe(f, ctx, overlay, shown, clock, load)
     }
   }
 
@@ -236,7 +233,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       const on = enabledIntervals(config)
       return on.length === 0 ? `${title} · none on` : `${title} · needs ≥ ${state.chartInterval} chart`
     }
-    const pending = phaseLabel(`${title} ${shown.join(' ')}`, shown.map((interval) => state.sources.find((s) => s.id === interval)?.store))
+    const pending = phaseLabel(`${title} ${shown.join(' ')}`, [state.sources[0]?.store])
     if (pending) return pending
     // Names the active set, which is the one thing eight separate legend rows used to say
     // for free.
@@ -245,9 +242,11 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
 
   return {
     id: overlay.id,
-    feature: overlay.feature,
+    // The server builds every overlay's data; the family's own feature is checked at register.
+    feature: 'mtf_graph',
     paneConfigs: [mtfPaneConfig(overlay)],
     register(f: PluginFacilities): IndicatorGroup[] {
+      if (!f.hasFeature(overlay.feature)) return []
       facilities = f
       return registerMtfIndicators(overlay)
     },
@@ -256,28 +255,25 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       const f = facilities
       if (!f) return null
       const config = ctx.config as MtfConfig
-      // The pane's instrument's own candle grid: where a vote becomes knowable, and which
-      // chart bar was open then, both depend on how that market dates its days (shift.ts).
-      // With none resolved the overlay says so and draws nothing, rather than place votes on
-      // the forex week's clock -- which put coinbase's daily votes seven hours early.
+      // The pane's instrument's own candle grid: which chart bar was open when a signal became
+      // knowable depends on how that market dates its days. With none resolved the overlay says
+      // so and draws nothing, rather than place signals on the forex week's clock -- which put
+      // coinbase's daily votes seven hours early.
       const clock = gridFor(ctx.symbol)
       if (!clock) {
         return {
           sources: [],
           label: () => `${title} · no market hours for this instrument`,
-          extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: [] })
+          extendData: () => ({ chartInterval: ctx.interval, config, graphRoots: [], intervals: [] })
         }
       }
       const shown = drawable(config, ctx.interval)
       const roots = graphRootsFor(config, ctx.interval)
-      // Longest first when graphs are on: a timeframe's window is sized from the stores of
-      // the roots above it.
-      const ordered =
-        roots.length > 0 ? [...shown].sort((a, b) => f.resolutionDurationMs(b) - f.resolutionDurationMs(a)) : shown
+      // The settings panel commits every keystroke, so a half-typed number reaches here; the
+      // server holds a step to the same floor.
+      const maxStep = Math.max(2, graphConfig(config).maxStep)
       return {
-        // Stores are created only for timeframes switched on: switching all eight on and
-        // off again should not leave eight populated caches behind.
-        sources: ordered.map((interval) => source(f, ctx, interval, roots, clock)),
+        sources: shown.length > 0 ? [source(f, ctx, shown, roots, maxStep, clock)] : [],
         label: (state) => label(config, state),
         extendData: () => ({
           chartInterval: ctx.interval,
@@ -285,7 +281,8 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
           // is compared and may be copied, which a bag of closures does not survive.
           schedule: clock.schedule,
           config,
-          graphRoots: roots
+          graphRoots: roots,
+          intervals: shown
         })
       }
     }

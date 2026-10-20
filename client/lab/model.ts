@@ -13,9 +13,10 @@
 //   outcomes  what is measured after every entry
 //   holdout   the end of the window kept back: the results show it beside the rest
 //
-// Every graph rule the AREV21 outlier rank 85 overlay hard-codes (client/mtf/graph.ts) is a SLOT
-// here, with that overlay's rule as its default, so `rank85Strategy()` draws the graphs the
-// overlay draws (`graph.test.ts` holds the two side by side). A slot either picks a preset or
+// Every graph rule the AREV21 outlier rank 85 overlay applies (built by the server since
+// wdashboard-server 0.56.0, services/mtfgraph.py) is a SLOT here, with that overlay's rule as its
+// default, so `rank85Strategy()` draws the graphs the overlay draws (`graph.test.ts` holds the two
+// side by side, against the server's own output). A slot either picks a preset or
 // is written in the expression language (./expr.ts), checked against the fields that slot offers
 // (`SCOPES`).
 //
@@ -340,7 +341,7 @@ export function scopeFunctions(scope: ExprScope): FnSpec[] {
 
 // -- presets -----------------------------------------------------------------------------------
 
-/** The overlay's step test, one condition per rule it states (graph.ts `canStep`). */
+/** The overlay's step test, one condition per rule it states (the server's `can_step`). */
 export function defaultStep(maxStep = 8): SlotCondition[] {
   return [
     { id: 'further', label: "goes further its graph's way", expr: '(child.price - parent.price) * dir > 0', enabled: true },
@@ -349,7 +350,7 @@ export function defaultStep(maxStep = 8): SlotCondition[] {
   ]
 }
 
-/** The overlay's entry: a step (not a root) on 5m or shorter (graph.ts `isEntry`). */
+/** The overlay's entry: a step (not a root) on 5m or shorter (the server's `is_entry`). */
 export function defaultGraphEntry(): SlotCondition[] {
   return [
     { id: 'step', label: 'a step, not a root', expr: 'not node.is_root', enabled: true },
@@ -386,7 +387,9 @@ export function defaultGraph(): GraphSpec {
     parent: 'supersede',
     step: defaultStep(),
     end: { rootBars: null, when: '', watch: null },
-    // mtf/graph.ts ROOT_LOOKBACK_BARS and mtf/plugin.ts GRAPH_LOOKBACK_MAX_BARS.
+    // How far back the lab READS, in the browser: 300 root bars to find a run's start, 10,000 of
+    // each lower timeframe's bars. The server reads every run whole; a run longer than these is
+    // cut here (the overlay's own bounds until wdashboard-server 0.56.0).
     lookback: { rootBars: 300, maxBars: 10_000 }
   }
 }

@@ -49,6 +49,11 @@ export type Feature =
   // (wdashboard-server services/arev21outlier.py). The registry rows gate on it by name; the
   // client's own outlier MTF overlays (client/mtf/overlays.ts) gate on it here.
   | 'arev21_outlier'
+  // GET /mtf/graph — a signal family on several timeframes at once, its signal graph and entry
+  // stars, built and cached on the server (wdashboard-server services/mtfgraph.py, 0.56.0). Every
+  // multi-timeframe overlay (client/mtf/) and the alert manager's graph-entry operand read it and
+  // nothing else; absent (an older server) the overlays are not offered.
+  | 'mtf_graph'
   // GET /krev/values — krev01 k-NN reversal votes (wdashboard-server services/krev.py).
   // The client only registers its KREV template and picker entry when advertised.
   | 'krev'

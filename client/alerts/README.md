@@ -42,10 +42,11 @@ the empty label").
 
 **Graph entries** (2026-10-05, user: "an alert when there is a 3m or 5m signal at the end of a
 graph"). An entry is what the AREV21 outlier rank 85 MTF overlay stars: a 3m or 5m signal
-stepped to, through the graph, from a root (client/mtf/graph.ts `isEntry`). The alert runs the
-overlay's OWN code on the overlay's own fetch -- `storeGraphSignals`, `buildRootGraphs`,
-`isEntry` -- so it stars the bars the chart stars (`graphentry.test.ts` checks the two side by
-side). What the alert keeps of its own is the graph's SETTINGS -- the timeframes it reads, its
+stepped to, through the graph, from a root. Since wdashboard-server 0.56.0 the graph is the
+server's (`GET /mtf/graph`, `services/mtfgraph.py`), built whole and cached there, and the alert
+asks for exactly what a pane asks for -- the overlay's own family and params, the timeframes, the
+roots, the largest step -- keeping the entries on its timeframe, so it stars the bars the chart
+stars by construction (`graphentry.test.ts` holds the request). What the alert keeps of its own is the graph's SETTINGS -- the timeframes it reads, its
 roots, its largest step -- **copied from a pane when the condition is chosen** (the active pane
 if it carries the overlay, else the first that does; user's choice, so a later change to the
 pane does not change what the alert means), editable behind its Settings toggle, and copied
@@ -54,9 +55,10 @@ at 1D: the overlay's own defaults switch on 1h and longer only, and a graph that
 below 1h has no entry to find. The entry's own timeframe is always added to what it reads.
 One difference from a pane is deliberate: a pane draws no timeframe finer than its chart, so a
 15m chart shows no 5m stars; the alert builds from every timeframe it was given. An entry is
-final once every timeframe the graph reads has been served past the instant it became knowable
-(`GraphEntries.through`); a timeframe the server has served nothing for (dev computes no arev21
-on 3m or 2h locally) is skipped rather than waited on.
+final once every timeframe the graph reads has been computed past the instant it became
+knowable -- the server's `computedThrough`, from the research feed's own cursors, capped at the
+window read (`GraphEntries.through`); a timeframe the feed has never generated (dev computes no
+arev21 on 2h) holds nothing back.
 
 **Time conditions** (2026-10-05, user: "also allow alerts based on time signals"): `Time of day
 (New York) at 5m closes reaches 09:30` fires at the first close at or after 09:30, once a day;

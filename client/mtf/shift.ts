@@ -1,25 +1,24 @@
 import type { KLineData } from 'klinecharts'
 import { resolutionDurationMs } from '../periods'
 import type { CandleGrid } from '../replay/timeframes'
-import { arevSignal, type ArevPoint } from '../arev/api'
 
-// Where a higher-timeframe vote belongs on a lower-timeframe chart.
+// Where a higher-timeframe signal belongs on a lower-timeframe chart.
 //
-// A vote cast on a 4h bar is not KNOWN until that bar closes — the sample that produced
+// A signal cast on a 4h bar is not KNOWN until that bar closes — the sample that produced
 // it is the bar's own extreme, and the bar is not finished being extreme until it is
 // finished. Drawing it on the bar it was cast on would put information on the chart
 // four hours before it existed, which is the ordinary way a multi-timeframe overlay
-// invents an edge it does not have. So every vote is shifted forward by one bar of ITS
-// OWN timeframe: a 1D vote dated 2026-08-20 draws on 2026-08-21, a 4h vote at 04:00
-// draws at 08:00.
+// invents an edge it does not have. So every signal is drawn on the chart bar that was open
+// at the instant it became knowable.
 //
-// "One bar forward" is a market question, not an arithmetic one, which is why this
-// module is handed a bar GRID rather than a duration. A 4h bar opening Friday 13:00 New
-// York is followed by one opening Sunday 17:00; `t + 4h` would place its vote inside the
-// weekend, on a bar that does not exist. The grid comes from the server (api.ts), which
-// owns the candle boundaries — see the workspace CLAUDE.md's "Candle boundary rules".
+// That instant is the server's (`GET /mtf/graph`, wdashboard-server services/mtfgraph.py): the
+// source candle's close, `get_interval_end`, on the instrument's own schedule -- a market
+// question the server owns the rules for (the workspace CLAUDE.md's "Candle boundary rules").
+// Until 0.56.0 this module worked it out itself, as the successor bar's open off a fetched bar
+// grid; the two place every signal on the same chart bar, because no chart bar opens inside
+// the market-closed gap where they differ.
 //
-// The second thing this module does is reconcile two different bar CLOCKS. The wire
+// What is left here is the chart's half, and it has to reconcile two different bar CLOCKS. The wire
 // dates intraday bars by their open, but daily-and-coarser bars by their canonical date --
 // the midnight that dates the session in the instrument's own zone (wdashboard-server's
 // services/wiredate.py). For the FX week that is `open + 7h`, because a daily candle opens
@@ -58,19 +57,6 @@ export function isFinerThan(source: string, chart: string): boolean {
   return resolutionDurationMs(source) < resolutionDurationMs(chart)
 }
 
-/** One arev21 signal and the instant it became knowable -- which is also what places it on
- * a chart: on the bar in force at that instant. */
-export interface ShiftedSignal {
-  /** Wire date of the SOURCE bar the vote was cast on — what the research row is keyed by. */
-  sourceDate: number
-  /** The instant the source bar closed: its successor's open, in absolute time. */
-  knownAt: number
-  /** P(price rises to the next sample), as the server computed it. */
-  p: number
-  /** The server's label: `'long'` argues up. Read off the published label, not off `p`. */
-  up: boolean
-}
-
 /** First index of `sorted` holding a value strictly greater than `x`, or `sorted.length`. */
 function upperBound(sorted: number[], x: number): number {
   let lo = 0
@@ -81,58 +67,6 @@ function upperBound(sorted: number[], x: number): number {
     else hi = mid
   }
   return lo
-}
-
-export interface ShiftInput {
-  sourceInterval: string
-  chartInterval: string
-  /** The pane's instrument's candle grid: how each interval's wire dates map to opens. */
-  clock: CandleGrid
-  /** Every arev21 point fetched for the source timeframe; non-signals are ignored here. */
-  points: Iterable<ArevPoint>
-  /** The source timeframe's bar opens as the wire states them, ascending. */
-  grid: number[]
-  /** The chart's own bars, ascending, as klinecharts holds them. */
-  chartBars: KLineData[]
-}
-
-/**
- * Every labelled vote in `points`, with the instant it became knowable: its source bar's
- * close, read as the successor bar's open on `grid`, in absolute time. Unordered, as `points`
- * was.
- *
- * A vote whose bar has no successor in the grid is the NEWEST vote at the live edge, and it is
- * kept, at its bar's own close: `open + one nominal source bar`. It cannot be dropped as "not
- * closed yet", because a vote only exists once its bar has closed -- the research feed writes
- * arev21 off closed bars, and every values route is clamped to closed bars under a replay
- * clock (`services/asof.py`). And its successor is never in the grid there, because the grid
- * is `/getbars`, which serves closed bars only: the successor is the bar still forming. Waiting
- * for it to close held every new vote back one more of its own bars -- a day on 1D -- which a
- * live overlay cannot afford (user, 2026-10-01: a 2h signal the sub-pane showed at 03:00 had
- * no MTF marker).
- *
- * `open + nominal length` is the close for every source this overlay reads: they are 1D or
- * intraday, a fixed number of milliseconds long, and on the FX and crypto grids no US DST
- * transition falls inside one (it is the server's own `get_interval_end`). Where the close is
- * NOT the successor's open -- into a weekend -- `chartBarAt` takes the first chart bar to open
- * after it, which is where the successor's open would have put it.
- */
-export function knowableSignals(sourceInterval: string, points: Iterable<ArevPoint>, grid: number[], clock: CandleGrid): ShiftedSignal[] {
-  const out: ShiftedSignal[] = []
-  if (grid.length === 0) return out
-  const gridAbs = grid.map((ms) => toAbsolute(sourceInterval, ms, clock))
-  const durationMs = resolutionDurationMs(sourceInterval)
-  for (const point of points) {
-    const label = arevSignal(point)
-    if (!label) continue
-    const castAbs = toAbsolute(sourceInterval, point.date, clock)
-    // The successor bar: the first grid open strictly after the one the vote was cast on.
-    // Strictly, so a vote is never placed back on its own bar.
-    const next = upperBound(gridAbs, castAbs)
-    const knownAt = next < gridAbs.length ? gridAbs[next] : castAbs + durationMs
-    out.push({ sourceDate: point.date, knownAt, p: point.p, up: label === 'long' })
-  }
-  return out
 }
 
 /** The chart's bar opens in absolute time, for `chartBarAt`. */
@@ -150,9 +84,9 @@ export function chartOpens(chartInterval: string, chartBars: KLineData[], clock:
  * loaded window began (its place is off screen to the left, not on the leftmost bar).
  *
  * The last chart bar is the one bar whose END the chart does not state: every other is
- * bounded by its successor's open. Left unbounded it swallows everything after it -- every
- * vote from the controller's forward fetch pad, and at the live edge every vote newer than
- * the loaded bars, resolves to "the last bar" and stacks there. That is not a cosmetic
+ * bounded by its successor's open. Left unbounded it swallows everything after it -- at the
+ * live edge every signal newer than the loaded bars would resolve to "the last bar" and stack
+ * there. That is not a cosmetic
  * pile-up but lookahead: votes that had not been cast yet, drawn on the newest candle. So it
  * is bounded by the chart interval's nominal length, which decides only WHETHER to draw and
  * never WHERE -- and which is exact for every interval that can reach this, because a source
@@ -165,7 +99,7 @@ export function chartOpens(chartInterval: string, chartBars: KLineData[], clock:
  * The same bound applies to EVERY bar, not only the last: a bar that had already closed by
  * `knownAt` was not in force then, and the signal belongs on the next bar to open. That is
  * the case whenever `knownAt` falls in a gap between chart bars -- a source bar's close into
- * the weekend (`knowableSignals`), or a chart bar missing from the data -- where taking the
+ * the weekend, or a chart bar missing from the data -- where taking the
  * bar before the gap would draw a vote on a candle that had finished before it was cast.
  */
 export function chartBarAt(knownAt: number, chartAbs: number[], chartInterval: string): number {
@@ -173,41 +107,4 @@ export function chartBarAt(knownAt: number, chartAbs: number[], chartInterval: s
   if (at < 0) return -1
   if (knownAt < chartAbs[at] + resolutionDurationMs(chartInterval)) return at
   return at + 1 < chartAbs.length ? at + 1 : -1
-}
-
-/**
- * Place each source-timeframe signal on the chart bar that was open when it became
- * knowable, keyed by that bar's own timestamp.
- *
- * A signal is dropped rather than approximated in three cases, all of which are the
- * honest answer:
- *
- *   * it became knowable before the first chart bar loaded — its marker is off screen to
- *     the left, not on the leftmost bar;
- *   * it became knowable after the last chart bar had closed — the bar it belongs on is
- *     not loaded, so it is not drawn at all rather than heaped onto the newest one;
- *   * the source timeframe is finer than the chart's, which `shiftSignals` refuses
- *     outright (see `isFinerThan`) — hundreds of sub-bar votes collapsing onto one
- *     candle is not a reading of anything, and the caller says so in the legend instead.
- */
-export function shiftSignals(input: ShiftInput): Map<number, ShiftedSignal[]> {
-  const { sourceInterval, chartInterval, clock, points, grid, chartBars } = input
-  const placed = new Map<number, ShiftedSignal[]>()
-  if (chartBars.length === 0 || grid.length === 0) return placed
-  if (isFinerThan(sourceInterval, chartInterval)) return placed
-
-  // Both sides onto one clock before anything is compared. See the module note: the wire
-  // dates these two intervals on different clocks whenever exactly one of them is
-  // daily-or-coarser, which is the common case for this overlay.
-  const chartAbs = chartOpens(chartInterval, chartBars, clock)
-
-  for (const signal of knowableSignals(sourceInterval, points, grid, clock)) {
-    const at = chartBarAt(signal.knownAt, chartAbs, chartInterval)
-    if (at < 0) continue
-    const key = chartBars[at].timestamp
-    const existing = placed.get(key)
-    if (existing) existing.push(signal)
-    else placed.set(key, [signal])
-  }
-  return placed
 }

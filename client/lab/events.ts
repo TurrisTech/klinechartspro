@@ -9,7 +9,7 @@
 //              event timeframe's closes, firing where it STARTS to hold
 //
 // A signal's price is read off its candle (`anchorPrice`): the body's top or bottom by default,
-// which is what the overlay prices a graph node at (client/mtf/graph.ts).
+// which is what the overlay prices a graph node at (wdashboard-server services/mtfgraph.py).
 //
 // Knowable at the close -- `get_interval_end`, the effective-timestamp rule -- where the overlay
 // uses the next bar's open. The two order every pair of signals the same way (they differ only

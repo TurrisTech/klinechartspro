@@ -2,13 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 
 // A whole run over a fake data source on the FX week: the wiring between the reads, the graph,
-// the entries, the outcomes and the trades -- and that the graphs a run builds are the overlay's
-// graphs over the same signals, read back as far as the overlay reads.
+// the entries, the outcomes and the trades -- and that the graphs a run builds are the graphs
+// its default slots build over the same signals, read back as far as they need. That those are
+// the overlay's -- the server's -- is graph.test.ts's job, against the server's own output.
 installWindow()
 const { nominalMs } = await import('../replay/timeframes')
 const { runStrategy, autoPathInterval, RunError } = await import('./runner')
 const { rank85Strategy, ruleStrategy, defaultStep } = await import('./model')
-const mtf = await import('../mtf/graph')
+const { buildRootGraphs } = await import('./graph')
 
 import type { Strategy } from './model'
 
@@ -47,13 +48,15 @@ describe('a graph strategy', () => {
     expect(run.counts.some((c) => c.signals > 0)).toBe(true)
   })
 
-  test('the graphs are the overlay’s, over the same signals', async () => {
-    const run = await runStrategy(strategy(), new FakeData(), { ...window, catalogue: null, now: NOW })
-    const theirs = mtf.buildRootGraphs(run.signals, ['4h', '1h'], 8, window.from)
+  test('the graphs are the default slots’ graphs, over the same signals', async () => {
+    const s = strategy()
+    const run = await runStrategy(s, new FakeData(), { ...window, catalogue: null, now: NOW })
+    const readings = { pip: 0.0001, atr: () => undefined, ind: () => undefined }
+    const theirs = buildRootGraphs({ signals: run.signals, spec: s.graph, entry: s.entry.when, from: window.from, readings })
     const describe = (graphs: Array<{ root: string; side: string; nodes: Array<{ signal: { key: string }; parent: number }> }>) =>
       graphs.map((g) => `${g.root} ${g.side}: ${g.nodes.map((n) => `${n.signal.key}<${n.parent}`).join(' ')}`)
     expect(describe(run.graphs)).toEqual(describe(theirs))
-    const entries = theirs.flatMap((g) => g.nodes.filter((n) => mtf.isEntry(n)).map((n) => n.signal.key))
+    const entries = theirs.flatMap((g) => g.nodes.filter((n) => n.entry).map((n) => n.signal.key))
     expect(run.entries.map((e) => e.id).sort()).toEqual([...new Set(entries)].filter((k) => run.entries.some((e) => e.id === k)).sort())
   })
 

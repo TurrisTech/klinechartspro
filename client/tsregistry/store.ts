@@ -27,7 +27,8 @@ import type { Range } from '../plugins/types'
 export const GRID_ARRAY = 'grid'
 
 /** One row of that grid: the bar's wire date, and its open and close when the source sent them
- * (the MTF overlay's graph prices each signal at its source bar's body -- mtf/graph.ts). */
+ * (the MTF overlay read its grid this way, and priced each signal at a bar's body, until
+ * wdashboard-server 0.56.0 built its graph). */
 export interface GridRow {
   date: number
   open?: number

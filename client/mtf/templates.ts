@@ -1,15 +1,13 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import type { MtfInterval } from './api'
-import { GRAPH_ROOTS, MTF_DEFAULTS, enabledIntervals, graphConfig, graphLineStyle, type MtfConfig, type MtfTimeframeStyle } from './config'
-import { buildRootGraphs, type GraphSide, type GraphSignal, isEntry, storeGraphSignals } from './graph'
+import { GRAPH_ROOTS, MTF_DEFAULTS, graphConfig, graphLineStyle, type MtfConfig, type MtfTimeframeStyle } from './config'
 import type { MtfOverlay } from './overlays'
-import { chartBarAt, chartOpens, shiftSignals, type ShiftedSignal } from './shift'
+import { chartBarAt, chartOpens } from './shift'
 import { resolutionDurationMs } from '../periods'
 import { peekStore } from '../plugins/store'
-import type { ArevPoint } from '../arev/api'
-import type { RegistryStore } from '../tsregistry/store'
-import { type CandleGrid, gridOf, type Schedule } from '../replay/timeframes'
+import type { MtfGraphStore } from './store'
+import { gridOf, type Schedule } from '../replay/timeframes'
 import { timestampCalc } from '../plugins/calc'
 
 // ONE klinecharts indicator template per overlay (overlays.ts), on the price pane, drawing
@@ -23,14 +21,11 @@ import { timestampCalc } from '../plugins/calc'
 // gear can open a panel with a group per timeframe (config.ts, drawn by the same
 // chartlayers settings renderer the Levels layer uses).
 //
-// The trade is that "which timeframes" moves out of the picker and into that panel, and
-// the legend collapses from eight rows to one naming the active set. Both are improvements
-// at three timeframes and up, which is the case the overlay exists for.
-//
-// Like every other app-registered template here, `calc` computes no model: it reads the
-// votes and bar grids the controller fetched, and does the one piece of real work this
-// overlay owns — placing each vote one source bar forward, at the bar by which it was
-// knowable (shift.ts, which is where that reasoning lives).
+// `calc` computes no model and no graph: the server answers both (`GET /mtf/graph`, read into
+// one store by plugin.ts), every row stamped with the instant it became knowable. What is left
+// here is the chart's own business -- which of ITS bars was open at each of those instants
+// (`chartBarAt`), how a bar's marks stack, and where an edge from a parent older than the loaded
+// bars comes in from the left.
 //
 // Declares no figures, on the marker-template rule: a vote's `p` must not enter the price
 // pane's y-axis range, or a probability near 0.5 would rescale the candles into a hairline.
@@ -39,13 +34,13 @@ import { timestampCalc } from '../plugins/calc'
 // them (`if (!isCover)`; klinechartspro #6 was that bug).
 
 export interface ExtendData {
-  /** Store key per source timeframe, for the timeframes currently switched on. */
+  /** The host's store key per source -- this overlay's one is `graph` (plugin.ts). */
   seriesKeys: Record<string, string>
-  /** Bumped by the controller whenever any of those stores changes. */
+  /** Bumped by the controller whenever that store changes. */
   rev: number
   /** The chart's own interval. `calc` cannot ask the chart for it — klinecharts hands a
-   * template bars and nothing about the period they were sampled at — and it is half of
-   * every clock conversion the shift makes, so the controller supplies it. */
+   * template bars and nothing about the period they were sampled at — and every placement is
+   * a question about its bars, so the controller supplies it. */
   chartInterval: string
   /** The pane's instrument's candle schedule (plugin.ts, from its resolved market hours):
    * every conversion between a wire date and an open is on it. Absent -- an unbound template,
@@ -53,18 +48,25 @@ export interface ExtendData {
   schedule?: Schedule
   /** The live settings, so a colour or size change repaints without refetching anything. */
   config: MtfConfig
-  /** The timeframes this pane's signal graphs start from, longest first; empty for none. The
-   * controller decides them (plugin.ts `graphRootsFor`): only on an overlay that offers a
-   * graph, and only roots switched on and among the timeframes drawn. */
+  /** The timeframes this pane's signal graphs start from, longest first; empty for none. */
   graphRoots?: MtfInterval[]
+  /** The timeframes drawn, shortest first: the order a bar's marks stack in. */
+  intervals?: MtfInterval[]
 }
 
-/** One placed signal, plus which timeframe placed it — the template draws several at once
- * now, so a marker has to carry its own provenance. */
-interface Marked extends ShiftedSignal {
+/** One placed signal, plus which timeframe placed it — the template draws several at once,
+ * so a marker has to carry its own provenance. */
+interface Marked {
   interval: MtfInterval
-  /** Position in the enabled set: the order a bar's marks stack in, outward from the candle,
-   * so the shorter timeframe is always the nearer one. Not a fixed distance (`draw`). */
+  /** The wire date of the candle it was cast on, on its own timeframe. */
+  sourceDate: number
+  /** The instant it became knowable, absolute. */
+  knownAt: number
+  p: number | null
+  /** The server's label: `'long'` argues up. */
+  up: boolean
+  /** Position among the timeframes drawn: the order a bar's marks stack in, outward from the
+   * candle, so the shorter timeframe is always the nearer one. Not a fixed distance (`draw`). */
   lane: number
 }
 
@@ -73,10 +75,10 @@ interface Marked extends ShiftedSignal {
 interface GraphDot {
   interval: MtfInterval
   price: number
-  side: GraphSide
+  side: 'top' | 'bottom'
   /** Where some graph starts: drawn as a ring. */
   root: boolean
-  /** A step on 5m or shorter (graph.ts `isEntry`): drawn as a star. */
+  /** A step on 5m or shorter -- an entry, as the server marks it: drawn as a star. */
   entry: boolean
 }
 
@@ -116,10 +118,10 @@ function laneHeight(style: MtfTimeframeStyle): number {
 
 /**
  * The placed marks and graphs, recomputed only when what they are computed FROM changes
- * (plugins/calc.ts): placement reads the bars' timestamps, never their prices, and the votes
- * come from the stores, whose changes arrive as a new `extendData`. Rebuilding on every tick
- * cost the prod wall about 1.7 s of main thread a minute, up to 60 ms per tick on a 3m pane with
- * four graph roots (2026-10-07). Exported for its own test.
+ * (plugins/calc.ts): placement reads the bars' timestamps, never their prices, and the rows
+ * come from the store, whose changes arrive as a new `extendData`. Rebuilding on every tick
+ * cost the prod wall about 1.7 s of main thread a minute when the graph was built here
+ * (2026-10-07). Exported for its own test.
  */
 export const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] => {
   const extend = indicator.extendData
@@ -128,66 +130,48 @@ export const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<V
 })
 
 /** Everything `calc` decides, from the bars and the pane's settings: the markers, the graphs and
- * the "hide signals outside the graph" filter. Exported for its own test -- it reads the stores
+ * the "hide signals outside the graph" filter. Exported for its own test -- it reads the store
  * and nothing else. */
 export function computeValues(dataList: KLineData[], extend: ExtendData): Value[] {
   // No schedule, no placement: a wire date cannot be turned into an open without knowing how
-  // the instrument dates its days (shift.ts).
-  if (!extend.schedule) return dataList.map(() => ({}))
+  // the instrument dates its days.
+  if (!extend.schedule || dataList.length === 0) return dataList.map(() => ({}))
+  const store = peekStore<MtfGraphStore>(extend.seriesKeys?.graph)
+  if (!store || typeof store.signals !== 'function') return dataList.map(() => ({}))
   const clock = gridOf(extend.schedule)
-  const intervals = enabledIntervals(extend.config)
-  // Per bar, the marks from every enabled timeframe, each tagged with its lane. Built once
-  // here rather than in `draw` because `draw` runs every frame and this walks every vote.
-  const byBar = new Map<number, Marked[]>()
-  intervals.forEach((interval, lane) => {
-    const key = extend.seriesKeys[interval]
-    const store = peekStore<RegistryStore<ArevPoint>>(key)
-    if (!store) return
-    const placed = shiftSignals({
-      sourceInterval: interval,
-      chartInterval: extend.chartInterval,
-      clock,
-      points: store.values.values(),
-      grid: store.grid(),
-      chartBars: dataList
+  const chartAbs = chartOpens(extend.chartInterval, dataList, clock)
+  const lanes = new Map<string, number>((extend.intervals ?? []).map((interval, lane) => [interval, lane]))
+  const graphOn = (extend.graphRoots?.length ?? 0) > 0
+  const onlyGraph = graphOn && graphConfig(extend.config).onlyGraph
+  const values: Value[] = dataList.map(() => ({}))
+  for (const row of store.signals()) {
+    const lane = lanes.get(row.interval)
+    if (lane === undefined) continue
+    // "Hide signals outside the graph": every arrow no graph took comes off the pane. Only with
+    // a graph drawn -- with no root on there is nothing to judge by, and emptying the pane of
+    // its markers would read as a broken overlay rather than as a filter.
+    if (onlyGraph && !row.inGraph) continue
+    const at = chartBarAt(row.knownAt, chartAbs, extend.chartInterval)
+    if (at < 0) continue
+    const value = values[at]
+    value.marks = value.marks ?? []
+    value.marks.push({
+      interval: row.interval as MtfInterval,
+      sourceDate: row.date,
+      knownAt: row.knownAt,
+      p: row.p,
+      up: row.signal === 'long',
+      lane
     })
-    for (const [timestamp, signals] of placed) {
-      const marks = byBar.get(timestamp) ?? []
-      for (const signal of signals) marks.push({ ...signal, interval, lane })
-      byBar.set(timestamp, marks)
-    }
-  })
-  const values: Value[] = dataList.map((bar) => {
-    const marks = byBar.get(bar.timestamp)
-    return marks ? { marks } : {}
-  })
-  const inGraph = extend.graphRoots?.length ? placeGraphs(values, dataList, extend, extend.graphRoots, clock) : null
-  // "Hide signals outside the graph": every arrow the graphs did not take comes off the pane.
-  // Only with a graph drawn -- with no root on there is nothing to judge by, and emptying the
-  // pane of its markers would read as a broken overlay rather than as a filter.
-  if (inGraph && graphConfig(extend.config).onlyGraph) {
-    for (const value of values) {
-      if (!value.marks) continue
-      const kept = value.marks.filter((mark) => inGraph.has(signalKey(mark.interval, mark.sourceDate)))
-      if (kept.length > 0) value.marks = kept
-      else value.marks = undefined
-    }
   }
+  // Stacked shortest timeframe nearest the candle: `draw` walks a bar's marks in this order.
+  for (const value of values) value.marks?.sort((a, b) => a.lane - b.lane)
+  if (graphOn) placeGraphs(values, store, extend, chartAbs)
   return values
 }
 
-/** A placed signal's identity: its timeframe and the bar it was cast on. */
-function signalKey(interval: string, sourceDate: number): string {
-  return `${interval}|${sourceDate}`
-}
-
 /**
- * The signal graphs (graph.ts), filed on the chart bars their markers sit on.
- *
- * Every root's graphs, each built from every signal the drawn timeframes' stores hold, from
- * the start of that root's graph in force at the loaded left edge -- the same `graphStart` the
- * controller sized those stores' windows by, so each walk begins where the fetched history is
- * known to be whole. A node on no loaded bar is not drawn.
+ * The server's graph nodes, filed on the chart bars their markers sit on.
  *
  * An edge INTO a drawn node from a parent older than the loaded bars is drawn all the same,
  * from where that parent would sit. On a short chart that is most of them -- a 5m chart holds
@@ -198,18 +182,8 @@ function signalKey(interval: string, sourceDate: number): string {
  * loads the parent's bar. An edge's child is never newer than the loaded bars (that would be
  * lookahead, and `chartBarAt` refuses it), so nothing is extrapolated to the right.
  */
-function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData, roots: MtfInterval[], clock: CandleGrid): Set<string> {
-  const inGraph = new Set<string>()
-  if (dataList.length === 0) return inGraph
-  const signals: GraphSignal[] = []
-  for (const [interval, key] of Object.entries(extend.seriesKeys)) {
-    const store = peekStore<RegistryStore<ArevPoint>>(key)
-    if (store) signals.push(...storeGraphSignals(interval, store, clock))
-  }
-  const chartAbs = chartOpens(extend.chartInterval, dataList, clock)
-  // The settings panel commits every keystroke, so a half-typed number reaches here.
-  const maxStep = Math.max(2, graphConfig(extend.config).maxStep)
-  const graphs = buildRootGraphs(signals, roots, maxStep, chartAbs[0])
+function placeGraphs(values: Value[], store: MtfGraphStore, extend: ExtendData, chartAbs: number[]): void {
+  const roots = new Set<string>(extend.graphRoots ?? [])
   const last = chartAbs.length - 1
   const msPerBar = last > 0 ? (chartAbs[last] - chartAbs[0]) / last : resolutionDurationMs(extend.chartInterval)
   /** Where a parent sits: its bar, or an extrapolated index left of the loaded bars. */
@@ -218,32 +192,25 @@ function placeGraphs(values: Value[], dataList: KLineData[], extend: ExtendData,
     const at = chartBarAt(knownAt, chartAbs, extend.chartInterval)
     return at < 0 ? null : at
   }
-  for (const graph of graphs) {
-    const root = graph.root as MtfInterval
-    const at = graph.nodes.map((node) => chartBarAt(node.signal.knownAt, chartAbs, extend.chartInterval))
-    graph.nodes.forEach((node, k) => {
-      inGraph.add(signalKey(node.signal.interval, node.signal.sourceDate))
-      const index = at[k]
-      if (index < 0) return
-      const value = values[index]
-      const interval = node.signal.interval as MtfInterval
-      const price = node.signal.price
-      value.dots = value.dots ?? []
-      const same = value.dots.find((d) => d.interval === interval && d.price === price && d.side === graph.side)
-      const entry = isEntry(node)
-      if (same) {
-        same.root ||= node.parent < 0
-        same.entry ||= entry
-      } else value.dots.push({ interval, price, side: graph.side, root: node.parent < 0, entry })
-      if (node.parent < 0) return
-      const parent = graph.nodes[node.parent].signal
-      const fromIndex = parentIndex(parent.knownAt)
-      if (fromIndex === null) return
-      value.edges = value.edges ?? []
-      value.edges.push({ fromIndex, fromPrice: parent.price, toPrice: price, root, interval })
-    })
+  for (const node of store.nodes()) {
+    if (!roots.has(node.root)) continue
+    const index = chartBarAt(node.knownAt, chartAbs, extend.chartInterval)
+    if (index < 0) continue
+    const value = values[index]
+    const interval = node.interval as MtfInterval
+    const isRoot = node.parent === null
+    value.dots = value.dots ?? []
+    const same = value.dots.find((d) => d.interval === interval && d.price === node.price && d.side === node.side)
+    if (same) {
+      same.root ||= isRoot
+      same.entry ||= node.entry
+    } else value.dots.push({ interval, price: node.price, side: node.side, root: isRoot, entry: node.entry })
+    if (!node.parent) continue
+    const fromIndex = parentIndex(node.parent.knownAt)
+    if (fromIndex === null) continue
+    value.edges = value.edges ?? []
+    value.edges.push({ fromIndex, fromPrice: node.parent.price, toPrice: node.price, root: node.root as MtfInterval, interval })
   }
-  return inGraph
 }
 
 function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
@@ -254,6 +221,7 @@ function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator
     a?.chartInterval !== b?.chartInterval ||
     JSON.stringify(a?.schedule) !== JSON.stringify(b?.schedule) ||
     JSON.stringify(a?.graphRoots) !== JSON.stringify(b?.graphRoots) ||
+    JSON.stringify(a?.intervals) !== JSON.stringify(b?.intervals) ||
     JSON.stringify(a?.seriesKeys) !== JSON.stringify(b?.seriesKeys) ||
     // A style-only edit still has to recalc, because which timeframes are ENABLED decides
     // both what `calc` places and each one's lane. Comparing the whole config rather than
@@ -419,7 +387,7 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
       // The real defaults, not an empty shell: klinecharts draws an indicator the moment it
       // is created, which is before the controller's next poll applies anything, so this
       // placeholder is what the first frames actually render against.
-      extendData: { seriesKeys: {}, rev: 0, chartInterval: '', config: MTF_DEFAULTS, graphRoots: [] },
+      extendData: { seriesKeys: {}, rev: 0, chartInterval: '', config: MTF_DEFAULTS, graphRoots: [], intervals: [] },
       series: 'price',
       figures: [],
       minValue: null,
@@ -461,15 +429,15 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
           // the chart that never draw on it, so a lone 2h mark on a 1h chart hung 30-140 px
           // under the low and fell off the bottom of the auto-sized axis (user, 2026-10-01).
           // The price axis is sized from the candles alone (no figures -- see the header), so
-          // the nearer a mark sits the likelier it is on screen. `computeValues` files a bar's
-          // marks in lane order already, so walking them in order is the stacking order.
+          // the nearer a mark sits the likelier it is on screen. `computeValues` sorts a bar's
+          // marks into lane order, so walking them in order is the stacking order.
           let belowOffset = LANE_INSET
           let aboveOffset = LANE_INSET
           for (const mark of marks) {
             const style = config.timeframes[mark.interval]
             if (!style?.enabled) continue
             const size = style.arrowSize
-            const text = `${mark.interval} ${mark.p.toFixed(2)}`
+            const text = mark.p === null ? mark.interval : `${mark.interval} ${mark.p.toFixed(2)}`
             // `'zone'` placement puts a long above the high and a short below the low; the
             // arrow still points the signal's way, so there it points away from the candle.
             const above = zoneAbove ? mark.up : !mark.up

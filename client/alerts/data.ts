@@ -1,5 +1,6 @@
-// WHERE AN ALERT'S DATA COMES FROM: stored bars (`/getbars`) and plugin points
-// (`/plugins/{id}/values`), both read PAST any replay clock (`asof: null`). On a replay wall
+// WHERE AN ALERT'S DATA COMES FROM: stored bars (`/getbars`), plugin points
+// (`/plugins/{id}/values`) and the multi-timeframe overlays' graphs (`/mtf/graph`), all read PAST
+// any replay clock (`asof: null`). On a replay wall
 // the page-wide clock clamps every read to the cursor, and an alert's look-ahead is exactly
 // what must not be clamped -- it is hidden from the chart until the cursor reaches it, as the
 // replay's own bar caches are. A live alert reads past it too: it watches the live market
@@ -9,12 +10,9 @@
 // that walks forward a chunk at a time, and the next search that starts where it stopped,
 // fetch each bar once.
 
-import type { ArevPoint } from '../arev/api'
 import { capabilities } from '../capabilities'
-import type { MtfInterval } from '../mtf/api'
-import type { MtfOverlay } from '../mtf/overlays'
+import { fetchMtfGraph, type MtfGraphAnswer, type MtfGraphRequest } from '../mtf/api'
 import { fetchPoints } from '../plugins/api'
-import type { PluginFacilities, PointsRequest } from '../plugins/types'
 import { HttpBarSource } from '../replay/source'
 import { type CandleGrid, gridFor } from '../replay/timeframes'
 import { fetchSymbolInfo } from '../symbols'
@@ -32,9 +30,9 @@ export interface AlertData {
   bars(symbol: string, interval: string, from: number, to: number): Promise<AlertBar[]>
   /** A plugin's points dated in `[from, to)` (wire dates, as the bars carry them), ascending. */
   points(source: PointSource, symbol: string, interval: string, from: number, to: number): Promise<Point[]>
-  /** A multi-timeframe overlay's votes on `interval`, dated in `[from, to)` -- through the
-   * overlay's OWN fetch, so its params (rank 85's `q`) are the ones the chart draws with. */
-  votes(overlay: MtfOverlay, symbol: string, interval: string, from: number, to: number): Promise<ArevPoint[]>
+  /** One page of a multi-timeframe overlay's graph, as the server builds it for the chart
+   * (`GET /mtf/graph`) -- the overlay's own family and params, so its stars are the chart's. */
+  graph(request: MtfGraphRequest): Promise<MtfGraphAnswer>
 }
 
 /** The most pages one points read follows before it stops: a runaway `nextFrom` must not turn
@@ -86,24 +84,10 @@ export class HttpAlertData implements AlertData {
     return out
   }
 
-  async votes(overlay: MtfOverlay, symbol: string, interval: string, from: number, to: number): Promise<ArevPoint[]> {
-    const out: ArevPoint[] = []
-    const limit = capabilities().limits.maxBarsPerRequest
-    let cursor = from
-    for (let page = 0; cursor < to && page < MAX_POINT_PAGES; page++) {
-      const answer = await overlay.fetchPoints(UNCLAMPED as PluginFacilities, symbol, interval as MtfInterval, cursor, to, limit)
-      for (const point of answer.points) if (point.date >= cursor && point.date < to) out.push(point)
-      if (answer.nextFrom === null || answer.nextFrom <= cursor) break
-      cursor = answer.nextFrom
-    }
-    return out
+  graph(request: MtfGraphRequest): Promise<MtfGraphAnswer> {
+    // Past the read clock, like every read here: `asof: null` keeps the page-wide one off it.
+    return fetchMtfGraph({ ...request, asof: null })
   }
-}
-
-/** The one facility an overlay's fetch uses, past the read clock: a replay's look-ahead and a
- * live alert both read what the page-wide clock would hide. */
-const UNCLAMPED: Pick<PluginFacilities, 'points'> = {
-  points: <P extends { date: number }>(request: PointsRequest) => fetchPoints<P>({ ...request, asof: null })
 }
 
 /** One contiguous run of rows keyed by an ascending number (a bar's open, a point's date),

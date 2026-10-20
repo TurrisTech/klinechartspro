@@ -29,12 +29,17 @@ indicator"), with four choices of theirs:
 | `sizing`, `costs`, `outcomes`, `pathInterval` | the account (with a leverage cap, default 50:1), what a trade pays beyond the spread (commission per million, slippage in pips, overnight financing), and the measures | |
 | `window`, `holdout` | the last N days or a date range, and the end of it held back from fitting (the last N%, or from a date) | |
 
-**Every rule `client/mtf/graph.ts` hard-codes is a slot whose default is that rule** — `rank85Strategy()`
-builds exactly the overlay's graphs. That is checked three ways: `graph.test.ts` runs both builders
-over 720 generated signal pools; `runner.test.ts` compares a whole run's graphs with the overlay's
-builder over the same signals; and `live.test.ts` (opt-in, `LAB_LIVE=<server>`) compares the lab's
-5m and 3m entries with the alert manager's graph-entry engine — the overlay's own fetch and graph
-code — on a real server (equal on dev EURUSD, 30 days, three root sets, 2026-10-15).
+**Every rule of the overlay's graph is a slot whose default is that rule** — `rank85Strategy()`
+builds exactly the overlay's graphs. Since wdashboard-server 0.56.0 the overlay's graph is the
+server's (`services/mtfgraph.py`, `GET /mtf/graph`), and so is the reference: `graph.test.ts` runs
+the lab's builder over `fixtures/graph_parity.json` -- generated signal pools and the graphs the
+server builds from them, generated and checked in the server's `tests/mtfgraph/` and vendored by
+`scripts/sync-engine-fixtures.sh` -- and `live.test.ts` (opt-in, `LAB_LIVE=<server>`) compares the
+lab's 5m and 3m entries with the alert manager's graph-entry engine, which reads the server's
+graph, on a real server. `runner.test.ts` holds a whole run's graphs to the default slots over the
+same signals. The lab starts each root's walk where the server does (`graphStarts`, the server's
+`walk_starts`): a longer root from its run in force at the shorter roots' starts, within the
+strategy's read bound.
 
 ### The expression language (`expr.ts`)
 

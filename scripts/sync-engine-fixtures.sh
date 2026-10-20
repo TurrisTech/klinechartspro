@@ -19,6 +19,10 @@
 #                                             the quantile, the bands, the rolling lines and
 #                                             the arrows, which the lab recomputes in the
 #                                             browser (client/arevlab/rules.ts)
+#   tests/mtfgraph/fixtures graph_parity.json the signal graph's rules (gen_graph_parity.py) --
+#                                             the graphs services/mtfgraph.py builds, which the
+#                                             Strategy Lab's default slots must build too
+#                                             (client/lab/graph.ts)
 set -euo pipefail
 here=$(cd "$(dirname "$0")/.." && pwd)
 root=${SERVER_ROOT:-$here/../../wdashboard-server/main}
@@ -29,6 +33,7 @@ pairs=(
   "$sim|$here/client/replay/fixtures|boundaries.json"
   "$root/tests/watch/fixtures|$here/client/alerts/fixtures|watch_cases.json"
   "$root/tests/arevlab/fixtures|$here/client/arevlab/fixtures|rules_parity.json"
+  "$root/tests/mtfgraph/fixtures|$here/client/lab/fixtures|graph_parity.json"
 )
 status=0
 for pair in "${pairs[@]}"; do
