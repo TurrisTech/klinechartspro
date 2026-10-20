@@ -3,7 +3,7 @@ import { installWindow } from '../plugins/testing'
 
 // Where a developed strategy goes: the saved set, a dashboard pane's run, and an alert operand.
 installWindow()
-const { StrategyStore } = await import('./store')
+const { StrategyStore, localPersistence } = await import('./store')
 const { rank85Strategy } = await import('./model')
 const { RunStore } = await import('./plugin')
 const { StrategyEntryEngine, lastClosedOpen, LATE_MS } = await import('./alertentries')
@@ -31,7 +31,38 @@ function memory(initial: Record<string, unknown> = {}): StrategyPersistence & { 
   return p
 }
 
+/** A Storage over a list of entries, listed in the order given. */
+function storageOf(entries: Array<[string, string]>): Storage {
+  const map = new Map(entries)
+  return {
+    get length() {
+      return map.size
+    },
+    key: (i: number) => [...map.keys()][i] ?? null,
+    getItem: (k: string) => map.get(k) ?? null,
+    setItem: (k: string, v: string) => void map.set(k, v),
+    removeItem: (k: string) => void map.delete(k),
+    clear: () => map.clear()
+  }
+}
+
 describe('the saved strategies', () => {
+  test('in this browser: the page’s own settings beside them hide nothing', async () => {
+    // The page keeps plain strings under the same prefix; listed first, they once stopped the read.
+    const a = rank85Strategy(1)
+    const storage = storageOf([
+      ['wd.lab.current', a.id],
+      ['wd.lab.tab', 'summary'],
+      ['wd.lab.strategy.broken', '{not json'],
+      ['wd.lab.strategies', JSON.stringify({ version: 1, order: [a.id] })],
+      [`wd.lab.strategy.${a.id}`, JSON.stringify(a)]
+    ])
+    const store = new StrategyStore(localPersistence(() => storage))
+    await store.load()
+    expect(store.list().map((x) => x.id)).toEqual([a.id])
+    store.dispose()
+  })
+
   test('one key per strategy plus an index; a save reads back', async () => {
     const persistence = memory()
     const store = new StrategyStore(persistence)
