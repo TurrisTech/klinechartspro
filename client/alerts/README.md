@@ -160,6 +160,27 @@ enabled alert on the replay's instrument and takes the earliest (each later sear
 by the best so far). Rows fetched stay in a `SpanCache` per series, so the next press refetches
 nothing it already holds. A Stop is heard between chunks.
 
+**Made faster, 2026-10-26** (the user: going to the next rank-85 3m/5m star "takes too long").
+Measured against prod first: a warm search was 0.4-0.5 s, one read after another -- each
+timeframe's bars, then each graph operand's `/mtf/graph` -- and an alert on the 3m AND the 5m
+star read the same ~310 KB graph twice. Now:
+
+- **Every timeframe, and every operand, is read at once** (`Promise.all`); a `SpanCache` reads
+  for one caller at a time, so two operands on one source never splice the same edge in twice.
+- **One graph is read once** (`graphentry.ts`): the engine holds each graph's entry nodes --
+  only the entries -- for the span the server has answered *finally* (never past its
+  `computedThrough`, so the live monitor's reads stay current), shared by every operand on the
+  same settings and every window over it, and reads on past a window by its own length.
+- **Bars are read a first chunk ahead** of what a chunk needs, so the next search -- starting a
+  few bars on, where this one stopped -- usually reads nothing at all.
+- **A chunk doubles while nothing is found** (`SEARCH_CHUNK_GROWTH`, up to 8x): a rare star
+  months away costs a handful of rounds instead of one per six days of 3m bars.
+
+Against prod, the follow-on searches went from 0.4-0.5 s to 1-2 ms when the next star lay in
+what was held, and one parallel round (~0.2 s) when not; the cold first one from 2.3 s to 1.1 s.
+And `client/replay/alerts.ts` now runs each search **ahead**, in the background after every
+advance, so a press usually finds the answer waiting (`client/replay/README.md`).
+
 Verified in the browser against the local stack (2026-10-04): "Close 1h crosses above MA(30)
 1h" stopped exactly on the bars where the chart's own MA30 is crossed, and "AREV arev21 signal
 4h is long" on exactly the bars `/plugins/arev/signals` labels long. A server without closed

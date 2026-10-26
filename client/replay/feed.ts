@@ -24,8 +24,15 @@ import { type CandleGrid, gridFor, nominalMs } from './timeframes'
 
 export const HISTORY_WINDOW_BARS = 500
 
-/** Above this many whole bars to append, a pane is reloaded at the cursor instead. */
-export const SEEK_THRESHOLD_BARS = 300
+/** Above this many whole bars to append, a pane is reloaded at the cursor instead.
+ *
+ * Each bar handed to a pane recalculates every indicator on it over every bar it holds, and
+ * lays it out (src/ChartPane.svelte `subscribeBar`): measured on a six-pane EURUSD wall carrying
+ * the usual overlays (2026-10-26), about 2.4 ms a bar: a 10-hour Go to appending ~340 bars
+ * across the panes stopped in 1.26 s, about 0.8 s of it handing bars over. A reload is one read of the
+ * pane's window and one recalculation; with the threshold at 60 the same jump stopped in 0.34 s.
+ * 100 sits about where the two cost the same on that wall with prod's round trip; it was 300. */
+export const SEEK_THRESHOLD_BARS = 100
 
 export class ReplayDatafeed implements Datafeed {
   private readonly callbacks = new Map<string, DatafeedSubscribeCallback>()
@@ -153,11 +160,12 @@ export class ReplayFeedHub {
    * cursor -- whole bars appended from the pane cache, the forming bar composed from base
    * bars -- or reload the pane when the span is too long to append. */
   async push(panes: readonly ChartProPane[], previous: number): Promise<PushReport[]> {
-    const reports: PushReport[] = []
-    for (const pane of panes) {
-      const report = await this.pushPane(pane, previous)
-      if (report) reports.push(report)
-    }
+    // Every pane at once: each reads its own bars, and one after another a six-pane wall paid six
+    // round trips per step. The base bars the forming bars are composed from are shared by every
+    // pane of an instrument, so they are read first, once, from the earliest bucket any pane needs
+    // -- a pane reading them itself would re-anchor the shared cache under another's read.
+    await this.coverBase(panes)
+    const reports = (await Promise.all(panes.map((pane) => this.pushPane(pane, previous)))).filter((r): r is PushReport => r !== null)
     // Let go of base bars no pane's forming bucket can still need -- each pane's bucket on its
     // own instrument's schedule.
     const opens = panes.flatMap((p) => {
@@ -167,6 +175,23 @@ export class ReplayFeedHub {
     const earliest = Math.min(...opens)
     if (Number.isFinite(earliest)) for (const c of this.baseCaches.values()) c.trimBefore(earliest)
     return reports
+  }
+
+  /** Read, per instrument, the base bars from the earliest forming bucket of any of its panes to
+   * the cursor. */
+  private async coverBase(panes: readonly ChartProPane[]): Promise<void> {
+    const earliest = new Map<string, { from: number; grid: CandleGrid }>()
+    for (const pane of panes) {
+      const info = pane.getSymbol()
+      const grid = gridFor(info)
+      if (!grid) continue
+      const symbol = `${symbolVendor(info)}:${info.ticker}`
+      const bucketOpen = grid.start(periodToResolution(pane.getPeriod()), this.cursor - 1)
+      if (bucketOpen >= this.cursor) continue
+      const held = earliest.get(symbol)
+      if (!held || bucketOpen < held.from) earliest.set(symbol, { from: bucketOpen, grid })
+    }
+    await Promise.all([...earliest].map(([symbol, { from, grid }]) => this.baseCache(symbol, grid).cover(from, this.cursor)))
   }
 
   private async pushPane(pane: ChartProPane, previous: number): Promise<PushReport | null> {

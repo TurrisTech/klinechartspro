@@ -22,8 +22,14 @@ import { compile, operandKey } from './rules'
 import { freshRun, type Instant, instants, scan, type Track } from './timeline'
 import type { Alert, Operand } from './types'
 
-/** Bars of the finest timeframe a rule reads, per chunk of a search. */
+/** Bars of the finest timeframe a rule reads, per chunk of a search -- the first chunk. */
 export const SEARCH_CHUNK_BARS = 3000
+
+/** How many times a chunk may double while nothing is found. A rule that next holds in a day
+ * is answered by the first chunk; one that next holds in two months -- a rare star -- would
+ * otherwise cost a round of reads per six days of 3m bars. Each chunk is one round of reads
+ * however long it is, so the doubling is what keeps a long search to a handful of rounds. */
+export const SEARCH_CHUNK_GROWTH = 3
 
 /** Rows held per series before a search trims what it has walked past. */
 const MAX_HELD_ROWS = 60_000
@@ -103,29 +109,36 @@ export class AlertSearch {
     if (intervals.length === 0) return null
     const catalogue = operands.some((o) => o.kind === 'series' || o.kind === 'signal') ? await this.catalogue() : null
     const lengths = intervals.map(resolutionDurationMs)
-    const chunk = SEARCH_CHUNK_BARS * Math.min(...lengths)
+    const firstChunk = SEARCH_CHUNK_BARS * Math.min(...lengths)
+    let chunk = firstChunk
     // Where evaluation starts, counted in BARS, not in time: the last few bar closes at or
     // before `after` of every timeframe, which is what the cursor's own instant answered (the
     // edge) and read (the crossings). A span of time would find none after a weekend, a session
     // gap or a hole in the store, and the edge and the crossings would then start from nothing.
     // Each timeframe is fetched back until it holds those bars plus its lead-in (doubling, a
     // few times at most), so each of those instants is evaluated warm.
+    // Every timeframe at once: they are independent reads, and on a wall's round trip of a
+    // tenth of a second each, one after another was most of what a search cost.
     const fetchFrom = new Map<string, number>()
     let evalFrom = after
-    for (const interval of intervals) {
-      const length = resolutionDurationMs(interval)
-      const need = leadInFor(operands, interval) + BASELINE_BARS
-      const bars = this.barCache(alert.symbol, interval)
-      let back = 2 * need * length + LEAD_PAD_MS
-      let closed: AlertBar[] = []
-      for (let attempt = 0; attempt < BACKFILL_ATTEMPTS; attempt++, back *= 2) {
-        await bars.ensure(after - back, after)
-        closed = bars.slice(after - back, after).filter((b) => b.end <= after)
-        if (closed.length >= need) break
-      }
-      fetchFrom.set(interval, after - back)
-      const baseline = closed[Math.max(0, closed.length - BASELINE_BARS)]
-      if (baseline) evalFrom = Math.min(evalFrom, baseline.end - 1)
+    const seeds = await Promise.all(
+      intervals.map(async (interval) => {
+        const length = resolutionDurationMs(interval)
+        const need = leadInFor(operands, interval) + BASELINE_BARS
+        const bars = this.barCache(alert.symbol, interval)
+        let back = 2 * need * length + LEAD_PAD_MS
+        let closed: AlertBar[] = []
+        for (let attempt = 0; attempt < BACKFILL_ATTEMPTS; attempt++, back *= 2) {
+          await bars.ensure(after - back, after)
+          closed = bars.slice(after - back, after).filter((b) => b.end <= after)
+          if (closed.length >= need) break
+        }
+        return { interval, from: after - back, baseline: closed[Math.max(0, closed.length - BASELINE_BARS)] }
+      })
+    )
+    for (const seed of seeds) {
+      fetchFrom.set(seed.interval, seed.from)
+      if (seed.baseline) evalFrom = Math.min(evalFrom, seed.baseline.end - 1)
     }
 
     const state = freshRun()
@@ -133,31 +146,37 @@ export class AlertSearch {
     while (processed < until) {
       if (options.shouldStop?.()) return null
       const chunkEnd = Math.min(until, Math.max(processed, after) + chunk)
-      const tracks: Track[] = []
-      for (const [interval, group] of groups) {
-        const bars = this.barCache(alert.symbol, interval)
-        const from = fetchFrom.get(interval) as number
-        await bars.ensure(from, chunkEnd)
-        // The bars this chunk reads: from `lead` bars before the one its first instant reads
-        // (the last bar closed by then), to every bar opening before its end. One whose close
-        // is past the end stays held for the next chunk's instants.
-        const held = bars.slice(from, chunkEnd)
-        const lead = leadInFor(operands, interval)
-        const first = held.findIndex((b) => b.end > processed)
-        const window = held.slice(Math.max(0, (first < 0 ? held.length : first) - 1 - lead))
-        const index = await this.pointIndexes(alert.symbol, interval, group.values(), window, catalogue, Math.min(until, chunkEnd + chunk))
-        tracks.push(await buildTrack(interval, window, group.values(), (o) => index.get(operandKey(o))))
-        if (bars.size > MAX_HELD_ROWS && window.length > 0) {
-          // Walked past: drop it, and stop asking for it -- `ensure` from the old start would
-          // fetch it all again.
-          bars.trimBefore(window[0].open)
-          fetchFrom.set(interval, window[0].open)
-        }
-      }
+      // The timeframes' reads in parallel, the tracks in the groups' order.
+      const tracks: Track[] = await Promise.all(
+        [...groups].map(async ([interval, group]) => {
+          const bars = this.barCache(alert.symbol, interval)
+          const from = fetchFrom.get(interval) as number
+          // Extended a whole first chunk past what this one needs: the next search starts where
+          // this one stopped, a few bars on, and would otherwise pay a round of reads for them.
+          if ((bars.end ?? Number.NEGATIVE_INFINITY) < chunkEnd) await bars.ensure(from, Math.min(until, chunkEnd + firstChunk))
+          // The bars this chunk reads: from `lead` bars before the one its first instant reads
+          // (the last bar closed by then), to every bar opening before its end. One whose close
+          // is past the end stays held for the next chunk's instants.
+          const held = bars.slice(from, chunkEnd)
+          const lead = leadInFor(operands, interval)
+          const first = held.findIndex((b) => b.end > processed)
+          const window = held.slice(Math.max(0, (first < 0 ? held.length : first) - 1 - lead))
+          const index = await this.pointIndexes(alert.symbol, interval, group.values(), window, catalogue, Math.min(until, chunkEnd + firstChunk))
+          const track = await buildTrack(interval, window, group.values(), (o) => index.get(operandKey(o)))
+          if (bars.size > MAX_HELD_ROWS && window.length > 0) {
+            // Walked past: drop it, and stop asking for it -- `ensure` from the old start would
+            // fetch it all again.
+            bars.trimBefore(window[0].open)
+            fetchFrom.set(interval, window[0].open)
+          }
+          return track
+        })
+      )
       const hit = scan(compiled.condition, alert.trigger, instants(tracks, compiled.fields, processed, chunkEnd), after, until, state)
       if (hit) return { alert, at: hit.at, instant: hit }
       processed = chunkEnd
       options.onProgress?.(processed)
+      if (chunk < firstChunk * 2 ** SEARCH_CHUNK_GROWTH) chunk *= 2
     }
     return null
   }
@@ -188,32 +207,36 @@ export class AlertSearch {
     if (window.length === 0) return out
     const from = window[0].date
     const to = Math.max(window[window.length - 1].date + 1, ahead)
-    for (const operand of operands) {
-      if (operand.kind === 'graph') {
-        // The overlay's own graph over this window (graphentry.ts), entries as points.
-        const found = await this.graphs.entries(symbol, operand, window[0].open, ahead)
-        out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
-        continue
-      }
-      if (operand.kind === 'strategy') {
-        // The saved strategy's own run over this window (client/lab/alertentries.ts).
-        const found = await this.strategies.entries(symbol, operand, window[0].open, ahead)
-        out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
-        continue
-      }
-      if (!catalogue) continue
-      const source = pointSource(operand, catalogue)
-      if (!source) continue
-      const key = sourceKey(source, symbol, interval)
-      let cache = this.points.get(key)
-      if (!cache) {
-        cache = new SpanCache((a, b) => this.data.points(source, symbol, interval, a, b), (p) => p.date)
-        this.points.set(key, cache)
-      }
-      await cache.ensure(from, to)
-      out.set(operandKey(operand), indexPoints(cache.slice(from, to), source.foldBy))
-      if (cache.size > MAX_HELD_ROWS) cache.trimBefore(from)
-    }
+    // Every operand's read at once. Two operands on one source -- or on one graph, like the 3m
+    // and the 5m star -- share the cache that serves them, and it reads for one at a time.
+    await Promise.all(
+      [...operands].map(async (operand) => {
+        if (operand.kind === 'graph') {
+          // The overlay's own graph over this window (graphentry.ts), entries as points.
+          const found = await this.graphs.entries(symbol, operand, window[0].open, ahead)
+          out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
+          return
+        }
+        if (operand.kind === 'strategy') {
+          // The saved strategy's own run over this window (client/lab/alertentries.ts).
+          const found = await this.strategies.entries(symbol, operand, window[0].open, ahead)
+          out.set(operandKey(operand), { rows: indexPoints(found.points, null).rows, through: found.through })
+          return
+        }
+        if (!catalogue) return
+        const source = pointSource(operand, catalogue)
+        if (!source) return
+        const key = sourceKey(source, symbol, interval)
+        let cache = this.points.get(key)
+        if (!cache) {
+          cache = new SpanCache((a, b) => this.data.points(source, symbol, interval, a, b), (p) => p.date)
+          this.points.set(key, cache)
+        }
+        await cache.ensure(from, to)
+        out.set(operandKey(operand), indexPoints(cache.slice(from, to), source.foldBy))
+        if (cache.size > MAX_HELD_ROWS) cache.trimBefore(from)
+      })
+    )
     return out
   }
 }

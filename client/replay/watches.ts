@@ -3,7 +3,7 @@ import { formatInstant } from '../trading/format'
 import { type LocalWatchSource, type LocalWatchState, type WatchFiring, LocalWatchRegistry } from '../watch/local'
 import type { Observation, Sample } from '../alerts/conditions'
 import { type WatchApi, WatchStore } from '../watch/store'
-import { PRICE_SOURCE } from '../watch/types'
+import { PRICE_SOURCE, priceCondition, priceLevel } from '../watch/types'
 import type { SourceField } from '../watch/types'
 import type { ReplayBar } from './cache'
 import type { ObserverStop, ReplayObserver } from './session'
@@ -28,6 +28,10 @@ import type { ObserverStop, ReplayObserver } from './session'
 
 /** What the watches need from the session. Structural, so a test can hand in a stub and the
  * session does not have to exist to exercise any of this. */
+/** The note that marks the replay controls' own stop price among the watches: the one watch the
+ * Go to panel sets, moves and removes. Every other watch is the chart's. */
+export const STOP_PRICE_NOTE = 'Bar replay stop price'
+
 export interface ReplayWatchHost {
   readonly cursor: number
   /** The last base bar that closed at or before `at`. */
@@ -210,6 +214,36 @@ export class ReplayWatches implements ReplayObserver {
     return this.store.load()
   }
 
+  // -- the controls' stop price -----------------------------------------------------------
+  //
+  // "Stop at this price" is a price watch -- the line on the chart, draggable like any other,
+  // its firing in the Notification Center -- so it stops Step, Play, Next alert and Go to with no
+  // code of its own. Crossing either way, once: when it has fired it stops nothing more.
+
+  /** The armed stop price, or null. */
+  stopPrice(): number | null {
+    const watch = this.stopWatch()
+    return watch && watch.status === 'armed' && watch.enabled ? priceLevel(watch) : null
+  }
+
+  async setStopPrice(price: number): Promise<void> {
+    const draft = { condition: priceCondition(price), name: `Stop at ${price}`, enabled: true }
+    const existing = this.stopWatch()
+    // Moved, and armed again from the bar the cursor is on (`arm` seeds the crossing).
+    const watch = existing ? await this.store.update(existing.id, draft) : await this.store.create({ ...draft, source: PRICE_SOURCE, target: this.opts.symbol, note: STOP_PRICE_NOTE, repeat: 'once' })
+    if (!watch) throw new Error('the stop price was refused')
+    if (existing) await this.store.arm(watch.id)
+  }
+
+  async clearStopPrice(): Promise<void> {
+    const watch = this.stopWatch()
+    if (watch) await this.store.remove(watch.id)
+  }
+
+  private stopWatch() {
+    return this.store.list().find((watch) => watch.note === STOP_PRICE_NOTE && watch.target === this.opts.symbol) ?? null
+  }
+
   // -- the observer seam ------------------------------------------------------------------
 
   /** An advance must walk base bars whenever a watch is armed, even with nothing resting and
@@ -222,6 +256,21 @@ export class ReplayWatches implements ReplayObserver {
   /** Every armed watch is a place Next alert can stop. */
   armedStops(): number {
     return this.registry.armedTargets().length
+  }
+
+  /** Whether no armed watch could fire on any base bar inside the span `bar` -- a coarser
+   * stored candle -- covers, so the walk may hand over `bar` instead of every one inside it.
+   * The observation is the base bars' own measure (`observeBar`): the mid of bid and ask
+   * bands, whose coarse band holds every finer one. */
+  quietOver(bar: ReplayBar): boolean {
+    return this.registry.quietOver(this.source.id, this.opts.symbol, observeBar(bar))
+  }
+
+  /** Put the watches back as `rows` had them: a run that is taken back (session.ts). */
+  restoreState(rows: readonly LocalWatchState[]): void {
+    this.registry.restore(rows)
+    this.source.forget()
+    void this.store.refresh()
   }
 
   onBar(bar: ReplayBar): ObserverStop[] {

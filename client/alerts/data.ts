@@ -102,9 +102,19 @@ export class SpanCache<R> {
     private readonly keyOf: (row: R) => number
   ) {}
 
+  /** Reads run one at a time: two callers extending the run at once would both fetch the
+   * same edge and splice it in twice. */
+  private queue: Promise<unknown> = Promise.resolve()
+
   /** Make `[from, to)` held, fetching only what is not. A range that does not touch the run
    * replaces it: two runs with a hole between would read as one with nothing in the hole. */
-  async ensure(from: number, to: number): Promise<void> {
+  ensure(from: number, to: number): Promise<void> {
+    const run = this.queue.then(() => this.extend(from, to))
+    this.queue = run.catch(() => {})
+    return run
+  }
+
+  private async extend(from: number, to: number): Promise<void> {
     if (to <= from) return
     if (this.lo === null || this.hi === null || to < this.lo || from > this.hi) {
       this.rows = await this.fetch(from, to)
@@ -142,5 +152,10 @@ export class SpanCache<R> {
 
   get size(): number {
     return this.rows.length
+  }
+
+  /** The end of the held run (exclusive), or null when nothing is held. */
+  get end(): number | null {
+    return this.hi
   }
 }

@@ -1,4 +1,5 @@
 import { Arming, FigureList } from '../trading/kit'
+import { type GoToMode, type GoToSpec, goToInstant } from './clock'
 import { formatClock, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
@@ -20,9 +21,13 @@ import { createDockableWindow } from '../chrome/window'
 //   transport   Play and Step, each beside the setting it uses (timeframe x multiple, the pace)
 //   next        Next alert, and how far a running search or walk has got or why the last
 //               advance stopped
-//   footer      Alerts (the alert manager), and Base / Results, one panel open at a time;
-//               Account and Trade, the two windows; Exit replay, set apart at the far end
-//               windows; Exit replay, set apart at the far end
+//   footer      Alerts (the alert manager), and Go to / Base / Results, one panel open at a
+//               time; Account and Trade, the two windows; Exit replay, set apart at the far end
+//
+// GO TO (the panel): a time of day on the instrument's clock -- on its next trading day, at its
+// next occurrence, or on a date -- and a stop price, which is a price watch like any other (the
+// line on the chart, the Notification Center) so every advance stops at it, with Run to run on
+// until it fires.
 //
 // The base timeframe and pause-on-fill are one click away instead of permanently on screen;
 // the alerts Next alert runs to are the alert manager's (client/alerts), opened from here; and
@@ -42,6 +47,9 @@ const DOCK_ORDER = 10
 /** The play pace, per browser: a viewer's preference, not part of the replay. */
 const PLAY_DELAY_KEY = 'wd.replay.playDelay'
 
+/** The Go to panel's time and day, per browser: "06:00 on the next trading day" is a habit. */
+const GO_TO_KEY = 'wd.replay.goTo'
+
 /** The Exit button's key in its two-press arming. */
 const EXIT = 'exit'
 
@@ -51,7 +59,7 @@ const EXIT = 'exit'
  * its progress, or a Stop already pressed, shows at once. */
 const BUSY_REVEAL_MS = 300
 
-type PanelId = 'settings' | 'results' | null
+type PanelId = 'goto' | 'settings' | 'results' | null
 
 export interface ReplayControlsOptions {
   controller: ReplayController
@@ -73,10 +81,21 @@ export interface ReplayControlsOptions {
   /** The alert manager the Alerts toggle opens -- where the alerts Next alert stops at are
    * written. Absent, there is no toggle. */
   alerts?: { isOpen: () => boolean; toggle: () => void }
+  /** The stop price the Go to panel sets: a price watch on the replay's instrument (watches.ts).
+   * Absent, the panel has no price row. */
+  priceStop?: PriceStop
   /** Injected by the tests: the wait between two played steps. */
   sleep?: (ms: number) => Promise<void>
   /** How long an advance runs before the controls show it (BUSY_REVEAL_MS). The tests pass 0. */
   busyRevealMs?: number
+}
+
+/** The one price watch the controls own. */
+export interface PriceStop {
+  /** The price it stops at while armed, or null when there is none (or it has fired). */
+  get(): number | null
+  set(price: number): Promise<void>
+  clear(): Promise<void>
 }
 
 export interface ReplayControls {
@@ -102,6 +121,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     onModeChange: () => render()
   })
   let panel: PanelId = null
+  // What the Go to panel holds between renders: every control change rebuilds the body, and a
+  // half-typed price must survive it.
+  let goTo: GoToSpec = readGoTo()
+  let priceDraft = ''
   // The status row's walk line while a walk or a search is in progress, so a progress report
   // can patch it.
   let walkLine: HTMLElement | null = null
@@ -248,6 +271,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     body.innerHTML = ''
     walkLine = null
     body.append(renderTransport(), renderNext(), renderToggles())
+    if (panel === 'goto') body.appendChild(renderGoTo())
     if (panel === 'settings') body.appendChild(renderSettings())
     if (panel === 'results') body.appendChild(renderResults())
     win.reflow()
@@ -373,7 +397,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     } else if (last) {
       // Absent until an advance has stopped.
       const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
-      reason.textContent = describeStop(last)
+      reason.textContent = describeStop(last, controller.grid.schedule.timezone)
       reason.title = last.alert?.readings ? `${reason.textContent} — ${last.alert.readings}` : reason.textContent
       row.appendChild(reason)
     }
@@ -392,6 +416,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       toggle.title = `The alert manager: ${count} enabled on ${controller.symbol.split(':')[1] ?? controller.symbol}, which is where Next alert stops`
       row.appendChild(toggle)
     }
+
+    const goToggle = toggleButton('Go to', '', panel === 'goto', () => showPanel('goto'))
+    goToggle.title = 'Go to a time, or stop at a price'
+    row.appendChild(goToggle)
 
     // The base is on the toggle itself: it decides how accurately every fill is priced, so
     // it should be legible without opening anything.
@@ -445,6 +473,149 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   function showPanel(next: PanelId): void {
     panel = panel === next ? null : next
     renderBody()
+  }
+
+  // -- Go to -------------------------------------------------------------------------------
+  //
+  //   Time   [06:00] [next trading day v]  [Go]  Thu, Oct 22, 06:00
+  //   Price  [1.16250      ] [Stop here] [Run]   stops at 1.16250 ×
+
+  function pressGoTo(): void {
+    if (controller.busy) return
+    const at = goToInstant(controller.cursor, goTo, controller.grid)
+    if (at === null) {
+      flash(win.element, 'Choose a time after the replay’s clock')
+      return
+    }
+    player.pause()
+    void controller.goTo(at).then((r) => r && options.onStop?.(r))
+  }
+
+  function renderGoTo(): HTMLElement {
+    const box = el('div', 'wd-replay-panel wd-replay-goto')
+    const busy = busyShown()
+    const zone = controller.grid.schedule.timezone
+
+    const timeRow = el('div', 'wd-replay-row')
+    const timeLabel = el('span', 'wd-replay-label')
+    timeLabel.textContent = 'Time'
+    const time = document.createElement('input')
+    time.type = 'time'
+    time.className = 'kc-input wd-replay-input wd-replay-goto-time'
+    time.value = minuteValue(goTo.minute)
+    time.title = `A time of day on ${controller.symbol.split(':')[1] ?? controller.symbol}'s clock (${zoneName(zone)})`
+    time.setAttribute('aria-label', 'Go to time')
+    time.addEventListener('change', () => {
+      const minute = minuteOf(time.value)
+      if (minute === null) return
+      goTo = { ...goTo, minute }
+      writeGoTo(goTo)
+      renderBody()
+    })
+    time.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+      const minute = minuteOf(time.value)
+      if (minute !== null) goTo = { ...goTo, minute }
+      pressGoTo()
+    })
+    const mode = select(
+      [
+        { value: 'day', label: 'next trading day' },
+        { value: 'next', label: 'next time' },
+        { value: 'date', label: 'on date' }
+      ],
+      goTo.mode,
+      (value) => {
+        goTo = { ...goTo, mode: value as GoToMode, day: goTo.day ?? nextDayOf(controller.cursor, zone) }
+        writeGoTo(goTo)
+        renderBody()
+      }
+    )
+    mode.title = 'Next trading day: that time on the first day after the replay’s own that the market trades. Next time: the next time the clock reads it.'
+    mode.setAttribute('aria-label', 'Go to which day')
+    timeRow.append(timeLabel, time, mode)
+    if (goTo.mode === 'date') {
+      const day = dayInput(new Date(goTo.day ?? nextDayOf(controller.cursor, zone)).toISOString().slice(0, 10))
+      day.classList.add('wd-replay-goto-day')
+      day.setAttribute('aria-label', 'Go to date')
+      day.addEventListener('change', () => {
+        const parsed = Date.parse(`${day.value}T00:00Z`)
+        if (!Number.isFinite(parsed)) return
+        goTo = { ...goTo, day: parsed }
+        renderBody()
+      })
+      timeRow.appendChild(day)
+    }
+    const target = goToInstant(controller.cursor, goTo, controller.grid)
+    const go = button('kc-button kc-button-outline wd-replay-goto-go', 'Go', pressGoTo)
+    go.disabled = busy || target === null
+    go.title = target === null ? 'Choose a time after the replay’s clock' : `Advance to ${formatClock(target, zone)}, stopping sooner for a fill pause or a price watch`
+    const preview = el('span', 'wd-replay-muted wd-replay-goto-target')
+    preview.textContent = target === null ? 'before the clock' : formatClock(target, zone)
+    timeRow.append(go, preview)
+    box.appendChild(timeRow)
+
+    if (options.priceStop) box.appendChild(renderPriceStop(options.priceStop, busy))
+    return box
+  }
+
+  function renderPriceStop(stop: PriceStop, busy: boolean): HTMLElement {
+    const row = el('div', 'wd-replay-row')
+    const label = el('span', 'wd-replay-label')
+    label.textContent = 'Price'
+    const quote = controller.snapshot.quotes[controller.symbol]
+    const mid = quote ? (quote.bid + quote.ask) / 2 : null
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.inputMode = 'decimal'
+    input.className = 'kc-input wd-replay-input wd-replay-price'
+    input.value = priceDraft
+    input.placeholder = mid === null ? 'price' : formatPrice(mid, quote?.bid)
+    input.setAttribute('aria-label', 'Stop at price')
+    input.title = 'The price to stop at: the first bar whose mid of bid and ask reaches it'
+    input.addEventListener('input', () => {
+      priceDraft = input.value
+    })
+    const set = (): void => {
+      const price = Number(priceDraft.trim())
+      if (!priceDraft.trim() || !Number.isFinite(price) || price <= 0) {
+        flash(win.element, 'Type the price to stop at')
+        return
+      }
+      priceDraft = ''
+      void stop.set(price).then(
+        () => renderBody(),
+        (err) => flash(win.element, err instanceof Error ? err.message : 'Could not set the stop')
+      )
+    }
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') set()
+    })
+    const place = button('kc-button kc-button-outline wd-replay-price-set', 'Stop here', set)
+    place.title = 'Stop every advance -- Step, Play, Next alert, Go to -- where the price reaches it'
+    const run = button('kc-button kc-button-outline wd-replay-run', 'Run', () => {
+      if (controller.busy) return
+      player.pause()
+      void controller.runToWatch().then((r) => r && options.onStop?.(r))
+    })
+    run.disabled = busy || controller.armedStops === 0
+    run.title =
+      controller.armedStops === 0
+        ? 'Set a stop price (or place a price watch) first'
+        : 'Run on until the price reaches the stop (or another price watch fires) -- quickly, however far. Does not move if it never does.'
+    row.append(label, input, place, run)
+    const current = stop.get()
+    if (current !== null) {
+      const at = el('span', 'wd-replay-muted wd-replay-price-current')
+      at.textContent = `stops at ${current}`
+      const clear = button('kc-button wd-replay-price-clear', '×', () => {
+        void stop.clear().then(() => renderBody())
+      })
+      clear.title = 'Remove the stop price'
+      clear.setAttribute('aria-label', 'Remove the stop price')
+      row.append(at, clear)
+    }
+    return row
   }
 
   function renderSettings(): HTMLElement {
@@ -545,6 +716,52 @@ function readDelay(): number {
   }
 }
 
+function readGoTo(): GoToSpec {
+  const fallback: GoToSpec = { mode: 'day', minute: 6 * 60 }
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(GO_TO_KEY) ?? 'null') as Partial<GoToSpec> | null
+    if (!stored) return fallback
+    const mode = stored.mode === 'next' || stored.mode === 'day' ? stored.mode : 'day'
+    const minute = typeof stored.minute === 'number' && stored.minute >= 0 && stored.minute < 1440 ? stored.minute : fallback.minute
+    return { mode, minute }
+  } catch {
+    return fallback
+  }
+}
+
+/** The time and which day, not a date: a date chosen once is stale by the next replay. */
+function writeGoTo(spec: GoToSpec): void {
+  try {
+    window.localStorage.setItem(GO_TO_KEY, JSON.stringify({ mode: spec.mode === 'date' ? 'day' : spec.mode, minute: spec.minute }))
+  } catch {
+    // Not remembered.
+  }
+}
+
+/** `HH:MM` for a minute of the day. */
+function minuteValue(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
+}
+
+/** The minute of the day a `HH:MM` reading names, or null. */
+function minuteOf(value: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})/.exec(value)
+  if (!m) return null
+  const minute = Number(m[1]) * 60 + Number(m[2])
+  return minute >= 0 && minute < 1440 ? minute : null
+}
+
+/** The calendar day after `ms`'s on `zone`'s clock, as its wall-clock midnight. */
+function nextDayOf(ms: number, zone: string): number {
+  return Math.floor(toWall(ms, zone) / 86_400_000) * 86_400_000 + 86_400_000
+}
+
+/** A price with as many decimals as `like` (a quote's bid) carries, at most six. */
+function formatPrice(price: number, like: number | undefined): string {
+  const decimals = like === undefined ? 5 : Math.min(6, (String(like).split('.')[1] ?? '').length || 2)
+  return price.toFixed(decimals)
+}
+
 function writeDelay(ms: number): void {
   try {
     window.localStorage.setItem(PLAY_DELAY_KEY, String(ms))
@@ -561,12 +778,14 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable || target.closest('.klinecharts-pro-pane-grip') !== null
 }
 
-function describeStop(result: AdvanceResult): string {
+function describeStop(result: AdvanceResult, zone: string): string {
   switch (result.reason) {
     case 'alert':
       return `Alert: ${result.alert?.name ?? ''}`
     case 'none':
-      return 'No alert triggers before the end of the data'
+      // Either way the cursor did not move: a replay cannot step back, so a run that would only
+      // have reached the end of the data is not made.
+      return result.seeking === 'watches' ? 'The price is not reached before the end of the data' : 'No alert triggers before the end of the data'
     case 'fill':
       return `Paused on ${result.events.some((e) => e.kind === 'fill') ? 'a fill' : 'a close'}`
     case 'watch': {
@@ -583,7 +802,8 @@ function describeStop(result: AdvanceResult): string {
       // What was asked for, which is what happened. Not the bars walked: whether the engine
       // walked them or seeked over the span (nothing working could fill) is the replay's
       // business, and "Jumped — nothing working" on a plain one-candle step read as an error.
-      return 'interval' in result.request ? `Stepped ${describeAdvance(result.request)}` : 'Advanced'
+      if ('interval' in result.request) return `Stepped ${describeAdvance(result.request)}`
+      return 'to' in result.request ? `Went to ${formatClock(result.to, zone)}` : 'Advanced'
   }
 }
 
