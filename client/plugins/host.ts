@@ -400,11 +400,16 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
   }
 
   // Everything a binding is made from: the indicator, the instrument, the pane's position (what
-  // its settings are kept under) and the revision of those settings.
-  const signatureOf = (ind: Indicator, ctx: Omit<BindContext, 'indicator' | 'siblings' | 'config'>): string => {
+  // its settings are kept under), the revision of those settings, and whatever else on the chart
+  // the plugin says it follows.
+  const signatureOf = (
+    ind: Indicator,
+    ctx: Omit<BindContext, 'indicator' | 'siblings' | 'config' | 'follows'>,
+    follows: unknown
+  ): string => {
     const config = configByTemplate.get(ind.name)
     const rev = config ? paneConfigs.rev(config, ctx.paneIndex) : null
-    return JSON.stringify([ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex, rev])
+    return JSON.stringify([ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex, rev, follows ?? null])
   }
 
   const bind = (entry: WiredPane, plugin: IndicatorPlugin, ind: Indicator, ctx: BindContext, sig: string): Binding | null => {
@@ -495,7 +500,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const plugin = pluginFor(ind.name)
       if (!plugin) continue
       seen.add(ind.id)
-      const sig = signatureOf(ind, base)
+      let follows: unknown
+      try {
+        follows = plugin.follows?.(ind, indicators)
+      } catch (err) {
+        console.warn(`[plugins] ${plugin.id} follows failed for ${ind.name}`, err)
+      }
+      const sig = signatureOf(ind, base, follows)
       const existing = entry.bindings.get(ind.id)
       if (existing && existing.signature === sig) continue
       const siblings = [...entry.bindings.values()]
@@ -508,7 +519,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // binding still holds it is unreachable by key -- the template's `peekStore` finds
       // nothing and the pane stays blank however much the orphan is filled.
       const config = configByTemplate.get(ind.name)
-      const b = bind(entry, plugin, ind, { ...base, indicator: ind, siblings, config: config && paneConfigs.read(config, entry.paneIndex) }, sig)
+      const b = bind(
+        entry,
+        plugin,
+        ind,
+        { ...base, indicator: ind, siblings, config: config && paneConfigs.read(config, entry.paneIndex), follows },
+        sig
+      )
       if (b) entry.bindings.set(ind.id, b)
       else entry.bindings.delete(ind.id)
       if (existing) dispose(existing)

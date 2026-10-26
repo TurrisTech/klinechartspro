@@ -1,8 +1,15 @@
+import type { Indicator } from 'klinecharts'
 import type { IndicatorGroup, SymbolInfo } from '../../src'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import { dailySource } from './api'
 import type { SessionClock } from './calendar'
-import { registerHeathLevelsIndicator, settingsOf as heathSettingsOf, TEMPLATE_NAME as HEATH_TEMPLATE } from './heathtemplate'
+import type { HeathLevelSettings } from './heathlevels'
+import {
+  registerHeathLevelsIndicator,
+  settingsOf as heathSettingsOf,
+  TEMPLATE_NAME as HEATH_TEMPLATE,
+  zoneSettingsOf
+} from './heathtemplate'
 import { registerTradeTalkIndicator, TEMPLATE_NAME } from './templates'
 
 // TradeTalk as a client plugin: one template on the price pane, one source (daily bars), and
@@ -32,6 +39,15 @@ export function clockFor(symbol: SymbolInfo, interval: string): SessionClock | n
   const geometry = symbol.dayGeometry
   if (!timezone || !geometry) return null
   return { timezone, openOffset: geometry.openOffset, sessionDated: isSessionDated(interval) }
+}
+
+/** The zones TradeTalk entries trades: those of the Heath levels indicator on its own pane -- the
+ * first, if there are several -- or null when there is none, and then the indicator's defaults.
+ * Only the settings that shape a zone are followed (`zoneSettingsOf`); a pane in another wall
+ * slot is another chart and is not looked at. */
+export function followedHeath(entries: Indicator, indicators: readonly Indicator[]): HeathLevelSettings | null {
+  const heath = indicators.find((other) => other.name === HEATH_TEMPLATE && other.paneId === entries.paneId)
+  return heath ? zoneSettingsOf(heath.calcParams) : null
 }
 
 export function createTradeTalkPlugin(): IndicatorPlugin {
@@ -67,6 +83,9 @@ export function createTradeTalkPlugin(): IndicatorPlugin {
       return groups
     },
     matches: (name) => name === TEMPLATE_NAME || name === HEATH_TEMPLATE,
+    // An edit of the Heath levels indicator beside it rebinds TradeTalk entries, which then
+    // trades the zones as they are now drawn.
+    follows: (indicator, indicators) => (indicator.name === TEMPLATE_NAME ? followedHeath(indicator, indicators) : null),
     bind(ctx: BindContext): BindingSpec | null {
       const f = facilities
       const name = ctx.indicator.name
@@ -86,10 +105,11 @@ export function createTradeTalkPlugin(): IndicatorPlugin {
           overrides: typeof precision === 'number' ? { precision } : undefined
         }
       }
+      const heath = (ctx.follows as HeathLevelSettings | null | undefined) ?? null
       return {
         sources: [dailySource(ctx.vendor, ctx.ticker) as SourceSpec],
         label: label('TradeTalk', 'daily levels', clock),
-        extendData: () => ({ clock, barMs, tick }),
+        extendData: () => ({ clock, barMs, tick, heath }),
         // The template declares a 5-digit precision so it never TIGHTENS the price axis
         // (klinecharts takes the minimum of the pane's indicator precisions); the
         // instrument's own is applied here, as the bid/ask plugin does.

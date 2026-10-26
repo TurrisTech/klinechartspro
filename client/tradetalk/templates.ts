@@ -2,6 +2,7 @@ import { registerIndicator, type Chart, type IndicatorTemplate, type KLineData }
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import type { Unit } from './calendar'
 import { heathLevels, type HeathLevelSettings } from './heathlevels'
+import { zoneSettingsOf } from './heathtemplate'
 import {
   chartSessions,
   chipText,
@@ -34,18 +35,11 @@ export const TEMPLATE_NAME = 'TT:entries'
  * The last was appended, so a layout saved before it existed reads its default. */
 export const DEFAULT_PARAMS = [2, 1, 1, 5, 0, 1, 1]
 
-/** The supply and demand the entry rule trades from when its switch is on: the Heath levels
- * indicator's own defaults, so what it trades is what that indicator draws. */
-const ENTRY_HEATH: HeathLevelSettings = {
-  left: 5,
-  right: 5,
-  sides: 0,
-  freshOnly: false,
-  stopLine: false,
-  maxRun: 3,
-  minWidth: 0.5,
-  maxCandle: 2
-}
+/** The supply and demand the entry rule trades from when its switch is on and no Heath levels
+ * indicator is on its pane: that indicator's defaults. With one there, the plugin hands its zone
+ * settings over in `extendData.heath` (plugin.ts `followedHeath`), so what is traded is what is
+ * drawn -- its largest candle, its run, its turn. */
+export const ENTRY_HEATH: HeathLevelSettings = zoneSettingsOf(undefined)
 
 const MIN_UNITS: readonly Unit[] = ['D', 'W', 'M']
 
@@ -92,7 +86,12 @@ export interface TradeTalkValue extends BarValue {
   summary?: Summary
 }
 
-type Indicator = { extendData?: ExtendData; calcParams?: unknown[] }
+export interface EntriesExtendData extends ExtendData {
+  /** The zone settings of the Heath levels indicator on this pane, or null for none. */
+  heath?: HeathLevelSettings | null
+}
+
+type Indicator = { extendData?: EntriesExtendData; calcParams?: unknown[] }
 
 /**
  * The sessions the chart can see and the calendar map over its bars -- the half of a pass a live
@@ -124,7 +123,7 @@ export function calc(dataList: KLineData[], indicator: Indicator): TradeTalkValu
   const { sessions, map } = held
   const { values, trades, units, skips } = computeTradeTalk({
     bars: dataList,
-    heath: settings.heath ? heathLevels(dataList, ENTRY_HEATH) : undefined,
+    heath: settings.heath ? heathLevels(dataList, extend.heath ?? ENTRY_HEATH) : undefined,
     sessions,
     clock: extend.clock,
     barMs: extend.barMs,
@@ -289,7 +288,7 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
           name: TEMPLATE_NAME,
           label: 'TradeTalk entries',
           description:
-            'Where the TradeTalk (Heath) method would enter: a candle sweeps a level — a yearly/quarterly/monthly/weekly/daily open, the previous period’s high, low or midpoint, or a supply or demand zone’s line — and closes back through it; the entry is a stop order at that candle’s extreme, the stop at its other extreme, the target the next opposing level, and anything under the minimum reward:risk is not a trade. Params: min R:R, bias filter, trading hours, order life, smallest level, level map on/off, supply and demand on/off.'
+            'Where the TradeTalk (Heath) method would enter: a candle sweeps a level — a yearly/quarterly/monthly/weekly/daily open, the previous period’s high, low or midpoint, or a supply or demand zone’s line (the zones of the Heath levels indicator on the pane, with its settings, or its defaults when there is none) — and closes back through it; the entry is a stop order at that candle’s extreme, the stop at its other extreme, the target the next opposing level, and anything under the minimum reward:risk is not a trade. Params: min R:R, bias filter, trading hours, order life, smallest level, level map on/off, supply and demand on/off.'
         }
       ]
     }

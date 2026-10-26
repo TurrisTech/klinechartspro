@@ -149,6 +149,9 @@ export interface BindContext {
    * the pane's own, or what an unconfigured pane draws with. An edit rebinds, so a binding
    * reads this once and never has to watch it. */
   config: object | undefined
+  /** What the plugin's `follows` answered for this indicator, or undefined for a plugin that
+   * follows nothing. Part of the binding's identity, so like `config` it is read once. */
+  follows?: unknown
 }
 
 export interface SettingsRequest {
@@ -246,4 +249,9 @@ export interface IndicatorPlugin {
   paneConfigs?: readonly PaneConfig[]
   /** Answer the params dialog (ChartProOptions.indicatorParamsValidator). */
   validateParams?(request: ValidateRequest): Promise<IndicatorParamsCheck>
+  /** What a binding reads from the chart beyond its own indicator: another template's
+   * parameters, say. Asked with the chart's indicators on every reconcile; the answer is part
+   * of the binding's identity, so a change rebinds just as an edit of the indicator's own
+   * parameters does, and `bind` gets it as `BindContext.follows`. JSON-serialisable. */
+  follows?(indicator: Indicator, indicators: readonly Indicator[]): unknown
 }
