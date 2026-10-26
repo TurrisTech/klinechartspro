@@ -176,6 +176,37 @@ describe('createPluginHost', () => {
     expect([...keys].every((k) => peekStore(k) === undefined)).toBe(true)
   })
 
+  test('what a plugin follows on the chart is part of the binding: a change there rebinds', async () => {
+    // PTS follows the params of an OTHER indicator on its chart, as TradeTalk entries follows
+    // Heath levels. An edit of that one must rebind PTS, which is handed the new answer.
+    const { plugin: base } = pointsPlugin([{ date: 1, v: 1 }])
+    const followed: unknown[] = []
+    const plugin: IndicatorPlugin = {
+      ...base,
+      follows: (_ind, indicators) => indicators.find((other) => other.name === 'OTHER')?.calcParams ?? null,
+      bind: (ctx) => {
+        followed.push(ctx.follows)
+        return base.bind(ctx)
+      }
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [{ timestamp: 1 }]
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5]), fakeIndicator('OTHER', 'o1', [1])]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    expect(followed).toEqual([[1]])
+    await new Promise((r) => setTimeout(r, 600)) // a reconcile with nothing changed binds nothing
+    expect(followed).toEqual([[1]])
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5]), fakeIndicator('OTHER', 'o1', [2])]
+    await new Promise((r) => setTimeout(r, 600))
+    expect(followed).toEqual([[1], [2]])
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5])]
+    await new Promise((r) => setTimeout(r, 600))
+    expect(followed).toEqual([[1], [2], null])
+  })
+
   test('a settings rebind that keeps a source keeps its store reachable by key', async () => {
     // A settings edit (mtf, the AREV lab) rebinds onto the same keys. The store must survive
     // the hand-over under its key, or the template's peekStore finds nothing and the pane goes

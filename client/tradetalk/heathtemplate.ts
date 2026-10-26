@@ -72,6 +72,16 @@ export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
   }
 }
 
+/** The settings that decide which zones exist and where: the turn, the run, the smallest zone and
+ * the largest candle. TradeTalk entries trades the zones the Heath levels indicator on its pane
+ * draws, so it takes these from that indicator (plugin.ts `followedHeath`). The rest are the
+ * drawing's own choices and stay with it -- above all `fresh only`, which is judged over the
+ * whole series and so is something a trade taken at the time could not have known. */
+export function zoneSettingsOf(calcParams: unknown[] | undefined): HeathLevelSettings {
+  const { left, right, maxRun, minWidth, maxCandle } = settingsOf(calcParams)
+  return { left, right, sides: 0, freshOnly: false, stopLine: false, maxRun, minWidth, maxCandle }
+}
+
 export interface HeathValue {
   [key: string]: unknown
   /** Attached to the last bar only: every supply and demand, which `draw` reads back. */

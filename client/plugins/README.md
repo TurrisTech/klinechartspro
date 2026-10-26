@@ -38,9 +38,18 @@ const plugin: IndicatorPlugin = {
     label: (state) => phaseLabel('MINE', [state.sources[0]?.store]) ?? 'MINE',   // legend.ts
     // optional: extendData(state), overrides, yAxisGap, attach()
   }),
-  // optional: paneConfigs (settings per pane, below), validateParams
+  // optional: paneConfigs (settings per pane, below), validateParams,
+  //           follows(indicator, indicators) -- what else on the chart a binding is made from
 }
 ```
+
+**`follows`** is for a binding that depends on another indicator on the same chart: TradeTalk
+entries trades the zones of the Heath levels indicator beside it. The host asks it on every
+reconcile and adds the answer to the binding's identity, beside its own `calcParams`. So an edit
+of the followed indicator rebinds this one, exactly as an edit of its own parameters would, and
+`bind` receives the answer as `ctx.follows`. Return something small and JSON-serialisable (the
+settings the binding uses, not the other indicator's whole state), or an edit that changes
+nothing this binding reads rebinds it anyway.
 
 Then add it to `registry.ts`. `PluginFacilities` is the whole of what a plugin may depend on:
 the API (`api.get`), the stream, `hasFeature`, the unified `points` fetch, the period/symbol

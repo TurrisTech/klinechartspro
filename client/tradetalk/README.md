@@ -112,7 +112,8 @@ yardstick. A candle over the limit has one of two effects:
 - **as the last opposite-colour candle itself**, that turn has **no level**. The candle before it is
   not "the last up-close candle before the sell-off", so drawing from it would invent a level.
 
-`TT:entries` trades the same zones with the same default (`ENTRY_HEATH`).
+`TT:entries` trades the zones the Heath levels indicator on its pane draws, this limit included
+(below, "It feeds the entries too"); with no Heath levels there it uses this default.
 
 **How 2× was chosen.** All figures come from prod bars of the seven majors, 2002 → 2026-10-23, at
 1D, 4h (folded from 1h on the 17:00 New York grid) and 1h. That is every level the shipped defaults
@@ -214,9 +215,20 @@ reading (#145), where on hourly charts drawn from the single line he scraps it o
 **the line** itself (#93, #94). The user asked for his readings, and the table above is now them.
 
 **It feeds the entries too** (2026-09-28). `TT:entries` parameter 7 (`supply and demand`, 0/1,
-default **on**) computes these same zones — the shipped defaults of this indicator, so what it
-trades is what the other indicator draws — and hands the entry rule one line per live zone, at the
-zone's open, labelled `supply` or `demand`. From there nothing about the rule changes: a candle
+default **on**) computes these same zones and hands the entry rule one line per live zone, at the
+zone's open, labelled `supply` or `demand`.
+
+**It follows the Heath levels indicator on its pane** (user, 2026-10-26: "make TradeTalk entries
+follow the Heath levels setting"). With a Heath levels indicator on the same pane, entries trades
+the zones that indicator draws: its bars before and after a turn, candles in one zone, smallest
+zone and **largest candle** (`zoneSettingsOf`). An edit to any of them rebinds entries, which trades
+the new zones within half a second. The plugin declares this through the host's `follows` hook,
+`followedHeath` in `plugin.ts`. With no Heath levels on the pane it uses that indicator's defaults
+(`ENTRY_HEATH`), and with two it follows the first. A Heath levels indicator on another wall pane
+is another chart and is not looked at. The drawing's own choices stay with the drawing: which
+side, the stop line, shading and calendar levels. **Fresh only** in particular is never followed:
+it filters zones by whether price ever came back, judged over the whole series, which a trade
+taken at the time could not know. From there nothing about the rule changes: a candle
 sweeps the line, closes back through it, and the break of that candle is the entry. His own setups
 read this way (§8 setup 1 pulls back "into a level"), and a zone is **live on the map from the bar
 its swing was confirmed until the bar that erased it** — the same forward-only life the other

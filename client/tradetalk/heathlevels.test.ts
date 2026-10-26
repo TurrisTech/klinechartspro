@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { Candle } from './calendar'
 import { atr, heathLevels, isLive, LOOKBACK, originOf, runStart, zoneOf, type HeathLevelSettings } from './heathlevels'
-import { emptyText, levelLabel, settingsOf, DEFAULT_PARAMS } from './heathtemplate'
+import { emptyText, levelLabel, settingsOf, zoneSettingsOf, DEFAULT_PARAMS } from './heathtemplate'
 
 const bar = (open: number, high: number, low: number, close: number): Candle => ({
   timestamp: 0,
@@ -379,6 +379,20 @@ describe('the chart half', () => {
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50]).maxCandle).toBe(2)
     // 0 is a setting, not a missing value: no limit.
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50, 0]).maxCandle).toBe(0)
+  })
+
+  test('what TradeTalk entries takes from it is what shapes a zone, never what filters the drawing', () => {
+    // left, right, sides, fresh only, stop line, fill, calendar, max run, smallest, largest
+    expect(zoneSettingsOf([3, 4, 1, 1, 1, 50, 0, 2, 80, 150])).toEqual({
+      left: 3,
+      right: 4,
+      sides: 0,
+      freshOnly: false,
+      stopLine: false,
+      maxRun: 2,
+      minWidth: 0.8,
+      maxCandle: 1.5
+    })
   })
 
   test('a level says whether price has been back to it', () => {
