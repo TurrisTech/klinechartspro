@@ -37,10 +37,10 @@ import { timestampMemo } from '../plugins/calc'
 
 export const TEMPLATE_NAME = 'TT:heathlevels'
 
-/** [left, right, sides, fresh only, stop line, fill, calendar, max run, smallest zone %].
- * Everything after `stop line` was appended rather than replacing anything, so a layout saved
- * before a parameter existed reads its default. */
-export const DEFAULT_PARAMS = [5, 5, 0, 0, 0, 12, 1, 3, 50]
+/** [left, right, sides, fresh only, stop line, fill, calendar, max run, smallest zone %,
+ * largest candle %]. Everything after `stop line` was appended rather than replacing anything, so
+ * a layout saved before a parameter existed reads its default. */
+export const DEFAULT_PARAMS = [5, 5, 0, 0, 0, 12, 1, 3, 50, 200]
 
 function numberAt(calcParams: unknown[] | undefined, at: number, fallback: number): number {
   const raw = calcParams?.[at]
@@ -67,7 +67,8 @@ export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
     calendar: Math.round(numberAt(calcParams, 6, DEFAULT_PARAMS[6])) !== 0,
     maxRun: Math.min(10, Math.max(1, Math.round(numberAt(calcParams, 7, DEFAULT_PARAMS[7])))),
     // Held as a multiple of ATR; the parameter is a percentage, which reads better in a box.
-    minWidth: Math.min(5, Math.max(0, Math.round(numberAt(calcParams, 8, DEFAULT_PARAMS[8])) / 100))
+    minWidth: Math.min(5, Math.max(0, Math.round(numberAt(calcParams, 8, DEFAULT_PARAMS[8])) / 100)),
+    maxCandle: Math.min(10, Math.max(0, Math.round(numberAt(calcParams, 9, DEFAULT_PARAMS[9])) / 100))
   }
 }
 
@@ -262,7 +263,8 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       { paramNameKey: 'Shading opacity %', precision: 0, min: 0, max: 100, default: DEFAULT_PARAMS[5] },
       { paramNameKey: 'Draw the calendar levels (0/1)', precision: 0, min: 0, max: 1, default: DEFAULT_PARAMS[6] },
       { paramNameKey: 'Candles in one zone (max)', precision: 0, min: 1, max: 10, default: DEFAULT_PARAMS[7] },
-      { paramNameKey: 'Smallest zone (% of ATR)', precision: 0, min: 0, max: 500, default: DEFAULT_PARAMS[8] }
+      { paramNameKey: 'Smallest zone (% of ATR)', precision: 0, min: 0, max: 500, default: DEFAULT_PARAMS[8] },
+      { paramNameKey: 'Largest candle (% of ATR, 0 no limit)', precision: 0, min: 0, max: 1000, default: DEFAULT_PARAMS[9] }
     ])
     registered = true
   }
@@ -271,7 +273,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       name: TEMPLATE_NAME,
       label: 'Heath levels (supply & demand)',
       description:
-        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand), and the run of same-colour candles before it — as a line at the earliest open, with their BODIES shaded as the area and the stop beyond its wick. Drawn only once price has TRADED AWAY from those candles — a close beyond the run’s far wick, which is what makes them a zone — dashed back over the stretch that existed in hindsight only, dimmed once price has been back into it, and erased by a close through the line or by one candle covering the whole area. Optionally with the objective calendar levels underneath — the yearly, quarterly, monthly, weekly and daily opens and the previous period’s high, low and midpoint. The zone is ONE candle when that candle is wide enough, and the one before it joins while it is not — “wide enough” being a percentage of ATR(14), so it means the same thing on every instrument and timeframe. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity, calendar levels on/off, candles in one zone, smallest zone.'
+        'Supply and demand the way the TradeTalk method draws them: the OPEN of the last opposite-colour candle before a turn — the last up-close candle before a sell-off (supply), the last down-close candle before a rally (demand), and the run of same-colour candles before it — as a line at the earliest open, with their BODIES shaded as the area and the stop beyond its wick. Drawn only once price has TRADED AWAY from those candles — a close beyond the run’s far wick, which is what makes them a zone — dashed back over the stretch that existed in hindsight only, dimmed once price has been back into it, and erased by a close through the line or by one candle covering the whole area. Optionally with the objective calendar levels underneath — the yearly, quarterly, monthly, weekly and daily opens and the previous period’s high, low and midpoint. The zone is ONE candle when that candle is wide enough, and the one before it joins while it is not — “wide enough” being a percentage of ATR(14), so it means the same thing on every instrument and timeframe. A candle too big to be supply or demand — by default more than twice the ATR(14) of the candles before it — is never part of a zone: it stops the run, and when it is the last opposite-colour candle itself that turn has no level. Params: bars before / after a turn, which side, fresh only, stop line, shading opacity, calendar levels on/off, candles in one zone, smallest zone, largest candle.'
     }
   ]
 }

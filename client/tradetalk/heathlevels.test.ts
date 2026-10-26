@@ -17,7 +17,8 @@ const dated = (bars: Candle[]): Candle[] => bars.map((b, i) => ({ ...b, timestam
 // `maxRun: 1` keeps every case below on the single last opposite-colour candle, which is what
 // the erasure and freshness rules are about; the run is its own describe at the bottom. The
 // `minWidth` here is far larger than any fixture's ATR, so the zone is never "wide enough" and
-// the cap alone decides the run -- which is what those cases are about.
+// the cap alone decides the run -- which is what those cases are about. `maxCandle: 0` takes
+// every candle whatever its size; the limit has its own describe too.
 const SETTINGS: HeathLevelSettings = {
   left: 2,
   right: 2,
@@ -25,7 +26,8 @@ const SETTINGS: HeathLevelSettings = {
   freshOnly: false,
   stopLine: false,
   maxRun: 1,
-  minWidth: 99
+  minWidth: 99,
+  maxCandle: 0
 }
 
 // A rally whose last candle closes up, then a sell-off: index 3 is the swing top and its own
@@ -353,10 +355,11 @@ describe('the chart half', () => {
       fill: 12,
       calendar: true,
       maxRun: 3,
-      minWidth: 0.5
+      minWidth: 0.5,
+      maxCandle: 2
     })
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
-    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99, 900])).toEqual({
+    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99, 900, 9999])).toEqual({
       left: 1,
       right: 200,
       sides: 2,
@@ -365,13 +368,17 @@ describe('the chart half', () => {
       fill: 100,
       calendar: false,
       maxRun: 10,
-      minWidth: 5
+      minWidth: 5,
+      maxCandle: 10
     })
     // Layouts saved before the shading and calendar parameters existed read their defaults.
     expect(settingsOf([5, 5, 0, 0, 0]).fill).toBe(12)
     expect(settingsOf([5, 5, 0, 0, 0, 12]).calendar).toBe(true)
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1]).maxRun).toBe(3)
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3]).minWidth).toBe(0.5)
+    expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50]).maxCandle).toBe(2)
+    // 0 is a setting, not a missing value: no limit.
+    expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50, 0]).maxCandle).toBe(0)
   })
 
   test('a level says whether price has been back to it', () => {
@@ -453,14 +460,16 @@ describe('one or more candles', () => {
   })
 
   test('every prefix agrees about the runs it can already see', () => {
-    const settings = { ...SETTINGS, maxRun: 3 }
-    const full = heathLevels(RUN, settings)
-    for (let n = 1; n <= RUN.length; n++) {
-      const prefix = heathLevels(RUN.slice(0, n), settings)
-      const visible = full.filter((level) => level.confirmIndex <= n - 1)
-      expect(prefix.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])).toEqual(
-        visible.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])
-      )
+    for (const maxCandle of [0, 1.5]) {
+      const settings = { ...SETTINGS, maxRun: 3, maxCandle }
+      const full = heathLevels(RUN, settings)
+      for (let n = 1; n <= RUN.length; n++) {
+        const prefix = heathLevels(RUN.slice(0, n), settings)
+        const visible = full.filter((level) => level.confirmIndex <= n - 1)
+        expect(prefix.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])).toEqual(
+          visible.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])
+        )
+      }
     }
   })
 })
@@ -503,6 +512,37 @@ describe('the zone widens only while it is too small', () => {
     expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 3 })[0].originIndex).toBe(1)
     // 0 is "always the single last candle", whatever the cap allows.
     expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 0 })[0].originIndex).toBe(3)
+  })
+})
+
+describe('a candle too big is not part of a zone', () => {
+  // RUN's up-close candles against the ATR of the candles before each: index 2 is 1.4 tall
+  // against 0.85 (1.65x), index 3 is 1.4 against 1.033 (1.35x).
+  const supply = (maxCandle: number) =>
+    heathLevels(RUN, { ...SETTINGS, maxRun: 3, maxCandle }).filter((level) => level.side === 'supply')
+
+  test('a big candle before the last one stops the run', () => {
+    expect(supply(0)[0].originIndex).toBe(1) // no limit: the whole run, 1-3
+    expect(supply(1.5)[0]).toMatchObject({ originIndex: 3, originEnd: 3, price: 11.3, low: 11.3, high: 12.4 })
+    expect(supply(1.7)[0].originIndex).toBe(1) // both fit under 1.7x
+  })
+
+  test('a big LAST candle means that turn has no level, not one drawn from further back', () => {
+    expect(supply(1.3)).toEqual([])
+  })
+
+  test('the yardstick is the ATR of the candles BEFORE it, so a big candle is not its own', () => {
+    // Index 3 is 1.4 tall. With its own range in the average the ATR is 1.125 and it would be
+    // 1.24x -- inside a 1.3x limit. Against the three candles before it, it is 1.35x and out.
+    expect(atr(RUN)[3]).toBeCloseTo(1.125, 10)
+    expect(supply(1.3)).toEqual([])
+    expect(supply(1.36)).toHaveLength(1)
+  })
+
+  test('the walk-back takes a predicate for which candles may join', () => {
+    const steps = dated([bar(10, 10.25, 9.95, 10.2), bar(10.2, 10.45, 10.15, 10.4), bar(10.4, 10.65, 10.35, 10.6)])
+    expect(runStart(steps, 2, 5, 999, (i) => i !== 0)).toBe(1)
+    expect(runStart(steps, 2, 5, 999, (i) => i !== 1)).toBe(2)
   })
 })
 

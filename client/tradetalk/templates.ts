@@ -43,7 +43,8 @@ const ENTRY_HEATH: HeathLevelSettings = {
   freshOnly: false,
   stopLine: false,
   maxRun: 3,
-  minWidth: 0.5
+  minWidth: 0.5,
+  maxCandle: 2
 }
 
 const MIN_UNITS: readonly Unit[] = ['D', 'W', 'M']
