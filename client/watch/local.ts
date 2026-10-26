@@ -7,6 +7,7 @@ import {
   describe,
   evaluate,
   needsPrevious,
+  neverWithin,
   OPS,
   parse
 } from '../alerts/conditions'
@@ -274,6 +275,19 @@ export class LocalWatchRegistry implements WatchApi {
   get(id: string): Watch | null {
     const record = this.records.get(id)
     return record ? toWire(record) : null
+  }
+
+  /** Whether no armed watch on `target` could fire on any reading inside the span `summary`
+   * summarises (client/alerts/conditions.ts `neverWithin`) -- so the caller may hand `onEvent`
+   * the summary in place of every reading inside it. A watch that cannot fire at all (fired
+   * once, switched off) is quiet. */
+  quietOver(sourceId: string, target: string, summary: Observation): boolean {
+    for (const record of this.records.values()) {
+      if (record.wire.source !== sourceId || record.wire.target !== target) continue
+      if (!record.wire.enabled || record.status !== 'armed') continue
+      if (!neverWithin(record.wire.condition, summary, record.previous)) return false
+    }
+    return true
   }
 
   /** Every armed watch's `(source, target)`. What a replay asks to decide whether it must

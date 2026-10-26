@@ -14,15 +14,15 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 |---|---|
 | `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
-| `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`. |
+| `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`; Go to's `goToInstant` (a time of day on the instrument's clock: next trading day, next occurrence, a date), `isTradingDay` and `onBaseBoundary`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
-| `alerts.ts` | `ReplayAlerts`: the user's enabled client alerts on this instrument (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to. |
+| `alerts.ts` | `ReplayAlerts`: the user's enabled client alerts on this instrument (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to -- run AHEAD in the background after every advance (the look-ahead), so a press usually finds its answer waiting. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `results.ts` | PURE. `replayResults`: the session's score from its snapshot -- net and realised P&L, win rate, averages, profit factor, expectancy, best/worst, the max drawdown of the realised curve -- and the rows the Results panel draws. |
 | `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
-| `watches.ts` | Price watches over the walk: the `price` source built from base bars, and the local backend `client/watch` draws. |
+| `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
@@ -44,7 +44,10 @@ thing being replayed. On screen there is only what every step uses:
 | [▶] [ Step ]  [1h v] × [1]  every [1 s v]                    |   transport
 | [Next alert]  Stepped 1h                                     |   the status, once there is one
 |--------------------------------------------------------------|
-| [Alerts 2] [Base 1h] [Results] [Account] [Trade]   Exit replay |   the alert manager; one panel
+| [Alerts 2] [Go to] [Base 1h] [Results] [Account] [Trade]  Exit replay |   the alert manager; one panel
+|--------------------------------------------------------------|
+| TIME  [06:00] [next trading day v] [Go]  Fri, Oct 23, 06:00  |   the Go to panel, when open:
+| PRICE [1.12650    ] [Stop here] [Run]  stops at 1.1265 ×     |   a time, and a stop price
 +--------------------------------------------------------------+
 ```
 
@@ -261,6 +264,36 @@ Stop to be hearable at all, and each was a bug before it was a feature:
 A cancel that lands before anything moved does not call `onAdvanced`: nothing the chart shows
 changed, and telling it the clock moved would make every plugin forget and refetch.
 
+**Go to** (2026-10-26, the user: "go to a certain time, for example, 6am of the next trading
+day"). The **Go to** panel takes a time of day on the instrument's own clock and which day:
+**next trading day** (the default -- the first day after the cursor's own calendar day that the
+market trades, so 06:00 from Wednesday 05:05 or Wednesday 20:00 is Thursday 06:00, and from
+Friday it is Monday), **next time** (the next time the clock reads it on a trading day, today
+included) or **on date**. The target is shown before you press Go, and the time and the choice
+of day are remembered per browser (`wd.replay.goTo`; a date is not -- it is stale by the next
+replay). It is an ordinary advance to an instant (`AdvanceRequest` `{ to }`), so a fill pause or a
+firing watch stops it sooner, exactly as for a Step; `session.goTo` moves the instant onto the
+base's grid first (`onBaseBoundary`: a base candle's open stays, anything inside a candle goes to
+its close -- later, never earlier, the rule a finer alert follows). A trading day is one the
+schedule is open at the middle of the session it dates (`isTradingDay`): 05:00 New York for the
+FX week, so Sunday -- open only from 17:00, for Monday's session -- does not count; 12:30 for US
+equities; every day for a continuous schedule.
+
+**Next alert looks ahead** (2026-10-26). A search is pure look-ahead: its answer from `after` --
+the first trigger H in `(after, until]` -- is also the answer from any later instant before H (no
+alert triggers in between, and whether one triggers at an instant is decided by the bar closes
+before it, which are the same whatever the search started from). So after every advance the
+session calls `warmAlerts()` and `ReplayAlerts` starts the next search in the background, while
+the chart loads and the user reads it; a Next alert pressed later takes that answer -- or, still
+running, waits for it and shows its progress -- and a Step that stays short of H keeps it good.
+One search runs at a time (they share `AlertSearch`'s caches): a look-ahead is dropped when the
+cursor passes its hit, when an alert's rule or trigger is edited or one is switched on or off,
+when a Stop is pressed while it is awaited (its null is not kept as "nothing ahead"), or when the
+replay is left. Measured on a six-pane EURUSD wall with a 3m/5m rank-85 star alert (local
+stack): a press to a nearby star stopped in 87-210 ms, the panes' own catching-up being all of
+it; the searches themselves -- 0.4-0.5 s each against prod, ~2 s cold -- now run while nobody is
+waiting. `client/alerts/README.md` has what made the searches themselves faster.
+
 **A walk says how far it has got** (user's call, 2026-09-20: the date, not a percentage or a bar
 count). Without it a months-long 1m walk showed a frozen chart and a Stop button, and "working"
 could not be told from "hung". `walkedTo` is the close of the last base bar walked — never
@@ -337,6 +370,52 @@ rather than `watch` so it cannot be mistaken for an alert about the live market.
 A replay walks one instrument, so `canWatch` refuses any other pane's — a stored line nothing
 could ever evaluate is worse than a menu that says why.
 
+### Stopping at a price, quickly (2026-10-26)
+
+The user: "we want bar replay to stop at a certain price. this feature should work quickly."
+
+**The stop price is a watch.** The Go to panel's **Price** row (`Stop here`, or Enter) places,
+moves or removes ONE replay watch of its own -- `price crosses P`, fired once, marked by its note
+(`STOP_PRICE_NOTE`) -- so it is the same line on the chart (draggable), the same row in the
+Notification Center, and it stops Step, Play, Next alert and Go to with no stop logic of its own.
+**Run** runs on until a watch fires (or a fill pauses it), however far that is. Its placeholder is
+the current mid, because the `price` field is the mid of bid and ask -- what the stop compares.
+
+**The skim** is what makes it quick. An armed watch used to make every advance walk every base
+bar (the seek shortcut would step over it), so a stop a month away at a 1m base was a month of
+1m bars fetched a page at a time and handed over one by one. Now, when nothing could fill
+(`canFill` false) and only the watches need the bars, `session.skim` reads the stored intervals
+coarser than the base that tile it (`summaryIntervals`: 1D then 1h over 1m), coarsest first,
+and asks the observer about each whole candle: **quiet** (`quietOver`) -- no watch could fire on
+any bar inside it -- and the candle is handed over as one bar and the cursor moves past it;
+otherwise it descends a level, down to the base bars, which are handed over exactly as the walk
+hands them. The head before the first whole candle, the tail after the last and a hole in the
+coarser store descend the same way; a stretch the market is closed throughout is passed over.
+"Quiet" is `neverWithin` (`client/alerts/conditions.ts`), which claims it only where it can be
+shown: `>`/`>=`/`<`/`<=` against a band that does not reach the level, a crossing with the
+level strictly outside the band and the reading before on the same side; nothing for `inside`,
+`==`, `changed`, `not` or a field with no band (`spread`) -- those walk, as before. The coarse
+band holds every finer one because the observation is the mid of the bid and ask bands, and a
+small slack (`SUMMARY_SLACK`, a quarter pip on EURUSD) covers a coarse candle stored a tick
+short. **The answer is the walk's**: `skim.test.ts` holds it against a brute-force walk over a
+synthetic week at eleven levels, and against prod EURUSD bars (2026-10-26, headless, Run from
+2025-01-07 15:00Z) the skim and the walk stopped on the same minute for levels 2, 2 and 8 weeks
+ahead in **0.29 / 0.31 / 0.53 s and 4 reads against 1.4 / 2.6 / 6.1 s and up to 21**. In the
+browser (local stack) a level first reached 3.5 days ahead took four reads, about 0.2 s, to
+find its minute.
+
+**With nothing that could fill, a walk does not feed the engine** at all -- it can learn nothing
+from the bars -- and it is quoted once where the advance lands (the close of the last bar handed
+over: the state a fed walk would have left it in). That is also what makes the next rule cheap:
+
+**A run that no watch stops is taken back.** Next alert with no alert ahead, or Run, used to run
+to the end of the data when a watch was armed and never fired -- which spends the replay, since
+a replay cannot step back. Now, when nothing could fill, it is taken back whole: the cursor and
+the watches as they were (`restoreState`), reason `none` ("The price is not reached before the
+end of the data" / "No alert triggers…"), nothing told the chart. The same rule as Next alert's
+"never moves on nothing" (2026-10-04); a run with something that could fill still runs, for the
+fill.
+
 ## The v1 bug, and why it cannot recur
 
 v1 pushed bars through a forming-bar path gated by a separately maintained `newest`
@@ -344,7 +423,13 @@ watermark that drifted from the chart. Here the hub keeps no watermark: what to 
 computed from `chart.getDataList().at(-1)` every time, the chart's tail is asserted against
 what was pushed after every step (`PushReport.problem`), and a jump longer than
 `SEEK_THRESHOLD_BARS` reloads the pane's window at the cursor (`chart.resetData()`, clean
-seek) instead of appending. Grid alignment: a composed forming bar is labelled by
+seek) instead of appending. That threshold was 300 and is **100** since 2026-10-26: every bar
+appended recalculates every indicator on the pane over every bar it holds, ~2.4 ms a bar on a
+six-pane wall with the usual overlays, so a 10-hour Go to that appended ~340 bars stopped in
+1.26 s, and reloading the panes past 60 bars stopped it in 0.34 s. **The panes are pushed
+concurrently** (they were one after another, a round trip each); the base bars their forming
+bars are composed from are read once first, from the earliest bucket any pane needs, because
+that cache is shared and a pane reading it itself would re-anchor it under another's read. Grid alignment: a composed forming bar is labelled by
 `intervalStart` (+7h for daily-and-coarser, `toWireDate`), the same label `/getbars` gives the
 whole bar.
 
@@ -379,7 +464,15 @@ drawdown read in close order, open trades kept out of the closed figures). `feed
 hub on a coinbase pane's own grid, and the refusal for a pane with no market hours.
 `timeframes.test.ts` pins `CandleGrid` against the wmarkettypes fixture for all three schedules,
 sweeps the FX grid against the old functions, and steps crypto through a weekend and equities
-across an overnight. `player.test.ts` pins the player alone (one loop however
+across an overnight. `skim.test.ts` holds the skim to the walk's answer -- a real session and
+real `ReplayWatches` over a synthetic week whose 1h and 1D candles are folded from its 1m bars:
+the same stopping minute as a brute-force walk at eleven levels, a sliver of the base bars read,
+a Step stopping there too, a run that never reaches its level taken back with the stop still
+armed, no skim with only the base stored, and a Stop heard (it fails with `neverWithin` made to
+skip, and with the descent removed). `goto.test.ts` pins Go to's day rule on all three schedules
+and across the DST change, and `onBaseBoundary`; `alerts.test.ts` pins the look-ahead (reused
+from a later cursor short of its hit, not past it; stale on an edit; a press waiting on it; a
+Stop's null never kept; one search at a time); `controls.test.ts` covers the Go to panel. `player.test.ts` pins the player alone (one loop however
 it is toggled, pause mid-step, an error ends it). happy-dom applies no stylesheet, so anything
 that hinges on CSS (`[hidden]` against a `display: flex`, as the dialog's backdrop is) is checked
 in the browser, not here. `scripts/sync-engine-fixtures.sh` vendors the

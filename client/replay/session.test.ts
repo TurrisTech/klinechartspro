@@ -3,7 +3,7 @@ import { installWindow } from '../plugins/testing'
 import type { ReplayAlertBook, SearchProgress } from './alerts'
 import type { BarSource, ReplayBar } from './cache'
 import type { AlertOccurrence } from './clock'
-import type { ReplayObserver } from './session'
+import type { ObserverStop, ReplayObserver } from './session'
 import { Engine } from './engine'
 import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from './timeframes'
 
@@ -233,13 +233,30 @@ describe('ReplayTradingSession', () => {
     expect(advanced).toEqual([])
   })
 
-  test('with nothing ahead but a price watch armed, it runs on for the watch', async () => {
+  test('with nothing ahead and a price watch that never fires, it stays put too', async () => {
+    // It runs for the watch -- and, nothing having fired by the end of the data and nothing
+    // being able to fill, takes the run back: the cursor where it was, the watches as they were.
     const start = ny('2024-03-04 09:00')
-    const { session } = make({ alerts: new FakeAlerts([]), observer: { ...observer(), armedStops: () => 1 } })
+    const restored: unknown[] = []
+    const watching = { ...observer(), armedStops: () => 1, restoreState: (rows: unknown) => restored.push(rows) }
+    const { session, advanced } = make({ alerts: new FakeAlerts([]), observer: watching })
     const r = await session.nextAlert()
-    expect(r?.reason).toBe('end')
+    expect(r?.reason).toBe('none')
+    expect(r?.seeking).toBe('alerts')
     expect(r?.walked).toBe(true)
-    expect(session.cursor).toBe(start + 8 * H)
+    expect(watching.seen.length).toBeGreaterThan(0)
+    expect(restored).toHaveLength(1)
+    expect(session.cursor).toBe(start)
+    expect(advanced).toEqual([])
+  })
+
+  test('with nothing ahead but a price watch that fires, it runs to the watch', async () => {
+    const start = ny('2024-03-04 09:00')
+    const watching = { ...observer((_bar, n) => (n === 3 ? [{ label: 'touch' }] : [])), armedStops: () => 1 }
+    const { session } = make({ alerts: new FakeAlerts([]), observer: watching })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('watch')
+    expect(session.cursor).toBe(start + 3 * H)
   })
 
   test('an alert finer than the base stops at the close of the base bar it falls in', async () => {
@@ -353,7 +370,8 @@ describe('ReplayTradingSession', () => {
 
 /** An observer that forces the walk and can act on each bar -- the deterministic stand-in for
  * a click that lands mid-walk. */
-function observer(onBar: (bar: ReplayBar, n: number) => void = () => {}): ReplayObserver & { seen: ReplayBar[] } {
+/** An observer that sees every bar; `onBar` may return what it raises on one. */
+function observer(onBar: (bar: ReplayBar, n: number) => unknown = () => undefined): ReplayObserver & { seen: ReplayBar[] } {
   const seen: ReplayBar[] = []
   return {
     seen,
@@ -361,8 +379,8 @@ function observer(onBar: (bar: ReplayBar, n: number) => void = () => {}): Replay
     armedStops: () => 0,
     onBar: (bar) => {
       seen.push(bar)
-      onBar(bar, seen.length)
-      return []
+      const raised = onBar(bar, seen.length)
+      return Array.isArray(raised) ? (raised as ObserverStop[]) : []
     },
     seeked: () => {},
     toState: () => []

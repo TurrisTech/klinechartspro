@@ -401,10 +401,20 @@ export async function mountBarReplay(
     settled: () => ctx.pluginHost.settled(PLAY_SETTLE_MS),
     account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() },
     trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() },
-    alerts: ctx.alerts?.manager
+    alerts: ctx.alerts?.manager,
+    priceStop: {
+      get: () => watches.stopPrice(),
+      set: (price) => watches.setStopPrice(price),
+      clear: () => watches.clearStopPrice()
+    }
   })
   // An alert added, switched or removed changes what Next alert can stop at.
-  const unsubscribeAlerts = ctx.alerts?.subscribe(() => controls.refresh()) ?? (() => {})
+  const unsubscribeAlerts =
+    ctx.alerts?.subscribe(() => {
+      controls.refresh()
+      session.warmAlerts()
+    }) ?? (() => {})
+  session.warmAlerts()
   await session.primeQuote()
   // The wall reads as history at a glance: a thin edge in the replay's orange round the chart,
   // however far away or rolled up the controls are (client/style.css `.wd-replay-wall`).

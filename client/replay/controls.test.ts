@@ -32,6 +32,8 @@ interface Fake {
   calls: {
     step: number
     nextAlert: number
+    goTo: number[]
+    runToWatch: number
     cancel: number
     persist: number
     setAdvance: Array<{ interval: string; multiple: number }>
@@ -82,13 +84,13 @@ function closedTrade(id: string, pnl: number, closedAt: number): SimTrade {
 }
 
 function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
-  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', alert: null, events: [], bars: [], walked: false, observed: [], ...over }
+  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', alert: null, events: [], bars: [], walked: false, observed: [], seeking: null, ...over }
 }
 
 function fake(): Fake {
   const listeners = new Set<(change?: 'walk') => void>()
   const snapshotListeners = new Set<SessionListener>()
-  const calls: Fake['calls'] = { step: 0, nextAlert: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
+  const calls: Fake['calls'] = { step: 0, nextAlert: 0, goTo: [], runToWatch: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
   const emit = (): void => {
     for (const l of [...listeners]) l()
   }
@@ -145,6 +147,14 @@ function fake(): Fake {
       calls.nextAlert++
       return result({ reason: 'none' })
     },
+    async goTo(at) {
+      calls.goTo.push(at)
+      return result({ reason: 'target', request: { to: at }, to: at })
+    },
+    async runToWatch() {
+      calls.runToWatch++
+      return result({ reason: 'none', seeking: 'watches', request: { toEnd: true, end: 0 } })
+    },
     cancel() {
       calls.cancel++
       controller.cancelling = true
@@ -173,6 +183,8 @@ interface Mounted extends Fake {
   account: { open: boolean; toggles: number }
   trade: { open: boolean; toggles: number }
   alerts: { open: boolean; toggles: number }
+  /** The stop price the Go to panel sets, as a stub of the watch it is. */
+  priceStop: { price: number | null; sets: number[]; clears: number }
   dispose(): void
   /** A button in the window by its visible label (badge excluded). */
   button(label: string): HTMLButtonElement
@@ -193,7 +205,19 @@ function mount(
   const account = { open: false, toggles: 0 }
   const trade = { open: false, toggles: 0 }
   const alerts = { open: false, toggles: 0 }
+  const priceStop = { price: null as number | null, sets: [] as number[], clears: 0 }
   const controls = createReplayControls({
+    priceStop: {
+      get: () => priceStop.price,
+      set: async (price) => {
+        priceStop.sets.push(price)
+        priceStop.price = price
+      },
+      clear: async () => {
+        priceStop.clears++
+        priceStop.price = null
+      }
+    },
     controller: f.controller,
     intervalsInUse: () => [...f.controller.intervalsInUse],
     bounds,
@@ -253,6 +277,7 @@ function mount(
     account,
     trade,
     alerts,
+    priceStop,
     dispose: () => controls.dispose(),
     maybeButton,
     button(text) {
@@ -725,6 +750,107 @@ describe('the panels', () => {
     expect(m.account.toggles).toBe(0)
     expect(m.button('Trade').getAttribute('aria-pressed')).toBe('true')
     expect(m.button('Trade').title).toBe('Hide the order ticket')
+  })
+})
+
+describe('the Go to panel', () => {
+  // The fake's cursor: Monday 2024-03-04 14:00Z, 09:00 New York.
+  const typeInto = (input: HTMLInputElement, value: string, event = 'change'): void => {
+    input.value = value
+    input.dispatchEvent(new Event(event))
+  }
+
+  test('goes to 06:00 on the next trading day by default, saying where before it goes', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    const time = m.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement
+    expect(time.value).toBe('06:00')
+    // Tuesday 06:00 New York (EST in early March): 11:00Z.
+    expect(m.q('.wd-replay-goto-target')?.textContent).toContain('06:00')
+    m.button('Go').click()
+    await flush()
+    expect(m.calls.goTo).toEqual([Date.UTC(2024, 2, 5, 11, 0)])
+    expect(m.stops.at(-1)?.reason).toBe('target')
+  })
+
+  test('the next time today, a time typed in, and Enter goes', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    const mode = m.q<HTMLSelectElement>('.wd-replay-goto select') as HTMLSelectElement
+    mode.value = 'next'
+    mode.dispatchEvent(new Event('change'))
+    const time = m.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement
+    typeInto(time, '10:30')
+    ;(m.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await flush()
+    // 10:30 New York the same Monday.
+    expect(m.calls.goTo).toEqual([Date.UTC(2024, 2, 4, 15, 30)])
+    // The time and the day are remembered; a re-mount opens on them.
+    m.dispose()
+    const again = mount()
+    again.button('Go to').click()
+    expect((again.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement).value).toBe('10:30')
+    expect((again.q<HTMLSelectElement>('.wd-replay-goto select') as HTMLSelectElement).value).toBe('next')
+  })
+
+  test('on a date: a date before the clock cannot be gone to', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    const mode = m.q<HTMLSelectElement>('.wd-replay-goto select') as HTMLSelectElement
+    mode.value = 'date'
+    mode.dispatchEvent(new Event('change'))
+    const day = m.q<HTMLInputElement>('.wd-replay-goto-day') as HTMLInputElement
+    typeInto(day, '2024-03-01')
+    expect(m.button('Go').disabled).toBe(true)
+    typeInto(m.q<HTMLInputElement>('.wd-replay-goto-day') as HTMLInputElement, '2024-03-07')
+    m.button('Go').click()
+    await flush()
+    expect(m.calls.goTo).toEqual([Date.UTC(2024, 2, 7, 11, 0)])
+  })
+
+  test('a stop price is set from the panel, shown, run to and removed', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    // Run needs something to run to.
+    expect(m.button('Run').disabled).toBe(true)
+    const price = m.q<HTMLInputElement>('.wd-replay-price') as HTMLInputElement
+    typeInto(price, '1.08500', 'input')
+    m.button('Stop here').click()
+    await flush()
+    expect(m.priceStop.sets).toEqual([1.085])
+    expect(m.q('.wd-replay-price-current')?.textContent).toBe('stops at 1.085')
+    // The watch it is counts as an armed stop, which is what Run (and Next alert) need.
+    m.controller.armedStops = 1
+    m.emit()
+    m.button('Run').click()
+    await flush()
+    expect(m.calls.runToWatch).toBe(1)
+    // The controller keeps the stop; the status line says what a run that found nothing means.
+    m.controller.lastStop = m.stops.at(-1) ?? null
+    m.emit()
+    expect(m.q('.wd-replay-stop-reason')?.textContent).toBe('The price is not reached before the end of the data')
+    m.button('×').click()
+    await flush()
+    expect(m.priceStop.clears).toBe(1)
+    expect(m.q('.wd-replay-price-current')).toBeNull()
+  })
+
+  test('a price that is not one is refused, and nothing is set', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    typeInto(m.q<HTMLInputElement>('.wd-replay-price') as HTMLInputElement, 'abc', 'input')
+    m.button('Stop here').click()
+    await flush()
+    expect(m.priceStop.sets).toEqual([])
+    expect(m.root.textContent).toContain('Type the price to stop at')
+  })
+
+  test('a Go to stop says where it went', async () => {
+    const m = mount()
+    m.controller.lastStop = result({ reason: 'target', request: { to: Date.UTC(2024, 2, 5, 11) }, to: Date.UTC(2024, 2, 5, 11) })
+    m.emit()
+    expect(m.q('.wd-replay-stop-reason')?.textContent).toContain('Went to')
+    expect(m.q('.wd-replay-stop-reason')?.textContent).toContain('06:00')
   })
 })
 
