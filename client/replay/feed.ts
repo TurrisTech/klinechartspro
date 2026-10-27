@@ -4,7 +4,7 @@ import { fetchBarsWidened } from '../history'
 import type { PluginStream } from '../plugins/types'
 import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
-import { BarCache, type BarSource, type ReplayBar, composeForming, nonWeekendGaps } from './cache'
+import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
 import { type CandleGrid, gridFor, nominalMs } from './timeframes'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
@@ -99,19 +99,34 @@ export interface PushReport {
   problem: string | null
 }
 
-/** Owns the pane caches and the per-symbol base caches the forming bars are composed from,
- * and pushes stepped bars into the wall's panes. */
+/** Which of the stored ladder the store holds for an instrument around `at`. */
+export type StoredProbe = (symbol: string, at: number, grid: CandleGrid) => Promise<string[]>
+
+/** Owns the pane caches and the per-symbol caches the forming bars are composed from, and
+ * pushes stepped bars into the wall's panes. */
 export class ReplayFeedHub {
   cursor: number
   private readonly paneCaches = new Map<string, BarCache>()
-  private readonly baseCaches = new Map<string, BarCache>()
+  /** Per instrument and interval of its compose ladder (`composeLadder`): the base, and the
+   * stored intervals between it and the panes'. */
+  private readonly composeCaches = new Map<string, BarCache>()
+  /** Per instrument, what the store holds -- set for the walked one, probed for the others. */
+  private readonly stored = new Map<string, Promise<readonly string[]>>()
 
   constructor(
     private readonly source: BarSource,
     private base: string,
-    cursor: number
+    cursor: number,
+    /** How an instrument the hub was not told about is probed; without one it composes from
+     * the base alone. */
+    private readonly probe: StoredProbe | null = null
   ) {
     this.cursor = cursor
+  }
+
+  /** What the store holds for `symbol` (the walked instrument's ladder, probed at start). */
+  setStored(symbol: string, intervals: readonly string[]): void {
+    this.stored.set(symbol, Promise.resolve(intervals))
   }
 
   createFeed(): ReplayDatafeed {
@@ -125,16 +140,16 @@ export class ReplayFeedHub {
   setBase(base: string): void {
     if (base === this.base) return
     this.base = base
-    for (const c of this.baseCaches.values()) c.dump()
-    this.baseCaches.clear()
+    for (const c of this.composeCaches.values()) c.dump()
+    this.composeCaches.clear()
   }
 
   /** Dump every cache (a symbol or interval change on the wall, or a large jump). */
   dumpAll(): void {
     for (const c of this.paneCaches.values()) c.dump()
-    for (const c of this.baseCaches.values()) c.dump()
+    for (const c of this.composeCaches.values()) c.dump()
     this.paneCaches.clear()
-    this.baseCaches.clear()
+    this.composeCaches.clear()
   }
 
   private paneCache(symbol: string, interval: string, grid: CandleGrid): BarCache {
@@ -147,51 +162,87 @@ export class ReplayFeedHub {
     return c
   }
 
-  private baseCache(symbol: string, grid: CandleGrid): BarCache {
-    let c = this.baseCaches.get(symbol)
+  private composeCache(symbol: string, interval: string, grid: CandleGrid): BarCache {
+    const key = `${symbol}|${interval}`
+    let c = this.composeCaches.get(key)
     if (!c) {
-      c = new BarCache(this.source, symbol, this.base, grid, 'core')
-      this.baseCaches.set(symbol, c)
+      c = new BarCache(this.source, symbol, interval, grid, 'core')
+      this.composeCaches.set(key, c)
     }
     return c
   }
 
+  /** What the store holds for `symbol`: as set, or probed once at the cursor. A probe that
+   * fails composes from the base alone. */
+  private storedFor(symbol: string, grid: CandleGrid): Promise<readonly string[]> {
+    let held = this.stored.get(symbol)
+    if (!held) {
+      const probe = this.probe
+      held = probe
+        ? probe(symbol, this.cursor, grid).catch((err) => {
+            console.warn(`[replay] could not probe the stored intervals of ${symbol}; composing from the base`, err)
+            return []
+          })
+        : Promise.resolve([])
+      this.stored.set(symbol, held)
+    }
+    return held
+  }
+
+  /** The spans the forming candle of `interval` opening at `bucketOpen` takes its bars from. */
+  private async formingSpans(symbol: string, interval: string, bucketOpen: number, grid: CandleGrid): Promise<ComposeSpan[]> {
+    const ladder = composeLadder(interval, this.base, await this.storedFor(symbol, grid))
+    return composeSpans(bucketOpen, this.cursor, ladder, grid)
+  }
+
   /** After the cursor moved from `previous` to `this.cursor`: bring every pane up to the
-   * cursor -- whole bars appended from the pane cache, the forming bar composed from base
-   * bars -- or reload the pane when the span is too long to append. */
+   * cursor -- whole bars appended from the pane cache, the forming bar composed from the
+   * coarsest stored bars that fit -- or reload the pane when the span is too long to append. */
   async push(panes: readonly ChartProPane[], previous: number): Promise<PushReport[]> {
     // Every pane at once: each reads its own bars, and one after another a six-pane wall paid six
-    // round trips per step. The base bars the forming bars are composed from are shared by every
-    // pane of an instrument, so they are read first, once, from the earliest bucket any pane needs
-    // -- a pane reading them itself would re-anchor the shared cache under another's read.
-    await this.coverBase(panes)
+    // round trips per step. The bars the forming bars are composed from are shared by every pane
+    // of an instrument, so they are read first, once -- a pane reading them itself would
+    // re-anchor a shared cache under another's read.
+    await this.coverForming(panes)
     const reports = (await Promise.all(panes.map((pane) => this.pushPane(pane, previous)))).filter((r): r is PushReport => r !== null)
-    // Let go of base bars no pane's forming bucket can still need -- each pane's bucket on its
-    // own instrument's schedule.
+    // Let go of bars no pane's forming bucket can still need -- each pane's bucket on its own
+    // instrument's schedule.
     const opens = panes.flatMap((p) => {
       const grid = gridFor(p.getSymbol())
       return grid ? [grid.start(periodToResolution(p.getPeriod()), Math.max(this.cursor - 1, 0))] : []
     })
     const earliest = Math.min(...opens)
-    if (Number.isFinite(earliest)) for (const c of this.baseCaches.values()) c.trimBefore(earliest)
+    if (Number.isFinite(earliest)) for (const c of this.composeCaches.values()) c.trimBefore(earliest)
     return reports
   }
 
-  /** Read, per instrument, the base bars from the earliest forming bucket of any of its panes to
-   * the cursor. */
-  private async coverBase(panes: readonly ChartProPane[]): Promise<void> {
-    const earliest = new Map<string, { from: number; grid: CandleGrid }>()
-    for (const pane of panes) {
-      const info = pane.getSymbol()
-      const grid = gridFor(info)
-      if (!grid) continue
-      const symbol = `${symbolVendor(info)}:${info.ticker}`
-      const bucketOpen = grid.start(periodToResolution(pane.getPeriod()), this.cursor - 1)
-      if (bucketOpen >= this.cursor) continue
-      const held = earliest.get(symbol)
-      if (!held || bucketOpen < held.from) earliest.set(symbol, { from: bucketOpen, grid })
-    }
-    await Promise.all([...earliest].map(([symbol, { from, grid }]) => this.baseCache(symbol, grid).cover(from, this.cursor)))
+  /** Read, per instrument and compose interval, the one range every forming candle of its
+   * panes takes from it -- all of them at once. A 1D pane at 06:00 on a 5s base reads 1h bars
+   * from 17:00, 1m bars from 06:00 and 5s bars from the last whole minute; not 5s bars from
+   * 17:00, nor (after a jump) from wherever the previous cursor was. */
+  private async coverForming(panes: readonly ChartProPane[]): Promise<void> {
+    const ranges = new Map<string, { symbol: string; grid: CandleGrid } & ComposeSpan>()
+    await Promise.all(
+      panes.map(async (pane) => {
+        const info = pane.getSymbol()
+        const grid = gridFor(info)
+        if (!grid) return
+        const symbol = `${symbolVendor(info)}:${info.ticker}`
+        const interval = periodToResolution(pane.getPeriod())
+        const bucketOpen = grid.start(interval, this.cursor - 1)
+        if (bucketOpen >= this.cursor) return
+        for (const span of await this.formingSpans(symbol, interval, bucketOpen, grid)) {
+          const key = `${symbol}|${span.interval}`
+          const held = ranges.get(key)
+          if (!held) ranges.set(key, { symbol, grid, ...span })
+          else {
+            held.from = Math.min(held.from, span.from)
+            held.to = Math.max(held.to, span.to)
+          }
+        }
+      })
+    )
+    await Promise.all([...ranges.values()].map((r) => this.composeCache(r.symbol, r.interval, r.grid).cover(r.from, r.to)))
   }
 
   private async pushPane(pane: ChartProPane, previous: number): Promise<PushReport | null> {
@@ -247,14 +298,18 @@ export class ReplayFeedHub {
       callback(toKLine(b))
       expectedLast = b.date
     }
-    // The forming bar: the bucket containing the cursor, composed from base bars that
-    // closed by the cursor. Its label is the same open `/getbars` labels the whole bar with.
+    // The forming bar: the bucket containing the cursor, composed from the stored bars inside
+    // it that closed by the cursor, coarsest first. Its label is the same open `/getbars`
+    // labels the whole bar with.
     let forming = false
     const bucketOpen = grid.start(interval, cursor - 1)
     if (bucketOpen < cursor && (whole.length === 0 || bucketOpen > whole[whole.length - 1].open) && bucketOpen >= lastOpen) {
-      const baseCache = this.baseCache(symbol, grid)
-      await baseCache.cover(bucketOpen, cursor)
-      const parts = baseCache.slice(bucketOpen, cursor).filter((b) => b.end <= cursor)
+      const parts: ReplayBar[] = []
+      for (const span of await this.formingSpans(symbol, interval, bucketOpen, grid)) {
+        const c = this.composeCache(symbol, span.interval, grid)
+        await c.cover(span.from, span.to)
+        for (const b of c.slice(span.from, span.to)) if (b.end <= cursor) parts.push(b)
+      }
       const bar = composeForming(interval, bucketOpen, parts, grid)
       if (bar) {
         callback(toKLine(bar))

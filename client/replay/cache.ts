@@ -1,4 +1,4 @@
-import { type CandleGrid, nominalMs } from './timeframes'
+import { type CandleGrid, divides, nominalMs, sortByLength } from './timeframes'
 
 // BarCache: one per (instrument, timeframe), over an injected `BarSource`. Holds a
 // CONTIGUOUS run of bars at and ahead of an anchor, prefetched so a step consumes cache
@@ -142,10 +142,13 @@ export class BarCache {
     if (this.anchor !== null && this.anchor < ms) this.anchor = Math.min(ms, this.coveredTo ?? ms)
   }
 
-  /** Make the run cover `[from, to)`: a `from` before the anchor is a seek (dump and reload
-   * there), anything else an `ensure`. For display caches that read by `slice`. */
+  /** Make the run cover `[from, to)`: a `from` before the anchor or past the run's end is a
+   * seek (dump and reload there), anything else an `ensure`. For display caches that read by
+   * `slice`. Past the end matters after a jump: extending the run from its own end would read
+   * every bar of the gap -- a day of 5s bars (~17,000, five pages one after another) for a
+   * forming candle that needs the last few minutes of it. */
   async cover(from: number, to: number): Promise<void> {
-    if (this.anchor === null || from < this.anchor) this.seek(from)
+    if (this.anchor === null || from < this.anchor || (this.coveredTo !== null && from > this.coveredTo)) this.seek(from)
     await this.ensure(to)
   }
 
@@ -158,6 +161,45 @@ export class BarCache {
   slice(from: number, to: number): ReplayBar[] {
     return this.bars.filter((b) => b.open >= from && b.open < to)
   }
+}
+
+/** The stored intervals a forming `interval` candle is composed from, coarsest first and ending
+ * at `base`: every stored interval coarser than the base that the base tiles and that tiles
+ * `interval`. A 1D pane on a 5s base with 1m and 1h stored composes from 1h, 1m, 5s, so its
+ * forming candle at 06:00 is thirteen 1h bars rather than 9,360 5s ones -- and the same candle:
+ * the store's coarser candles are its finer ones aggregated (measured on prod 2026-10-26: every
+ * hour and minute of five symbol-days of EURGBP, EURUSD and GBPUSD agreed in all five fields).
+ * With nothing stored known, the base alone. */
+export function composeLadder(interval: string, base: string, stored: readonly string[]): string[] {
+  const between = stored.filter((s) => s !== base && s !== interval && nominalMs(s) > nominalMs(base) && nominalMs(s) < nominalMs(interval) && divides(base, s) && divides(s, interval))
+  return [...sortByLength(between).reverse(), base]
+}
+
+/** The bars of one ladder interval a forming candle takes: those opening in `[from, to)`. */
+export interface ComposeSpan {
+  interval: string
+  from: number
+  to: number
+}
+
+/** Where the forming candle opening at `bucketOpen` takes its bars from with the cursor at
+ * `cursor`: each ladder interval in turn takes its whole candles that closed by the cursor, from
+ * where the coarser one stopped, and the base (last) takes the rest. Consecutive and in time
+ * order; an empty span is left out. */
+export function composeSpans(bucketOpen: number, cursor: number, ladder: readonly string[], grid: CandleGrid): ComposeSpan[] {
+  const spans: ComposeSpan[] = []
+  let from = bucketOpen
+  ladder.forEach((interval, i) => {
+    let to = cursor
+    if (i < ladder.length - 1) {
+      // The candle the cursor is inside has not closed: this interval stops at its open.
+      const open = grid.start(interval, cursor - 1)
+      if (grid.end(interval, open) > cursor) to = Math.max(from, open)
+    }
+    if (to > from) spans.push({ interval, from, to })
+    from = Math.max(from, to)
+  })
+  return spans
 }
 
 /** Compose the forming `interval` bar from finer bars inside its bucket (`bucketOpen` on

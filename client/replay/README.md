@@ -15,7 +15,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
 | `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`; Go to's `goToInstant` (a time of day on the instrument's clock: next trading day, next occurrence, a date), `isTradingDay` and `onBaseBoundary`. |
-| `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run. `composeForming`, `nonWeekendGaps`. |
+| `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run; `cover` past the run's end is a seek too. `composeLadder`/`composeSpans` (which stored bars a forming candle is made of), `composeForming`, `nonWeekendGaps`. |
 | `alerts.ts` | `ReplayAlerts`: the user's enabled client alerts on this instrument (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to -- run AHEAD in the background after every advance (the look-ahead), so a press usually finds its answer waiting. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `results.ts` | PURE. `replayResults`: the session's score from its snapshot -- net and realised P&L, win rate, averages, profit factor, expectancy, best/worst, the max drawdown of the realised curve -- and the rows the Results panel draws. |
@@ -427,11 +427,28 @@ seek) instead of appending. That threshold was 300 and is **100** since 2026-10-
 appended recalculates every indicator on the pane over every bar it holds, ~2.4 ms a bar on a
 six-pane wall with the usual overlays, so a 10-hour Go to that appended ~340 bars stopped in
 1.26 s, and reloading the panes past 60 bars stopped it in 0.34 s. **The panes are pushed
-concurrently** (they were one after another, a round trip each); the base bars their forming
-bars are composed from are read once first, from the earliest bucket any pane needs, because
-that cache is shared and a pane reading it itself would re-anchor it under another's read. Grid alignment: a composed forming bar is labelled by
+concurrently** (they were one after another, a round trip each); the bars their forming
+bars are composed from are read once first, one range per instrument and interval for every
+pane, because those caches are shared and a pane reading one itself would re-anchor it under
+another's read. Grid alignment: a composed forming bar is labelled by
 `intervalStart` (+7h for daily-and-coarser, `toWireDate`), the same label `/getbars` gives the
 whole bar.
+
+**A forming candle is made of the coarsest stored bars that fit** (2026-10-26). `composeLadder`
+picks every stored interval between the base and the pane's that tiles one and is tiled by the
+other, and `composeSpans` hands each the whole candles of it that closed by the cursor, from
+where the coarser one stopped: a 1D pane at 06:12:35 on a 5s base is 1h bars from 17:00, 1m bars
+from 06:00 and 5s bars from 06:12 -- 13 + 12 + 7 bars where it was 9,360. It is the same candle:
+the store's coarser candles are its finer ones aggregated (every hour and minute of five prod
+symbol-days agreed in all five fields), so the 45 forming 1h/4h/1D candles of a run of prod Go
+tos came out identical before and after. What the store holds is the walked instrument's probed
+ladder (`hub.setStored`), and for any other instrument on the wall a probe of its own at the
+cursor; with neither, the base alone, as before. And `BarCache.cover` now seeks when asked for a
+range past the end of its run: it used to extend from its own end, so after a jump of a day the
+5s cache read every bar of the gap -- about 11,000, a page after another -- for a candle that
+needed the last minute of it. Measured headless against prod (EURGBP, six panes 3m..1D, 5s base):
+the push after a Go to "06:00 next trading day" took **30-109 ms** reading 400 1m bars, against
+**482-616 ms** reading ~11,000 5s bars.
 
 ## Persistence
 
