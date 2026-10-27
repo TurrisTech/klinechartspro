@@ -112,8 +112,75 @@ const LANE_INSET = 6
  * sized from its own arrow and text, so two cannot collide however the sizes are turned up. */
 const LANE_GAP = 4
 
+/** Space kept between a label and one on a neighbouring bar. */
+const LABEL_SIDE_GAP = 2
+
 function laneHeight(style: MtfTimeframeStyle): number {
   return style.arrowSize * 1.4 + (style.textSize > 0 ? style.textSize + 2 : 0) + LANE_GAP
+}
+
+/** The room one mark takes beside its candle, in pixels. */
+export interface MarkRoom {
+  /** Its bar's x. */
+  x: number
+  /** The candle edge it hangs from: the low's y for a mark below, the high's above. */
+  edge: number
+  above: boolean
+  /** Half the wider of its arrow and its label, plus the gap kept beside it. */
+  halfWidth: number
+  /** Its arrow, label and the gap after them (`laneHeight`). */
+  height: number
+}
+
+/**
+ * Each mark's distance outward from its candle edge. On one bar the marks stack, shortest
+ * timeframe nearest the candle; and a mark that would cross one already placed on a NEARBY bar
+ * moves outward past it. A label is several bars wide on a short chart ("15m 0.58" spans five
+ * or six 5m bars), so neighbours' labels at a similar height printed over each other.
+ *
+ * `rooms` come left to right, each bar's in stacking order, and a mark only ever moves outward,
+ * so the nearest mark to a candle keeps its place and a cluster becomes a staircase. Exported for
+ * its own test.
+ */
+export function placeMarks(rooms: readonly MarkRoom[]): number[] {
+  const placed: Array<{ x: number; left: number; right: number; top: number; bottom: number }> = []
+  const offsets: number[] = []
+  let reach = 0
+  for (const room of rooms) reach = Math.max(reach, room.halfWidth)
+  let first = 0
+  let barX = Number.NaN
+  let below = LANE_INSET
+  let above = LANE_INSET
+  for (const room of rooms) {
+    if (room.x !== barX) {
+      barX = room.x
+      below = above = LANE_INSET
+    }
+    // Nothing placed this far left can reach this mark.
+    while (first < placed.length && placed[first].x + 2 * reach <= room.x) first++
+    const left = room.x - room.halfWidth
+    const right = room.x + room.halfWidth
+    let offset = room.above ? above : below
+    for (;;) {
+      const top = room.above ? room.edge - offset - room.height : room.edge + offset
+      const bottom = top + room.height
+      let hit: (typeof placed)[number] | undefined
+      for (let k = first; k < placed.length && !hit; k++) {
+        const p = placed[k]
+        if (left < p.right && right > p.left && top < p.bottom && bottom > p.top) hit = p
+      }
+      if (!hit) {
+        placed.push({ x: room.x, left, right, top, bottom })
+        break
+      }
+      // Just past it, outward -- always further than before, so this ends.
+      offset = room.above ? room.edge - hit.top : hit.bottom - room.edge
+    }
+    offsets.push(offset)
+    if (room.above) above = offset + room.height
+    else below = offset + room.height
+  }
+  return offsets
 }
 
 /**
@@ -418,50 +485,69 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
           )
         }
         const zoneAbove = overlay.placement === 'zone'
-        for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
+        // Stacked per bar and per side, shortest timeframe nearest the candle: each mark sits
+        // outside the ones this bar actually has, and outside any on a nearby bar its label would
+        // cross (`placeMarks`). Not a fixed lane per enabled timeframe -- that reserved room for
+        // every timeframe switched on, including the ones finer than the chart that never draw
+        // on it, so a lone 2h mark on a 1h chart hung 30-140 px under the low and fell off the
+        // bottom of the auto-sized axis (user, 2026-10-01). The price axis is sized from the
+        // candles alone (no figures -- see the header), so the nearer a mark sits the likelier
+        // it is on screen. `computeValues` sorts a bar's marks into lane order, so walking them
+        // in order is the stacking order.
+        //
+        // The walk starts as far left of the screen as a label can reach, so a mark just off the
+        // left edge both shows the part of its label that is on screen and still pushes the
+        // marks beside it -- otherwise they would jump as it scrolled off.
+        let widest = 0
+        for (const style of Object.values(config.timeframes)) {
+          if (style?.enabled) widest = Math.max(widest, style.arrowSize, style.textSize * 3)
+        }
+        const space = data.length > 1 ? Math.abs(xAxis.convertToPixel(1) - xAxis.convertToPixel(0)) : 0
+        const lead = space > 0 ? Math.ceil(widest / space) : 0
+        const placing: Array<{ mark: Marked; style: MtfTimeframeStyle; text: string; room: MarkRoom }> = []
+        ctx.save()
+        for (let i = Math.max(0, range.realFrom - lead); i <= Math.min(data.length - 1, range.realTo); i++) {
           const marks = indicator.result[i]?.marks
           if (!marks) continue
           const bar = data[i]
           const x = xAxis.convertToPixel(i)
-          // Stacked per bar and per side, shortest timeframe nearest the candle: each mark sits
-          // outside the ones this bar actually has. Not a fixed lane per enabled timeframe --
-          // that reserved room for every timeframe switched on, including the ones finer than
-          // the chart that never draw on it, so a lone 2h mark on a 1h chart hung 30-140 px
-          // under the low and fell off the bottom of the auto-sized axis (user, 2026-10-01).
-          // The price axis is sized from the candles alone (no figures -- see the header), so
-          // the nearer a mark sits the likelier it is on screen. `computeValues` sorts a bar's
-          // marks into lane order, so walking them in order is the stacking order.
-          let belowOffset = LANE_INSET
-          let aboveOffset = LANE_INSET
           for (const mark of marks) {
             const style = config.timeframes[mark.interval]
             if (!style?.enabled) continue
-            const size = style.arrowSize
             const text = mark.p === null ? mark.interval : `${mark.interval} ${mark.p.toFixed(2)}`
+            ctx.font = `${style.textSize}px sans-serif`
+            const textWidth = style.textSize > 0 ? ctx.measureText(text).width : 0
             // `'zone'` placement puts a long above the high and a short below the low; the
             // arrow still points the signal's way, so there it points away from the candle.
             const above = zoneAbove ? mark.up : !mark.up
-            const armLength = size * 1.4
-            if (!above) {
-              // Below the low: an up arrow's tip touches the lane, a down arrow's base does.
-              const nearY = yAxis.convertToPixel(bar.low) + belowOffset
-              const tipY = mark.up ? nearY : nearY + armLength
-              arrow(ctx, x, tipY, size, style.color, mark.up)
-              if (style.textSize > 0) {
-                label(ctx, x, nearY + armLength + 2, text, style.color, style.textSize, false)
-              }
-              belowOffset += laneHeight(style)
-            } else {
-              const nearY = yAxis.convertToPixel(bar.high) - aboveOffset
-              const tipY = mark.up ? nearY - armLength : nearY
-              arrow(ctx, x, tipY, size, style.color, mark.up)
-              if (style.textSize > 0) {
-                label(ctx, x, nearY - armLength - 2, text, style.color, style.textSize, true)
-              }
-              aboveOffset += laneHeight(style)
+            const room: MarkRoom = {
+              x,
+              edge: yAxis.convertToPixel(above ? bar.high : bar.low),
+              above,
+              halfWidth: Math.max(style.arrowSize, textWidth / 2) + LABEL_SIDE_GAP / 2,
+              height: laneHeight(style)
             }
+            placing.push({ mark, style, text, room })
           }
         }
+        ctx.restore()
+        const offsets = placeMarks(placing.map((p) => p.room))
+        placing.forEach(({ mark, style, text, room }, k) => {
+          const size = style.arrowSize
+          const armLength = size * 1.4
+          if (!room.above) {
+            // Below the low: an up arrow's tip touches the lane, a down arrow's base does.
+            const nearY = room.edge + offsets[k]
+            const tipY = mark.up ? nearY : nearY + armLength
+            arrow(ctx, room.x, tipY, size, style.color, mark.up)
+            if (style.textSize > 0) label(ctx, room.x, nearY + armLength + 2, text, style.color, style.textSize, false)
+          } else {
+            const nearY = room.edge - offsets[k]
+            const tipY = mark.up ? nearY - armLength : nearY
+            arrow(ctx, room.x, tipY, size, style.color, mark.up)
+            if (style.textSize > 0) label(ctx, room.x, nearY - armLength - 2, text, style.color, style.textSize, true)
+          }
+        })
         return true
       }
     }
