@@ -9,7 +9,7 @@ const { fakeChart, fakeFacilities, fakeIndicator, fakePane, flush } = await impo
 const { paneConfig } = await import('./paneconfig')
 
 import type { SettingsPanelOptions } from '../chartlayers/settings'
-import type { BindContext, IndicatorPlugin, Page, Range, SourceSpec } from './types'
+import type { BindContext, IndicatorPlugin, Page, Range, SourceNotify, SourceSpec, SourceStore } from './types'
 
 type Point = { date: number; v: number }
 
@@ -317,6 +317,196 @@ describe('createPluginHost', () => {
     // binding's rev is its own sequence number folded with its stores' revs).
     expect((rev(a) as number) % 1_000_003).toBe(store?.rev as number)
     expect((rev(b) as number) % 1_000_003).toBe(store?.rev as number)
+  })
+
+  // A live cue says the producer has written something since the last read. A fetch already in
+  // flight was asked before that write, so it cannot answer the cue -- yet its answer is filed as
+  // covering the range, and a cue that merely waited for it was lost until the next one. On prod
+  // the timeframes of one close arrive ~100 ms apart and a re-read takes 100-300 ms, so the
+  // second timeframe's cue routinely lands inside the first one's read.
+  test('a refetch asked while an older fetch is in flight reads again once that one lands', async () => {
+    const data: Point[] = [1, 2, 3, 4, 5].map((d) => ({ date: d, v: d }))
+    const fetches: Range[] = []
+    let gate: Promise<void> = Promise.resolve()
+    // The binding's notify, once it has subscribed.
+    const cue = { refetch: (): void => {} }
+    const plugin: IndicatorPlugin = {
+      id: 'cue',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'CUE',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'cue|EURUSD|5m',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              // Answered from what the producer had written when the request arrived.
+              const answer = data.filter((p) => p.date >= range.from && p.date < range.to)
+              await gate
+              return { points: answer, nextFrom: null }
+            },
+            subscribe: (_store: SourceStore<Point>, n: SourceNotify) => {
+              cue.refetch = () => n.refetch()
+              return () => {}
+            }
+          }
+        ],
+        label: () => 'CUE'
+      })
+    }
+    const f = facilities()
+    f.maxValuesPerRequest = 100
+    const host = await createPluginHost({ plugins: [plugin], facilities: f })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = Array.from({ length: 9 }, (_, i) => ({ timestamp: i + 1 }))
+    fc.indicators = [fakeIndicator('CUE', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await host.settled()
+    const key = (fc.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key)
+    expect(fetches).toEqual([{ from: 1, to: 10 }])
+
+    let release: () => void = () => {}
+    gate = new Promise<void>((resolve) => (release = resolve))
+    // The first timeframe's cue: forget the tail, read it again -- in flight.
+    store?.forgetAfter(6)
+    cue.refetch()
+    await flush()
+    // The second timeframe is written, and its cue arrives while that read is still out.
+    data.push({ date: 7, v: 70 })
+    store?.forgetAfter(6)
+    cue.refetch()
+    await flush()
+    release()
+    await host.settled()
+
+    expect(store?.values.get(7)).toBe(70)
+    expect(fetches).toEqual([
+      { from: 1, to: 10 },
+      { from: 6, to: 10 },
+      { from: 6, to: 10 }
+    ])
+  })
+
+  test('a burst of refetches inside one read costs one more read, not one each', async () => {
+    const fetches: Range[] = []
+    let gate: Promise<void> = Promise.resolve()
+    // The binding's notify, once it has subscribed.
+    const cue = { refetch: (): void => {} }
+    const plugin: IndicatorPlugin = {
+      id: 'burst',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'BURST',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'burst|EURUSD|5m',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              await gate
+              return { points: [], nextFrom: null }
+            },
+            subscribe: (_store: SourceStore<Point>, n: SourceNotify) => {
+              cue.refetch = () => n.refetch()
+              return () => {}
+            }
+          }
+        ],
+        label: () => 'BURST'
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = Array.from({ length: 9 }, (_, i) => ({ timestamp: i + 1 }))
+    fc.indicators = [fakeIndicator('BURST', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await host.settled()
+    const key = (fc.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key)
+
+    let release: () => void = () => {}
+    gate = new Promise<void>((resolve) => (release = resolve))
+    store?.forgetAfter(6)
+    cue.refetch()
+    await flush()
+    // Four more timeframes close inside that read.
+    for (let i = 0; i < 4; i++) {
+      store?.forgetAfter(6)
+      cue.refetch()
+    }
+    await flush()
+    gate = Promise.resolve()
+    release()
+    await host.settled()
+    expect(fetches.slice(1)).toEqual([
+      { from: 6, to: 10 },
+      { from: 6, to: 10 }
+    ])
+  })
+
+  test('two panes on one store hearing one cue still read once', async () => {
+    const fetches: Range[] = []
+    let gate: Promise<void> = Promise.resolve()
+    const notifies: Array<{ refetch(): void }> = []
+    const plugin: IndicatorPlugin = {
+      id: 'pair',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'PAIR',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'pair|EURUSD|1h',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              await gate
+              return { points: [], nextFrom: null }
+            },
+            subscribe: (_store: SourceStore<Point>, n: SourceNotify) => {
+              notifies.push(n)
+              return () => {}
+            }
+          }
+        ],
+        label: () => 'PAIR'
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const a = fakeChart()
+    const b = fakeChart()
+    a.data = b.data = Array.from({ length: 9 }, (_, i) => ({ timestamp: i + 1 }))
+    a.indicators = [fakeIndicator('PAIR', 'a')]
+    b.indicators = [fakeIndicator('PAIR', 'b')]
+    host.sync([fakePane('p1', a.chart), fakePane('p2', b.chart)])
+    await host.settled()
+    const key = (a.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key)
+    const before = fetches.length
+
+    let release: () => void = () => {}
+    gate = new Promise<void>((resolve) => (release = resolve))
+    // One stream message, both panes' listeners, in one task: the first one's read was sent
+    // after the cue arrived, so the second one's waits for it.
+    for (const n of notifies) {
+      store?.forgetAfter(6)
+      n.refetch()
+    }
+    await flush()
+    release()
+    await host.settled()
+    expect(notifies.length).toBe(2)
+    expect(fetches.slice(before)).toEqual([{ from: 6, to: 10 }])
   })
 
   test('a replaying page records the phase and retries', async () => {

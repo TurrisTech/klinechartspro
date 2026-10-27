@@ -287,11 +287,60 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     }
   }
 
-  // Every fetch in flight, by store: what it covers and when it ends. A binding whose window
-  // overlaps a fetch another binding already has in flight waits for it rather than asking for
-  // the same bars again -- two panes on one instrument (an MTF overlay's 4h source under a 1h and
-  // a 15m pane) used to fetch the part they share twice.
-  const storeFetches = new Map<string, Set<{ range: Range; done: Promise<void> }>>()
+  // Every fetch in flight, by store: what it covers, the turn it was sent in, and when it ends. A
+  // binding whose window overlaps a fetch another binding already has in flight waits for it
+  // rather than asking for the same bars again -- two panes on one instrument (an MTF overlay's
+  // 4h source under a 1h and a 15m pane) used to fetch the part they share twice.
+  const storeFetches = new Map<string, Set<{ range: Range; turn: number; done: Promise<void> }>>()
+
+  // Waiting is wrong for a `refetch`, though: that is a live cue saying the producer has written
+  // something, and a fetch sent before the cue arrived was answered without it -- yet its answer
+  // is filed as covering the range, so a cue that only waited for it was lost until the next one.
+  // On prod the timeframes of one close arrive ~100 ms apart and a re-read takes 100-300 ms, so
+  // an MTF overlay's second timeframe routinely landed inside its first one's read (2026-10-27).
+  // So a refetch records, per store, the turn it came in and where the store is short; a fetch
+  // that lands with one recorded after the turn it was sent in reads that part again, once.
+  //
+  // A turn is one task: everything one stream message sets off -- every pane's listener for it,
+  // and the fetch the first of them sends -- shares one, so two panes on one store still read
+  // once per cue. Any call schedules the move to the next, so it moves before anything later runs.
+  const invalidations = new Map<string, Array<{ turn: number; from: number }>>()
+  let turn = 0
+  let turnEnding = false
+  const currentTurn = (): number => {
+    if (!turnEnding) {
+      turnEnding = true
+      queueMicrotask(() => {
+        turnEnding = false
+        turn++
+      })
+    }
+    return turn
+  }
+
+  /** What a refetch of `b` was told: from where each source it reads is short, at this turn. Only
+   * a store with a fetch in flight records it -- no other fetch can have been asked too early. */
+  const noteInvalidation = (entry: WiredPane, b: Binding): void => {
+    const range = chartRange(entry.chart)
+    if (!range) return
+    for (const source of b.sources) {
+      if (!storeFetches.has(source.key)) continue
+      const window = source.spec.window ? source.spec.window(range) : range
+      const gap = window ? source.store.missing(window)[0] : undefined
+      if (!gap) continue
+      const marks = invalidations.get(source.key) ?? []
+      marks.push({ turn: currentTurn(), from: gap.from })
+      invalidations.set(source.key, marks)
+    }
+  }
+
+  /** The part of a landed fetch's range a refetch invalidated after it was sent, or null. */
+  const staleSpan = (key: string, fetch: { range: Range; turn: number }): Range | null => {
+    let from = Number.POSITIVE_INFINITY
+    for (const mark of invalidations.get(key) ?? []) if (mark.turn > fetch.turn) from = Math.min(from, mark.from)
+    const span = { from: Math.max(from, fetch.range.from), to: fetch.range.to }
+    return span.from < span.to ? span : null
+  }
 
   const scheduleRetry = (entry: WiredPane, b: Binding, afterMs: number): void => {
     if (b.retryTimer) clearTimeout(b.retryTimer)
@@ -307,7 +356,8 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     b.inFlight.add(tag)
     const store = source.store
     let finish = (): void => {}
-    const fetch = { range: gap, done: new Promise<void>((resolve) => (finish = resolve)) }
+    let filed = false
+    const fetch = { range: gap, turn: currentTurn(), done: new Promise<void>((resolve) => (finish = resolve)) }
     let running = storeFetches.get(source.key)
     if (!running) {
       running = new Set()
@@ -329,6 +379,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         }
         const to = page.nextFrom ?? gap.to
         store.ingest(page.points, { from, to }, page.arrays)
+        filed = true
         store.setPhase('ready')
         applyReaders(source.key)
         if (page.nextFrom === null) return
@@ -341,8 +392,14 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     } finally {
       b.inFlight.delete(tag)
       running.delete(fetch)
-      if (running.size === 0) storeFetches.delete(source.key)
+      const again = filed && !b.disposed ? staleSpan(source.key, fetch) : null
+      if (running.size === 0) {
+        storeFetches.delete(source.key)
+        invalidations.delete(source.key)
+      }
       finish()
+      // Sent before its waiters resume, so they wait for it rather than send their own.
+      if (again) void fetchGap(entry, b, source, again)
     }
   }
 
@@ -467,7 +524,10 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       try {
         s.unsubscribe = s.spec.subscribe(s.store, {
           changed: () => requestApply(entry, b),
-          refetch: () => void ensureCoverage(entry, b)
+          refetch: () => {
+            noteInvalidation(entry, b)
+            void ensureCoverage(entry, b)
+          }
         })
       } catch (err) {
         console.error(`[plugins] ${plugin.id} subscribe failed for ${s.id}`, err)
