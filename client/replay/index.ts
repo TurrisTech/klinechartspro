@@ -102,7 +102,7 @@ function safeStorage(): Storage | null {
  * will share. Called by the app before constructing the chart. */
 export function bootReplay(intent: ReplayIntent, base: string): ReplayBoot {
   setReadClock(intent.cursor)
-  const hub = new ReplayFeedHub(new HttpBarSource(), base, intent.cursor)
+  const hub = new ReplayFeedHub(new HttpBarSource(), base, intent.cursor, storedIntervalsFor)
   return { intent, hub, datafeed: () => hub.createFeed() }
 }
 
@@ -274,6 +274,7 @@ export async function mountBarReplay(
   const latest = capabilities().serverTime || Date.now()
   const hub = boot.hub
   hub.setBase(stored.base)
+  hub.setStored(stored.symbol, storedIntervals)
   hub.cursor = stored.cursor
   setReadClock(stored.cursor)
 

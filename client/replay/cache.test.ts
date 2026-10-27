@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { BarCache, type BarSource, type ReplayBar, composeForming, nonWeekendGaps } from './cache'
+import { BarCache, type BarSource, PREFETCH_BARS, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
 import { FX_GRID, fromWall, intervalEnd, toWireDate } from './timeframes'
 
 function ny(text: string): number {
@@ -107,6 +107,33 @@ describe('BarCache', () => {
     expect(src.calls.some((c) => c.from < far && c.to > start + 30 * H && c.from > start)).toBe(false)
   })
 
+  test('cover past the end of the run is a seek: the gap is never read', async () => {
+    // Longer than the prefetch margin, so there is something past the run's end to land on.
+    const src = new RecordingSource(series('1h', start, 2 * PREFETCH_BARS))
+    const cache = new BarCache(src, 'oanda:EURUSD', '1h', FX_GRID)
+    await cache.cover(start, start + 2 * H)
+    const reach = cache.reach as number
+    const far = reach + 10 * H
+    await cache.cover(far, far + 2 * H)
+    expect(src.calls.length).toBe(2)
+    expect(src.calls[1].from).toBe(far)
+    expect(cache.anchoredAt).toBe(far)
+    expect(cache.slice(far, far + 2 * H).map((b) => b.open)).toEqual([far, far + H])
+  })
+
+  test('cover inside the run reads nothing; cover from its end extends it', async () => {
+    const src = new RecordingSource(data)
+    const cache = new BarCache(src, 'oanda:EURUSD', '1h', FX_GRID)
+    await cache.cover(start, start + 2 * H)
+    await cache.cover(start + H, start + 3 * H)
+    expect(src.calls.length).toBe(1)
+    const reach = cache.reach as number
+    await cache.cover(reach, reach + H)
+    expect(src.calls.length).toBe(2)
+    expect(src.calls[1].from).toBe(reach)
+    expect(cache.anchoredAt).toBe(start)
+  })
+
   test('dump forgets the anchor; ensure without one is an error', async () => {
     const cache = new BarCache(new RecordingSource(data), 'oanda:EURUSD', '1h', FX_GRID)
     cache.dump()
@@ -139,6 +166,59 @@ describe('composeForming', () => {
   })
   test('nothing closed yet is null', () => {
     expect(composeForming('1h', 0, [], FX_GRID)).toBeNull()
+  })
+})
+
+describe('composeLadder', () => {
+  const stored = ['5s', '1m', '1h', '1D']
+  test('every stored interval between the base and the pane, coarsest first, then the base', () => {
+    expect(composeLadder('1D', '5s', stored)).toEqual(['1h', '1m', '5s'])
+    expect(composeLadder('1h', '5s', stored)).toEqual(['1m', '5s'])
+    expect(composeLadder('4h', '5s', stored)).toEqual(['1h', '1m', '5s'])
+    expect(composeLadder('5m', '5s', stored)).toEqual(['1m', '5s'])
+    expect(composeLadder('1W', '5s', stored)).toEqual(['1D', '1h', '1m', '5s'])
+    expect(composeLadder('1D', '1m', ['1m', '1h', '1D'])).toEqual(['1h', '1m'])
+  })
+  test('nothing between them, or nothing stored known: the base alone', () => {
+    expect(composeLadder('1m', '5s', stored)).toEqual(['5s'])
+    expect(composeLadder('1h', '1h', stored)).toEqual(['1h'])
+    expect(composeLadder('1D', '5s', [])).toEqual(['5s'])
+  })
+  test('an interval that does not tile the pane, or is not tiled by the base, is left out', () => {
+    // 1h does not tile a 90m candle; 15m does.
+    expect(composeLadder('90m', '5s', ['5s', '1m', '15m', '1h'])).toEqual(['15m', '1m', '5s'])
+    // A 2m base does not tile 5m: nothing between 2m and 1h is used but what 2m tiles.
+    expect(composeLadder('1h', '2m', ['2m', '5m', '10m'])).toEqual(['10m', '2m'])
+  })
+})
+
+describe('composeSpans', () => {
+  const ladder = ['1h', '1m', '5s']
+  const bucket = ny('2024-03-19 17:00')
+  test('whole hours, then whole minutes, then the base for the rest', () => {
+    const cursor = ny('2024-03-20 06:12') + 35_000
+    expect(composeSpans(bucket, cursor, ladder, FX_GRID)).toEqual([
+      { interval: '1h', from: bucket, to: ny('2024-03-20 06:00') },
+      { interval: '1m', from: ny('2024-03-20 06:00'), to: ny('2024-03-20 06:12') },
+      { interval: '5s', from: ny('2024-03-20 06:12'), to: cursor }
+    ])
+  })
+  test('a cursor on an hour is hours alone', () => {
+    const cursor = ny('2024-03-20 06:00')
+    expect(composeSpans(bucket, cursor, ladder, FX_GRID)).toEqual([{ interval: '1h', from: bucket, to: cursor }])
+  })
+  test('inside the first hour and minute the base does it all', () => {
+    const cursor = bucket + 35_000
+    expect(composeSpans(bucket, cursor, ladder, FX_GRID)).toEqual([{ interval: '5s', from: bucket, to: cursor }])
+  })
+  test('at the Friday close, and over the weekend, the hours cover the session', () => {
+    const thu = ny('2024-03-21 17:00')
+    expect(composeSpans(thu, ny('2024-03-22 17:00'), ladder, FX_GRID)).toEqual([{ interval: '1h', from: thu, to: ny('2024-03-22 17:00') }])
+    expect(composeSpans(thu, ny('2024-03-23 10:00'), ladder, FX_GRID)).toEqual([{ interval: '1h', from: thu, to: ny('2024-03-23 10:00') }])
+  })
+  test('one interval is one span to the cursor', () => {
+    const cursor = ny('2024-03-20 06:12') + 35_000
+    expect(composeSpans(bucket, cursor, ['5s'], FX_GRID)).toEqual([{ interval: '5s', from: bucket, to: cursor }])
   })
 })
 
