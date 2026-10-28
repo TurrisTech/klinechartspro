@@ -319,9 +319,12 @@ base bar that closed at or before the cursor (`barAt`), probing back 50 base bar
 eightfold. From Sunday's open that widening walked back through the closed weekend: at a 5s base
 the fifth probe read ~12 days of 5s bars, page after page, to find Friday's last one (prod EURGBP,
 a Step from Saturday 11:27 to Sunday's open: 63 reads, 20 s before the cursor moved; `barAt` alone
-12.3 s). The probe now starts at the last session close at or before the cursor, on the
-instrument's own schedule (the close of the 1D candle containing it -- the cursor itself while the
-market is open): the same bar, one read, 48 ms.
+12.3 s). The probe now goes one session at a time on the instrument's own schedule: back from the
+cursor -- or from the close of the session it falls after, when the market is shut -- widening, but
+never into the closed window before the session; a session with no bar closed by then hands over
+to the close of the one before. The first cut (`client-7944be9`) anchored only at that close, which
+missed the case the Step actually lands on, Sunday's first 5s close (17:00:05), inside Monday's
+session with nothing closed yet: still 12.9 s and five probes on prod, now 135 ms and two.
 
 **A walk says how far it has got** (user's call, 2026-09-20: the date, not a percentage or a bar
 count). Without it a months-long 1m walk showed a frozen chart and a Stop button, and "working"
