@@ -2,7 +2,8 @@ import { MTF_INTERVALS } from '../mtf/api'
 import { GRAPH_ROOTS } from '../mtf/config'
 import { resolutionDurationMs } from '../periods'
 import { BAR_FIELDS, BUILTIN_INDICATORS, builtinInfo, builtinOutputs, graphTitle, type ServerCatalogue, TIME_ZONES } from './catalogue'
-import { button, el, iconButton, input, numberInput, select, timeInput } from './dom'
+import { fromWall, toWall } from '../replay/timeframes'
+import { button, dateTimeInput, el, iconButton, input, numberInput, select, timeInput } from './dom'
 import { defaultLeaf, defaultRightOperand, type EditNode, type GroupMode, type GroupNode, group, leafCount } from './editable'
 import { defaultGraphSettings, entryIntervals, graphOverlays, type GraphSettings } from './graphentry'
 import { isLabelOperand, LABEL_OPS, NUMERIC_OPS, OP_WORDS, OPERAND_OPS, TIME_OP_WORDS, TIME_OPS, WEEKDAYS } from './rules'
@@ -137,7 +138,7 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       })
     )
 
-    const clock = isClock(leaf.left)
+    const clock = isClock(leaf.left) || isInstant(leaf.left)
     const ops = isLabelOperand(leaf.left) ? LABEL_OPS : clock ? TIME_OPS : NUMERIC_OPS
     const words = clock ? TIME_OP_WORDS : OP_WORDS
     const op = select(
@@ -180,6 +181,32 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       })
       label.setAttribute('aria-label', 'Which label')
       box.appendChild(label)
+      return box
+    }
+    if (leaf.left.kind === 'time' && leaf.left.field === 'datetime') {
+      // A date and time is typed on the condition's own clock, kept as the instant.
+      const zone = leaf.left.zone
+      if (leaf.op === 'inside' || leaf.op === 'outside') {
+        const fallback = nextMorning(zone)
+        const band = leaf.right && 'band' in leaf.right ? leaf.right.band : [fallback, fallback + 86_400_000]
+        const low = dateTimeInput(band[0], zone, (value) => {
+          leaf.right = { band: [value, (leaf.right as { band: [number, number] }).band[1]] }
+        })
+        const high = dateTimeInput(band[1], zone, (value) => {
+          leaf.right = { band: [(leaf.right as { band: [number, number] }).band[0], value] }
+        })
+        low.setAttribute('aria-label', 'From')
+        high.setAttribute('aria-label', 'To')
+        const and = el('span', 'wd-alert-muted')
+        and.textContent = 'to'
+        box.append(low, and, high)
+        return box
+      }
+      const at = dateTimeInput(leaf.right && 'value' in leaf.right ? leaf.right.value : nextMorning(zone), zone, (value) => {
+        leaf.right = { value }
+      })
+      at.setAttribute('aria-label', 'Date and time')
+      box.appendChild(at)
       return box
     }
     if (isClock(leaf.left)) {
@@ -306,7 +333,8 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       if (offer.time) {
         optionGroup('Time', [
           { value: 'tim:minute', label: 'Time of day' },
-          { value: 'tim:weekday', label: 'Weekday' }
+          { value: 'tim:weekday', label: 'Weekday' },
+          { value: 'tim:datetime', label: 'Date and time' }
         ])
       }
     }
@@ -362,7 +390,7 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
         (value) => onChange({ ...operand, zone: value })
       )
       zone.setAttribute('aria-label', 'Clock')
-      zone.title = 'Whose clock: the time of day and the weekday are read on it'
+      zone.title = 'Whose clock: the time of day, the weekday and the date and time are read on it'
       box.appendChild(zone)
     } else if (operand.kind === 'series') {
       const row = catalogue?.stored.find((s) => s.entry.name === operand.indicator)
@@ -399,7 +427,7 @@ export function createRuleTree(options: RuleTreeOptions): RuleTree {
       const entry = entryIntervals().includes(interval) ? interval : '5m'
       return withEntry({ kind: 'graph', interval: entry, overlay: rest, ...graphSettingsFor(rest) }, entry)
     }
-    if (kind === 'tim') return { kind: 'time', interval, field: rest === 'weekday' ? 'weekday' : 'minute', zone: 'America/New_York' }
+    if (kind === 'tim') return { kind: 'time', interval, field: rest === 'weekday' || rest === 'datetime' ? rest : 'minute', zone: 'America/New_York' }
     if (kind === 'stg') return { kind: 'strategy', interval, strategy: rest }
     return null
   }
@@ -534,6 +562,18 @@ function isClock(operand: Operand): boolean {
   return operand.kind === 'time' && operand.field === 'minute'
 }
 
+/** Whether an operand reads the date and time (compared with instants, typed on its clock). */
+function isInstant(operand: Operand): boolean {
+  return operand.kind === 'time' && operand.field === 'datetime'
+}
+
+/** 09:30 tomorrow on `zone`'s clock: what a new date-and-time condition starts at. */
+function nextMorning(zone: string): number {
+  const day = 86_400_000
+  const wall = toWall(Date.now(), zone)
+  return fromWall(wall - (((wall % day) + day) % day) + day + 570 * 60_000, zone)
+}
+
 /** What kind of comparison an operand takes: a label (per source), a time of day, a number. */
 function shape(operand: Operand): string {
   if (operand.kind === 'signal') return `signal:${operand.plugin}/${operand.variant}`
@@ -552,6 +592,9 @@ function resetComparison(leaf: RuleLeaf, labels: Array<{ value: string }>): void
   } else if (isClock(leaf.left)) {
     leaf.op = 'crosses_above'
     leaf.right = { value: 570 }
+  } else if (leaf.left.kind === 'time' && leaf.left.field === 'datetime') {
+    leaf.op = 'crosses_above'
+    leaf.right = { value: nextMorning(leaf.left.zone) }
   } else {
     leaf.op = 'crosses_above'
     leaf.right = { value: 0 }

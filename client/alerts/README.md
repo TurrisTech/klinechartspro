@@ -35,7 +35,7 @@ An **operand** is a value per bar of its timeframe, on the alert's instrument:
 | `series` | a stored registry row's series — AREV19…23 `p`, arev21_outlier, krev01 | `/plugins/{id}/values` |
 | `signal` | a plugin's published label on a bar — `long`, `top` — or '' for none | `/plugins/{id}/values`' `signal` field |
 | `graph` | a multi-timeframe overlay's **graph entry** on a 3m/5m bar -- the star the overlay draws, `top`/`bottom`, or '' | the overlay's own fetch and graph code, headless (`graphentry.ts`) |
-| `time` | the clock at each bar close: **time of day** (minutes past midnight, typed HH:MM) or **weekday**, on a chosen zone | the bar's close, on that zone's wall clock |
+| `time` | the clock at each bar close: **time of day** (minutes past midnight, typed HH:MM), **weekday**, or **date and time** (the instant, typed on the zone's wall clock), on a chosen zone | the bar's close, on that zone's wall clock |
 
 A signal or a graph entry can be compared with **any side** (`is any side`, compiled to "not
 the empty label").
@@ -66,6 +66,17 @@ arev21 on 2h) holds nothing back.
 same for days. Read at each bar CLOSE of the condition's timeframe, on the chosen zone's wall
 clock (New York, London, Frankfurt, Tokyo, Sydney, UTC), so DST moves nothing. A window across
 midnight is written as "is not between" its complement.
+
+**Date and time** (2026-10-28, user: "is there an alert for recurring time of day when market is
+open? also have one for date/time"). `Date and time (New York) at 5m closes reaches 2026-11-03
+09:30` fires once, at the first close at or after that instant. "Is between", "is at or after"
+and "is before" make a window of dates, as for a time of day.
+- It reads the close instant itself (`clockValue` returns it); the zone is only how it is typed
+  and shown (`dateTimeInput`, `formatDateTime`).
+- Both time alerts fire only while the market is open, because they are read at bar closes and
+  there are no bars while it is shut. A time of day fires on trading days only. A date and time
+  that falls on a weekend fires at the first close after the market opens.
+- In a bar replay either is a Next alert stop like any other.
 
 OBV and PVT are not offered: they are running sums from the first bar loaded, so their value
 depends on where a window starts and never converges -- every alert reads a window, and a

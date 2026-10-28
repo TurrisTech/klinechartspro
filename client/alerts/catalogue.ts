@@ -205,7 +205,7 @@ export function labelOperand(operand: Operand, catalogue: ServerCatalogue | null
     case 'strategy':
       return `${savedStrategyName(operand.strategy) ?? operand.strategy} entry`
     case 'time':
-      return `${operand.field === 'minute' ? 'Time of day' : 'Weekday'} (${zoneLabel(operand.zone)})`
+      return `${operand.field === 'minute' ? 'Time of day' : operand.field === 'weekday' ? 'Weekday' : 'Date and time'} (${zoneLabel(operand.zone)})`
   }
 }
 
