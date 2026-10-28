@@ -83,6 +83,11 @@ describe('ClientAlertStore', () => {
     await store.setEnabled(id, true)
     expect(store.get(id)?.status).toBe('armed')
     expect(store.enabledOn('oanda:EURUSD').length).toBe(1)
+    // Every enabled one, on any instrument: what a replay's Next alert stops at.
+    await store.create({ ...definition({ repeat: 'once' }), symbol: 'oanda:EURGBP' })
+    expect(store.enabled().map((a) => a.symbol).sort()).toEqual(['oanda:EURGBP', 'oanda:EURUSD'])
+    await store.setEnabled(id, false)
+    expect(store.enabled().map((a) => a.symbol)).toEqual(['oanda:EURGBP'])
   })
 
   test('round-trips through its persistence, dropping a row that no longer reads', async () => {

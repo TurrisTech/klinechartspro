@@ -127,7 +127,7 @@ describe.skipIf(!BASE_URL)('bar replay end to end (real server, fake wall)', () 
       trigger: 'level' as const, repeat: 'always' as const, cooldownMs: 0,
       createdAt: 0, updatedAt: 0, armedAt: 0, status: 'armed' as const, lastFiredAt: null, fireCount: 0
     }
-    const alerts = new ReplayAlerts(SYMBOL, () => [alert], new AlertSearch(new HttpAlertData(), async () => ({ stored: [], signals: [] })))
+    const alerts = new ReplayAlerts(() => [alert], new AlertSearch(new HttpAlertData(), async () => ({ stored: [], signals: [] })))
     const created = await simApi.create({ mode: 'replay', balance: 10_000, symbol: SYMBOL })
     let rev = created.session.rev
     const saves: number[] = []

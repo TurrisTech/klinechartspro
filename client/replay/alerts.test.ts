@@ -54,7 +54,7 @@ const starts = (search: FakeSearch) => search.calls.map((c) => c.after / H)
 function book(at: number[], list: Alert[] = [alert('a')]) {
   const search = new FakeSearch(at)
   const alerts = { list }
-  const replay = new ReplayAlerts('oanda:EURUSD', () => alerts.list, search as unknown as AlertSearch)
+  const replay = new ReplayAlerts(() => alerts.list, search as unknown as AlertSearch)
   return { replay, search, alerts }
 }
 
@@ -175,6 +175,26 @@ describe('ReplayAlerts look-ahead', () => {
     search.calls.length = 0
     expect(await replay.prefetch(50 * H, 100 * H)).toBeNull()
     expect(starts(search)).toEqual([50])
+  })
+
+  test('every enabled alert counts, on whatever instrument it watches -- not only the one replayed', async () => {
+    // The Alerts list as the store hands it over: EURUSD's alert and EURGBP's, the replay on either.
+    const usd = alert('usd')
+    const gbp = { ...alert('gbp'), symbol: 'oanda:EURGBP' }
+    const search = new FakeSearch([5 * H])
+    const searched: string[] = []
+    const next = search.next.bind(search)
+    search.next = (a, after, until, options) => {
+      searched.push(a.symbol)
+      return next(a, after, until, options)
+    }
+    const replay = new ReplayAlerts(() => [usd, gbp], search as unknown as AlertSearch)
+    expect(replay.count()).toBe(2)
+    const hit = await replay.next(0, 100 * H, progress())
+    expect(hit).toMatchObject({ effective: 5 * H })
+    expect(new Set(searched)).toEqual(new Set(['oanda:EURUSD', 'oanda:EURGBP']))
+    // The stop names its alert's own instrument, for the notification.
+    expect(['oanda:EURUSD', 'oanda:EURGBP']).toContain(hit?.symbol ?? 'none')
   })
 
   test('one search at a time: a superseded look-ahead is stopped before the next starts', async () => {

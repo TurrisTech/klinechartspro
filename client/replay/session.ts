@@ -118,10 +118,13 @@ export interface ReplayController {
    * Reported with the walk's progress (`'walk'` change). */
   readonly searchedTo: number | null
   readonly lastStop: AdvanceResult | null
-  /** The client alerts Next alert can stop at (enabled, on this instrument). */
+  /** The client alerts Next alert can stop at: every enabled one, on any instrument. */
   readonly alertCount: number
   /** Armed stops besides the alerts (price watches): Next alert stops at those too. */
   readonly armedStops: number
+  /** What can fill on the walked instrument -- resting orders, and open trades' stop loss or take
+   * profit: Next alert stops where one does, too. */
+  readonly workingStops: number
   readonly storedIntervals: readonly string[]
   readonly intervalsInUse: readonly string[]
   readonly symbol: string
@@ -467,6 +470,12 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     return this.opts.observer?.armedStops() ?? 0
   }
 
+  get workingStops(): number {
+    const orders = [...this.engine.orders.values()].filter((o) => o.symbol === this.symbol && o.status === 'pending' && o.price !== null).length
+    const trades = [...this.engine.trades.values()].filter((t) => t.symbol === this.symbol && t.closedAt === null && (t.stopLoss !== null || t.takeProfit !== null)).length
+    return orders + trades
+  }
+
   get alertCount(): number {
     return this.opts.alerts?.count() ?? 0
   }
@@ -569,8 +578,14 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // alert, or Run to price.
       const seeking: AdvanceResult['seeking'] = options.alerts ? 'alerts' : options.watches ? 'watches' : null
       const watchRun = seeking !== null && plan.reason !== 'alert'
+      const fillable = canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
+      // A run to the next event stops at the first one -- an alert, a watch firing, or a fill or a
+      // close: a stop loss or a take profit hit, a resting order filled (user, 2026-10-28: "when
+      // price hits a stop or take profit, that is also another next alert"). Step and Play pause
+      // on one only with Pause on fill set.
+      const pauseOn = this.pauseOnFill || seeking !== null
       // Nothing that could stop the run at all: nowhere to go.
-      const nowhere = watchRun && !cancelled && this.armedStops === 0
+      const nowhere = watchRun && !cancelled && this.armedStops === 0 && !fillable
       // Walk the base bars only when one of them could actually do something. With nothing
       // resting and nothing protected the account cannot change however the price moves, so
       // the advance SEEKS: the cursor lands on the same instant, the engine takes the closing
@@ -578,16 +593,19 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // ...or when an observer needs the bars. A watch armed on this wall is answered by the
       // walk, so it is as good a reason to walk as a resting order is: seeking past the span
       // would step over the very move it was placed to see.
-      const fillable = canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
       const walked = fillable || (this.opts.observer?.needsBars() ?? false)
       // With nothing that could fill, the engine has nothing to learn from the bars: it is not fed
       // them, and is quoted once where the advance lands -- the state a walk would have left it
       // in. That is also what lets a run that found nothing be taken back whole.
-      // ...and the walk SKIMS: wherever the watches are quiet over a whole coarser stored candle,
-      // that candle is handed over in place of every base bar inside it (`skim`).
-      const levels = !fillable && walked && this.opts.observer?.quietOver ? this.summaryIntervals() : []
-      const trail: WalkState = { consumed, observed: [], cancelled: false, last: null, sliceStart: performance.now(), report: () => {} }
-      const before = watchRun && !fillable ? structuredClone(this.opts.observer?.toState() ?? []) : null
+      // ...and the walk SKIMS: wherever nothing could happen over a whole coarser stored candle --
+      // the watches quiet on it, and its bid/ask range reaching no resting order, stop loss or
+      // take profit -- that candle is handed over in place of every base bar inside it (`skim`).
+      const watchesSkim = !(this.opts.observer?.needsBars() ?? false) || this.opts.observer?.quietOver !== undefined
+      const levels = walked && watchesSkim ? this.summaryIntervals() : []
+      const trail: WalkState = { consumed, observed: [], cancelled: false, last: null, sliceStart: performance.now(), report: () => {}, fillable, pauseOn, events, paused: false }
+      // A run that may be taken back keeps what it would put back: the watches, and the account.
+      const before = watchRun ? structuredClone(this.opts.observer?.toState() ?? []) : null
+      const account = watchRun && fillable ? this.engine.toState() : null
       if (cancelled || nowhere) {
         // Neither walk nor seek: the cursor stays where it was.
       } else if (levels.length > 0) {
@@ -596,6 +614,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         this.baseCache.seek(this.cursor)
         observed = trail.observed
         cancelled = trail.cancelled
+        paused = trail.paused
       } else if (walked) {
         const chunk = WALK_CHUNK_BARS * nominalMs(this.base)
         let reach = this.cursor
@@ -626,7 +645,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
             // left it -- and the BASE bar, not the refinement's parts.
             const raised = this.opts.observer?.onBar(bar) ?? []
             this.cursor = bar.end
-            if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+            if (pauseOn && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
               paused = true
               break walk
             }
@@ -656,16 +675,18 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       }
       // The walk is over, however it ended: from here the controls say why it stopped.
       this.walkedTo = null
-      // A run to the end that no watch stopped -- and that nothing could have filled on -- would
-      // spend the whole replay for nothing: a replay cannot step back. So it is taken back, as
-      // Next alert with no alert ahead never moves (the user's rule, 2026-10-04): the cursor and
-      // the watches as they were, the engine never fed.
+      // A run to the end that nothing stopped -- no watch fired, nothing filled -- would spend the
+      // whole replay for nothing: a replay cannot step back. So it is taken back, as Next alert
+      // with no alert ahead never moves (the user's rule, 2026-10-04): the cursor, the watches and
+      // the account as they were. Nothing filled, so the account only ever took quotes.
       const takenBack = before !== null && !cancelled && !paused && observed.length === 0 && !nowhere
       if (takenBack) {
         this.cursor = from
         this.opts.observer?.restoreState?.(before)
+        if (account) this.engine.restore(account)
         this.baseCache.seek(from)
         consumed.length = 0
+        events.length = 0
       } else if (walked && !fillable && trail.last) {
         const bar = toBidAsk(trail.last, this.symbol)
         this.engine.onQuote({ symbol: this.symbol, time: trail.last.end, bid: bar.bidClose, ask: bar.askClose })
@@ -759,32 +780,43 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 
   /**
-   * THE SKIM: the walk of `[from, to)` when nothing can fill and only the observer -- the price
-   * watches -- needs the bars. Each whole candle of `levels[level]` inside the span is asked
-   * about first: when the observer is quiet over it (no watch could fire on any bar inside), it
-   * is handed over as one bar and the cursor moves past it; otherwise the walk descends into it
-   * a level finer, down to the base bars, which are handed over one by one exactly as a walk
-   * hands them. The parts of the span no whole candle covers -- the head before the first, the
-   * tail after the last, a hole in the coarser store -- descend the same way; a stretch the
-   * market is closed throughout is passed over.
+   * THE SKIM: the walk of `[from, to)` by the coarsest candles nothing can happen on. Each whole
+   * candle of `levels[level]` inside the span is asked about first: when it is quiet -- no watch
+   * could fire on any bar inside it, and its bid/ask range reaches no resting order, stop loss or
+   * take profit -- it is handed over as one bar and the cursor moves past it; otherwise the walk
+   * descends into it a level finer, down to the base bars, which are handed over one by one
+   * exactly as a walk hands them (to the engine first, then the watches). The parts of the span
+   * no whole candle covers -- the head before the first, the tail after the last, a hole in the
+   * coarser store -- descend the same way; a stretch the market is closed throughout is passed
+   * over.
    *
-   * So a watch a month away costs one read of daily candles and, near the level, one of hours
-   * and one of minutes, where the walk read every minute between. What fires, and where, is
-   * the walk's answer: `neverWithin` (client/alerts/conditions.ts) only skips a candle on which
-   * nothing could have fired, and the base bars decide the rest. True when it stopped (a watch
-   * fired, or a Stop was pressed).
+   * So a watch, or a stop loss, a month away costs one read of daily candles and, near the
+   * level, one of hours and one of minutes, where the walk read every minute between. What
+   * happens, and where, is the walk's answer: `neverWithin` (client/alerts/conditions.ts) only
+   * skips a candle on which no watch could have fired, `intersectsWorking` (clock.ts) one on
+   * which nothing could have filled -- the engine takes such a candle whole, and only its quote
+   * and clock move, as they would over the bars inside it -- and the base bars decide the rest.
+   * True when it stopped (a watch fired, a fill or a close paused it, or a Stop was pressed).
    */
   private async skim(level: number, from: number, to: number, levels: readonly string[], trail: WalkState): Promise<boolean> {
     if (to <= from) return false
-    const observer = this.opts.observer as ReplayObserver
+    // A span shorter than one candle of this level holds none whole: on to the next, unread.
+    if (level < levels.length && to - from < nominalMs(levels[level])) return this.skim(level + 1, from, to, levels, trail)
+    const observer = this.opts.observer
     if (level === levels.length) {
       for (const bar of await this.opts.barSource.fetch(this.symbol, this.base, from, to, 'all', this.grid)) {
         if (bar.open < from || bar.end > to) continue
         if (await this.breathe(trail)) return true
-        const raised = observer.onBar(bar)
+        const produced = trail.fillable ? await this.consume(bar, this.base) : []
+        trail.events.push(...produced)
+        const raised = observer?.onBar(bar) ?? []
         trail.consumed.push(bar)
         trail.last = bar
         this.cursor = bar.end
+        if (trail.pauseOn && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+          trail.paused = true
+          return true
+        }
         if (raised.length > 0) {
           trail.observed = raised
           return true
@@ -797,17 +829,46 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     for (const candle of candles) {
       if (candle.open > at && !this.closedThroughout(at, candle.open) && (await this.skim(level + 1, at, candle.open, levels, trail))) return true
       if (await this.breathe(trail)) return true
-      if (observer.quietOver?.(candle)) {
-        // Nothing can fire on it, so nothing does: it only moves the watches' baseline on.
-        observer.onBar(candle)
+      if (this.quietOver(candle, trail)) {
+        // Nothing can happen on it, so nothing does: the watches' baseline moves on, and the
+        // engine takes its quote and clock. Whatever it reports all the same is kept, and ends the
+        // run as a fill on a base bar would -- never dropped.
+        const produced = trail.fillable ? this.engine.onBar(toBidAsk(candle, this.symbol)) : []
+        trail.events.push(...produced)
+        observer?.onBar(candle)
         trail.consumed.push(candle)
         trail.last = candle
         this.cursor = candle.end
+        if (trail.pauseOn && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+          trail.paused = true
+          return true
+        }
       } else if (await this.skim(level + 1, candle.open, candle.end, levels, trail)) return true
       at = candle.end
     }
     if (at < to && !this.closedThroughout(at, to)) return this.skim(level + 1, at, to, levels, trail)
     return false
+  }
+
+  /** Whether nothing could happen on `candle`: no watch could fire on it, and -- when something
+   * can fill -- its bid/ask range, from the last quote on, reaches no resting order, stop loss or
+   * take profit. From the last quote, because a price can GAP through a level without any bar's
+   * range holding it: a buy limit at 1.0900 with Friday's close at 1.1000 and Sunday's open at
+   * 1.0800 fills at the open, and Sunday's candles alone never reach 1.0900. */
+  private quietOver(candle: ReplayBar, trail: WalkState): boolean {
+    const observer = this.opts.observer
+    if (observer?.needsBars() && !observer.quietOver?.(candle)) return false
+    if (!trail.fillable) return true
+    const bid = candle.bid ?? { l: candle.l, h: candle.h }
+    const ask = candle.ask ?? { l: candle.l, h: candle.h }
+    const quote = this.engine.quotes.get(this.symbol)
+    const band = {
+      bidLow: Math.min(bid.l, quote?.bid ?? bid.l),
+      bidHigh: Math.max(bid.h, quote?.bid ?? bid.h),
+      askLow: Math.min(ask.l, quote?.ask ?? ask.l),
+      askHigh: Math.max(ask.h, quote?.ask ?? ask.h)
+    }
+    return !intersectsWorking(band, [...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
   }
 
   /** Between two bars of a skim: hand the event loop back now and then, report the progress,
@@ -900,6 +961,14 @@ interface WalkState {
   consumed: ReplayBar[]
   observed: ObserverStop[]
   cancelled: boolean
+  /** Something can fill: the engine is fed what is handed over, and a candle whose range reaches
+   * a resting order, a stop loss or a take profit is not handed over whole. */
+  fillable: boolean
+  /** Whether a fill or a close ends the advance, and whether one did. */
+  pauseOn: boolean
+  paused: boolean
+  /** What the engine produced on the way. */
+  events: SimEvent[]
   /** The last bar handed over: its close is the quote the engine lands on. */
   last: ReplayBar | null
   sliceStart: number

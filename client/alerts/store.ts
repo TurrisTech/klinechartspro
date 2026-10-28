@@ -135,7 +135,12 @@ export class ClientAlertStore implements AlertSource {
     return row ? toAlert(row) : null
   }
 
-  /** The enabled alerts on one instrument: what a replay of it can stop at. */
+  /** The enabled alerts, on every instrument: what a bar replay's Next alert can stop at. */
+  enabled(): Alert[] {
+    return this.list().filter((a) => a.enabled)
+  }
+
+  /** The enabled alerts on one instrument. */
   enabledOn(symbol: string): Alert[] {
     return this.list().filter((a) => a.enabled && a.symbol === symbol)
   }

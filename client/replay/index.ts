@@ -52,7 +52,8 @@ export interface BarReplayController {
 /** The alert manager, as a replay uses it: the alerts Next alert stops at, the search that
  * finds them, and the window the controls' Alerts toggle opens. */
 export interface ReplayAlertsContext {
-  enabledOn(symbol: string): Alert[]
+  /** The enabled alerts, on every instrument: Next alert stops at the next of any of them. */
+  enabled(): Alert[]
   subscribe(listener: () => void): () => void
   search: AlertSearch
   catalogue: () => Promise<ServerCatalogue>
@@ -309,7 +310,7 @@ export async function mountBarReplay(
     storedIntervals: storedIntervals.length > 0 ? storedIntervals : [stored.base],
     engine: Engine.fromState(stored.engine),
     observer: watches,
-    alerts: ctx.alerts ? new ReplayAlerts(stored.symbol, (symbol) => ctx.alerts?.enabledOn(symbol) ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
+    alerts: ctx.alerts ? new ReplayAlerts(() => ctx.alerts?.enabled() ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
     barSource: replayBars,
     dataEnd: () => latest,
     save: async (state) => {
@@ -392,7 +393,8 @@ export async function mountBarReplay(
         // tagged `replay` so it never reads as news about the live market.
         ctx.notify.notify({
           title: result.alert.name,
-          body: [stored.symbol.split(':')[1] ?? stored.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective)}`].filter(Boolean).join(' · '),
+          // The alert's own instrument: any on the Alerts list, not only the one replayed.
+          body: [result.alert.symbol.split(':')[1] ?? result.alert.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective)}`].filter(Boolean).join(' · '),
           level: 'alert',
           source: 'replay',
           data: { alertId: result.alert.alertId, eventAt: result.alert.effective, replay: true }

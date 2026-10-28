@@ -110,6 +110,7 @@ function fake(): Fake {
     lastStop: null,
     alertCount: 0,
     armedStops: 0,
+    workingStops: 0,
     storedIntervals: ['1m', '1h', '1D'],
     intervalsInUse: ['5m', '1h'],
     symbol: SYM,
@@ -455,22 +456,28 @@ describe('the title bar and the transport', () => {
 })
 
 describe('the advance row', () => {
-  test('Next alert needs something to stop at: an alert on the instrument, or an armed watch', async () => {
+  test('Next alert needs something to stop at: an alert, an armed watch, or an order or stop that can fill', async () => {
     const m = mount()
     const next = (): HTMLButtonElement => m.button('Next alert')
     expect(next().disabled).toBe(true)
-    expect(next().title).toBe('Add an alert on EURUSD (Alerts) or place a price watch first')
+    expect(next().title).toBe('Enable an alert (Alerts), place a price watch, or rest an order or a stop first')
 
     m.controller.armedStops = 1
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 0 alerts on EURUSD triggers, or a price watch fires')
+    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or a price watch fires')
 
     m.controller.armedStops = 0
+    m.controller.workingStops = 1
+    m.emit()
+    expect(next().disabled).toBe(false)
+    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or an order, stop loss or take profit fills')
+
+    m.controller.workingStops = 0
     m.controller.alertCount = 2
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 2 alerts on EURUSD triggers')
+    expect(next().title).toBe('Advance to where the next of 2 alerts triggers')
 
     next().click()
     await flush()
@@ -522,10 +529,12 @@ describe('the advance row', () => {
 
 describe('the status line', () => {
   const reasons: Array<[string, Partial<AdvanceResult>, string]> = [
-    ['an alert, by its name', { reason: 'alert', alert: { alertId: 'a1', name: 'RSI oversold', effective: 0, readings: '' } }, 'Alert: RSI oversold'],
+    ['an alert, by its name', { reason: 'alert', alert: { alertId: 'a1', name: 'RSI oversold', symbol: 'oanda:EURUSD', effective: 0, readings: '' } }, 'Alert: RSI oversold'],
     ['nothing ahead', { reason: 'none' }, 'No alert triggers before the end of the data'],
-    ['a fill pause', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Paused on a fill'],
-    ['a close pause', { reason: 'fill', events: [{ kind: 'close' } as never] }, 'Paused on a close'],
+    ['a fill', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Order filled'],
+    ['a stop loss', { reason: 'fill', events: [{ kind: 'fill' }, { kind: 'close', reason: 'stop_loss' }] as never }, 'Stop loss hit'],
+    ['a take profit', { reason: 'fill', events: [{ kind: 'close', reason: 'take_profit' } as never] }, 'Take profit hit'],
+    ['a close', { reason: 'fill', events: [{ kind: 'close', reason: 'manual' } as never] }, 'Trade closed'],
     ['a watch', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }] }, 'Stopped at watch EURUSD 1.10000'],
     ['several watches on one bar', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }, { label: 'b' }, { label: 'c' }] }, 'Stopped at watch EURUSD 1.10000 +2'],
     ['a cancel after walking', { reason: 'cancel', walked: true, bars: [{}, {}, {}] as never }, 'Stopped by you after 3 bars'],
@@ -603,7 +612,7 @@ describe('the status line', () => {
 
   test('an alert stop carries what the rule read, on hover', () => {
     const m = mount()
-    m.controller.lastStop = result({ reason: 'alert', alert: { alertId: 'a1', name: 'oversold', effective: 0, readings: 'RSI(14) 1h 28.1' } })
+    m.controller.lastStop = result({ reason: 'alert', alert: { alertId: 'a1', name: 'oversold', symbol: 'oanda:EURUSD', effective: 0, readings: 'RSI(14) 1h 28.1' } })
     m.emit()
     expect((m.q('.wd-replay-stop-reason') as HTMLElement).title).toBe('Alert: oversold — RSI(14) 1h 28.1')
   })
@@ -650,7 +659,7 @@ describe('the panels', () => {
   test('Alerts opens the alert manager and badges the alerts Next alert can stop at', () => {
     const m = mount()
     expect(m.q('.wd-replay-badge')).toBeNull()
-    expect(m.button('Alerts').title).toBe('The alert manager: 0 enabled on EURUSD, which is where Next alert stops')
+    expect(m.button('Alerts').title).toBe('The alert manager: 0 enabled, which is where Next alert stops')
     m.controller.alertCount = 3
     m.emit()
     expect((m.q('.wd-replay-badge') as HTMLElement).textContent).toBe('3')

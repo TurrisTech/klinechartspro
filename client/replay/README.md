@@ -16,7 +16,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
 | `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`; Go to's `goToInstant` (a time of day on the instrument's clock: next trading day, next occurrence, a date), `isTradingDay` and `onBaseBoundary`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run; `cover` past the run's end is a seek too. `composeLadder`/`composeSpans` (which stored bars a forming candle is made of), `composeForming`, `nonWeekendGaps`. |
-| `alerts.ts` | `ReplayAlerts`: the user's enabled client alerts on this instrument (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to -- run AHEAD in the background after every advance (the look-ahead), so a press usually finds its answer waiting. |
+| `alerts.ts` | `ReplayAlerts`: every one of the user's enabled client alerts, on whatever instrument it watches (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to -- run AHEAD in the background after every advance (the look-ahead), so a press usually finds its answer waiting. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `results.ts` | PURE. `replayResults`: the session's score from its snapshot -- net and realised P&L, win rate, averages, profit factor, expectancy, best/worst, the max drawdown of the realised curve -- and the rows the Results panel draws. |
 | `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
@@ -107,8 +107,38 @@ error.
 
 **Next alert** (2026-10-04) replaced Next signal and its Signals panel (user: "let's remove
 bar replay's next signal feature as we will have next alert"). It runs to where the next of the
-user's **enabled client alerts on this instrument** triggers -- the alert manager's list
-(`client/alerts`), opened from the **Alerts** toggle, whose badge counts them. A published
+user's **enabled client alerts** triggers -- every one on the alert manager's list
+(`client/alerts`), opened from the **Alerts** toggle, whose badge counts them, on whatever
+instrument each watches. Since 2026-10-28 (user: "next alert should be just the next alert
+according to the Alerts popup, not on current chart"): until then only the replayed instrument's
+alerts counted, so a replay of EURGBP had no Next alert for an alert on EURUSD, and switching a
+pane's symbol mid-replay changed nothing, since the replay keeps the instrument it started on.
+Each alert is searched on its own instrument's bars and schedule; the stop's notification names
+that instrument.
+
+**A stop loss or take profit hit is another Next alert** (2026-10-28; user: "when price hits a stop
+or take profit, that is also another next alert").
+- **It stops the run:** Next alert, and Run to a price, end at the first fill or close -- a stop
+  loss or take profit hit, a resting order filled -- whatever Pause on fill says. Step and Play
+  still pause only with it set. The controls name what happened: "Stop loss hit", "Take profit
+  hit", "Order filled".
+- **It enables the button:** a resting order or a protected trade counts like an alert
+  (`workingStops`), so Next alert works with no alert at all and runs to the fill.
+- **Nothing found:** a run that meets nothing before the end of the data is taken back, the
+  account included (`Engine.restore`). Nothing filled, so the account only ever took quotes.
+- **Limit and stop orders count** (user: "also a limit trade is part of next alert"): a resting
+  limit or stop order filling ends the run as a stop loss does ("Order filled").
+- **The skim covers fills:** a candle whose bid/ask range reaches no resting order, stop loss or
+  take profit goes to the engine whole (`quietOver`, `intersectsWorking`). Only its quote and
+  clock move, as over the bars inside it. A level of the skim longer than the span is not read.
+- **Gaps:** the range is taken from the last quote on, because a price can gap through a level
+  that no candle's range then holds. A buy limit at 1.0900 is filled at Sunday's 1.0800 open after
+  Friday's 1.1000 close. Measured against the first cut, which used the candle's own range: that
+  skipped the gap, filled it silently, and took the whole run back as "nothing ahead".
+  - Anything the engine still reports on a candle handed over whole is kept, and ends the run.
+
+On prod EURGBP 5s, a long whose take profit is hit 2.5 days out: the same close (06:00:05,
+0.86912) by 24 candles and bars in 4 ms, against 30,006 base bars in 44 ms walked. A published
 signal is something an alert reads (`AREV arev21 signal 4h is long`), so "the next AREV21
 long" is an alert of one condition; a rule may combine it with anything else. With only price
 watches armed it still runs, to the first watch that fires. With neither it is disabled, and
