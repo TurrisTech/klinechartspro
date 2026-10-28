@@ -294,6 +294,26 @@ stack): a press to a nearby star stopped in 87-210 ms, the panes' own catching-u
 it; the searches themselves -- 0.4-0.5 s each against prod, ~2 s cold -- now run while nobody is
 waiting. `client/alerts/README.md` has what made the searches themselves faster.
 
+**What a press lands on is read ahead too** (2026-10-28). Measured on prod's EURUSD (the Tablet
+wall: 1h, 5m and 3m with the rank 85 overlay, base 1m, the 5m star alert), the time a press took
+was its landing's reads, one round trip after another: the base bar a seek takes its quote from,
+before the cursor moved; then the bars the forming candles are made of; then the reloaded panes'
+windows; then the overlays' reads, which for a reloaded pane waited out the plugin host's 250 ms
+range debounce. Three changes:
+- `ReplayAlerts.prefetch` resolves to the instant its search found, and `warmAlerts` reads the base
+  bar there (`landing`, `alertStop`): the seek's quote no longer waits for the press.
+- `ReplayFeedHub.push` reloads a pane too far behind (`reloadIfFar`) before it reads anything
+  else: a reload is the pane's own read of its window and needs none of the bars the other
+  panes' forming candles are made of.
+- The plugin host covers a pane whose bars were replaced whole (both ends moved) at once, not
+  after the debounce, which is kept for pans and new bars (`client/plugins/host.ts`).
+
+On the same eight stops from Fri 2023-01-06 04:25 New York, until the last read reaching the
+landing was done: 530, 181, 202, 341, 1,014, 532, 276 and 190 ms on `main`; 372, 57, 147, 188,
+427, 296, 136 and 119 ms with these. What is left is mostly the server's `/mtf/graph` (up to
+~0.85 s for the 5m overlay on a cold read) and, after a jump short enough to append, the forming
+candle's read before the overlays'.
+
 **A walk says how far it has got** (user's call, 2026-09-20: the date, not a percentage or a bar
 count). Without it a months-long 1m walk showed a frozen chart and a Stop button, and "working"
 could not be told from "hung". `walkedTo` is the close of the last base bar walked — never
@@ -423,7 +443,7 @@ watermark that drifted from the chart. Here the hub keeps no watermark: what to 
 computed from `chart.getDataList().at(-1)` every time, the chart's tail is asserted against
 what was pushed after every step (`PushReport.problem`), and a jump longer than
 `SEEK_THRESHOLD_BARS` reloads the pane's window at the cursor (`chart.resetData()`, clean
-seek) instead of appending. That threshold was 300 and is **100** since 2026-10-26: every bar
+seek, sent before any other read of the push) instead of appending. That threshold was 300 and is **100** since 2026-10-26: every bar
 appended recalculates every indicator on the pane over every bar it holds, ~2.4 ms a bar on a
 six-pane wall with the usual overlays, so a 10-hour Go to that appended ~340 bars stopped in
 1.26 s, and reloading the panes past 60 bars stopped it in 0.34 s. **The panes are pushed

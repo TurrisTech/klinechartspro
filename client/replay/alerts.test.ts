@@ -64,6 +64,21 @@ describe('ReplayAlerts look-ahead', () => {
     expect(search.calls).toHaveLength(1)
   })
 
+  test('a look-ahead says where it found the next alert, for reading ahead what a press lands on', async () => {
+    const { replay, search } = book([5 * H, 9 * H])
+    expect(await replay.prefetch(0, 100 * H)).toBe(5 * H)
+    // From a later cursor short of the hit: the same search, the same answer.
+    expect(await replay.prefetch(2 * H, 100 * H)).toBe(5 * H)
+    expect(search.calls).toHaveLength(1)
+    expect(await replay.prefetch(5 * H, 100 * H)).toBe(9 * H)
+    expect(await replay.prefetch(9 * H, 100 * H)).toBeNull()
+    // Superseded before it answered: nothing to read ahead for.
+    search.gate = new Promise(() => {})
+    const first = replay.prefetch(20 * H, 100 * H)
+    void replay.prefetch(10 * H, 100 * H)
+    expect(await first).toBeNull()
+  })
+
   test('still good from a later cursor short of the hit; not from one at or past it', async () => {
     const { replay, search } = book([5 * H, 9 * H])
     replay.prefetch(0, 100 * H)

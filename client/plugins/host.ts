@@ -604,6 +604,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     }
   }
 
+  /** The first and last bar a chart holds, or null when it holds none. */
+  const dataEnds = (chart: Chart): { first: number; last: number } | null => {
+    const data = chart.getDataList()
+    return data.length > 0 ? { first: data[0].timestamp, last: data[data.length - 1].timestamp } : null
+  }
+
   const coverAll = (entry: WiredPane): void => {
     for (const b of entry.bindings.values()) void ensureCoverage(entry, b)
   }
@@ -622,8 +628,22 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     // A pan, a zoom or a page of history may expose bars a source has not covered. A tick that
     // only moves the forming bar cannot, and on a fast feed it would otherwise keep resetting
     // the debounce so that nothing newly exposed was fetched until the market went quiet.
+    //
+    // Bars replaced whole -- both ends moved, or the first load: a reload, as a replay's long jump
+    // makes -- are one event, not a pan's stream of them, and are covered at once. Debounced, a
+    // Next alert landing on prod waited 250 ms between its 5m pane's reload and the overlays'
+    // reads of it.
+    let ends = dataEnds(chart)
     entry.unwatchView = onViewMoved(chart, () => {
+      const now = dataEnds(chart)
+      const replaced = now !== null && (ends === null || (now.first !== ends.first && now.last !== ends.last))
+      ends = now
       if (entry.rangeTimer) clearTimeout(entry.rangeTimer)
+      entry.rangeTimer = null
+      if (replaced) {
+        coverAll(entry)
+        return
+      }
       entry.rangeTimer = setTimeout(() => {
         entry.rangeTimer = null
         coverAll(entry)

@@ -212,6 +212,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   private saveChain: Promise<void> = Promise.resolve()
   private disposed = false
   private cancelRequested = false
+  /** The base bar a Next alert press would land on, read while the look-ahead's answer waits for
+   * the press (`warmAlerts`): the quote a seek takes there, so the press does not wait a round
+   * trip for it before the cursor moves. */
+  private landing: { base: string; at: number; bar: Promise<ReplayBar | null> } | null = null
 
   constructor(private readonly opts: ReplaySessionOptions) {
     this.symbol = opts.symbol
@@ -372,6 +376,15 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
    * passed through: a watch armed before the first step has to be seeded from the bar the
    * cursor is standing on, and this is the one place that knows how to find it. */
   async barAt(at: number): Promise<ReplayBar | null> {
+    const held = this.landing
+    if (held && held.at === at && held.base === this.base) {
+      const bar = await held.bar
+      if (bar) return bar
+    }
+    return this.readBarAt(at)
+  }
+
+  private async readBarAt(at: number): Promise<ReplayBar | null> {
     let span = QUOTE_PROBE_BARS * nominalMs(this.base)
     for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
       const probe = new BarCache(this.opts.barSource, this.symbol, this.base, this.grid, 'all')
@@ -517,11 +530,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const alert = options.alerts ? await this.findAlert(from, end) : null
       const plan = planAdvance(from, { toEnd: true, end }, this.grid, alert)
       let reason: StopReason = plan.reason === 'alert' ? 'alert' : 'toEnd' in request || end < target ? 'end' : 'target'
-      // An alert on a timeframe finer than the base triggers inside a base bar, and the walk moves
-      // in whole base bars: stopping mid-bar would leave the rest of that bar -- with the price
-      // action before the cursor in it -- for the next advance to fill against. So the stop is the
-      // close of the base bar it falls in: later, never earlier, so nothing is seen ahead of time.
-      const stopAt = plan.reason === 'alert' ? Math.min(end, Math.max(plan.stopAt, this.grid.end(this.base, plan.stopAt - 1))) : plan.stopAt
+      const stopAt = plan.reason === 'alert' ? this.alertStop(plan.stopAt, end) : plan.stopAt
       const events: SimEvent[] = []
       const consumed: ReplayBar[] = []
       let observed: ObserverStop[] = []
@@ -678,7 +687,24 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
    * advance, and by the wall when the replay opens or the alerts change. */
   warmAlerts(): void {
     if (this.disposed || this.busy) return
-    this.opts.alerts?.prefetch?.(this.cursor, this.opts.dataEnd())
+    const end = this.opts.dataEnd()
+    const found = this.opts.alerts?.prefetch?.(this.cursor, end)
+    // ...and once it has found one, the base bar a press would land on (`landing`).
+    void found?.then((at) => {
+      if (at === null || this.disposed) return
+      const stopAt = this.alertStop(at, end)
+      if (this.landing?.at === stopAt && this.landing.base === this.base) return
+      this.landing = { base: this.base, at: stopAt, bar: this.readBarAt(stopAt).catch(() => null) }
+    })
+  }
+
+  /** Where an advance stops for an alert triggering at `at`. An alert on a timeframe finer than
+   * the base triggers inside a base bar, and the walk moves in whole base bars: stopping mid-bar
+   * would leave the rest of that bar -- with the price action before the cursor in it -- for the
+   * next advance to fill against. So the stop is the close of the base bar it falls in: later,
+   * never earlier, so nothing is seen ahead of time. */
+  private alertStop(at: number, end: number): number {
+    return Math.min(end, Math.max(at, this.grid.end(this.base, at - 1)))
   }
 
   /** How far the walk has got, for the controls -- throttled, and skipped when nothing moved. A

@@ -110,6 +110,11 @@ export interface Value {
 export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendData): Value[] {
   const values: Value[] = dataList.map(() => ({}))
   if (dataList.length === 0) return values
+  // One past the last bar too, for what became knowable at its close (mtf/shift.ts `chartBarAt`).
+  const valueAt = (i: number): Value => {
+    values[i] ??= {}
+    return values[i]
+  }
   const grid: CandleGrid = run.grid
   const chartAbs = chartOpens(extend.chartInterval, dataList, grid)
   const last = chartAbs.length - 1
@@ -135,7 +140,7 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
         const entry = show.entries && (entryIds.has(node.signal.key) || filteredIds.has(node.signal.key))
         const isRoot = node.parent < 0
         if (show.graphs || entry) {
-          const value = values[i]
+          const value = valueAt(i)
           value.dots ??= []
           const same = value.dots.find((d) => d.interval === node.signal.interval && d.price === node.signal.price && d.side === graph.side)
           const dot: Dot = {
@@ -157,8 +162,9 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
         const parent = graph.nodes[node.parent].signal
         const from = index(parent.knownAt)
         if (from === null) return
-        values[i].edges ??= []
-        values[i].edges?.push({ fromIndex: from, fromPrice: parent.price, toPrice: node.signal.price, root: graph.root, interval: node.signal.interval })
+        const value = valueAt(i)
+        value.edges ??= []
+        value.edges.push({ fromIndex: from, fromPrice: parent.price, toPrice: node.signal.price, root: graph.root, interval: node.signal.interval })
         void k
       })
     }
@@ -168,8 +174,9 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
     for (const entry of [...run.entries, ...run.filtered]) {
       const i = at(entry.at)
       if (i < 0) continue
-      values[i].dots ??= []
-      values[i].dots?.push({
+      const value = valueAt(i)
+      value.dots ??= []
+      value.dots.push({
         interval: entry.signal.interval,
         price: entry.signal.price,
         side: entry.side,
@@ -185,8 +192,9 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
       if (show.graphs && inGraph.has(signal.key)) continue
       const i = at(signal.knownAt)
       if (i < 0) continue
-      values[i].marks ??= []
-      values[i].marks?.push({ interval: signal.interval, side: signal.side })
+      const value = valueAt(i)
+      value.marks ??= []
+      value.marks.push({ interval: signal.interval, side: signal.side })
     }
   }
   if (show.trades && run.sim) {
@@ -194,15 +202,17 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
       const open = at(trade.openedAt)
       const selected = extend.selected === trade.entry.id
       if (open >= 0) {
-        values[open].trades ??= []
-        values[open].trades?.push({ kind: 'open', direction: trade.direction, price: trade.openPrice, selected })
+        const value = valueAt(open)
+        value.trades ??= []
+        value.trades.push({ kind: 'open', direction: trade.direction, price: trade.openPrice, selected })
       }
       if (trade.closedAt === null || trade.closePrice === null) continue
       const close = at(trade.closedAt)
       if (close < 0) continue
       const from = index(trade.openedAt)
-      values[close].trades ??= []
-      values[close].trades?.push({
+      const value = valueAt(close)
+      value.trades ??= []
+      value.trades.push({
         kind: 'close',
         direction: trade.direction,
         price: trade.closePrice,
@@ -315,7 +325,8 @@ function draw(ctx: CanvasRenderingContext2D, result: Value[], data: KLineData[],
     const value = result[i]
     if (!value) continue
     const cx = x(i)
-    const bar = data[i]
+    // The slot after the last bar has no candle yet: its marks hang off the last close.
+    const bar = data[i] ?? { high: data[data.length - 1].close, low: data[data.length - 1].close }
     for (const mark of value.marks ?? []) {
       // A pool signal outside any graph: a small triangle off the candle, its timeframe's colour.
       const above = mark.side === 'top'

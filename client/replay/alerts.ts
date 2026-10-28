@@ -29,8 +29,10 @@ export interface ReplayAlertBook {
   /** The first alert triggering in `(after, until]`, or null. */
   next(after: number, until: number, progress: SearchProgress): Promise<AlertOccurrence | null>
   /** Start looking for the first alert after `after` now, so that a Next alert pressed later
-   * finds the answer waiting. Optional: a book without it searches when asked. */
-  prefetch?(after: number, until: number): void
+   * finds the answer waiting. Optional: a book without it searches when asked. Resolves to the
+   * instant that search found, or null (nothing, stopped, superseded or failed) -- for reading
+   * ahead what a press would land on. */
+  prefetch?(after: number, until: number): Promise<number | null>
   /** Abandon any search in the background (the replay was left). */
   dispose?(): void
 }
@@ -81,10 +83,11 @@ export class ReplayAlerts implements ReplayAlertBook {
     return this.alerts(this.symbol).length
   }
 
-  prefetch(after: number, until: number): void {
+  prefetch(after: number, until: number): Promise<number | null> {
     const signature = this.signature()
-    if (this.count() === 0 || this.usable(this.ahead, signature, after, until)) return
-    this.start(signature, after, until)
+    if (this.count() === 0) return Promise.resolve(null)
+    const ahead = this.usable(this.ahead, signature, after, until) ? (this.ahead as Lookahead) : this.start(signature, after, until)
+    return ahead.promise.then((hit) => (ahead.dropped || hit === null || hit.at <= after ? null : hit.at))
   }
 
   dispose(): void {

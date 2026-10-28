@@ -115,6 +115,25 @@ describe('one calc, from the store to the markers', () => {
     expect(marksOf(computeValues(chartBars(12), extend(config(), ['1h', '4h'], [])))).toEqual(['4h@bar4'])
   })
 
+  test("what became knowable at the last bar's close is placed in the slot the next bar takes", () => {
+    // A replay standing on 8h: bars 0..7 have closed and the bar opening at 8h has not printed.
+    // The star a Next alert stopped at -- cast on bar 7, knowable at its close -- is drawn there
+    // at once, with the edge into it, and stays there when that bar arrives.
+    const star = signal('1h', 7 * H, 8 * H, 1.12, 'long', true)
+    seed([ROOT, star], [node(ROOT, '4h', null), node(star, '4h', ROOT, true)])
+    const values = computeValues(chartBars(8), extend(config()))
+    expect(values).toHaveLength(9)
+    expect(marksOf(values)).toEqual(['4h@bar4', '1h@bar8'])
+    expect(dotsOf(values)).toEqual(['4h@bar4 root', '1h@bar8 entry'])
+    expect(values[8].edges).toEqual([{ fromIndex: 4, fromPrice: 1.1, toPrice: 1.12, root: '4h', interval: '1h' }])
+    const next = computeValues(chartBars(9), extend(config()))
+    expect(next).toHaveLength(9)
+    expect(dotsOf(next)).toEqual(dotsOf(values))
+    // Nothing became knowable at the close: no slot.
+    seed([ROOT], [node(ROOT, '4h', null)])
+    expect(computeValues(chartBars(8), extend(config()))).toHaveLength(8)
+  })
+
   test('a tick that only moves the forming bar reuses the last result; anything else recomputes', () => {
     seed([ROOT, STEP, OUTSIDE], [node(ROOT, '4h', null), node(STEP, '4h', ROOT)])
     const data = chartBars(12)
