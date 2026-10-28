@@ -134,10 +134,13 @@ function make(
     stored?: string[]
     alerts?: ReplayAlertBook
     observer?: ReplayObserver
+    /** Where the synthetic minutes begin, and how many there are. */
+    start?: number
+    minutes?: number
   } = {}
 ): Made {
-  const start = ny('2024-03-04 09:00')
-  const source = new SyntheticSource(start, 8 * 60)
+  const start = opts.start ?? ny('2024-03-04 09:00')
+  const source = new SyntheticSource(start, opts.minutes ?? 8 * 60)
   const saved: unknown[] = []
   const advanced: Array<{ from: number; to: number; reason: string }> = []
   const session = new ReplayTradingSession({
@@ -241,6 +244,19 @@ describe('ReplayTradingSession', () => {
     expect(r?.walked).toBe(false)
     expect(source.calls.length).toBe(ahead)
     expect(session.snapshot.quotes[SYM].bid).toBeCloseTo(1.1 + 239 * 0.0001, 9)
+  })
+
+  test("across a weekend, the quote is looked for from Friday's close, in one read", async () => {
+    // Friday 2024-03-01 15:00 to 17:00 New York, then Sunday's open: the market-closed gap between.
+    const friday = ny('2024-03-01 15:00')
+    const { session, source } = make({ base: '1m', start: friday, minutes: 240 })
+    const sunday = ny('2024-03-03 17:00')
+    source.calls.length = 0
+    const bar = await session.barAt(sunday)
+    expect(bar?.open).toBe(ny('2024-03-01 16:59'))
+    // One probe back from Friday's 17:00, not widened through the weekend from Sunday's.
+    expect(source.calls).toHaveLength(1)
+    expect(source.calls[0].from).toBeGreaterThan(ny('2024-03-01 16:00'))
   })
 
   test('with nothing ahead, Next alert stays put rather than spend the replay', async () => {
