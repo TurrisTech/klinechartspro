@@ -32,6 +32,9 @@ export interface BarSource {
    * the chart until they are consumed). Must page internally past the server's cap. `grid` is
    * the instrument's schedule: it turns a wire label into a candle's open and close. */
   fetch(symbol: string, interval: string, from: number, to: number, columns: Columns, grid: CandleGrid): Promise<ReplayBar[]>
+  /** Load ahead what reads of `intervals` from `at` on will need, before they are made. Optional:
+   * a source without it fetches when asked. */
+  warm?(symbol: string, intervals: readonly string[], at: number, grid: CandleGrid): Promise<void>
 }
 
 /** How far ahead of the anchor a cache keeps bars, in bars of its own interval. */

@@ -314,6 +314,41 @@ landing was done: 530, 181, 202, 341, 1,014, 532, 276 and 190 ms on `main`; 372,
 ~0.85 s for the 5m overlay on a cold read) and, after a jump short enough to append, the forming
 candle's read before the overlays'.
 
+**Future data is held in memory, a whole tile at a time** (2026-10-28; user: "bar replay should
+cache future data. the base timeframe should be pulled, so a whole tile from the current replay
+time to the end of the tile should be in memory. alerts should be cached into the future as well.
+other timeframes should be cached as well to test price alerts").
+- **Bars** come through `TiledBarSource` (`tiled.ts`), one per page, for the walk, the skim, the
+  quote probe and every pane's catch-up. The alert search and the Strategy Lab read through it too.
+  - A read with bid and ask (`'all'`) loads a stored interval's whole tile and its `side=bidask`
+    half (the same rows, never fetched by the chart), joins them and holds them decoded:
+    `MAX_HELD_BARS`, least recently used out first.
+  - Loading one tile starts the next. After every advance the session warms the base and the
+    skim's coarser intervals (1D, 1h, 1m over a 5s base) at the cursor (`warmAlerts` → `warm`).
+  - Mid-only reads (`'core'`) take `barsFromTiles`, folding 3m or 4h out of a stored interval.
+  - What no tile covers -- the forming period, an untiled interval, a tile that will not load --
+    comes from `/getbars`, as everything did before.
+
+  Measured against `/getbars` on prod: EURGBP 5s, 1m, 1h, 1D and EURUSD 5s with bid/ask, and
+  EURGBP 3m and 5m mid, windows reaching into the open period -- every field equal.
+- **Alerts:** `ReplayAlerts` keeps a chain of triggers, each search starting from the last hit,
+  `ALERTS_AHEAD` (5) ahead of the cursor, topped up after every press. A press inside the chain
+  takes its hit at once. A Step past its end, or an edit, starts a new chain from the cursor.
+- **Price watches** are tested on the coarsest candles first and finer ones only where one could
+  fire (the skim, below). Its 1D, 1h and 1m candles are now these held tiles, not a server read per
+  level per advance.
+
+Measured on prod data:
+- Run to a stop price 2.5 days out at a 5s base (EURGBP from Mon 2023-10-16 06:00 New York):
+  612 ms and 6 server reads before, **5 ms and none** with the tiles warm; the same stop.
+- The browser (EURUSD Tablet wall, 1m base, five Next alert presses from Fri 2023-01-06 04:25):
+  - the cursor moved 24-122 ms after the click;
+  - no bar was read from the server, except one 3m pane reload across the weekend;
+  - what is left is the overlays' own reads (138-527 ms);
+  - heap 57 MB.
+- **Cold**, a tile is fetched and decoded whole: ~0.4-0.9 s for a 5s week with its quote half,
+  paid once per week a replay enters (in the background when the warm got there first).
+
 **A quote across a weekend is looked for from Friday's close** (2026-10-28). A seek lands on the
 base bar that closed at or before the cursor (`barAt`), probing back 50 base bars and widening
 eightfold. From Sunday's open that widening walked back through the closed weekend: at a 5s base

@@ -19,7 +19,7 @@ import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
-import { HttpBarSource } from './source'
+import { TiledBarSource } from './tiled'
 import { ReplayWatches } from './watches'
 import { type CandleGrid, gridOf, nominalMs, scheduleOf, STORED_LADDER, sortByLength } from './timeframes'
 
@@ -98,11 +98,16 @@ function safeStorage(): Storage | null {
   }
 }
 
+/** Every bar a replay reads -- the walk, the skim, the quote, every pane's catch-up -- from tiles
+ * held in memory a whole tile at a time (tiled.ts), one for the page: tiles never change, so what
+ * one replay loaded serves the next. */
+const replayBars = new TiledBarSource()
+
 /** Prepare a replay wall: set the read clock to the cursor and build the feed hub the panes
  * will share. Called by the app before constructing the chart. */
 export function bootReplay(intent: ReplayIntent, base: string): ReplayBoot {
   setReadClock(intent.cursor)
-  const hub = new ReplayFeedHub(new HttpBarSource(), base, intent.cursor, storedIntervalsFor)
+  const hub = new ReplayFeedHub(replayBars, base, intent.cursor, storedIntervalsFor)
   return { intent, hub, datafeed: () => hub.createFeed() }
 }
 
@@ -200,7 +205,7 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
           pauseOnFill: false,
           storedIntervals: stored,
           engine,
-          barSource: new HttpBarSource(),
+          barSource: replayBars,
           dataEnd: () => latest,
           save: async () => {},
           onAdvanced: () => {}
@@ -305,7 +310,7 @@ export async function mountBarReplay(
     engine: Engine.fromState(stored.engine),
     observer: watches,
     alerts: ctx.alerts ? new ReplayAlerts(stored.symbol, (symbol) => ctx.alerts?.enabledOn(symbol) ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
-    barSource: new HttpBarSource(),
+    barSource: replayBars,
     dataEnd: () => latest,
     save: async (state) => {
       try {

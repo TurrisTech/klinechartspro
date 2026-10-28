@@ -21,7 +21,7 @@ import { capabilities } from '../capabilities'
 import { apiGet } from '../config'
 import { fetchBars } from '../history'
 import type { ReplayBar } from '../replay/cache'
-import { HttpBarSource } from '../replay/source'
+import { TiledBarSource } from '../replay/tiled'
 import { type CandleGrid, nominalMs } from '../replay/timeframes'
 import { fetchSymbolInfo } from '../symbols'
 import type { SignalPoint } from './events'
@@ -100,7 +100,7 @@ export class TailCache<R> {
 
 export class HttpLabData implements LabData {
   private readonly alertData = new HttpAlertData()
-  private readonly barSource = new HttpBarSource()
+  private readonly barSource = new TiledBarSource()
   private readonly bars_ = new Map<string, TailCache<ReplayBar>>()
   private readonly signals_ = new Map<string, TailCache<SignalPoint>>()
   private readonly points_ = new Map<string, TailCache<Point>>()
