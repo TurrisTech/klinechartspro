@@ -45,7 +45,11 @@ class FakeSearch {
 }
 
 const progress = (stop = () => false) => ({ reached: [] as number[], shouldStop: stop, onProgress(r: number) { this.reached.push(r) } })
-const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+const settle = async (turns = 10) => {
+  for (let i = 0; i < turns; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+}
+/** Where each search started: a chain searches on from each trigger it found. */
+const starts = (search: FakeSearch) => search.calls.map((c) => c.after / H)
 
 function book(at: number[], list: Alert[] = [alert('a')]) {
   const search = new FakeSearch(at)
@@ -59,23 +63,27 @@ describe('ReplayAlerts look-ahead', () => {
     const { replay, search } = book([5 * H, 9 * H])
     replay.prefetch(0, 100 * H)
     await settle()
-    expect(search.calls).toHaveLength(1)
+    // The chain: from the cursor, then from each trigger it found, until nothing is left.
+    expect(starts(search)).toEqual([0, 5, 9])
     expect((await replay.next(0, 100 * H, progress()))?.effective).toBe(5 * H)
-    expect(search.calls).toHaveLength(1)
+    expect((await replay.next(5 * H, 100 * H, progress()))?.effective).toBe(9 * H)
+    expect(await replay.next(9 * H, 100 * H, progress())).toBeNull()
+    expect(starts(search)).toEqual([0, 5, 9])
   })
 
   test('a look-ahead says where it found the next alert, for reading ahead what a press lands on', async () => {
     const { replay, search } = book([5 * H, 9 * H])
     expect(await replay.prefetch(0, 100 * H)).toBe(5 * H)
-    // From a later cursor short of the hit: the same search, the same answer.
+    // From a later cursor short of the hit: the same chain, the same answer.
     expect(await replay.prefetch(2 * H, 100 * H)).toBe(5 * H)
-    expect(search.calls).toHaveLength(1)
     expect(await replay.prefetch(5 * H, 100 * H)).toBe(9 * H)
     expect(await replay.prefetch(9 * H, 100 * H)).toBeNull()
+    expect(starts(search)).toEqual([0, 5, 9])
     // Superseded before it answered: nothing to read ahead for.
-    search.gate = new Promise(() => {})
-    const first = replay.prefetch(20 * H, 100 * H)
-    void replay.prefetch(10 * H, 100 * H)
+    const fresh = book([5 * H])
+    fresh.search.gate = new Promise(() => {})
+    const first = fresh.replay.prefetch(20 * H, 100 * H)
+    void fresh.replay.prefetch(10 * H, 100 * H)
     expect(await first).toBeNull()
   })
 
@@ -83,10 +91,9 @@ describe('ReplayAlerts look-ahead', () => {
     const { replay, search } = book([5 * H, 9 * H])
     replay.prefetch(0, 100 * H)
     expect((await replay.next(2 * H, 100 * H, progress()))?.effective).toBe(5 * H)
-    expect(search.calls).toHaveLength(1)
     expect((await replay.next(5 * H, 100 * H, progress()))?.effective).toBe(9 * H)
-    expect(search.calls).toHaveLength(2)
-    expect(search.calls[1].after).toBe(5 * H)
+    // Never a search from a cursor inside the chain: from its start and its triggers only.
+    expect(starts(search)).toEqual([0, 5, 9])
   })
 
   test('nothing ahead is an answer too, from any later cursor with the same end', async () => {
@@ -107,7 +114,8 @@ describe('ReplayAlerts look-ahead', () => {
     await replay.next(0, 100 * H, progress())
     alerts.list = [...alerts.list, alert('b')]
     await replay.next(0, 100 * H, progress())
-    expect(search.calls).toHaveLength(3 + 1) // one search per alert for the two-alert list
+    // From the cursor again after each edit: one, one, then one per alert of the two-alert list.
+    expect(search.calls.filter((c) => c.after === 0)).toHaveLength(1 + 1 + 2)
   })
 
   test('a press while it runs waits for it, and sees its progress', async () => {
@@ -123,7 +131,8 @@ describe('ReplayAlerts look-ahead', () => {
     expect(p.reached).toEqual([H])
     release()
     expect((await answer)?.effective).toBe(5 * H)
-    expect(search.calls).toHaveLength(1)
+    // It joined the running search rather than starting its own.
+    expect(search.calls.filter((c) => c.after === 0)).toHaveLength(1)
   })
 
   test("a Stop while waiting stops it, and its null is not kept as 'nothing ahead'", async () => {
@@ -143,6 +152,29 @@ describe('ReplayAlerts look-ahead', () => {
     const before = search.calls.length
     expect((await replay.next(0, 100 * H, progress()))?.effective).toBe(5 * H)
     expect(search.calls).toHaveLength(before + 1)
+  })
+
+  test('it keeps ALERTS_AHEAD triggers found ahead of the cursor, topped up after each press', async () => {
+    const { ALERTS_AHEAD } = await import('./alerts')
+    const { replay, search } = book(Array.from({ length: 12 }, (_, k) => (k + 1) * H))
+    replay.prefetch(0, 100 * H)
+    await settle()
+    expect(starts(search)).toEqual(Array.from({ length: ALERTS_AHEAD }, (_, k) => k))
+    // A press takes the first at once, and the session's next look-ahead tops the chain up.
+    expect((await replay.next(0, 100 * H, progress()))?.effective).toBe(H)
+    expect(search.calls).toHaveLength(ALERTS_AHEAD)
+    replay.prefetch(H, 100 * H)
+    await settle()
+    expect(starts(search)).toEqual(Array.from({ length: ALERTS_AHEAD + 1 }, (_, k) => k))
+  })
+
+  test("a Step past the chain's end starts another from the cursor rather than search the gap", async () => {
+    const { replay, search } = book(Array.from({ length: 12 }, (_, k) => (k + 1) * H))
+    replay.prefetch(0, 100 * H)
+    await settle()
+    search.calls.length = 0
+    expect(await replay.prefetch(50 * H, 100 * H)).toBeNull()
+    expect(starts(search)).toEqual([50])
   })
 
   test('one search at a time: a superseded look-ahead is stopped before the next starts', async () => {

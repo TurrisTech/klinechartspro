@@ -713,6 +713,9 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
    * advance, and by the wall when the replay opens or the alerts change. */
   warmAlerts(): void {
     if (this.disposed || this.busy) return
+    // The bars the next advance reads first: the base it walks, and the coarser candles the skim
+    // asks before them -- the tile each falls in at the cursor, and the next (tiled.ts).
+    void this.opts.barSource.warm?.(this.symbol, [this.base, ...this.summaryIntervals()], this.cursor, this.grid).catch(() => {})
     const end = this.opts.dataEnd()
     const found = this.opts.alerts?.prefetch?.(this.cursor, end)
     // ...and once it has found one, the base bar a press would land on (`landing`).
