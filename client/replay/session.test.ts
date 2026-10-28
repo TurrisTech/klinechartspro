@@ -246,7 +246,7 @@ describe('ReplayTradingSession', () => {
     expect(session.snapshot.quotes[SYM].bid).toBeCloseTo(1.1 + 239 * 0.0001, 9)
   })
 
-  test("across a weekend, the quote is looked for from Friday's close, in one read", async () => {
+  test("across a weekend, the quote is looked for from Friday's close, not back through it", async () => {
     // Friday 2024-03-01 15:00 to 17:00 New York, then Sunday's open: the market-closed gap between.
     const friday = ny('2024-03-01 15:00')
     const { session, source } = make({ base: '1m', start: friday, minutes: 240 })
@@ -257,6 +257,13 @@ describe('ReplayTradingSession', () => {
     // One probe back from Friday's 17:00, not widened through the weekend from Sunday's.
     expect(source.calls).toHaveLength(1)
     expect(source.calls[0].from).toBeGreaterThan(ny('2024-03-01 16:00'))
+    // Where a Step from the weekend really stops: inside Sunday's session, before its first bar
+    // has closed. That session holds nothing yet, so the probe goes to the one before it.
+    source.calls.length = 0
+    const justAfter = await session.barAt(sunday + 30_000)
+    expect(justAfter?.open).toBe(ny('2024-03-01 16:59'))
+    expect(source.calls).toHaveLength(2)
+    expect(source.calls.every((c) => c.from >= ny('2024-03-01 16:00'))).toBe(true)
   })
 
   test('with nothing ahead, Next alert stays put rather than spend the replay', async () => {

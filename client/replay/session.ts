@@ -12,6 +12,10 @@ import { type BaseCheck, type CandleGrid, coarser, divides, finerStored, nominal
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50
 
+/** How many probes `quoteAt` makes at most: within a session the span widens eightfold, and a
+ * session with nothing in it hands over to the one before -- a day at a 5s base is four probes. */
+const QUOTE_PROBE_ATTEMPTS = 12
+
 /** How much of the span a walk fetches at once, in base bars: about one server page
  * (`HttpBarSource` pages at 80% of the 5,000-bar cap). A walk used to fetch the whole span
  * before reading its first bar, so a year at a 1m base was a minute of download nothing could
@@ -385,23 +389,40 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 
   private async readBarAt(at: number): Promise<ReplayBar | null> {
-    // Looked for back from the last session close at or before `at`, on the instrument's own
-    // schedule -- `at` itself while the market is open. Across a closed window the widening walked
-    // back through it a page at a time: a Step landing on Sunday's open at a 5s base read ~12 days
-    // of 5s bars to find Friday's last one (prod EURGBP, 63 reads, 20 s before the cursor moved).
-    const edge = Math.min(at, this.grid.end('1D', this.grid.start('1D', at - 1)))
-    let span = QUOTE_PROBE_BARS * nominalMs(this.base)
-    for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
+    // Looked for one session at a time, on the instrument's own schedule: back from `at` (or the
+    // close of the session it falls after, when the market is shut), widening, but never into the
+    // closed window before the session -- a session with no bar closed by then hands over to the
+    // close of the one before. Widened by time alone, the probe walked back through the weekend a
+    // page at a time: a Step from Saturday stops on Sunday's first 5s close, and at a 5s base the
+    // fifth probe read ~12 days of 5s bars to find Friday's last one (prod EURGBP, 63 reads, 12-20 s
+    // before the cursor moved).
+    const first = QUOTE_PROBE_BARS * nominalMs(this.base)
+    let edge = Math.min(at, this.sessionCloseBefore(at))
+    let span = first
+    for (let attempt = 0; attempt < QUOTE_PROBE_ATTEMPTS; attempt++) {
+      const open = this.grid.start('1D', edge - 1)
+      const from = Math.max(edge - span, open)
       const probe = new BarCache(this.opts.barSource, this.symbol, this.base, this.grid, 'all')
-      probe.seek(edge - span)
+      probe.seek(from)
       await probe.ensure(edge)
       const last = probe
-        .slice(edge - span, edge)
+        .slice(from, edge)
         .filter((b) => b.end <= at)
         .at(-1)
       if (last) return last
+      if (from > open) span *= 8
+      else {
+        edge = this.sessionCloseBefore(open)
+        span = first
+      }
     }
     return null
+  }
+
+  /** The close of the session in force just before `t` (the 1D candle containing it): `t` or later
+   * while a session runs on through it, the last close before it when the market is shut. */
+  private sessionCloseBefore(t: number): number {
+    return this.grid.end('1D', this.grid.start('1D', t - 1))
   }
 
   /** Feed the engine the closing quote at `at`. Primes the ticket before the first step, and
