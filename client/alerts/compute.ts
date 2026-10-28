@@ -77,6 +77,7 @@ export async function buildTrack(
   points: (operand: Operand) => PointIndex | undefined
 ): Promise<Track> {
   const values = new Map<string, Value[]>()
+  const entries = new Set<string>()
   let data: KLineData[] | null = null
   for (const operand of operands) {
     if (operand.interval !== interval) continue
@@ -104,6 +105,8 @@ export async function buildTrack(
       case 'strategy': {
         const index = points(operand)
         values.set(key, bars.map((bar) => signalValue(index?.rows.get(bar.date), index !== undefined && index.through !== null && bar.date <= index.through)))
+        // An entry takes part in one firing (./timeline.ts); a signal is a value like any other.
+        if (operand.kind !== 'signal') entries.add(key)
         break
       }
       case 'time':
@@ -111,7 +114,7 @@ export async function buildTrack(
         break
     }
   }
-  return { interval, at: bars.map((bar) => bar.end), dates: bars.map((bar) => bar.date), values }
+  return { interval, at: bars.map((bar) => bar.end), dates: bars.map((bar) => bar.date), values, ...(entries.size > 0 ? { entries } : {}) }
 }
 
 /** The clock at `at` on `zone`'s wall: minutes past midnight, or the weekday. Read at a bar's
