@@ -385,13 +385,18 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 
   private async readBarAt(at: number): Promise<ReplayBar | null> {
+    // Looked for back from the last session close at or before `at`, on the instrument's own
+    // schedule -- `at` itself while the market is open. Across a closed window the widening walked
+    // back through it a page at a time: a Step landing on Sunday's open at a 5s base read ~12 days
+    // of 5s bars to find Friday's last one (prod EURGBP, 63 reads, 20 s before the cursor moved).
+    const edge = Math.min(at, this.grid.end('1D', this.grid.start('1D', at - 1)))
     let span = QUOTE_PROBE_BARS * nominalMs(this.base)
     for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
       const probe = new BarCache(this.opts.barSource, this.symbol, this.base, this.grid, 'all')
-      probe.seek(at - span)
-      await probe.ensure(at)
+      probe.seek(edge - span)
+      await probe.ensure(edge)
       const last = probe
-        .slice(at - span, at)
+        .slice(edge - span, edge)
         .filter((b) => b.end <= at)
         .at(-1)
       if (last) return last

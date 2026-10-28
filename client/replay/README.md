@@ -314,6 +314,15 @@ landing was done: 530, 181, 202, 341, 1,014, 532, 276 and 190 ms on `main`; 372,
 ~0.85 s for the 5m overlay on a cold read) and, after a jump short enough to append, the forming
 candle's read before the overlays'.
 
+**A quote across a weekend is looked for from Friday's close** (2026-10-28). A seek lands on the
+base bar that closed at or before the cursor (`barAt`), probing back 50 base bars and widening
+eightfold. From Sunday's open that widening walked back through the closed weekend: at a 5s base
+the fifth probe read ~12 days of 5s bars, page after page, to find Friday's last one (prod EURGBP,
+a Step from Saturday 11:27 to Sunday's open: 63 reads, 20 s before the cursor moved; `barAt` alone
+12.3 s). The probe now starts at the last session close at or before the cursor, on the
+instrument's own schedule (the close of the 1D candle containing it -- the cursor itself while the
+market is open): the same bar, one read, 48 ms.
+
 **A walk says how far it has got** (user's call, 2026-09-20: the date, not a percentage or a bar
 count). Without it a months-long 1m walk showed a frozen chart and a Stop button, and "working"
 could not be told from "hung". `walkedTo` is the close of the last base bar walked — never
