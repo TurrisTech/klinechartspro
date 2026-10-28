@@ -8,7 +8,12 @@ import type { AlertOccurrence } from './clock'
 // NEXT ALERT: where the replay's next stop is, by the alert manager's rules.
 //
 // The alerts are the user's own client alerts (client/alerts) -- the same list a live wall
-// watches -- on the instrument this replay walks, and only the ENABLED ones. Whether one has
+// watches, and the Alerts window shows -- every ENABLED one, on whatever instrument it watches
+// (user, 2026-10-28: "next alert should be just the next alert according to the Alerts popup, not
+// on current chart"). Each is searched on its own instrument's bars and schedule, and the replay's
+// clock -- one clock for every pane -- is what stops there; which chart is showing, or which
+// instrument the replay walks, plays no part. Until then only the walked instrument's alerts
+// counted, so a wall replaying EURGBP had no Next alert for an alert on EURUSD. Whether one has
 // fired on the live market (`once`) is about the live market and is ignored here: a replay asks
 // where the rule next triggers in ITS history (client/alerts/timeline.ts `scan`).
 //
@@ -87,15 +92,15 @@ export class ReplayAlerts implements ReplayAlertBook {
   private tail: Promise<unknown> = Promise.resolve()
 
   constructor(
-    private readonly symbol: string,
-    private readonly alerts: (symbol: string) => Alert[],
+    /** The enabled alerts, on every instrument. */
+    private readonly alerts: () => Alert[],
     private readonly search: AlertSearch,
     /** For the readings' labels only. */
     private readonly catalogue: () => Promise<ServerCatalogue | null> = async () => null
   ) {}
 
   count(): number {
-    return this.alerts(this.symbol).length
+    return this.alerts().length
   }
 
   prefetch(after: number, until: number): Promise<number | null> {
@@ -146,7 +151,7 @@ export class ReplayAlerts implements ReplayAlertBook {
     let step = chain.step
     if (!step) {
       const from = chain.through
-      const alerts = this.alerts(this.symbol)
+      const alerts = this.alerts()
       const running: Step = { promise: Promise.resolve(), waiter: null, reached: null }
       let stopped = false
       const search = this.tail.then(() =>
@@ -221,6 +226,7 @@ export class ReplayAlerts implements ReplayAlertBook {
     return {
       alertId: hit.alert.id,
       name: hit.alert.name,
+      symbol: hit.alert.symbol,
       effective: hit.at,
       readings: readings(compile(hit.alert.rule), hit.instant, await this.catalogue().catch(() => null))
     }
@@ -229,6 +235,6 @@ export class ReplayAlerts implements ReplayAlertBook {
   /** The alerts as searched: an edit of a rule or a trigger, or one switched on or off, changes
    * it. Nothing else does -- a name, a note, a firing on the live market change no answer. */
   private signature(): string {
-    return JSON.stringify(this.alerts(this.symbol).map((a) => [a.id, a.rule, a.trigger]))
+    return JSON.stringify(this.alerts().map((a) => [a.id, a.symbol, a.rule, a.trigger]))
   }
 }

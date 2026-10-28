@@ -129,6 +129,21 @@ export class Engine {
     return engine
   }
 
+  /** Put this engine back as `state` had it -- in place, since the session holds it: a run that
+   * found nothing to stop at is taken back whole. */
+  restore(state: EngineState): void {
+    const from = Engine.fromState(state)
+    this.balance = from.balance
+    this.clock = from.clock
+    this.nextId = from.nextId
+    this.quotes.clear()
+    for (const [k, q] of from.quotes) this.quotes.set(k, q)
+    this.orders.clear()
+    for (const [k, o] of from.orders) this.orders.set(k, o)
+    this.trades.clear()
+    for (const [k, t] of from.trades) this.trades.set(k, t)
+  }
+
   private id(prefix: string): string {
     return `${prefix}${this.nextId++}`
   }

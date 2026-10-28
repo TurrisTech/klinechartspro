@@ -369,14 +369,17 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     })
     // A price watch is a stop too, so a wall with watches and no alert can still run to the
     // next one.
+    // Every enabled alert on the Alerts list, whatever instrument it watches -- and every price
+    // watch, resting order, stop loss and take profit, since each ends the run where it happens.
     const alerts = controller.alertCount
-    const stops = alerts + controller.armedStops
-    const ticker = controller.symbol.split(':')[1] ?? controller.symbol
+    const working = controller.workingStops
+    const stops = alerts + controller.armedStops + working
     next.disabled = busy || stops === 0
+    const also = [controller.armedStops > 0 ? 'a price watch fires' : null, working > 0 ? 'an order, stop loss or take profit fills' : null].filter((part) => part !== null)
     next.title =
       stops === 0
-        ? `Add an alert on ${ticker} (Alerts) or place a price watch first`
-        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} on ${ticker} triggers${controller.armedStops > 0 ? ', or a price watch fires' : ''}`
+        ? 'Enable an alert (Alerts), place a price watch, or rest an order or a stop first'
+        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} triggers${also.map((part) => `, or ${part}`).join('')}`
     row.appendChild(next)
 
     const last = controller.lastStop
@@ -413,7 +416,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         manager.toggle()
         renderBody()
       })
-      toggle.title = `The alert manager: ${count} enabled on ${controller.symbol.split(':')[1] ?? controller.symbol}, which is where Next alert stops`
+      toggle.title = `The alert manager: ${count} enabled, which is where Next alert stops`
       row.appendChild(toggle)
     }
 
@@ -786,8 +789,12 @@ function describeStop(result: AdvanceResult, zone: string): string {
       // Either way the cursor did not move: a replay cannot step back, so a run that would only
       // have reached the end of the data is not made.
       return result.seeking === 'watches' ? 'The price is not reached before the end of the data' : 'No alert triggers before the end of the data'
-    case 'fill':
-      return `Paused on ${result.events.some((e) => e.kind === 'fill') ? 'a fill' : 'a close'}`
+    case 'fill': {
+      // The event that ended it is the last the engine produced.
+      const last = [...result.events].reverse().find((e) => e.kind === 'fill' || e.kind === 'close')
+      if (last?.kind === 'fill') return 'Order filled'
+      return last?.reason === 'stop_loss' ? 'Stop loss hit' : last?.reason === 'take_profit' ? 'Take profit hit' : 'Trade closed'
+    }
     case 'watch': {
       const [first, ...rest] = result.observed
       return `Stopped at watch ${first?.label ?? ''}${rest.length > 0 ? ` +${rest.length}` : ''}`

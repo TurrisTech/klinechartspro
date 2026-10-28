@@ -65,7 +65,7 @@ function fixedAlerts(at: number[]): ReplayAlertBook {
     count: () => (at.length > 0 ? 1 : 0),
     next: async (after, until) => {
       const effective = at.find((t) => t > after && t <= until)
-      return effective === undefined ? null : { alertId: 'a1', name: 'oversold', effective, readings: '' }
+      return effective === undefined ? null : { alertId: 'a1', name: 'oversold', symbol: 'oanda:EURUSD', effective, readings: '' }
     }
   }
 }

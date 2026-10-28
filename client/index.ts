@@ -495,7 +495,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       notify: notifications,
       // Next alert: the same alerts, searched through the replay's own history.
       alerts: {
-        enabledOn: (symbol) => alertsRuntime.store.enabledOn(symbol),
+        enabled: () => alertsRuntime.store.enabled(),
         subscribe: (listener) => alertManager.subscribe(listener),
         search: alertsRuntime.search,
         catalogue: alertsRuntime.catalogue,

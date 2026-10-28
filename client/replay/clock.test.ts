@@ -52,7 +52,7 @@ describe('planAdvance', () => {
     expect(targetOf(cursor, { interval: '1h', multiple: 3 }, FX_GRID)).toBe(ny('2024-03-04 13:00'))
     expect(targetOf(cursor, { toEnd: true, end: 123 }, FX_GRID)).toBe(123)
   })
-  const alert = (effective: number) => ({ alertId: 'a1', name: 'oversold', effective, readings: '' })
+  const alert = (effective: number) => ({ alertId: 'a1', name: 'oversold', symbol: 'oanda:EURUSD', effective, readings: '' })
   test('an alert before the target wins', () => {
     const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, FX_GRID, alert(ny('2024-03-04 12:00')))
     // The 4h grid is anchored at 17:00: 09:00-13:00 then 13:00-17:00.

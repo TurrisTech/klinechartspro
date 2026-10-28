@@ -21,6 +21,8 @@ export type AdvanceRequest = { interval: string; multiple: number } | { to: numb
 export interface AlertOccurrence {
   alertId: string
   name: string
+  /** The instrument the alert watches -- any on the Alerts list, not only the one replayed. */
+  symbol: string
   /** The bar close it triggers at: the instant the rule's values became knowable. */
   effective: number
   /** What the rule read there, for the stop's notification. */
