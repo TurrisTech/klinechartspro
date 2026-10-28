@@ -1,6 +1,7 @@
 // DOM helpers for the alert manager's forms (./editor.ts, ./ruletree.ts) and the Strategy Lab's
 // (client/lab), in the house style: `kc-*` tokens, `wd-*` classes, plain elements.
 
+import { fromWall, toWall } from '../replay/timeframes'
 import { formatMinute } from './rules'
 
 export function el(tag: string, className: string): HTMLElement {
@@ -76,6 +77,24 @@ export function timeInput(minute: number, onValue: (minute: number) => void): HT
   const commit = (): void => {
     const m = /^(\d{1,2}):(\d{2})/.exec(i.value)
     if (m) onValue(Number(m[1]) * 60 + Number(m[2]))
+  }
+  i.addEventListener('input', () => {
+    commit()
+    i.dispatchEvent(new CustomEvent('wd-alert-edited', { bubbles: true }))
+  })
+  i.addEventListener('change', commit)
+  return i
+}
+
+/** A date and time typed on `zone`'s wall clock, kept as the instant (epoch ms). */
+export function dateTimeInput(at: number, zone: string, onValue: (at: number) => void): HTMLInputElement {
+  const i = document.createElement('input')
+  i.type = 'datetime-local'
+  i.className = 'kc-input wd-alert-datetime'
+  i.value = new Date(toWall(at, zone)).toISOString().slice(0, 16)
+  const commit = (): void => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(i.value)
+    if (m) onValue(fromWall(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])), zone))
   }
   i.addEventListener('input', () => {
     commit()

@@ -17,7 +17,7 @@ import { toWall } from '../replay/timeframes'
 import { readField } from '../tsregistry/api'
 import { operandKey, WEEKDAYS } from './rules'
 import type { Track, Value } from './timeline'
-import type { Operand } from './types'
+import type { Operand, TimeField } from './types'
 
 /** A stored bar: the store-clock open, its close (the effective instant), the wire date the
  * server files it and its points under, and the prices. `ReplayBar` is one. */
@@ -117,9 +117,11 @@ export async function buildTrack(
   return { interval, at: bars.map((bar) => bar.end), dates: bars.map((bar) => bar.date), values, ...(entries.size > 0 ? { entries } : {}) }
 }
 
-/** The clock at `at` on `zone`'s wall: minutes past midnight, or the weekday. Read at a bar's
+/** The clock at `at` on `zone`'s wall: minutes past midnight, or the weekday -- or, for a date
+ * and time, the instant itself (the zone is only how it is typed and shown). Read at a bar's
  * CLOSE, the instant it is evaluated at -- a 5m bar 09:25-09:30 reads 09:30. */
-export function clockValue(at: number, field: 'minute' | 'weekday', zone: string): Value {
+export function clockValue(at: number, field: TimeField, zone: string): Value {
+  if (field === 'datetime') return at
   const wall = toWall(at, zone)
   if (field === 'weekday') return WEEKDAYS[(new Date(wall).getUTCDay() + 6) % 7]
   return Math.floor((((wall % DAY_MS) + DAY_MS) % DAY_MS) / 60_000)

@@ -221,6 +221,30 @@ describe('graph entries and time conditions in the editor', () => {
   })
 })
 
+describe('a date and time', () => {
+  test('reaches a date and time, typed on the chosen clock and kept as the instant', async () => {
+    const m = mount()
+    m.manager.create()
+    await settle()
+    m.change(m.root.querySelector('.wd-alert-source') as HTMLSelectElement, 'tim:datetime')
+    expect((m.root.querySelector('.wd-alert-op') as HTMLSelectElement).selectedOptions[0].textContent).toBe('reaches')
+    const at = m.root.querySelector('[aria-label="Date and time"]') as HTMLInputElement
+    expect(at.type).toBe('datetime-local')
+    // A new one starts at 09:30 tomorrow on its clock.
+    expect(at.value.slice(11)).toBe('09:30')
+    at.value = '2026-11-03T09:30'
+    at.dispatchEvent(new Event('input', { bubbles: true }))
+    expect(m.root.querySelector('.wd-alert-sentence')?.textContent).toBe('Date and time (New York) at 1h closes reaches 2026-11-03 09:30')
+    m.button('Create alert').click()
+    await settle()
+    expect(m.store.list()[0].rule).toEqual({
+      left: { kind: 'time', interval: '1h', field: 'datetime', zone: 'America/New_York' },
+      op: 'crosses_above',
+      right: { value: Date.UTC(2026, 10, 3, 14, 30) }
+    })
+  })
+})
+
 describe('the editable tree', () => {
   test('round-trips every shape a rule can take', () => {
     const leaf: Rule = { left: { kind: 'bar', interval: '1h', field: 'close' }, op: '>', right: { value: 1 } }
