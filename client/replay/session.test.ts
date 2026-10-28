@@ -104,7 +104,7 @@ function bucketLen(interval: string): number {
 class FakeAlerts implements ReplayAlertBook {
   asked: Array<{ after: number; until: number }> = []
   constructor(
-    private readonly at: number[],
+    protected readonly at: number[],
     private readonly enabled = 1,
     private readonly during?: (progress: SearchProgress) => void
   ) {}
@@ -221,6 +221,26 @@ describe('ReplayTradingSession', () => {
     const again = await session.nextAlert()
     expect(again?.alert?.effective).toBe(start + 5 * H)
     expect(advanced.map((a) => a.reason)).toEqual(['alert', 'alert'])
+  })
+
+  test('the bar a press lands on is read while the look-ahead waits, so the press reads nothing', async () => {
+    const start = ny('2024-03-04 09:00')
+    class Ahead extends FakeAlerts {
+      async prefetch(after: number, until: number): Promise<number | null> {
+        return this.at.find((t) => t > after && t <= until) ?? null
+      }
+    }
+    // Inside a base bar: the press lands on that bar's close, and that bar is what is read ahead.
+    const { session, source } = make({ alerts: new Ahead([start + 3 * H + 20 * M]) })
+    session.warmAlerts()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const ahead = source.calls.length
+    expect(source.calls.some((c) => c.interval === '1h' && c.from <= start + 3 * H && c.to >= start + 4 * H)).toBe(true)
+    const r = await session.nextAlert()
+    expect(session.cursor).toBe(start + 4 * H)
+    expect(r?.walked).toBe(false)
+    expect(source.calls.length).toBe(ahead)
+    expect(session.snapshot.quotes[SYM].bid).toBeCloseTo(1.1 + 239 * 0.0001, 9)
   })
 
   test('with nothing ahead, Next alert stays put rather than spend the replay', async () => {

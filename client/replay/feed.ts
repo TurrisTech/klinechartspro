@@ -199,12 +199,22 @@ export class ReplayFeedHub {
    * cursor -- whole bars appended from the pane cache, the forming bar composed from the
    * coarsest stored bars that fit -- or reload the pane when the span is too long to append. */
   async push(panes: readonly ChartProPane[], previous: number): Promise<PushReport[]> {
-    // Every pane at once: each reads its own bars, and one after another a six-pane wall paid six
-    // round trips per step. The bars the forming bars are composed from are shared by every pane
-    // of an instrument, so they are read first, once -- a pane reading them itself would
-    // re-anchor a shared cache under another's read.
-    await this.coverForming(panes)
-    const reports = (await Promise.all(panes.map((pane) => this.pushPane(pane, previous)))).filter((r): r is PushReport => r !== null)
+    // A pane too far behind to append to is reloaded at the cursor, and before anything is read:
+    // its reload is the pane's own read of its window, and needs none of the bars the other
+    // panes' forming candles are composed from. Sent after them, it waited a round trip (a Next
+    // alert landing on prod: the 5m and 3m panes' reloads went out 150-200 ms after the press).
+    const reports = new Map<ChartProPane, PushReport | null>()
+    for (const pane of panes) {
+      const reloaded = this.reloadIfFar(pane, previous)
+      if (reloaded) reports.set(pane, reloaded)
+    }
+    const appending = panes.filter((pane) => !reports.has(pane))
+    // Every other pane at once: each reads its own bars, and one after another a six-pane wall
+    // paid six round trips per step. The bars the forming bars are composed from are shared by
+    // every pane of an instrument, so they are read first, once -- a pane reading them itself
+    // would re-anchor a shared cache under another's read.
+    await this.coverForming(appending)
+    await Promise.all(appending.map(async (pane) => reports.set(pane, await this.pushPane(pane))))
     // Let go of bars no pane's forming bucket can still need -- each pane's bucket on its own
     // instrument's schedule.
     const opens = panes.flatMap((p) => {
@@ -213,7 +223,29 @@ export class ReplayFeedHub {
     })
     const earliest = Math.min(...opens)
     if (Number.isFinite(earliest)) for (const c of this.composeCaches.values()) c.trimBefore(earliest)
-    return reports
+    return panes.map((pane) => reports.get(pane)).filter((r): r is PushReport => r !== null && r !== undefined)
+  }
+
+  /** Reload `pane` at the cursor when the jump since its last bar is longer than the append
+   * threshold, and say so; null for a pane to append to (or one `pushPane` reports on). */
+  private reloadIfFar(pane: ChartProPane, previous: number): PushReport | null {
+    const symbolInfo = pane.getSymbol()
+    const vendor = symbolVendor(symbolInfo)
+    const interval = periodToResolution(pane.getPeriod())
+    const feed = pane.getDatafeed() as ReplayDatafeed
+    if (typeof feed?.callbackFor !== 'function' || !feed.callbackFor(vendor, symbolInfo.ticker, interval)) return null
+    let last: number | undefined
+    try {
+      last = pane.getChart().getDataList().at(-1)?.timestamp
+    } catch {
+      return null
+    }
+    const grid = gridFor(symbolInfo)
+    if (last === undefined || !grid) return null
+    const nominal = Math.max(1, Math.floor((this.cursor - Math.max(grid.fromWire(interval, last), previous)) / nominalMs(interval)))
+    if (nominal <= SEEK_THRESHOLD_BARS) return null
+    this.reload(pane, `${vendor}:${symbolInfo.ticker}`, interval, grid)
+    return { paneId: pane.id, key: feedKey(vendor, symbolInfo.ticker, interval), pushed: 0, forming: false, reloaded: true, problem: null }
   }
 
   /** Read, per instrument and compose interval, the one range every forming candle of its
@@ -245,7 +277,7 @@ export class ReplayFeedHub {
     await Promise.all([...ranges.values()].map((r) => this.composeCache(r.symbol, r.interval, r.grid).cover(r.from, r.to)))
   }
 
-  private async pushPane(pane: ChartProPane, previous: number): Promise<PushReport | null> {
+  private async pushPane(pane: ChartProPane): Promise<PushReport | null> {
     const symbolInfo = pane.getSymbol()
     const vendor = symbolVendor(symbolInfo)
     const ticker = symbolInfo.ticker
@@ -274,13 +306,7 @@ export class ReplayFeedHub {
     if (!grid) return { ...base, problem: `no market hours for ${symbol}` }
     const cursor = this.cursor
     const lastOpen = grid.fromWire(interval, last)
-
-    // A jump longer than the append threshold: reload the pane's window at the cursor.
-    const nominal = Math.max(1, Math.floor((cursor - Math.max(lastOpen, previous)) / nominalMs(interval)))
-    if (nominal > SEEK_THRESHOLD_BARS) {
-      this.reload(pane, symbol, interval, grid)
-      return { ...base, reloaded: true }
-    }
+    // (A jump longer than the append threshold was reloaded already: `reloadIfFar`.)
 
     // Whole bars: every stored bar of the interval opening at or after the chart's last bar
     // (the last may be the previously forming bar, now closed: its final version replaces

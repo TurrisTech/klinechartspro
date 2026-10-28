@@ -134,6 +134,33 @@ describe('createPluginHost', () => {
     ])
   })
 
+  test('bars replaced whole are covered at once; a page of history waits out the debounce', async () => {
+    const data = Array.from({ length: 30 }, (_, i) => ({ date: i, v: i }))
+    const { plugin, fetches } = pointsPlugin(data)
+    const f = facilities()
+    f.maxValuesPerRequest = 100
+    const host = await createPluginHost({ plugins: [plugin], facilities: f })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [5, 6, 7].map((timestamp) => ({ timestamp }))
+    fc.indicators = [fakeIndicator('PTS', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    expect(fetches).toEqual([{ from: 5, to: 8 }])
+    // A reload at a later cursor (a replay's long jump): both ends moved.
+    fc.data = [20, 21, 22].map((timestamp) => ({ timestamp }))
+    fc.fireRange()
+    await flush()
+    expect(fetches.slice(1)).toEqual([{ from: 20, to: 23 }])
+    // A page of older bars: one end moved, as a pan's stream of them does.
+    fc.data = [17, 18, 19, 20, 21, 22].map((timestamp) => ({ timestamp }))
+    fc.fireRange()
+    await flush()
+    expect(fetches).toHaveLength(2)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(fetches.slice(2)).toEqual([{ from: 17, to: 20 }])
+  })
+
   test('two panes reading one source share a store, dropped with the last of them', async () => {
     const { plugin } = pointsPlugin([{ date: 1, v: 1 }])
     const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })

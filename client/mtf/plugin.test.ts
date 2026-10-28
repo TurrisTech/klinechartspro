@@ -84,6 +84,44 @@ describe('each overlay', () => {
     expect(spec?.sources[0].window?.({ from: t, to: t + 2 * 3_600_000 + 1 })).toEqual({ from: t - 4 * 86_400_000, to: t + 3 * 3_600_000 })
   })
 
+  test('a replay standing on the last bar\'s close reads that instant too; a live chart does not', async () => {
+    const { setReadClock } = await import('../config')
+    const { spec } = bound(2, '1h')
+    const t = Date.parse('2026-10-05T13:00Z')
+    const range = { from: t, to: t + 2 * 3_600_000 + 1 }
+    const close = t + 3 * 3_600_000
+    try {
+      // On the close: what became knowable at it is knowable now (drawn in the next bar's slot).
+      setReadClock(close)
+      expect(spec?.sources[0].window?.(range)?.to).toBe(close + 1)
+      // Inside the bar, it is still forming: its close is not knowable yet.
+      setReadClock(close - 60_000)
+      expect(spec?.sources[0].window?.(range)?.to).toBe(close)
+      // Live: the last bar is forming.
+      setReadClock(null)
+      expect(spec?.sources[0].window?.(range)?.to).toBe(close)
+    } finally {
+      setReadClock(null)
+    }
+  })
+
+  test("live, Friday's last close is read once it has passed; a close the next bar opens at is not", async () => {
+    const { closeKnown } = await import('./plugin')
+    const { FX_GRID } = await import('../replay/timeframes')
+    const H = 3_600_000
+    const { spec } = bound(2, '1h')
+    // Friday 2026-10-02 16:00 New York (20:00Z): the week's last hour, closing 17:00 (21:00Z).
+    const friday = Date.parse('2026-10-02T20:00Z')
+    const close = friday + H
+    expect(spec?.sources[0].window?.({ from: friday - 5 * H, to: friday + 1 })?.to).toBe(close + 1)
+    expect(closeKnown(FX_GRID, '1h', friday, close, close - 60_000)).toBe(false)
+    expect(closeKnown(FX_GRID, '1h', friday, close, close)).toBe(true)
+    // Thursday's 16:00: the next bar opens at 17:00 and carries it.
+    const thursday = friday - 24 * H
+    expect(spec?.sources[0].window?.({ from: thursday - 5 * H, to: thursday + 1 })?.to).toBe(thursday + H)
+    expect(closeKnown(FX_GRID, '1h', thursday, thursday + H, thursday + 2 * H)).toBe(false)
+  })
+
   test('nothing drawn, nothing read', () => {
     const { spec } = bound(2, '1D')
     // Only 1D is not finer than a daily chart; with it off nothing is drawable.

@@ -144,6 +144,11 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
   const graphOn = (extend.graphRoots?.length ?? 0) > 0
   const onlyGraph = graphOn && graphConfig(extend.config).onlyGraph
   const values: Value[] = dataList.map(() => ({}))
+  // One past the last bar too, when something became knowable at its close (`chartBarAt`).
+  const valueAt = (i: number): Value => {
+    values[i] ??= {}
+    return values[i]
+  }
   for (const row of store.signals()) {
     const lane = lanes.get(row.interval)
     if (lane === undefined) continue
@@ -153,7 +158,7 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
     if (onlyGraph && !row.inGraph) continue
     const at = chartBarAt(row.knownAt, chartAbs, extend.chartInterval)
     if (at < 0) continue
-    const value = values[at]
+    const value = valueAt(at)
     value.marks = value.marks ?? []
     value.marks.push({
       interval: row.interval as MtfInterval,
@@ -166,7 +171,7 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
   }
   // Stacked shortest timeframe nearest the candle: `draw` walks a bar's marks in this order.
   for (const value of values) value.marks?.sort((a, b) => a.lane - b.lane)
-  if (graphOn) placeGraphs(values, store, extend, chartAbs)
+  if (graphOn) placeGraphs(valueAt, store, extend, chartAbs)
   return values
 }
 
@@ -180,9 +185,10 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
  * parent's place is extrapolated at the loaded bars' own average spacing, which counts the
  * market-closed gaps inside the loaded span the way the chart does; it is exact once a pan
  * loads the parent's bar. An edge's child is never newer than the loaded bars (that would be
- * lookahead, and `chartBarAt` refuses it), so nothing is extrapolated to the right.
+ * lookahead, and `chartBarAt` refuses it) -- at most knowable at the last one's close, in the
+ * slot after it -- so nothing is extrapolated to the right.
  */
-function placeGraphs(values: Value[], store: MtfGraphStore, extend: ExtendData, chartAbs: number[]): void {
+function placeGraphs(valueAt: (index: number) => Value, store: MtfGraphStore, extend: ExtendData, chartAbs: number[]): void {
   const roots = new Set<string>(extend.graphRoots ?? [])
   const last = chartAbs.length - 1
   const msPerBar = last > 0 ? (chartAbs[last] - chartAbs[0]) / last : resolutionDurationMs(extend.chartInterval)
@@ -196,7 +202,7 @@ function placeGraphs(values: Value[], store: MtfGraphStore, extend: ExtendData, 
     if (!roots.has(node.root)) continue
     const index = chartBarAt(node.knownAt, chartAbs, extend.chartInterval)
     if (index < 0) continue
-    const value = values[index]
+    const value = valueAt(index)
     const interval = node.interval as MtfInterval
     const isRoot = node.parent === null
     value.dots = value.dots ?? []
@@ -418,10 +424,12 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
           )
         }
         const zoneAbove = overlay.placement === 'zone'
-        for (let i = Math.max(0, range.realFrom); i <= Math.min(data.length - 1, range.realTo); i++) {
+        for (let i = Math.max(0, range.realFrom); i <= Math.min(indicator.result.length - 1, range.realTo); i++) {
           const marks = indicator.result[i]?.marks
           if (!marks) continue
-          const bar = data[i]
+          // The slot after the last bar (`chartBarAt`) has no candle yet: its marks hang off the
+          // price it will open from, the last close.
+          const bar = data[i] ?? { high: data[data.length - 1].close, low: data[data.length - 1].close }
           const x = xAxis.convertToPixel(i)
           // Stacked per bar and per side, shortest timeframe nearest the candle: each mark sits
           // outside the ones this bar actually has. Not a fixed lane per enabled timeframe --

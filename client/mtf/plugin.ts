@@ -1,4 +1,5 @@
 import type { IndicatorGroup } from '../../src'
+import { getReadClock } from '../config'
 import { type PaneConfig, paneConfig } from '../plugins/paneconfig'
 import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire } from '../tsregistry/plugin'
 import type {
@@ -95,6 +96,30 @@ export async function mtfLiveWire(
   return found && { ...found, direct: false }
 }
 
+/**
+ * Whether what became knowable at the close of a pane's last bar (opening `lastOpen`, closing
+ * `close`) is to be read: whether that instant has passed while the chart holds no bar for it.
+ *
+ * - In a replay, once the read clock has reached it: a replay standing on a bar's close (Next
+ *   alert stops on the close of the bar whose star it found) knows what became knowable then,
+ *   though the next bar has no prices yet.
+ * - Live, once it has passed where the market then closes -- Friday's 17:00 on the FX week, an
+ *   equity session's 16:00 -- so no bar opens until the market does. Until 2026-10-28 every
+ *   signal knowable at Friday's close (the 1D, 8h, 4h and every intraday one closing then) was
+ *   on no intraday chart all weekend. Not at any other close: the last bar is then forming, and
+ *   the next one opens at its close and carries what became knowable there; reading the
+ *   instant before it opens would file it as read before the research feed has written it.
+ *   (Around Friday's close that risk remains, healed by the overlay's live cue, which re-reads
+ *   from the bar's close once its signal is written: `graphSubscribe`.)
+ *
+ * The browser's clock decides "passed" live; it only matters within its error of the close.
+ */
+export function closeKnown(clock: CandleGrid, interval: string, lastOpen: number, close: number, now: number = Date.now()): boolean {
+  const at = getReadClock()
+  if (at !== null) return close <= at
+  return close <= now && clock.nextStart(interval, lastOpen) > close
+}
+
 /** The store identity: everything that decides the answer, and nothing else. */
 export function graphSourceKey(
   overlay: MtfOverlay,
@@ -189,11 +214,17 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       // which is exactly when each row came to exist.
       createStore: createMtfGraphStore,
       /** The chart's loaded bars as instants: from the first one's open (less the gap before
-       * it) to the last one's close. */
-      window: (chartRange: Range): Range => ({
-        from: toAbsolute(ctx.interval, chartRange.from, clock) - WINDOW_BACK_PAD_MS,
-        to: clock.end(ctx.interval, toAbsolute(ctx.interval, chartRange.to - 1, clock))
-      }),
+       * it) to the last one's close -- and that close itself once it has passed and no bar opens
+       * at it to carry what became knowable then, which the chart draws in the slot the next bar
+       * will take (shift.ts `chartBarAt`). */
+      window: (chartRange: Range): Range => {
+        const lastOpen = toAbsolute(ctx.interval, chartRange.to - 1, clock)
+        const close = clock.end(ctx.interval, lastOpen)
+        return {
+          from: toAbsolute(ctx.interval, chartRange.from, clock) - WINDOW_BACK_PAD_MS,
+          to: closeKnown(clock, ctx.interval, lastOpen, close) ? close + 1 : close
+        }
+      },
       fetch: async (range, limit) => {
         const answer = await fetchMtfGraph({
           symbol,

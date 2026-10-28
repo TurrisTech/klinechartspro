@@ -207,6 +207,40 @@ describe('ReplayFeedHub composes the forming candle from the coarsest stored bar
     expect(store.calls.reduce((n, c) => n + (c.interval === '5s' ? c.bars : 0), 0)).toBeLessThan(500)
   })
 
+  test("a pane too far behind reloads at once, not after the other panes' reads", async () => {
+    const store = STORE.fresh()
+    let release = (): void => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const held: BarSource = {
+      fetch: async (symbol, interval, from, to) => {
+        await gate
+        return store.fetch(symbol, interval, from, to)
+      }
+    }
+    const before = ny(19, 6)
+    const hub = new ReplayFeedHub(held, '1m', before)
+    hub.setStored('oanda:EURUSD', ['1m', '1h', '1D'])
+    const hour = fxPane('hour', '1h', store.all('1h').filter((b) => b.open < before).slice(-20).map(asKLine))
+    const minute = fxPane('minute', '1m', store.all('1m').filter((b) => b.open < before).slice(-20).map(asKLine))
+    let resets = 0
+    ;(minute.pane as unknown as { getChart: () => unknown }).getChart = () => ({ getDataList: () => minute.data, resetData: () => resets++ })
+    // Three and a half hours on: 210 minutes is past the append threshold, 3 hours is not.
+    hub.cursor = ny(19, 9, 30)
+    const pushing = hub.push([hour.pane, minute.pane], before)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(resets).toBe(1)
+    release()
+    const reports = await pushing
+    expect(reports.map((r) => [r.paneId, r.reloaded, r.problem])).toEqual([
+      ['hour', false, null],
+      ['minute', true, null]
+    ])
+    // The reloaded pane composed nothing: every read was for the hourly pane.
+    expect(store.calls.every((c) => c.from >= ny(19, 5))).toBe(true)
+  })
+
   test('an instrument with nothing stored known composes from the base, as before', async () => {
     const store = STORE.fresh()
     const before = ny(19, 6, 0, 20)

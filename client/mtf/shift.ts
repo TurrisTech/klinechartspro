@@ -75,7 +75,8 @@ export function chartOpens(chartInterval: string, chartBars: KLineData[], clock:
 }
 
 /**
- * Index of the chart bar in force at `knownAt` (absolute), or -1 when no loaded bar is.
+ * Index of the chart bar in force at `knownAt` (absolute), or -1 when no loaded bar is -- or
+ * `chartAbs.length`, the slot the next bar will take, for the instant the last bar closed.
  *
  * The last one to have opened at or before it. At or before, not strictly after, so a
  * source close that coincides exactly with a chart bar's open lands ON that bar -- which is
@@ -101,10 +102,20 @@ export function chartOpens(chartInterval: string, chartBars: KLineData[], clock:
  * the case whenever `knownAt` falls in a gap between chart bars -- a source bar's close into
  * the weekend, or a chart bar missing from the data -- where taking the
  * bar before the gap would draw a vote on a candle that had finished before it was cast.
+ *
+ * What became knowable at the very instant the last bar CLOSED belongs on the next bar, which the
+ * chart does not hold yet: a replay standing on a bar close (Next alert stops on the close of the
+ * bar whose 5m star it found), or a market that has closed for the weekend. It goes to the slot
+ * that bar will take, one past the last, where it stays when the bar arrives -- not on the closed
+ * bar, and not left off the chart until the next bar prints (until 2026-10-28 it was: the star a
+ * Next alert stopped at appeared one step after the stop). Only the instant itself: anything
+ * later is no less likely to be lookahead than before.
  */
 export function chartBarAt(knownAt: number, chartAbs: number[], chartInterval: string): number {
   const at = upperBound(chartAbs, knownAt) - 1
   if (at < 0) return -1
-  if (knownAt < chartAbs[at] + resolutionDurationMs(chartInterval)) return at
-  return at + 1 < chartAbs.length ? at + 1 : -1
+  const close = chartAbs[at] + resolutionDurationMs(chartInterval)
+  if (knownAt < close) return at
+  if (at + 1 < chartAbs.length) return at + 1
+  return knownAt === close ? chartAbs.length : -1
 }
