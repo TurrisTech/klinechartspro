@@ -16,6 +16,14 @@
 // Bars of two timeframes that close at the same instant land in the same observation, so a
 // 12:00 1h close and a 12:00 4h close are evaluated once, together.
 //
+// An ENTRY -- a graph's star, a saved strategy's entry -- takes part in one firing. Every
+// instant re-reads every timeframe's latest bar, so without this a 5m star fired again at the
+// 3m close inside the next 5m bar, and an edge trigger missed a 3m star that landed while the
+// 5m one was still the latest (user, 2026-10-28: Next alert on the rank 85 3m or 5m star must
+// stop once per star). Once an alert fires, every entry it read reads as none ('') from then
+// on; until then a star counts like any other value, so "3m star and 5m star" fires at the
+// second of the two to close.
+//
 // PURE: arrays in, instants and firings out.
 
 import { type Condition, evaluate, type Observation, type Sample } from './conditions'
@@ -33,11 +41,16 @@ export interface Track {
   dates?: readonly number[]
   /** Operand key -> its value on each bar, aligned with `at`. */
   values: ReadonlyMap<string, readonly Value[]>
+  /** The keys whose values are entries (graph stars, strategy entries): each takes part in one
+   * firing. */
+  entries?: ReadonlySet<string>
 }
 
 export interface Instant {
   at: number
   observation: Observation
+  /** Each entry field, and the close of the bar it was read from -- which entry it is. */
+  entries?: ReadonlyMap<string, number>
 }
 
 /** Merge tracks into instants, ascending. Only instants in `(from, to]` are returned, but the
@@ -57,13 +70,17 @@ export function instants(
   const out: Instant[] = []
   for (const t of ordered) {
     const reading = new Map<string, Value>()
+    const entries = new Map<string, number>()
     tracks.forEach((track, i) => {
       let p = pointers[i]
       while (p + 1 < track.at.length && track.at[p + 1] <= t) p++
       pointers[i] = p
-      for (const [key, values] of track.values) reading.set(key, p >= 0 ? values[p] : undefined)
+      for (const [key, values] of track.values) {
+        reading.set(key, p >= 0 ? values[p] : undefined)
+        if (p >= 0 && track.entries?.has(key)) entries.set(key, track.at[p])
+      }
     })
-    out.push({ at: t, observation: observe(fields, reading) })
+    out.push({ at: t, observation: observe(fields, reading), ...(entries.size > 0 ? { entries } : {}) })
   }
   return out
 }
@@ -95,19 +112,49 @@ export interface RunState {
   /** The last observation: what a crossing compares against. */
   previous: Observation | null
   policy: PolicyState
+  /** Entry field -> the close of the bar whose entry has fired: it reads as none from then on. */
+  spent: Map<string, number>
 }
 
 export function freshRun(): RunState {
-  return { previous: null, policy: armedState() }
+  return { previous: null, policy: armedState(), spent: new Map() }
+}
+
+/** The instant's observation with every entry that has already fired read as none. */
+export function unspent(instant: Instant, state: RunState): Observation {
+  if (!instant.entries) return instant.observation
+  let out: Observation | null = null
+  for (const [field, bar] of instant.entries) {
+    if (state.spent.get(field) !== bar || instant.observation[field] === undefined) continue
+    out ??= { ...instant.observation }
+    out[field] = { value: '' }
+  }
+  return out ?? instant.observation
+}
+
+/** Mark every entry this instant reads as fired. */
+export function spend(instant: Instant, state: RunState): void {
+  if (instant.entries) for (const [field, bar] of instant.entries) state.spent.set(field, bar)
 }
 
 /** Evaluate one instant and move the policy. True when the alert fires there. */
 export function stepInstant(condition: Condition, settings: PolicySettings, state: RunState, instant: Instant): boolean {
-  const result = evaluate(condition, instant.observation, state.previous)
+  const previous = state.previous
+  const now = unspent(instant, state)
+  const result = evaluate(condition, now, previous)
   // Recorded whatever the answer: the next crossing compares against THIS reading.
-  state.previous = instant.observation
+  state.previous = now
   if (state.policy.status !== 'armed') return false
-  return decide(state.policy, settings, result, instant.at)
+  const fired = decide(state.policy, settings, result, instant.at)
+  if (fired && instant.entries) {
+    spend(instant, state)
+    // Held only by the entries it just spent, it no longer holds: an edge then starts again at
+    // the next entry, however soon.
+    const after = unspent(instant, state)
+    state.previous = after
+    if (evaluate(condition, after, previous) !== true) state.policy.wasTrue = false
+  }
+  return fired
 }
 
 /** What a replay's "Next alert" asks: the first instant in `(after, until]` at which the rule

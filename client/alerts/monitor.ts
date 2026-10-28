@@ -33,7 +33,7 @@ import type { AlertData, Point } from './data'
 import { compile, type CompiledRule, operandKey } from './rules'
 import { pointSource } from './search'
 import { type ClientAlertStore, signature } from './store'
-import { freshRun, type Instant, instants, type RunState, stepInstant, type Track } from './timeline'
+import { freshRun, type Instant, instants, type RunState, spend, stepInstant, type Track, unspent } from './timeline'
 import type { Alert, Operand } from './types'
 
 /** The stream, as much of it as the monitor uses -- the page's `stream` is one. */
@@ -329,12 +329,14 @@ class Runner {
   }
 
   /** The first evaluation: nothing already closed may fire. The last instant is where the
-   * edge and the crossings start from -- the baseline, as arming a watch seeds one. */
+   * edge and the crossings start from -- the baseline, as arming a watch seeds one -- and an
+   * entry on it is spent, or the next close of another timeframe would fire on it. */
   private seed(timeline: Instant[]): void {
     const last = timeline[timeline.length - 1]
     const before = timeline.length > 1 ? timeline[timeline.length - 2].observation : null
-    this.state.previous = last.observation
-    this.state.policy.wasTrue = evaluate(this.compiled.condition, last.observation, before) === true
+    spend(last, this.state)
+    this.state.previous = unspent(last, this.state)
+    this.state.policy.wasTrue = evaluate(this.compiled.condition, this.state.previous, before) === true
     this.watermark = last.at
   }
 

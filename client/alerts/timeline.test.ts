@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { compile, operandKey } from './rules'
 import { freshRun, instants, scan, type Track } from './timeline'
-import type { Operand } from './types'
+import { ANY_LABEL, type Operand, type Rule } from './types'
 
 const H = 3_600_000
 const close1h: Operand = { kind: 'bar', interval: '1h', field: 'close' }
@@ -85,5 +85,68 @@ describe('scan', () => {
     expect(scan(condition, 'level', list, 4 * H, 6 * H)?.at).toBe(5 * H)
     // Two in a row are one episode to an edge trigger.
     expect(scan(condition, 'edge', list, 4 * H, 6 * H)).toBeNull()
+  })
+})
+
+describe('entries take part in one firing', () => {
+  // Minutes from 00:00: 3m bars close at 3, 6, 9, ..., 5m bars at 5, 10, 15, ...
+  const MIN = 60_000
+  const graph = (interval: string): Operand => ({ kind: 'graph', interval, overlay: 'mtf_arev21_outlier_rank_85', timeframes: ['3m', '5m', '1h', '1D'], roots: ['1D'], maxStep: 8 })
+  const g3 = graph('3m')
+  const g5 = graph('5m')
+  const any = (operand: Operand) => ({ left: operand, op: '==', right: { label: ANY_LABEL } })
+  const closes = (step: number, last: number) => Array.from({ length: last / step }, (_, i) => (i + 1) * step * MIN)
+  /** A track of `operand` with an entry (`top`) on the bars closing at `stars`, none elsewhere. */
+  function stars(interval: string, step: number, operand: Operand, at: number[]): Track {
+    const ends = closes(step, 30)
+    return { interval, at: ends, values: new Map([[operandKey(operand), ends.map((e) => (at.includes(e / MIN) ? 'top' : ''))]]), entries: new Set([operandKey(operand)]) }
+  }
+  /** Every stop a replay's Next alert makes, press after press, in minutes. */
+  function stops(rule: Rule, trigger: 'level' | 'edge', tracks: Track[]): number[] {
+    const { condition, fields } = compile(rule)
+    const list = instants(tracks, fields)
+    const out: number[] = []
+    let after = 0
+    for (let hit = scan(condition, trigger, list, after, 30 * MIN); hit; hit = scan(condition, trigger, list, after, 30 * MIN)) {
+      out.push(hit.at / MIN)
+      after = hit.at
+    }
+    return out
+  }
+
+  // A 5m star at 10, another at 25, and a 3m star at 27 while the 25 one is still the latest 5m bar.
+  const either = { any: [any(g3), any(g5)] }
+  const tracks = () => [stars('3m', 3, g3, [27]), stars('5m', 5, g5, [10, 25])]
+
+  test('3m or 5m: one stop per star -- not again at the other timeframe\'s next close', () => {
+    // Before: 10, 12, 25, 27, 30 -- the 5m star at 12, the 3m one at 30, read again.
+    expect(stops(either, 'level', tracks())).toEqual([10, 25, 27])
+  })
+
+  test('3m or 5m, edge: a star landing while the other is the latest bar still stops', () => {
+    // Before: 10, 25 -- the rule had held since 25, so the 3m star at 27 began nothing.
+    expect(stops(either, 'edge', tracks())).toEqual([10, 25, 27])
+  })
+
+  test('3m and 5m: fires at the second of the two to close; a fired star is not reused', () => {
+    const both = { all: [any(g3), any(g5)] }
+    // 3m at 9 then 5m at 10: one stop, at 10. 5m at 20 then 3m at 21: one stop, at 21. The 3m
+    // star at 24 has only the 5m one at 20 to pair with, and that one has fired.
+    expect(stops(both, 'level', [stars('3m', 3, g3, [9, 21, 24]), stars('5m', 5, g5, [10, 20])])).toEqual([10, 21])
+  })
+
+  test('a star with a condition on a finer timeframe stops once, not at every finer close', () => {
+    const close3m: Operand = { kind: 'bar', interval: '3m', field: 'close' }
+    const ends = closes(3, 30)
+    const rule = { all: [any(g5), { left: close3m, op: '>', right: { value: 0 } }] }
+    // Before: 10 and 12 -- the 3m close at 12 is new and holds, and the 5m star was re-read.
+    expect(stops(rule, 'level', [track('3m', ends, close3m, ends.map(() => 1)), stars('5m', 5, g5, [10])])).toEqual([10])
+  })
+
+  test('stars on back-to-back bars are a stop each, in either mode', () => {
+    const one = any(g3)
+    expect(stops(one, 'level', [stars('3m', 3, g3, [21, 24])])).toEqual([21, 24])
+    // Unlike a signal, an entry is not an episode: each is a star of its own.
+    expect(stops(one, 'edge', [stars('3m', 3, g3, [21, 24])])).toEqual([21, 24])
   })
 })

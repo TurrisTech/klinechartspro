@@ -118,6 +118,17 @@ carrying the last value forward would compare today's close against yesterday's 
 that is the crossing bar only, which is TradingView's "once per bar close". `edge` fires where
 it **starts** holding: two AREV longs on consecutive bars are one episode to an edge trigger.
 
+**An entry takes part in one firing** (2026-10-28, user: Next alert on the rank 85 3m or 5m star
+must stop once per star). A graph's star and a saved strategy's entry are ENTRIES: once the alert
+fires, every entry it read reads as none from then on. Every instant re-reads every timeframe's
+latest bar, so before this a 5m star fired again at the 3m close inside the next 5m bar (`level`),
+and a 3m star landing while the 5m one was still the latest began nothing (`edge`). Until it
+fires, a star counts like any other value: "3m star and 5m star" fires at the second of the two
+to close, and "5m star and the 3m close above X" at the first 3m close that holds, once. A star
+already on the chart when an alert starts is spent with the baseline. So in either mode it is one
+stop per star, back-to-back stars included -- an entry is not an episode. A signal is unchanged:
+it is a value like any other (`timeline.ts`, `compute.ts`).
+
 ## Live: `monitor.ts`
 
 Page-level (started once by `startAlerts`), so it keeps watching through a workspace switch
