@@ -24,10 +24,11 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
 | `landing.ts` | `LandingWarmer`: WHEN the next landing is warmed on the server -- once the wall is quiet, never while an advance runs, one landing at a time. The wall it waits on and the warm-up it sends are injected. |
+| `follow.ts` | PURE. Following the chart to another instrument: what keeps the replay where it is (`FollowBlockers`), which pane change is a request (`followRequest`), the target resolved as a mount resolves it (`followTarget`), the base it walks there (`followBase`) and the blob moved to it (`movedState`). |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. `probeStoredIntervals`: which of the stored ladder an instrument holds -- one bar per interval its vendor stores (`storedLadderFor` against `/capabilities` `baseIntervals`), never one the server would only fold. |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). Also `inertStream`. |
-| `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
+| `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk, and the follow (`follow`: one attempt at a time, for the newest request). |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
 | `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
 | `index.ts` | `mountBarReplay` — mirrors `mountPaperTrading` on the shared `mountTradingDock`; `startReplayFlow`, `bootReplay`, `clearReplay`. |
@@ -113,7 +114,8 @@ user's **enabled client alerts** triggers -- every one on the alert manager's li
 instrument each watches. Since 2026-10-28 (user: "next alert should be just the next alert
 according to the Alerts popup, not on current chart"): until then only the replayed instrument's
 alerts counted, so a replay of EURGBP had no Next alert for an alert on EURUSD, and switching a
-pane's symbol mid-replay changed nothing, since the replay keeps the instrument it started on.
+pane's symbol mid-replay changed nothing, since the replay kept the instrument it started on (it
+follows the active pane since 2026-10-29: "Following the chart to another instrument", below).
 Each alert is searched on its own instrument's bars and schedule; the stop's notification names
 that instrument.
 
@@ -259,6 +261,93 @@ change on `coinbase:BTCUSD` from Friday 22:00 UTC: steps land on Saturday's hour
 forming bar composed from the 1h base equals the server's `asof` rebuild in all five fields at each
 step; EURUSD steps and labels exactly as before (pinned by `timeframes.test.ts`, which sweeps the
 FX grid against the old functions).
+
+## Following the chart to another instrument
+
+The user, 2026-10-29: a replay of EURGBP, the pane switched to EURUSD, and nothing followed --
+the replay went on walking EURGBP under a chart that showed EURUSD, because the session, its
+watches and its title bar were all built from the blob's `symbol` and only a new replay changed
+it. **Now the replay follows the active pane** (`follow.ts`, `session.follow`): pick another
+instrument on the active pane and the replay walks that one, **at the same cursor, in the same
+session and the same paper account** -- the blob is written for the new instrument and the wall is
+rebuilt from it the way a reload rebuilds it (`bootReplay`, `mountBarReplay`), so the new
+instrument's market hours and stored intervals are resolved exactly as at a mount, and nothing
+else in the replay had to learn that an instrument can change. A replay still walks one
+instrument, and `canWatch` still refuses every other pane's watches; what changed is only which.
+
+**It follows only when nothing is open on the instrument it walks**: no open trade, no pending
+order, no armed price watch (the stop price included). Each of those is evaluated by the walk and
+by nothing else, so leaving one behind would leave a stop loss nothing could hit, an order nothing
+could fill, a line nothing could fire. Otherwise the replay keeps walking the old instrument and
+the controls show a notice between Next alert and the footer, in the watch line's orange:
+
+```
+The replay walks EURGBP, not EURUSD: EURGBP has 1 open trade and 1 armed price watch.
+Close or remove them to follow EURUSD, or exit the replay.          [Follow EURUSD] ×
+```
+
+What keeps it is read live, so closing the last trade turns the same notice into "Nothing is open
+on it any more" and enables **Follow EURUSD**. The follow is a button rather than automatic once the
+last trade closes: a stop loss hit mid-Play would otherwise rebuild the wall under the user. **×**
+keeps walking EURGBP and drops the notice; picking EURGBP again on the pane does the same.
+
+Which change is a request (`followRequest`): a symbol picked on the **active** pane, for an
+instrument other than the one walked. A wall that follows its active pane fans the pick out to
+the other panes, each reported in turn, and those are not requests; nor is activating a pane that
+already shows another instrument -- a replay wall can mix instruments, and a click on a pane is
+not a choice of what to walk. One more is made at a mount (`followOnMount`): a wall that comes
+back with **no** pane on the instrument walked -- Revert after a follow, a reload that let the
+unsaved draft go, a workspace switched mid-replay -- has moved its active pane off it as surely as
+a pick does, so the replay follows (or says why not) rather than walk an instrument nobody can
+see. It converges in one rebuild: the wall the follow rebuilds shows what it walks.
+
+Before anything is written the new instrument is resolved as a mount resolves it, and a reason
+not to follow is said in the same notice rather than met at the mount -- where it would have
+LEFT the replay, throwing the session away: no market hours for it ("No market hours for X"),
+nothing stored for it at the cursor, or nothing stored that fits the panes. The base is the one
+walked now when the new instrument stores it, it tiles the panes and no candle of it straddles the
+cursor on the new instrument's grid; otherwise the coarsest stored interval that does
+(`followBase`). Measured on prod at Mon 2023-10-16 06:00 New York: EURGBP and EURUSD hold
+5s/1m/1h/1D, XAU_USD and coinbase BTCUSD 1m/1h/1D only -- so a 5s replay of EURGBP followed to gold
+walks 1m. The straddle is the cross-schedule case: a 1D base followed from the FX week (17:00 New
+York) to a coinbase pair (midnight UTC) stands inside a coinbase day, so it walks 1h; the session
+keeps its cursor on a base boundary everywhere else (`onBaseBoundary`, `alertStop`), and a follow
+keeps it there by choosing the base, not by moving the cursor. The mount the follow rebuilds into
+takes the follow's own probe of the store rather than asking again (the same instrument at the same
+instant, a moment later): those four one-bar reads took 93-294 ms against prod from here.
+
+**What the account keeps of the instrument left** (`movedState`):
+- **its closed trades and their P&L** -- the session's history; Results scores them with the rest.
+  The balance adds each instrument's P&L in its own quote currency, as paper trading's does;
+- **its last quote**, frozen at the cursor it was left at. It marks nothing (nothing is open on it)
+  and prices nothing: the session now refuses an order on any instrument but the one it walks
+  ("This replay walks EURUSD only") -- the engine's "no price yet" used to be what refused those.
+
+What it drops: the instrument left's price watches (none armed by then; fired or switched off,
+nothing could evaluate them again), and a quote of the instrument followed kept from an earlier
+walk of it -- the price of then, not of now -- so the new wall quotes it at the cursor
+(`primeQuote`).
+
+**The races** a follow has to survive (the first three pinned by `follow.test.ts`, the last two
+by `mount.test.ts`):
+- **An advance in flight** lands first (Play stops: no advance starts while a follow is being made,
+  nor any order), and what it left open is looked at again before anything is written.
+- **A newer pick** while one is being made is taken up by the same attempt -- one at a time,
+  always for the newest -- and only its blob is written.
+- **Withdrawn while the blob is being written** (the pane picked back, or ×): the walked
+  instrument's blob is written back over it, and the session saves as before.
+- **Nothing saves over the moved blob**: once it is queued the old session writes nothing more,
+  and a stale-rev save (`409`, another tab) now resyncs and writes again at once rather than
+  waiting for a next change a follow never has.
+- **Exit while a save is in flight** (a follow's, or the last step's): a save landing after Exit
+  no longer writes back the replay intent Exit cleared, which put the next rebuild or reload back
+  into the replay just left.
+
+A `?symbol=` link opens a scratch wall built from the link alone, so its rebuild would have put
+the pane back on the linked instrument under a replay walking another; the scratch wall now keeps
+its last layout in memory for the rebuild (still saving nothing; a reload starts from the link
+again, and the replay follows it back as any wall moved off its instrument). Entering and leaving
+replay on such a wall keeps its changes too, which it did not.
 
 ## The base timeframe
 
@@ -545,7 +634,8 @@ row about something that happened should not vanish when you leave; it is tagged
 rather than `watch` so it cannot be mistaken for an alert about the live market.
 
 A replay walks one instrument, so `canWatch` refuses any other pane's — a stored line nothing
-could ever evaluate is worse than a menu that says why.
+could ever evaluate is worse than a menu that says why. (A follow changes which instrument that
+is, never how many: the new wall's watches are the new instrument's.)
 
 ### Stopping at a price, quickly (2026-10-26)
 
@@ -647,7 +737,9 @@ the push after a Go to "06:00 next trading day" took **30-109 ms** reading 400 1
 `sim_session` with `mode='replay'` via `PUT /sim/sessions/{id}/state` (optimistic `rev`); the
 blob holds cursor, engine state, base, advance setting, pause-on-fill and the replay's price
 watches. A blob written while Next signal existed also carries `starred` and `armed`; `restore`
-ignores them (not a version bump, which would have thrown those replays away). The alerts are
+ignores them (not a version bump, which would have thrown those replays away). Its `symbol` is
+the instrument walked NOW: a follow rewrites it (and `vendor`, and `base` when it had to change),
+while the server's own record of the session keeps the one it was created with. The alerts are
 not in the blob: they are the account's, and the replay only reads them. The intent (session id + cursor) lives in `sessionStorage` so it survives the wall
 rebuild entering/leaving replay needs.
 
@@ -690,7 +782,19 @@ real `ReplayWatches` over a synthetic week whose 1h and 1D candles are folded fr
 the same stopping minute as a brute-force walk at eleven levels, a sliver of the base bars read,
 a Step stopping there too, a run that never reaches its level taken back with the stop still
 armed, no skim with only the base stored, and a Stop heard (it fails with `neverWithin` made to
-skip, and with the descent removed). `goto.test.ts` pins Go to's day rule on all three schedules
+skip, and with the descent removed). `follow.test.ts` pins following the chart: the blockers and their wording, which pane change is
+a request, the base chosen (kept, replaced when not stored, finer across a straddle, none), the
+blob moved (same cursor and account, the old quote kept, a stale one of the target dropped) and
+read back by `restore`; then a real session -- followed with nothing open, the rebuild asked for
+once and nothing saved after; refused for an open trade, a pending order, an armed watch and an
+instrument that cannot be walked, each said and each followed once it is gone; an order on
+another instrument refused; and the three races above. `mount.test.ts` mounts `mountBarReplay`
+for real over a fake one-pane wall and a stubbed server (happy-dom, this file only): a pick on the
+active pane writes one blob walking the new instrument at the same cursor and asks for one
+rebuild, whose mount takes the follow's probe; an open trade writes nothing and shows the notice;
+a wall mounted with no pane on the instrument walked follows its active pane; a `409` still
+writes the blob; a save after Exit leaves the intent cleared. `controls.test.ts` renders the
+notice in each state. `goto.test.ts` pins Go to's day rule on all three schedules
 and across the DST change, and `onBaseBoundary`; `alerts.test.ts` pins the look-ahead (reused
 from a later cursor short of its hit, not past it; stale on an edit; a press waiting on it; a
 Stop's null never kept; one search at a time); `controls.test.ts` covers the Go to panel. `player.test.ts` pins the player alone (one loop however

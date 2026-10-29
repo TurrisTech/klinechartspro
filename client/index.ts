@@ -131,6 +131,12 @@ async function runWall(container: HTMLElement): Promise<void> {
   }
 
   let scratch = linked !== null
+  // The scratch wall as it last stood. A rebuild -- entering or leaving replay, or a replay
+  // following its pane to another instrument -- builds from this, where the link alone would put
+  // every pane back on the linked instrument (and a followed replay would walk one the wall no
+  // longer shows). In memory only: a scratch wall still saves nothing, and a reload starts from
+  // the link again.
+  let scratchLayout: PersistedLayout | null = null
   const switcher = createWorkspaceSwitcher({
     store,
     transientLabel: () => (scratch ? `${linked} (link)` : null),
@@ -208,8 +214,11 @@ async function runWall(container: HTMLElement): Promise<void> {
             saveControls,
             // The draft when there is one: a rebuild (entering or leaving replay) or a switch
             // back to a workspace left with unsaved changes must not drop them.
-            layout: scratch ? defaultLayout(linked as string) : store.working(),
+            layout: scratch ? (scratchLayout ?? defaultLayout(linked as string)) : store.working(),
             persist: !scratch,
+            keepScratch: (layout) => {
+              scratchLayout = layout
+            },
             rebuild: () => void remount()
           })
         } catch (err) {
@@ -276,6 +285,8 @@ interface WallOptions {
   layout: PersistedLayout
   /** False for the `?symbol=` scratch wall, which deliberately saves nothing. */
   persist: boolean
+  /** Where a scratch wall's changes go instead: kept in memory for the next rebuild. */
+  keepScratch: (layout: PersistedLayout) => void
   /** Tear this wall down and build the next (entering or leaving replay). */
   rebuild: () => void
 }
@@ -361,9 +372,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // until Save (client/workspaces/save.ts). The store notifies the switcher and the Save and
   // Revert controls when that changes whether there is anything unsaved.
   const persist = (): void => {
-    if (!persistEnabled) return
     const layout = currentLayout()
-    if (layout) store.stageActiveLayout(layout)
+    if (!layout) return
+    if (persistEnabled) store.stageActiveLayout(layout)
+    else options.keepScratch(layout)
   }
   let latestSync = { ...hydrated.sync }
 
@@ -435,7 +447,12 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     // hand-scaled price axis. Before this, those survived only until some OTHER change
     // (a symbol, a timeframe, a layout) happened to persist the wall on their behalf.
     onPaneStateChange: persist,
-    onSymbolChange: persist,
+    onSymbolChange: (paneId, symbol) => {
+      // Staged first: a replay that follows the pane to its new instrument rebuilds the wall
+      // from the layout as it now stands (client/replay/follow.ts).
+      persist()
+      replay?.symbolChanged(paneId, symbol)
+    },
     onPeriodChange: persist,
     onSyncChange: (options) => {
       latestSync = options
