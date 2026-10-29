@@ -341,6 +341,9 @@ describe('ReplayDatafeed re-anchors a window at what the cursor lets be answered
     } finally {
       globalThis.fetch = originalFetch
       setReadClock(null)
+    }
+  })
+})
 
 // THE BARS A PANE WILL HOLD AT THE NEXT LANDING (`landingRange`), which is what a bar replay warms
 // the server over before the press. It must be what the push will really leave -- worked out by
