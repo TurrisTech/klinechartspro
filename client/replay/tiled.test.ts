@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
 import { installWindow } from '../plugins/testing'
-import type { QuoteColumns } from '../tiles/decode'
+import type { TileColumns } from '../tiles/decode'
 import type { TileEntry, TileManifest } from '../tiles/manifest'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import type { CandleGrid } from './timeframes'
@@ -13,17 +13,16 @@ import type { CandleGrid } from './timeframes'
 // days and Thursday besides -- the period the tiles do not cover yet.
 
 installWindow()
-const { TiledBarSource, joinQuotes } = await import('./tiled')
+const { TiledBarSource, barsBetween, pairColumns } = await import('./tiled')
 const { FX_GRID } = await import('./timeframes')
 
 const M = 60_000
 const DAY = 86_400_000
 const T0 = Date.parse('2024-03-05T00:00Z') // a Tuesday, inside the FX week
 const minutes = (from: number, n: number): KLineData[] => Array.from({ length: n }, (_, i) => ({ timestamp: from + i * M, open: 1 + i, high: 2 + i, low: i, close: 1.5 + i, volume: i }))
-const quotes = (bars: KLineData[]): QuoteColumns => {
-  const col = (f: (b: KLineData) => number) => bars.map(f)
-  return { ts: col((b) => b.timestamp), bo: col((b) => b.open - 0.1), bh: col((b) => b.high - 0.1), bl: col((b) => b.low - 0.1), bc: col((b) => b.close - 0.1), ao: col((b) => b.open + 0.1), ah: col((b) => b.high + 0.1), al: col((b) => b.low + 0.1), ac: col((b) => b.close + 0.1) }
-}
+const col = (bars: KLineData[], f: (b: KLineData) => number) => Float64Array.from(bars, f)
+const midColumns = (bars: KLineData[]): TileColumns => ({ ts: col(bars, (b) => b.timestamp), o: col(bars, (b) => b.open), h: col(bars, (b) => b.high), l: col(bars, (b) => b.low), c: col(bars, (b) => b.close), v: col(bars, (b) => b.volume ?? 0) })
+const quotes = (bars: KLineData[]): TileColumns => ({ ts: col(bars, (b) => b.timestamp), bo: col(bars, (b) => b.open - 0.1), bh: col(bars, (b) => b.high - 0.1), bl: col(bars, (b) => b.low - 0.1), bc: col(bars, (b) => b.close - 0.1), ao: col(bars, (b) => b.open + 0.1), ah: col(bars, (b) => b.high + 0.1), al: col(bars, (b) => b.low + 0.1), ac: col(bars, (b) => b.close + 0.1) })
 const day1 = minutes(T0, 1440)
 const day2 = minutes(T0 + DAY, 1440)
 const day3 = minutes(T0 + 2 * DAY, 1440)
@@ -45,10 +44,10 @@ class FakeLayer {
   async pair(_m: TileManifest, e: TileEntry) {
     this.pairs.push(e.name)
     if (this.broken.has(e.name)) return null
-    const mid = e.name === 'd1' ? day1 : day2
-    const quote = quotes(mid)
+    const bars = e.name === 'd1' ? day1 : day2
+    const quote = quotes(bars)
     if (this.misaligned.has(e.name)) quote.ts[3] += 1
-    return { mid, quote }
+    return pairColumns(midColumns(bars), quote)
   }
 }
 
@@ -140,11 +139,20 @@ describe('TiledBarSource', () => {
     expect(layer.pairs).toEqual([])
   })
 
-  test('a quote half is joined row for row, or not at all', () => {
-    const joined = joinQuotes('1m', day1.slice(0, 2), quotes(day1.slice(0, 2)), FX_GRID)
-    expect(joined?.[1]).toEqual({ open: T0 + M, end: T0 + 2 * M, date: T0 + M, o: 2, h: 3, l: 1, c: 2.5, v: 1, bid: { o: 1.9, h: 2.9, l: 0.9, c: 2.4 }, ask: { o: 2.1, h: 3.1, l: 1.1, c: 2.6 } })
-    const off = quotes(day1.slice(0, 2))
-    off.ts.pop()
-    expect(joinQuotes('1m', day1.slice(0, 2), off, FX_GRID)).toBeNull()
+  test('a quote half is paired row for row, or not at all', () => {
+    expect(pairColumns(midColumns(day1.slice(0, 2)), quotes(day1.slice(0, 2)))).not.toBeNull()
+    expect(pairColumns(midColumns(day1.slice(0, 2)), quotes(day1.slice(0, 1)))).toBeNull()
+    const moved = quotes(day1.slice(0, 2))
+    moved.ts[1] += 1
+    expect(pairColumns(midColumns(day1.slice(0, 2)), moved)).toBeNull()
+  })
+
+  test('a held tile builds bars only for the rows a read asks for', () => {
+    const tile = pairColumns(midColumns(day1), quotes(day1))
+    if (!tile) throw new Error('unpaired')
+    const bars = barsBetween(tile, T0 + M, T0 + 3 * M, '1m', FX_GRID)
+    expect(bars).toHaveLength(2)
+    expect(bars[0]).toEqual({ open: T0 + M, end: T0 + 2 * M, date: T0 + M, o: 2, h: 3, l: 1, c: 2.5, v: 1, bid: { o: 1.9, h: 2.9, l: 0.9, c: 2.4 }, ask: { o: 2.1, h: 3.1, l: 1.1, c: 2.6 } })
+    expect(barsBetween(tile, T0 - DAY, T0, '1m', FX_GRID)).toEqual([])
   })
 })

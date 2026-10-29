@@ -351,8 +351,13 @@ other timeframes should be cached as well to test price alerts").
 - **Bars** come through `TiledBarSource` (`tiled.ts`), one per page, for the walk, the skim, the
   quote probe and every pane's catch-up. The alert search and the Strategy Lab read through it too.
   - A read with bid and ask (`'all'`) loads a stored interval's whole tile and its `side=bidask`
-    half (the same rows, never fetched by the chart), joins them and holds them decoded:
-    `MAX_HELD_BARS`, least recently used out first.
+    half (the same rows, never fetched by the chart) and holds them decoded AS COLUMNS
+    (`MAX_HELD_BARS` rows, least recently used out first). A read builds `ReplayBar`s only for the
+    rows it returns (`barsBetween`, by binary search), and the columns are decoded one at a time
+    with the page handed a turn between (`decodeColumns`). The first cut (client-a117849) decoded
+    both halves whole and built every bar at once: 240-440 ms main-thread blocks per 5s week, a
+    Run to a price three weeks out held 1.8 s of long tasks on prod. Columnar, the same reads
+    decode in under a quarter of the time (a warm-up of four tiles 925 → 234 ms headless).
   - Loading one tile starts the next. After every advance the session warms the base and the
     skim's coarser intervals (1D, 1h, 1m over a 5s base) at the cursor (`warmAlerts` → `warm`).
   - Mid-only reads (`'core'`) take `barsFromTiles`, folding 3m or 4h out of a stored interval.
