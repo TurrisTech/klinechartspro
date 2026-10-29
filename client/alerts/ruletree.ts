@@ -1,3 +1,4 @@
+import { getReadClock } from '../config'
 import { MTF_INTERVALS } from '../mtf/api'
 import { GRAPH_ROOTS } from '../mtf/config'
 import { resolutionDurationMs } from '../periods'
@@ -567,10 +568,12 @@ function isInstant(operand: Operand): boolean {
   return operand.kind === 'time' && operand.field === 'datetime'
 }
 
-/** 09:30 tomorrow on `zone`'s clock: what a new date-and-time condition starts at. */
+/** 09:30 tomorrow on `zone`'s clock: what a new date-and-time condition starts at. Tomorrow by
+ * the read clock under a bar replay (`config.ts`): a condition written at a 2023 cursor is about
+ * 2023, and one started a day after today's date could never be reached by the replay. */
 function nextMorning(zone: string): number {
   const day = 86_400_000
-  const wall = toWall(Date.now(), zone)
+  const wall = toWall(getReadClock() ?? Date.now(), zone)
   return fromWall(wall - (((wall % day) + day) % day) + day + 570 * 60_000, zone)
 }
 

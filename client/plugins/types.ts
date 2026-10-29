@@ -99,6 +99,22 @@ export interface SourceSpec<P = unknown> {
   createStore?(key: string): SourceStore<P>
   /** Live updates. Returns the disposer. */
   subscribe?(store: SourceStore<P>, notify: SourceNotify): () => void
+  /** Have the SERVER work out ahead of time what this source will read once the read clock
+   * stands at `at`: a bar replay's next landing, before the press (`PluginHost.warmAhead`).
+   * Optional, and only worth offering for a source whose first read of a region is expensive on
+   * the server and cached there -- the MTF overlays' `/mtf/graph`. */
+  warm?: SourceWarm
+}
+
+/** How a source is warmed (`SourceSpec.warm`). Two halves, so the host can send ONE read for
+ * every pane sharing a store, over the union of their windows. */
+export interface SourceWarm {
+  /** The window this source will read once the read clock stands at `at`, for the bars the pane
+   * will hold then (`chartRange`, on the chart's clock, as `window` takes it). */
+  window(chartRange: Range, at: number): Range | null
+  /** Ask the server for `window` under the read clock `at`, for its caches only. Nothing is
+   * filed: the answer lies past the chart's clock, and a store holding it would draw it early. */
+  read(window: Range, at: number): Promise<void>
 }
 
 export interface BoundSource {

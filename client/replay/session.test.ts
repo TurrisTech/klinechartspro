@@ -134,6 +134,7 @@ function make(
     stored?: string[]
     alerts?: ReplayAlertBook
     observer?: ReplayObserver
+    warmLanding?: (at: number) => void
     /** Where the synthetic minutes begin, and how many there are. */
     start?: number
     minutes?: number
@@ -166,7 +167,8 @@ function make(
       advanced.push({ from: r.from, to: r.to, reason: r.reason })
     },
     alerts: opts.alerts,
-    observer: opts.observer
+    observer: opts.observer,
+    warmLanding: opts.warmLanding
   })
   session.setIntervalsInUse(['1h'])
   return { session, source, saved, advanced }
@@ -244,6 +246,36 @@ describe('ReplayTradingSession', () => {
     expect(r?.walked).toBe(false)
     expect(source.calls.length).toBe(ahead)
     expect(session.snapshot.quotes[SYM].bid).toBeCloseTo(1.1 + 239 * 0.0001, 9)
+  })
+
+  test('the wall is told where a press would land -- the base bar\'s close -- but not while a press is landing there', async () => {
+    const start = ny('2024-03-04 09:00')
+    let release = (): void => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    class Gated extends FakeAlerts {
+      async prefetch(after: number, until: number): Promise<number | null> {
+        await gate
+        return this.at.find((t) => t > after && t <= until) ?? null
+      }
+      async next(after: number, until: number, progress: SearchProgress): Promise<AlertOccurrence | null> {
+        // The look-ahead finds its answer while the press is under way.
+        release()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        return super.next(after, until, progress)
+      }
+    }
+    const told: number[] = []
+    const made = make({ alerts: new Gated([start + 2 * H + 20 * M, start + 5 * H + 20 * M]), warmLanding: (at) => told.push(at) })
+    made.session.warmAlerts()
+    const r = await made.session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(made.session.cursor).toBe(start + 3 * H)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The first landing was the press's own; the next one is where the following press lands:
+    // inside the 14:00 base bar, so on its close.
+    expect(told).toEqual([start + 6 * H])
   })
 
   test("across a weekend, the quote is looked for from Friday's close, not back through it", async () => {

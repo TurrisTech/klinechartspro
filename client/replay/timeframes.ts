@@ -141,6 +141,26 @@ export const CANDIDATE_LADDER: readonly string[] = [
  * it -- callers pass the instrument's own list). */
 export const STORED_LADDER: readonly string[] = ['5s', '1m', '1h', '1D']
 
+/** The part of the stored ladder an instrument of one vendor can hold: `STORED_LADDER` cut to
+ * the intervals the server says that vendor stores (`/capabilities` `baseIntervals`), or all of
+ * it where the server states nothing (an older server: probe everything, as before).
+ *
+ * The cut is what keeps "stored" meaning stored. `/getbars` answers an interval the vendor does
+ * not hold as readily as one it does -- it folds it -- so a probe that only asks "is there a
+ * bar?" counted schwab's 1h as stored, though schwab stores 1m, 30m and 1D and every 1h bar is
+ * a fold of 30m. Two folds that disagree, as it happens: the browser's (client/tiles/derive.ts)
+ * keeps the 09:00-09:30 pre-market half hour a stored read carries, the server's drops it
+ * (prod SPY 2026-10-05..23: the 09:00 hour differed in open and volume on 15 of 15 days, in its
+ * high or low on 9, and no other hour differed at all). Taken for stored, it became a replay
+ * base (`validateBase` requires a stored one), a rung of every 4h/1D forming candle
+ * (`composeLadder`) and a step of the fill engine's refinement (`finerStored`), each answering
+ * from whichever fold its period landed in.
+ * The cut also spares the probe the reads the server can only refuse: 5s for schwab and
+ * coinbase is a 500. */
+export function storedLadderFor(advertised: readonly string[] | null): string[] {
+  return advertised === null ? [...STORED_LADDER] : STORED_LADDER.filter((code) => advertised.includes(code))
+}
+
 /** The greatest common divisor of a set of intervals: the coarsest interval that tiles every
  * one of them. Intraday sets reduce exactly (3m + 5m -> 1m, 15m + 1h -> 15m); a set with a
  * calendar interval picks the coarsest ladder entry dividing all (1D + 1W -> 1D, 4h + 1D ->
@@ -538,7 +558,21 @@ export function nextIntervalStart(code: string, ms: number, tz: string = MARKET_
   for (;;) {
     start = nextIntradayStart(code, start, tz)
     if (isMarketOpen(start, tz)) return start
+    start = lastStartBeforeReopening(code, start, tz, FX_DAY)
   }
+}
+
+/** Where a walk of `code`'s candles, at `shut` inside a closed window, resumes: the last of them
+ * to open before the market reopens, so the next step is the first one after it does.
+ *
+ * Without it the walk stepped through the closed window a candle at a time -- 34,560 5s candles
+ * from Friday's close to Sunday's FX open, 46,800 across an equity weekend, each a timezone
+ * conversion or several: a quarter of a second per call, and a parity test over a few hundred of
+ * them that outran bun's five-second limit under load. Nothing can open in between, so skipping
+ * it changes no answer; the grid is still walked the same way on either side, across DST. */
+function lastStartBeforeReopening(code: string, shut: number, tz: string, day: DayGeometry): number {
+  const resume = intervalStart(code, fromWall(reopening(toWall(shut, tz), day), tz) - 1, tz)
+  return resume > shut ? resume : shut
 }
 
 /** Close of the candle containing `ms` -- exclusive, and NOT the next candle's open: a week
@@ -658,6 +692,18 @@ function dayClose(sessionDay: number, day: DayGeometry): number {
   return sessionDay + day.closeOffset * HOUR
 }
 
+/** The naive wall clock at which a market shut at `wall` next opens -- the BOUNDARY notion, as
+ * `scheduleIsMarketOpen` has it: the open of the first weekday session after the one `wall`
+ * belongs to. A session date never lies after its own open (`sessionDateFor`), so an instant
+ * shut on a weekday is past that day's close and the next weekday's open is the answer, and one
+ * shut over a weekend reopens on Monday's session -- Sunday 17:00 for the FX week. Only for an
+ * instant that IS shut on a market that closes. */
+function reopening(wall: number, day: DayGeometry): number {
+  let next = sessionDateFor(wall, day) + DAY
+  while (weekday(next) >= 5) next += DAY
+  return dayOpen(next, day)
+}
+
 /** The session date that NAMES the bucket `sessionDay` falls in, for a market-day market.
  * `unitStartForSessionDate` answers with that bucket's FOREX open, so adding the FX offset
  * back off it leaves the midnight the bucket is named for -- the half of the answer that is
@@ -766,6 +812,7 @@ export function scheduleNextIntervalStart(code: string, ms: number, tz: string, 
   for (;;) {
     cursor = nextIntradayStart(code, cursor, tz)
     if (scheduleIsMarketOpen(cursor, tz, day)) return cursor
+    cursor = lastStartBeforeReopening(code, cursor, tz, day)
   }
 }
 

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { KLineData } from 'klinecharts'
-import type { ChartProPane, SymbolInfo } from '../../src'
+import type { ChartProPane, Period, SymbolInfo } from '../../src'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import { CONTINUOUS_DAY, type CandleGrid } from './timeframes'
 
@@ -269,5 +269,156 @@ describe('ReplayFeedHub composes the forming candle from the coarsest stored bar
     await hub.push([day.pane], cursor)
     expect(probes).toEqual([{ symbol: 'oanda:EURUSD', at: cursor }])
     expect(store.calls.some((c) => c.interval === '1h')).toBe(true)
+  })
+})
+
+// THE WINDOW A PANE RELOADS INTO ENDS PAST THE BAR FORMING AT THE CURSOR. A forex day forming
+// from Tuesday 17:00 is dated Wednesday 00:00 on the wire -- after the cursor -- so a window
+// ending at the cursor left it out: a 1D pane reloaded between 17:00 and midnight drew Tuesday
+// as its last candle (prod EURGBP at 2023-10-24 19:00 New York), the day it was in nowhere.
+const { setReadClock } = await import('../config')
+
+describe('ReplayDatafeed re-anchors a window at what the cursor lets be answered', () => {
+  const DAY = resolutionToPeriod('1D') as Period
+
+  /** `/getbars` under `asof` over the store's bars, as `services/ohlcv.py` answers it: the closed
+   * bars dated inside the window and the day forming at the clock rebuilt from the 5s rows that
+   * had closed. No tiles and the FX week's schedule. */
+  function server(store: AggregatedStore) {
+    const asked: Array<{ from: number; to: number }> = []
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/instrument')) {
+        const sessions = [{ openDay: 'sun', openTime: '17:00', closeDay: 'fri', closeTime: '17:00' }]
+        return Response.json({ vendor: 'oanda', symbol: 'EURUSD', marketHours: { timezone: 'America/New_York', sessions } })
+      }
+      if (!url.pathname.endsWith('/getbars')) return new Response('not found', { status: 404 })
+      const from = Number(url.searchParams.get('from'))
+      const to = Number(url.searchParams.get('to'))
+      const asof = Number(url.searchParams.get('asof'))
+      asked.push({ from, to })
+      const answer = store.all('1D').filter((b) => b.end <= asof && b.date >= from && b.date < to)
+      const open = FX_GRID.start('1D', asof)
+      if (open < asof && asof < FX_GRID.end('1D', open)) {
+        const forming = composeForming('1D', open, store.all('5s').filter((b) => b.open >= open && b.end <= asof), FX_GRID)
+        if (forming && forming.date >= from && forming.date < to) answer.push(forming)
+      }
+      const bars = answer.map((b) => ({ date: b.date, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }))
+      return Response.json(bars.length === 0 ? { s: 'no_data' } : bars)
+    }
+    return { asked, fetch: fetch as typeof globalThis.fetch }
+  }
+
+  test('a forex day pane reloaded at 19:00 gets the day forming since 17:00, dated tomorrow', async () => {
+    const store = STORE.fresh()
+    const api = server(store)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = api.fetch
+    try {
+      for (const [cursor, last] of [
+        // Two hours into the day dated Wednesday: it has rows, and is the pane's last candle.
+        [ny(19, 19), ny(20, 0)],
+        // On its open nothing of it exists: Tuesday's day, closed at 17:00, is the last.
+        [ny(19, 17), ny(19, 0)],
+        // Mid-session the day is dated before the cursor, and was answered before too.
+        [ny(20, 11), ny(20, 0)]
+      ] as const) {
+        setReadClock(cursor)
+        const hub = new ReplayFeedHub(store, '5s', cursor)
+        const symbol = { ticker: 'EURUSD', exchange: 'oanda', timezone: FX_SCHEDULE.timezone, dayGeometry: FX_SCHEDULE.day } as SymbolInfo
+        const now = Date.now()
+        const bars = await hub.createFeed().getHistoryKLineData(symbol, DAY, now - 500 * 86_400_000, now)
+        expect(bars.at(-1)?.timestamp).toBe(last)
+        if (last > cursor) {
+          const open = FX_GRID.start('1D', cursor)
+          const parts = store.all('5s').filter((b) => b.open >= open && b.end <= cursor)
+          expect(bars.at(-1)).toEqual(asKLine(composeForming('1D', open, parts, FX_GRID) as ReplayBar))
+        }
+        // And never a date past the forming day: the window stops at the next day's.
+        expect(Math.max(...api.asked.map((a) => a.to))).toBeLessThanOrEqual(FX_GRID.toWire('1D', FX_GRID.nextStart('1D', cursor)))
+        api.asked.length = 0
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+      setReadClock(null)
+    }
+  })
+})
+
+// THE BARS A PANE WILL HOLD AT THE NEXT LANDING (`landingRange`), which is what a bar replay warms
+// the server over before the press. It must be what the push will really leave -- worked out by
+// the same rule -- or the warm-up builds a region the panes then do not read.
+
+describe('ReplayFeedHub.landingRange', () => {
+  const M = 60_000
+  const range = (data: KLineData[]) => ({ from: data[0].timestamp, to: (data.at(-1)?.timestamp ?? 0) + 1 })
+
+  test('short of the append threshold: the pane keeps its bars, to the bar open at the landing -- what the push leaves', async () => {
+    const before = ny(19, 6)
+    for (const at of [ny(19, 9, 30), ny(19, 10)]) {
+      const store = STORE.fresh()
+      const hub = new ReplayFeedHub(store, '1m', before)
+      hub.setStored('oanda:EURUSD', ['1m', '1h', '1D'])
+      const hour = fxPane('hour', '1h', store.all('1h').filter((b) => b.open < before).slice(-20).map(asKLine))
+      const predicted = hub.landingRange(hour.pane, at)
+      // Inside the 09:00 bar it is forming; on 10:00 it has closed and none has opened yet.
+      expect(predicted).toEqual({ from: hour.data[0].timestamp, to: ny(19, 9) + 1 })
+      hub.cursor = at
+      const [report] = await hub.push([hour.pane], before)
+      expect([report.reloaded, report.problem]).toEqual([false, null])
+      expect(range(hour.data)).toEqual(predicted as { from: number; to: number })
+    }
+  })
+
+  test("past it: the window the pane is reloaded into, from at or before the reload's first bar", async () => {
+    const store = STORE.fresh()
+    const before = ny(19, 6)
+    const hub = new ReplayFeedHub(store, '1m', before)
+    hub.setStored('oanda:EURUSD', ['1m', '1h', '1D'])
+    const minute = fxPane('minute', '1m', store.all('1m').filter((b) => b.open < before).slice(-20).map(asKLine))
+    let resets = 0
+    ;(minute.pane as unknown as { getChart: () => unknown }).getChart = () => ({ getDataList: () => minute.data, resetData: () => resets++ })
+    // 210 minutes on: past the 100-bar threshold.
+    const at = ny(19, 9, 30)
+    expect(hub.landingRange(minute.pane, at)).toEqual({ from: at - 500 * M, to: ny(19, 9, 29) + 1 })
+    hub.cursor = at
+    const [report] = await hub.push([minute.pane], before)
+    expect([report.reloaded, resets]).toEqual([true, 1])
+    // ...and 99 minutes on is not, by the same rule.
+    expect(new ReplayFeedHub(store, '1m', before).landingRange(minute.pane, before + 99 * M)?.from).toBe(minute.data[0].timestamp)
+  })
+
+  test('a pane a push would leave alone has none: no bars, or no subscription', () => {
+    const hub = new ReplayFeedHub(STORE.fresh(), '1m', ny(19, 6))
+    expect(hub.landingRange(fxPane('empty', '1h', []).pane, ny(19, 9))).toBeNull()
+    const unsubscribed = fxPane('off', '1h', [bar(ny(19, 5))])
+    ;(unsubscribed.pane as unknown as { getDatafeed: () => unknown }).getDatafeed = () => ({ callbackFor: () => undefined })
+    expect(hub.landingRange(unsubscribed.pane, ny(19, 9))).toBeNull()
+  })
+
+  test("the panes' bar loads are counted while in flight: a reloaded pane's overlays have not asked yet", async () => {
+    const realFetch = globalThis.fetch
+    const { error: realError, warn: realWarn } = console
+    globalThis.fetch = (async () => {
+      throw new Error('offline')
+    }) as unknown as typeof fetch
+    // What a failed load says on the way out is not this test's business.
+    console.error = console.warn = () => {}
+    try {
+      const hub = new ReplayFeedHub(STORE.fresh(), '1m', ny(19, 9))
+      const feed = hub.createFeed()
+      const symbol = { ticker: 'EURUSD', exchange: 'oanda', timezone: FX_SCHEDULE.timezone, dayGeometry: FX_SCHEDULE.day } as SymbolInfo
+      const period = resolutionToPeriod('1m')
+      if (!period) throw new Error('no 1m period')
+      const loading = feed.getHistoryKLineData(symbol, period, ny(19, 1), ny(19, 9))
+      expect(hub.loadsInFlight).toBe(1)
+      // A load that fails still ends.
+      expect(await loading).toEqual([])
+      expect(hub.loadsInFlight).toBe(0)
+    } finally {
+      globalThis.fetch = realFetch
+      console.error = realError
+      console.warn = realWarn
+    }
   })
 })

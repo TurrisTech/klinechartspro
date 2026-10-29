@@ -26,7 +26,7 @@
 // resolution path across dev and production; until then this is the version that works.
 
 import type { KLineData } from 'klinecharts'
-import { parquetRead } from 'hyparquet'
+import { parquetMetadata, parquetRead } from 'hyparquet'
 
 /**
  * Decode one tile's bytes into bars.
@@ -57,38 +57,41 @@ export async function decodeTile(bytes: ArrayBuffer, precision: number): Promise
   return bars
 }
 
-/** One tile's bid and ask candles (its `side=bidask` half), column by column, row for row with
- * the mid tile of the same name: `ts` is the same wire timestamp, prices the same 10**precision. */
-export interface QuoteColumns {
-  ts: number[]
-  bo: number[]
-  bh: number[]
-  bl: number[]
-  bc: number[]
-  ao: number[]
-  ah: number[]
-  al: number[]
-  ac: number[]
-}
+/** A tile's columns, by name, as numbers: `ts` as stored, prices unscaled by the precision. */
+export type TileColumns = Record<string, Float64Array>
 
-const QUOTE_COLUMNS = ['ts', 'bo', 'bh', 'bl', 'bc', 'ao', 'ah', 'al', 'ac'] as const
-
-/** Decode a quote tile's bytes. Prices come back unscaled by `precision`; `ts` as is. */
-export async function decodeQuoteTile(bytes: ArrayBuffer, precision: number): Promise<QuoteColumns> {
+/**
+ * Decode the named columns of one tile, ONE COLUMN AT A TIME, handing the page a turn
+ * (`between`) after each: a 5s week is ~70k rows, and decoding it whole -- and building an
+ * object per row -- held the main thread 240-440 ms per tile on prod (a bar replay's Run to a
+ * price three weeks out: six long tasks, 1.8 s). A column is a few milliseconds.
+ *
+ * Read into typed arrays at each chunk's own row offset. `scaled` names the price columns,
+ * divided by 10**precision; any other is taken as stored (`ts`, `v`).
+ */
+export async function decodeColumns(bytes: ArrayBuffer, names: readonly string[], precision: number, scaled: ReadonlySet<string>, between: () => Promise<void> = async () => {}): Promise<TileColumns> {
+  const metadata = parquetMetadata(bytes)
+  const rows = Number(metadata.num_rows)
   const scale = 10 ** precision
-  const cols = Object.fromEntries(QUOTE_COLUMNS.map((name) => [name, [] as number[]])) as unknown as QuoteColumns
-  await parquetRead({
-    file: bytes,
-    columns: [...QUOTE_COLUMNS],
-    onChunk: (chunk: { columnName: string; columnData: ArrayLike<unknown> }) => {
-      const target = (cols as unknown as Record<string, number[] | undefined>)[chunk.columnName]
-      if (target === undefined) return
-      const scaled = chunk.columnName !== 'ts'
-      for (let i = 0; i < chunk.columnData.length; i++) {
-        const value = Number(chunk.columnData[i])
-        target.push(scaled ? value / scale : value)
+  const out: TileColumns = {}
+  for (const name of names) {
+    const column = new Float64Array(rows)
+    const divide = scaled.has(name)
+    await parquetRead({
+      file: bytes,
+      metadata,
+      columns: [name],
+      onChunk: (chunk: { columnName: string; columnData: ArrayLike<unknown>; rowStart: number }) => {
+        if (chunk.columnName !== name) return
+        const data = chunk.columnData
+        for (let i = 0; i < data.length; i++) {
+          const value = Number(data[i])
+          column[chunk.rowStart + i] = divide ? value / scale : value
+        }
       }
-    }
-  })
-  return cols
+    })
+    out[name] = column
+    await between()
+  }
+  return out
 }

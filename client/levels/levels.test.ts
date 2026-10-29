@@ -1,13 +1,16 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import type { Chart } from 'klinecharts'
+import type { Chart, OverlayCreate } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
-import { installWindow } from '../plugins/testing'
+import { fakePane, installWindow } from '../plugins/testing'
 import type { LayerContext } from '../chartlayers/types'
 
 // The Levels layer: when its data goes out of date, what identifies a request, and what it
 // draws. `client/config.ts` reads `window` at import, so everything below is loaded after
 // the DOM stub, the same way `client/plugins/*.test.ts` does it.
 installWindow()
+// The wall tests build real controllers, which read the toolbar-era settings once.
+const win = globalThis.window as unknown as Record<string, unknown>
+win.localStorage ??= { getItem: () => null, setItem: () => {}, removeItem: () => {} }
 
 const requests: URL[] = []
 let nextLevelsBody: unknown = []
@@ -37,11 +40,46 @@ globalThis.fetch = (async (input: URL | RequestInfo) => {
   if (!isCapabilities && watermarkHeader !== null) {
     headers['X-Levels-Computed-Through'] = watermarkHeader
   }
-  return new Response(JSON.stringify(isCapabilities ? CAPABILITIES : nextLevelsBody), {
+  if (!isCapabilities && answerGate) await answerGate
+  const body = isCapabilities ? CAPABILITIES : servedBook ? serverAnswer(servedBook, url) : nextLevelsBody
+  return new Response(JSON.stringify(body), {
     status: 200,
     headers
   })
 }) as typeof fetch
+
+/** When set, `/levels` answers out of this book the way the server does, instead of with
+ * `nextLevelsBody`. */
+let servedBook: Level[] | null = null
+/** When set, `/levels` answers only once it resolves: a read that stays in flight. */
+let answerGate: Promise<void> | null = null
+
+/** wdashboard-server's own filter, restated from the Python rather than from `levelsIn`
+ * (ohlcv.py `levels_route`, services/levels.py `LevelsBook.band` + `build_level`): the
+ * interval set, spent levels only when asked for, the price band inclusive at both ends, and
+ * a lifespan that intersects the window -- not confirmed after `date_to`, and if spent, not
+ * last invalidated before `date_from`. */
+function serverAnswer(book: Level[], url: URL): Level[] {
+  const q = url.searchParams
+  const priceMin = Number(q.get('price_min'))
+  const priceMax = Number(q.get('price_max'))
+  const dateFrom = q.has('date_from') ? Number(q.get('date_from')) : null
+  const dateTo = q.has('date_to') ? Number(q.get('date_to')) : null
+  const intervals = q.get('intervals')?.split(',') ?? null
+  const includeInvalidated = q.get('include_invalidated') === 'true'
+  const out: Level[] = []
+  for (const level of book) {
+    if (intervals && !intervals.includes(level.interval)) continue
+    const spent = !level.active
+    if (spent && !includeInvalidated) continue
+    if (level.price < priceMin || level.price > priceMax) continue
+    const lifespanEnd = spent && level.invalidations.length > 0 ? level.invalidations[level.invalidations.length - 1] : null
+    if (dateTo !== null && level.effectiveAt > dateTo) continue
+    if (dateFrom !== null && lifespanEnd !== null && lifespanEnd < dateFrom) continue
+    out.push(level)
+  }
+  return out
+}
 
 const VIEW = { priceMin: 1.05, priceMax: 1.15, from: 1_000_000, to: 2_000_000 }
 const BAND = {
@@ -65,7 +103,8 @@ const CAPABILITIES = {
     maxSubscriptionsPerConnection: 32
   },
   levels: [
-    { vendor: 'oanda', symbol: 'EURUSD', intervals: ['1M', '1W'], computedThrough: 1_700_000_000_000 }
+    { vendor: 'oanda', symbol: 'EURUSD', intervals: ['1M', '1W'], computedThrough: 1_700_000_000_000 },
+    { vendor: 'oanda', symbol: 'EURGBP', intervals: ['1M', '1W'], computedThrough: 1_700_000_000_000 }
   ],
   plugins: []
 }
@@ -74,9 +113,11 @@ const { loadCapabilities } = await import('../capabilities')
 await loadCapabilities()
 
 const { levelsLayer } = await import('./layer')
-const { fetchLevels, levelsComputedThrough, levelsRequestsInFlight } = await import('./api')
+const { fetchLevels, GATHER_MS, levelsComputedThrough, levelsIn, levelsRequestsInFlight } = await import('./api')
 const { DEFAULT_LEVELS_CONFIG } = await import('./config')
 const { overlaySignature } = await import('../chartlayers/paint')
+const { setReadClock } = await import('../config')
+const { createLayerController } = await import('../chartlayers/controller')
 
 type Level = Awaited<ReturnType<typeof fetchLevels>>[number]
 
@@ -341,19 +382,22 @@ describe('fetchLevels', () => {
     expect(requests).toHaveLength(2)
   })
 
-  test('a different window is a different request', async () => {
+  test('a different window asked at another moment is a different request', async () => {
     requests.length = 0
     nextLevelsBody = []
     const params = {
       vendor: 'oanda',
       symbol: 'EURUSD',
-      priceMin: 1.05,
-      priceMax: 1.15,
+      priceMin: 3.05,
+      priceMax: 3.15,
       dateFrom: 1_000_000,
       dateTo: 2_000_000
     }
-    await Promise.all([fetchLevels(params), fetchLevels({ ...params, priceMax: 1.16 })])
+    await fetchLevels(params)
+    // Not inside the window just read, so nothing can stand in for it.
+    await fetchLevels({ ...params, priceMax: 3.16 })
     expect(requests).toHaveLength(2)
+    expect(requests[1].searchParams.get('price_max')).toBe('3.16')
   })
 
   test('a failure is shared by every caller and clears the entry', async () => {
@@ -374,6 +418,281 @@ describe('fetchLevels', () => {
     expect(results.every((r) => r.status === 'rejected')).toBe(true)
     expect(levelsRequestsInFlight()).toBe(0)
     globalThis.fetch = boom
+  })
+})
+
+// --------------------------------------------------------------- one read per instrument
+
+describe('one read per instrument', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  const EURUSD = { vendor: 'oanda', symbol: 'EURUSD' }
+
+  test('asks made together on one instrument are ONE read of their union', async () => {
+    // A replay step across a day boundary invalidates every pane of the wall in one task, each
+    // with its own band and date window: until 2026-10-29 that was a read per pane.
+    requests.length = 0
+    servedBook = book()
+    const windows = [
+      { priceMin: 1.08, priceMax: 1.1, dateFrom: 5_000_000, dateTo: 6_000_000 },
+      { priceMin: 1.05, priceMax: 1.12, dateFrom: 3_000_000, dateTo: 7_000_000 },
+      { priceMin: 1.0, priceMax: 1.2, dateFrom: 1_000_000, dateTo: 9_000_000 },
+      { priceMin: 1.15, priceMax: 1.3, dateFrom: 8_000_000, dateTo: 9_500_000 }
+    ]
+    const answers = await Promise.all(windows.map((window) => fetchLevels({ ...EURUSD, ...window })))
+    servedBook = null
+    expect(requests).toHaveLength(1)
+    const sent = requests[0].searchParams
+    expect([sent.get('price_min'), sent.get('price_max'), sent.get('date_from'), sent.get('date_to')]).toEqual([
+      '1',
+      '1.3',
+      '1000000',
+      '9500000'
+    ])
+    // And every ask is handed exactly what the server answers for its own window -- the same
+    // levels, in the same order.
+    windows.forEach((window, i) => {
+      expect(answers[i]).toEqual(serverAnswer(book(), levelsUrl(window)))
+    })
+    expect(answers.every((answer) => answer.length > 0)).toBe(true)
+  })
+
+  test('with spent levels: a level spent before a window is left out of it, as the server leaves it out', async () => {
+    requests.length = 0
+    servedBook = book()
+    const windows = [
+      { priceMin: 1.0, priceMax: 1.3, dateFrom: 6_000_000, dateTo: 7_000_000 },
+      { priceMin: 1.0, priceMax: 1.3, dateFrom: 1_000_000, dateTo: 9_000_000 }
+    ]
+    const answers = await Promise.all(
+      windows.map((window) => fetchLevels({ ...EURUSD, ...window, includeInvalidated: true }))
+    )
+    servedBook = null
+    expect(requests).toHaveLength(1)
+    const narrow = serverAnswer(book(), levelsUrl(windows[0], true))
+    expect(answers[0]).toEqual(narrow)
+    // The fixture does exercise it: the wide read holds spent levels the narrow window must not.
+    expect(answers[1].filter((level) => !level.active && !narrow.includes(level)).length).toBeGreaterThan(0)
+  })
+
+  test('whatever else decides the answer keeps two asks apart', async () => {
+    requests.length = 0
+    nextLevelsBody = []
+    const window = { priceMin: 1.0, priceMax: 1.2, dateFrom: 1, dateTo: 2 }
+    await Promise.all([
+      fetchLevels({ ...EURUSD, ...window }),
+      fetchLevels({ vendor: 'oanda', symbol: 'EURGBP', ...window }),
+      fetchLevels({ ...EURUSD, ...window, intervals: ['1W'] }),
+      fetchLevels({ ...EURUSD, ...window, includeInvalidated: true })
+    ])
+    expect(requests).toHaveLength(4)
+  })
+
+  test('two read clocks are two reads, and each is sent under the clock it was asked under', async () => {
+    requests.length = 0
+    nextLevelsBody = []
+    const window = { ...EURUSD, priceMin: 1.0, priceMax: 1.2, dateFrom: 1, dateTo: 2 }
+    try {
+      setReadClock(1_111_000)
+      const first = fetchLevels(window)
+      // A replay moves the clock while the first ask is still gathering.
+      setReadClock(2_222_000)
+      const second = fetchLevels(window)
+      await Promise.all([first, second])
+    } finally {
+      setReadClock(null)
+    }
+    expect(requests.map((url) => url.searchParams.get('asof')).sort()).toEqual(['1111000', '2222000'])
+  })
+
+  test('an ask inside a read already in flight waits on it', async () => {
+    requests.length = 0
+    servedBook = book()
+    let answer = (): void => {}
+    answerGate = new Promise((resolve) => {
+      answer = resolve
+    })
+    const wide = fetchLevels({ ...EURUSD, priceMin: 1.0, priceMax: 1.3, dateFrom: 0, dateTo: 10_000_000 })
+    await sleep(GATHER_MS + 5)
+    expect(levelsRequestsInFlight()).toBe(1) // sent, not yet answered
+    const inside = { priceMin: 1.1, priceMax: 1.2, dateFrom: 2_000_000, dateTo: 4_000_000 }
+    const narrow = fetchLevels({ ...EURUSD, ...inside })
+    await sleep(GATHER_MS + 5)
+    answerGate = null
+    answer()
+    const answers = await Promise.all([wide, narrow])
+    servedBook = null
+    expect(requests).toHaveLength(1)
+    expect(answers[1]).toEqual(serverAnswer(book(), levelsUrl(inside)))
+  })
+
+  test('an ask inside a window read a moment ago re-reads THAT window, so the browser can revalidate it', async () => {
+    // The answer is not kept here: the browser holds it under the union's URL, and asking that
+    // URL again is what lets the server's ETag answer 304 instead of reading the book again.
+    requests.length = 0
+    servedBook = book()
+    try {
+      setReadClock(3_333_000)
+      await Promise.all([
+        fetchLevels({ ...EURUSD, priceMin: 1.0, priceMax: 1.1, dateFrom: 1_000_000, dateTo: 5_000_000 }),
+        fetchLevels({ ...EURUSD, priceMin: 1.05, priceMax: 1.25, dateFrom: 4_000_000, dateTo: 9_000_000 })
+      ])
+      const inside = { priceMin: 1.06, priceMax: 1.09, dateFrom: 4_500_000, dateTo: 4_600_000 }
+      const answer = await fetchLevels({ ...EURUSD, ...inside })
+      expect(requests).toHaveLength(2)
+      expect(requests[1].search).toBe(requests[0].search)
+      expect(answer).toEqual(serverAnswer(book(), levelsUrl(inside)))
+      // Outside every window read: its own.
+      await fetchLevels({ ...EURUSD, priceMin: 1.4, priceMax: 1.5, dateFrom: 1, dateTo: 2 })
+      expect(requests[2].searchParams.get('price_min')).toBe('1.4')
+      // And never across clocks: a window read under another one says nothing about this one.
+      setReadClock(4_444_000)
+      await fetchLevels({ ...EURUSD, ...inside })
+      expect(requests[3].searchParams.get('price_min')).toBe('1.06')
+    } finally {
+      setReadClock(null)
+      servedBook = null
+    }
+  })
+
+  test('the union read states the watermark for the instrument', async () => {
+    nextLevelsBody = []
+    watermarkHeader = '1W=777'
+    await Promise.all([
+      fetchLevels({ vendor: 'oanda', symbol: 'AUDNZD', priceMin: 1, priceMax: 2, dateFrom: 1, dateTo: 2 }),
+      fetchLevels({ vendor: 'oanda', symbol: 'AUDNZD', priceMin: 1.5, priceMax: 3, dateFrom: 1, dateTo: 3 })
+    ])
+    watermarkHeader = null
+    expect(levelsComputedThrough('oanda', 'AUDNZD')).toEqual({ '1W': 777 })
+  })
+})
+
+describe('levelsIn', () => {
+  const window = { priceMin: 1.1, priceMax: 1.2, dateFrom: 1_000, dateTo: 2_000 }
+
+  test('the price band is inclusive at both ends', () => {
+    const inBand = [level({ price: 1.1, effectiveAt: 1_500 }), level({ price: 1.2, effectiveAt: 1_500 })]
+    const outside = [level({ price: 1.0999999, effectiveAt: 1_500 }), level({ price: 1.2000001, effectiveAt: 1_500 })]
+    expect(levelsIn([...inBand, ...outside], window)).toEqual(inBand)
+  })
+
+  test('a lifespan that intersects the window, not a birth inside it', () => {
+    const confirmedEarly = level({ effectiveAt: 10 })
+    const confirmedAtTheEnd = level({ effectiveAt: 2_000 })
+    const confirmedAfter = level({ effectiveAt: 2_001 })
+    const spentInside = level({ active: false, effectiveAt: 10, invalidations: [500, 1_000] })
+    const spentBefore = level({ active: false, effectiveAt: 10, invalidations: [500, 999] })
+    // An active level has no end, however long ago it was last tested.
+    const testedBefore = level({ effectiveAt: 10, invalidations: [20] })
+    const all = [confirmedEarly, confirmedAtTheEnd, confirmedAfter, spentInside, spentBefore, testedBefore]
+    expect(levelsIn(all, window)).toEqual([confirmedEarly, confirmedAtTheEnd, spentInside, testedBefore])
+  })
+})
+
+// --------------------------------------------------------------------------------- a wall
+
+describe('a wall of panes', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  let releases: Array<() => void> = []
+  afterAll(() => {
+    for (const release of releases) release()
+    releases = []
+  })
+
+  // Six timeframes of one instrument ending at the same instant, each with its own price
+  // range -- what the controller turns into six different bands and date windows.
+  const SPECS = [
+    { step: 300_000, low: 1.095, high: 1.1 },
+    { step: 900_000, low: 1.09, high: 1.105 },
+    { step: 3_600_000, low: 1.08, high: 1.11 },
+    { step: 14_400_000, low: 1.06, high: 1.13 },
+    { step: 86_400_000, low: 1.03, high: 1.17 },
+    { step: 7 * 86_400_000, low: 0.98, high: 1.25 }
+  ]
+  const END = 9_000_000_000
+
+  function wallChart(spec: (typeof SPECS)[number]) {
+    const bars = Array.from({ length: 60 }, (_, i) => ({
+      timestamp: END - (59 - i) * spec.step,
+      open: spec.low,
+      high: spec.high,
+      low: spec.low,
+      close: spec.high
+    }))
+    const state = { overlays: [] as OverlayCreate[] }
+    const chart = {
+      getIndicators: () => [{ id: 'lv', name: 'LEVELS:levels', visible: true }],
+      getDataList: () => bars,
+      getVisibleRange: () => ({ from: 0, to: bars.length, realFrom: 0, realTo: bars.length - 1 }),
+      getYAxes: () => [{ getRange: () => ({ from: spec.low, to: spec.high }) }],
+      createOverlay: (list: OverlayCreate[]) => {
+        state.overlays.push(...list)
+        return list.map(() => 'id')
+      },
+      removeOverlay: () => {
+        state.overlays = []
+      },
+      subscribeAction: () => {},
+      unsubscribeAction: () => {}
+    } as unknown as Chart
+    return { chart, state }
+  }
+
+  /** The overlays each pane draws, the panes attached to one controller in one task. */
+  async function wall(tickers: string[]) {
+    const controller = createLayerController(levelsLayer, 'LEVELS:levels')
+    const panes = tickers.map((ticker, i) => ({ ticker, ...wallChart(SPECS[i % SPECS.length]) }))
+    for (const [i, pane] of panes.entries()) {
+      releases.push(controller.attach(fakePane(`p${i}`, pane.chart, pane.ticker), 'lv', DEFAULT_LEVELS_CONFIG))
+    }
+    await sleep(GATHER_MS + 30)
+    return { controller, drawn: () => panes.map((pane) => overlaySignature(pane.state.overlays)) }
+  }
+
+  test('a six-pane wall reads once, and a day boundary invalidating every pane reads once more', async () => {
+    servedBook = book()
+    requests.length = 0
+    const { controller, drawn } = await wall(Array(6).fill('EURUSD'))
+    expect(requests).toHaveLength(1)
+    const opened = drawn()
+    controller.invalidate()
+    await sleep(GATHER_MS + 30)
+    expect(requests).toHaveLength(2)
+    expect(drawn()).toEqual(opened)
+    servedBook = null
+  })
+
+  test('...and every pane draws exactly what it drew when it read alone', async () => {
+    servedBook = book()
+    const together = (await wall(Array(6).fill('EURUSD'))).drawn()
+    // Each pane on its own, under a read clock of its own so that nothing read for the wall
+    // can stand in for its own window.
+    const alone: string[] = []
+    try {
+      for (const [i, spec] of SPECS.entries()) {
+        setReadClock(5_000_000 + i)
+        const controller = createLayerController(levelsLayer, 'LEVELS:levels')
+        const { chart, state } = wallChart(spec)
+        requests.length = 0
+        releases.push(controller.attach(fakePane(`alone${i}`, chart, 'EURUSD'), 'lv', DEFAULT_LEVELS_CONFIG))
+        await sleep(GATHER_MS + 30)
+        expect(requests).toHaveLength(1)
+        alone.push(overlaySignature(state.overlays))
+      }
+    } finally {
+      setReadClock(null)
+      servedBook = null
+    }
+    expect(together).toEqual(alone)
+    // Not vacuous: the panes draw different sets, and none draws nothing.
+    expect(new Set(together).size).toBe(SPECS.length)
+  })
+
+  test('two instruments on one wall are two reads', async () => {
+    servedBook = book()
+    requests.length = 0
+    await wall(['EURUSD', 'EURGBP', 'EURUSD', 'EURGBP', 'EURUSD', 'EURGBP'])
+    servedBook = null
+    expect(requests.map((url) => url.searchParams.get('symbol')).sort()).toEqual(['EURGBP', 'EURUSD'])
   })
 })
 
@@ -398,6 +717,39 @@ function context(
     symbol: { ticker, shortName: ticker, timezone: 'America/New_York', dayGeometry: { openOffset: -7, closeOffset: 17, everyDayTrades: false } } as SymbolInfo,
     vendor: 'oanda'
   }
+}
+
+/** A deterministic book across 1.0-1.3 and epoch ms 0-10,000,000 (a seeded LCG, so every
+ * call is the same book): actives, tested actives and spent levels, on both intervals. */
+function book(): Level[] {
+  let seed = 7
+  const next = (): number => {
+    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
+    return seed / 2_147_483_648
+  }
+  return Array.from({ length: 400 }, (_, i) => {
+    const effectiveAt = Math.floor(next() * 9_000_000)
+    const tests = Math.floor(next() * 14)
+    const invalidations = Array.from({ length: tests }, (_, k) => effectiveAt + (k + 1) * Math.floor(next() * 100_000 + 1))
+    return level({
+      interval: i % 3 === 0 ? '1M' : '1W',
+      price: Math.round((1 + next() * 0.3) * 1e5) / 1e5,
+      bornAt: effectiveAt - 1,
+      effectiveAt,
+      invalidations,
+      active: tests < 10
+    })
+  })
+}
+
+function levelsUrl(window: { priceMin: number; priceMax: number; dateFrom: number; dateTo: number }, includeInvalidated = false): URL {
+  const url = new URL('http://test/levels')
+  url.searchParams.set('price_min', String(window.priceMin))
+  url.searchParams.set('price_max', String(window.priceMax))
+  url.searchParams.set('date_from', String(window.dateFrom))
+  url.searchParams.set('date_to', String(window.dateTo))
+  if (includeInvalidated) url.searchParams.set('include_invalidated', 'true')
+  return url
 }
 
 function level(over: Partial<Level> = {}): Level {

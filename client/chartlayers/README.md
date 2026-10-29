@@ -82,11 +82,25 @@ events faster than the debounce window indefinitely, and a purely trailing debou
 never fire at all, leaving a pane showing the levels it had before the user panned until the
 market went quiet.
 
-The layer's own fetch deduplicates identical in-flight requests (`levels/api.ts`) — a wall of
-panes on one symbol shares a time axis, so one pan lands several byte-identical `/levels`
-reads on a browser with six connections per origin to spend. The server side of the same
-concern is `wdashboard-server` `docs/plugins.md`: the book is read once per closed 1W/1M bar
-and `/levels` answers a conditional GET.
+**One `/levels` read per instrument, not per pane** (`levels/api.ts`, since 2026-10-29). Whatever
+makes one pane of a wall re-read makes all of them re-read together -- a replay step across a day
+boundary invalidates every view at once, and a workspace opening or a new candle at 17:00 lands
+on every pane in the same moment -- and each asks for its own band and date window. Those asks
+are gathered per instrument and per everything else that decides the answer (interval set,
+spent levels, read clock) into ONE read of the union of their windows, and each pane is handed
+exactly what the server would have sent for its own window, picked out by the server's own
+filter (`levelsIn`). The controller is untouched: every view still holds and extends its own
+window, so it draws precisely what it drew when it read alone -- under a replay clock with spent
+levels shown, less a lookahead the server's own per-window answer had (`levelsIn` says which
+levels, and why none of them was ever on screen). An ask inside a read already in
+flight waits on it, and one inside a window read recently re-reads that window's URL, so the
+browser revalidates the answer it already holds and the server's ETag answers 304. Measured on
+prod with six-pane EURUSD and EURGBP walls at four 2023 replay clocks: a day boundary went from
+6 concurrent reads and 1.4-2.3 s to 1 read and 0.44-0.79 s, with every pane's overlays
+identical; live, a wall opening went from 6 reads to 1, and six panes re-reading 300 ms apart
+after a new candle from 6 full reads to five 304s and one read. The server
+side of the same concern is `wdashboard-server` `docs/plugins.md`: the book is read once per
+closed 1W/1M bar and `/levels` answers a conditional GET.
 
 ## Tests
 
@@ -96,4 +110,5 @@ hidden or removed, settings per pane, the wall document's shape, the legend), `p
 `paint.test.ts` (the signature is blind to nothing visible and to everything invisible),
 `../levels/freshness.test.ts` (the horizon in all three states, both DST directions, and that
 a dead feed is still bounded), `../levels/levels.test.ts` (what identifies a request, what is
-drawn, the tick case end to end, and that the horizon is read per instrument).
+drawn, the tick case end to end, that the horizon is read per instrument, and that a wall reads
+once per instrument while every pane draws what it drew reading alone).

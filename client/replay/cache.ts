@@ -169,10 +169,30 @@ export class BarCache {
 /** The stored intervals a forming `interval` candle is composed from, coarsest first and ending
  * at `base`: every stored interval coarser than the base that the base tiles and that tiles
  * `interval`. A 1D pane on a 5s base with 1m and 1h stored composes from 1h, 1m, 5s, so its
- * forming candle at 06:00 is thirteen 1h bars rather than 9,360 5s ones -- and the same candle:
- * the store's coarser candles are its finer ones aggregated (measured on prod 2026-10-26: every
- * hour and minute of five symbol-days of EURGBP, EURUSD and GBPUSD agreed in all five fields).
- * With nothing stored known, the base alone. */
+ * forming candle at 06:00 is thirteen 1h bars rather than 9,360 5s ones. With nothing stored
+ * known, the base alone. `stored` must be what the vendor really stores (`probeStoredIntervals`
+ * cuts the probe to it): an interval the server only folds is not a rung.
+ *
+ * Whether it is the same candle the base alone would make depends on the vendor, and was measured
+ * on prod (2026-10-26 and -29; each stored bar against its finer stored bars aggregated, every
+ * field, bid and ask included):
+ *
+ * - oanda: exact. 1D against 1h on 1,003 session-days of seven instruments 2010-2026 (Sunday
+ *   opens, month ends, both DST changes), against 1m on 56 and 5s on 4; 1h and 1m against 5s on
+ *   five symbol-days.
+ * - coinbase: prices exact on the backfilled history; a few recent live-written hours differ in
+ *   one price by up to 0.06% (at most 6 of 336 an instrument). Volume differs on most bars,
+ *   because each interval's decimal volume is rounded to a whole unit on its own (wmarketdata
+ *   `sources/coinbase/_util`): a BTC minute is about 2 BTC, so the coarser rung is the more
+ *   accurate volume, not the less.
+ * - schwab: not exact, and nothing could make it so. Its daily is the exchange's official bar --
+ *   closing-auction close (differs from the last minute's on 56 of 59 SPY days), consolidated
+ *   volume (1.2-2.1x the minutes') -- not an aggregate of anything stored. It stays a rung of
+ *   1W and 1M all the same: a week is folded from those very days (94 of 94 SPY weeks equal),
+ *   so the forming week ends as the bar that replaces it, matches the 1D pane beside it, and
+ *   agrees on every finished day with the server's `asof` rebuild (which folds closed 1D bars);
+ *   composed from minutes, every finished day of it would show about a third less volume than
+ *   the closed weeks to its left. */
 export function composeLadder(interval: string, base: string, stored: readonly string[]): string[] {
   const between = stored.filter((s) => s !== base && s !== interval && nominalMs(s) > nominalMs(base) && nominalMs(s) < nominalMs(interval) && divides(base, s) && divides(s, interval))
   return [...sortByLength(between).reverse(), base]

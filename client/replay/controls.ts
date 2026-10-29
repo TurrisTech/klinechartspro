@@ -1,5 +1,6 @@
 import { Arming, FigureList } from '../trading/kit'
 import { type GoToMode, type GoToSpec, goToInstant } from './clock'
+import { blocked, describeBlockers, type FollowNotice, undoBlockers } from './follow'
 import { formatClock, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
@@ -21,6 +22,8 @@ import { createDockableWindow } from '../chrome/window'
 //   transport   Play and Step, each beside the setting it uses (timeframe x multiple, the pace)
 //   next        Next alert, and how far a running search or walk has got or why the last
 //               advance stopped
+//   notice      only when the chart's active pane moved to an instrument the replay has not
+//               followed: which one it walks, why it stayed, what to do, and Follow (follow.ts)
 //   footer      Alerts (the alert manager), and Go to / Base / Results, one panel open at a
 //               time; Account and Trade, the two windows; Exit replay, set apart at the far end
 //
@@ -270,7 +273,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const body = win.body
     body.innerHTML = ''
     walkLine = null
-    body.append(renderTransport(), renderNext(), renderToggles())
+    body.append(renderTransport(), renderNext())
+    const notice = controller.followNotice
+    if (notice) body.appendChild(renderFollowNotice(notice))
+    body.appendChild(renderToggles())
     if (panel === 'goto') body.appendChild(renderGoTo())
     if (panel === 'settings') body.appendChild(renderSettings())
     if (panel === 'results') body.appendChild(renderResults())
@@ -405,6 +411,45 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       row.appendChild(reason)
     }
     return row
+  }
+
+  /** The chart moved to an instrument the replay has not followed. It says which instrument the
+   * replay walks -- the title bar names it too, but this is where the eye goes after a symbol
+   * pick that seemed to do nothing -- why it stayed, and what to do. What keeps it is read live
+   * (`followBlockers`): close the last trade and the same notice offers the follow. */
+  function renderFollowNotice(notice: FollowNotice): HTMLElement {
+    const box = el('div', 'wd-replay-notice')
+    box.setAttribute('role', 'status')
+    const walked = tickerOf(controller.symbol)
+    const to = notice.ticker
+    const holding = controller.followBlockers
+    const stuck = notice.problem === null && blocked(holding)
+    const text = el('div', 'wd-replay-notice-text')
+    if (notice.moving) text.textContent = `Following ${to}…`
+    else if (notice.problem !== null) {
+      text.textContent = `The replay walks ${walked}, not ${to}: ${lowerFirst(notice.problem)}. Keep walking ${walked}, or exit and start a replay of ${to}.`
+    } else if (stuck) {
+      text.textContent = `The replay walks ${walked}, not ${to}: ${walked} has ${describeBlockers(holding)}. ${undoBlockers(holding)} to follow ${to}, or exit the replay.`
+    } else text.textContent = `The replay walks ${walked}. Nothing is open on it any more, so it can follow the chart to ${to} from here.`
+    box.appendChild(text)
+    if (notice.moving) return box
+
+    const actions = el('div', 'wd-replay-notice-actions')
+    const follow = button('kc-button kc-button-outline wd-replay-follow', `Follow ${to}`, () => {
+      if (controller.busy) return
+      player.pause()
+      void controller.follow()
+    })
+    follow.disabled = stuck || busyShown()
+    follow.title = stuck
+      ? `${undoBlockers(holding)} first: the replay walks one instrument, and only its walk can fill, close or fire what is open on ${walked}`
+      : `Walk ${to} from ${formatClock(controller.cursor, controller.grid.schedule.timezone)}: the same account, its history kept`
+    const keep = button('kc-button kc-icon-button wd-replay-notice-close', '×', () => controller.dismissFollow())
+    keep.setAttribute('aria-label', `Keep walking ${walked}`)
+    keep.title = `Keep walking ${walked}`
+    actions.append(follow, keep)
+    box.appendChild(actions)
+    return box
   }
 
   function renderToggles(): HTMLElement {
@@ -1076,6 +1121,16 @@ function instantOfInput(value: string, zone: string): number | null {
 /** The mounted chart's theme class ('dark' or ''), for chrome mounted outside its root. */
 export function chartTheme(): string {
   return document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''
+}
+
+/** `EURUSD` of `oanda:EURUSD`. */
+function tickerOf(symbol: string): string {
+  return symbol.split(':').pop() ?? symbol
+}
+
+/** "No market hours for X" as it reads after a colon. */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1)
 }
 
 function el(tag: string, className: string): HTMLElement {

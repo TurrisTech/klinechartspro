@@ -12,7 +12,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 
 | module | role |
 |---|---|
-| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
+| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`, `storedLadderFor`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
 | `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`; Go to's `goToInstant` (a time of day on the instrument's clock: next trading day, next occurrence, a date), `isTradingDay` and `onBaseBoundary`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run; `cover` past the run's end is a seek too. `composeLadder`/`composeSpans` (which stored bars a forming candle is made of), `composeForming`, `nonWeekendGaps`. |
@@ -23,10 +23,12 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
+| `landing.ts` | `LandingWarmer`: WHEN the next landing is warmed on the server -- once the wall is quiet, never while an advance runs, one landing at a time. The wall it waits on and the warm-up it sends are injected. |
+| `follow.ts` | PURE. Following the chart to another instrument: what keeps the replay where it is (`FollowBlockers`), which pane change is a request (`followRequest`), the target resolved as a mount resolves it (`followTarget`), the base it walks there (`followBase`) and the blob moved to it (`movedState`). |
 | — glue — | |
-| `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. |
-| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
-| `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
+| `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. `probeStoredIntervals`: which of the stored ladder an instrument holds -- one bar per interval its vendor stores (`storedLadderFor` against `/capabilities` `baseIntervals`), never one the server would only fold. |
+| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). Also `inertStream`. |
+| `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk, and the follow (`follow`: one attempt at a time, for the newest request). |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
 | `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
 | `index.ts` | `mountBarReplay` — mirrors `mountPaperTrading` on the shared `mountTradingDock`; `startReplayFlow`, `bootReplay`, `clearReplay`. |
@@ -112,7 +114,8 @@ user's **enabled client alerts** triggers -- every one on the alert manager's li
 instrument each watches. Since 2026-10-28 (user: "next alert should be just the next alert
 according to the Alerts popup, not on current chart"): until then only the replayed instrument's
 alerts counted, so a replay of EURGBP had no Next alert for an alert on EURUSD, and switching a
-pane's symbol mid-replay changed nothing, since the replay keeps the instrument it started on.
+pane's symbol mid-replay changed nothing, since the replay kept the instrument it started on (it
+follows the active pane since 2026-10-29: "Following the chart to another instrument", below).
 Each alert is searched on its own instrument's bars and schedule; the stop's notification names
 that instrument.
 
@@ -213,7 +216,21 @@ fetched-and-empty for good — a permanent blank column in its sub-pane, one per
 daily boundary**: they are computed on 1W/1M, so one can only appear or be spent at a 17:00
 market-day close. Invalidating them every step cost three slow `/levels` reads per 15-minute
 step, which saturated the browser's six-connection budget and starved the panes' own history
-loads.
+loads. And the boundary itself reads once per instrument, not once per pane: every view asks in
+the same task, and `levels/api.ts` sends one read of the union of their windows (six panes on
+EURUSD or EURGBP at 2023 clocks: 6 reads and 1.4-2.3 s before, 1 read and 0.44-0.79 s after).
+
+**A pane's own history read ends just past the bar forming at the cursor** (`feed.ts`,
+`plugins/horizon.ts` `answerableTo`), on the wire clock its bars are dated by. That is the cursor
+itself for an intraday pane, but a forex day forming from Tuesday 17:00 is dated Wednesday 00:00:
+ending the window at the cursor left a 1D pane reloaded between 17:00 and midnight without its
+forming candle (prod EURGBP, 2023-10-24 19:00 New York). The read through the tiles
+(`tiles/join.ts`) then asks `/getbars` for **nothing that cannot be answered**: past that bar
+nothing exists, and on its open -- where a Step leaves every pane whose interval divides the Step's --
+not even that bar. The chart's widening (`history.ts` `fetchBarsWidened`) used to send one such
+empty read per attempt, one after another: a 5s pane's newer-in-time page from a Saturday cursor
+made four on prod, and a pane reloaded after a 1h Step was seen making eleven. What a widening
+still has to ask is the same request on every attempt, and it is asked once.
 
 ## Every instrument on its own schedule
 
@@ -245,12 +262,108 @@ forming bar composed from the 1h base equals the server's `asof` rebuild in all 
 step; EURUSD steps and labels exactly as before (pinned by `timeframes.test.ts`, which sweeps the
 FX grid against the old functions).
 
+## Following the chart to another instrument
+
+The user, 2026-10-29: a replay of EURGBP, the pane switched to EURUSD, and nothing followed --
+the replay went on walking EURGBP under a chart that showed EURUSD, because the session, its
+watches and its title bar were all built from the blob's `symbol` and only a new replay changed
+it. **Now the replay follows the active pane** (`follow.ts`, `session.follow`): pick another
+instrument on the active pane and the replay walks that one, **at the same cursor, in the same
+session and the same paper account** -- the blob is written for the new instrument and the wall is
+rebuilt from it the way a reload rebuilds it (`bootReplay`, `mountBarReplay`), so the new
+instrument's market hours and stored intervals are resolved exactly as at a mount, and nothing
+else in the replay had to learn that an instrument can change. A replay still walks one
+instrument, and `canWatch` still refuses every other pane's watches; what changed is only which.
+
+**It follows only when nothing is open on the instrument it walks**: no open trade, no pending
+order, no armed price watch (the stop price included). Each of those is evaluated by the walk and
+by nothing else, so leaving one behind would leave a stop loss nothing could hit, an order nothing
+could fill, a line nothing could fire. Otherwise the replay keeps walking the old instrument and
+the controls show a notice between Next alert and the footer, in the watch line's orange:
+
+```
+The replay walks EURGBP, not EURUSD: EURGBP has 1 open trade and 1 armed price watch.
+Close or remove them to follow EURUSD, or exit the replay.          [Follow EURUSD] ×
+```
+
+What keeps it is read live, so closing the last trade turns the same notice into "Nothing is open
+on it any more" and enables **Follow EURUSD**. The follow is a button rather than automatic once the
+last trade closes: a stop loss hit mid-Play would otherwise rebuild the wall under the user. **×**
+keeps walking EURGBP and drops the notice; picking EURGBP again on the pane does the same.
+
+Which change is a request (`followRequest`): a symbol picked on the **active** pane, for an
+instrument other than the one walked. A wall that follows its active pane fans the pick out to
+the other panes, each reported in turn, and those are not requests; nor is activating a pane that
+already shows another instrument -- a replay wall can mix instruments, and a click on a pane is
+not a choice of what to walk. One more is made at a mount (`followOnMount`): a wall that comes
+back with **no** pane on the instrument walked -- Revert after a follow, a reload that let the
+unsaved draft go, a workspace switched mid-replay -- has moved its active pane off it as surely as
+a pick does, so the replay follows (or says why not) rather than walk an instrument nobody can
+see. It converges in one rebuild: the wall the follow rebuilds shows what it walks.
+
+Before anything is written the new instrument is resolved as a mount resolves it, and a reason
+not to follow is said in the same notice rather than met at the mount -- where it would have
+LEFT the replay, throwing the session away: no market hours for it ("No market hours for X"),
+nothing stored for it at the cursor, or nothing stored that fits the panes. The base is the one
+walked now when the new instrument stores it, it tiles the panes and no candle of it straddles the
+cursor on the new instrument's grid; otherwise the coarsest stored interval that does
+(`followBase`). Measured on prod at Mon 2023-10-16 06:00 New York: EURGBP and EURUSD hold
+5s/1m/1h/1D, XAU_USD and coinbase BTCUSD 1m/1h/1D only -- so a 5s replay of EURGBP followed to gold
+walks 1m. The straddle is the cross-schedule case: a 1D base followed from the FX week (17:00 New
+York) to a coinbase pair (midnight UTC) stands inside a coinbase day, so it walks 1h; the session
+keeps its cursor on a base boundary everywhere else (`onBaseBoundary`, `alertStop`), and a follow
+keeps it there by choosing the base, not by moving the cursor. The mount the follow rebuilds into
+takes the follow's own probe of the store rather than asking again (the same instrument at the same
+instant, a moment later): those four one-bar reads took 93-294 ms against prod from here.
+
+**What the account keeps of the instrument left** (`movedState`):
+- **its closed trades and their P&L** -- the session's history; Results scores them with the rest.
+  The balance adds each instrument's P&L in its own quote currency, as paper trading's does;
+- **its last quote**, frozen at the cursor it was left at. It marks nothing (nothing is open on it)
+  and prices nothing: the session now refuses an order on any instrument but the one it walks
+  ("This replay walks EURUSD only") -- the engine's "no price yet" used to be what refused those.
+
+What it drops: the instrument left's price watches (none armed by then; fired or switched off,
+nothing could evaluate them again), and a quote of the instrument followed kept from an earlier
+walk of it -- the price of then, not of now -- so the new wall quotes it at the cursor
+(`primeQuote`).
+
+**The races** a follow has to survive (the first three pinned by `follow.test.ts`, the last two
+by `mount.test.ts`):
+- **An advance in flight** lands first (Play stops: no advance starts while a follow is being made,
+  nor any order), and what it left open is looked at again before anything is written.
+- **A newer pick** while one is being made is taken up by the same attempt -- one at a time,
+  always for the newest -- and only its blob is written.
+- **Withdrawn while the blob is being written** (the pane picked back, or ×): the walked
+  instrument's blob is written back over it, and the session saves as before.
+- **Nothing saves over the moved blob**: once it is queued the old session writes nothing more,
+  and a stale-rev save (`409`, another tab) now resyncs and writes again at once rather than
+  waiting for a next change a follow never has.
+- **Exit while a save is in flight** (a follow's, or the last step's): a save landing after Exit
+  no longer writes back the replay intent Exit cleared, which put the next rebuild or reload back
+  into the replay just left.
+
+A `?symbol=` link opens a scratch wall built from the link alone, so its rebuild would have put
+the pane back on the linked instrument under a replay walking another; the scratch wall now keeps
+its last layout in memory for the rebuild (still saving nothing; a reload starts from the link
+again, and the replay follows it back as any wall moved off its instrument). Entering and leaving
+replay on such a wall keeps its changes too, which it did not.
+
 ## The base timeframe
 
 The interval the engine walks. It must be a common denominator of every pane interval and
 stored for the instrument (`validateBase`); the default is the GCD of the intervals in use
 floored to the coarsest stored interval dividing it (`defaultBase`): 3m+5m → 1m, 1h+4h → 1h,
 15m+1h → 1m, 1D+1W → 1D.
+
+"Stored" is the probe's answer (`probeStoredIntervals`): of `STORED_LADDER`, the intervals the
+instrument's vendor stores according to `/capabilities` `baseIntervals` and that hold a bar near
+the cursor. Until 2026-10-29 the probe asked about the whole ladder, and `/getbars` answers an
+interval it folds as readily as one it stores -- so schwab's 1h, a fold of its 30m, was offered
+as a base, used as a rung of every 4h/1D forming candle and as a step of the refinement, each
+time answering from whichever fold its period landed in (the browser's keeps the 09:00-09:30
+pre-market half hour of a stored read, the server's drops it: prod SPY's 09:00 hour differed in
+open and volume on 15 of 15 days, and no other hour did). A schwab wall now walks 1m or 1D.
 
 ## Advancing
 
@@ -344,6 +457,57 @@ landing was done: 530, 181, 202, 341, 1,014, 532, 276 and 190 ms on `main`; 372,
 ~0.85 s for the 5m overlay on a cold read) and, after a jump short enough to append, the forming
 candle's read before the overlays'.
 
+**...and so are the overlays there, on the server** (2026-10-29). The server's `/mtf/graph` cache
+(wdashboard-server 0.56.1's read-ahead, 0.56.2's three spans) makes every read of a region it has
+built 6-13 ms, but the FIRST read of a region is the expensive one: it reads the signals of every
+graph root's run back from the window, often months, and walks them. A Next alert jumping weeks
+or months lands in such a region, and every overlay on the wall waited for it. Measured against
+prod data (a local server on `2e5cb73`, EURUSD 3m, 5m and 1h panes with the rank 85 overlay, roots
+1D 8h 4h 2h): a landing a week to two months on took **0.2-4.9 s** per overlay read, and 0.3-2.0 s
+until all three panes were drawn.
+
+The landing is known before the press (the look-ahead above), so it is warmed then:
+- The session tells the wall where a press would land (`ReplaySessionOptions.warmLanding`, the
+  same `alertStop` instant the press stops on), whenever the look-ahead has found it and no
+  advance is running -- a press that got there first reads it itself. The wall also asks again
+  when its panes change (`BarReplayController.sync`), for a pane mounted since.
+- `ReplayFeedHub.landingRange` says what each pane will hold there, by the rule the push follows
+  (`reloads`): the 500-bar window a reload loads, from at or before its first bar, or the pane's
+  bars to the landing's for a jump short enough to append.
+- `PluginHost.warmAhead` asks each source that offers it (`SourceSpec.warm`; the MTF overlays) for
+  the window it will read there under the landing's clock, and sends ONE read per store over the
+  union of its panes' windows, `asof` the landing and `limit` 1 -- the server builds and keeps the
+  whole window whatever the limit, so the body is one signal -- past the HTTP cache (`no-store`: a
+  revalidation would be answered with a 304 before anything was built). The answer is thrown
+  away, never filed: it lies past the chart's clock, and a store holding it would draw it early.
+  A store already warmed for that instant over as much sends nothing, so the ask after every
+  Step short of the landing costs nothing.
+- `LandingWarmer` (`landing.ts`) sends it once the wall is quiet -- no pane loading bars through
+  the replay's datafeed and no plugin read in flight, on two looks 50 ms apart (a reloaded pane's
+  bars arrive before its overlays ask, and in between the wall looks idle) -- or after 5 s
+  regardless. Not while an advance runs or once the cursor is at the landing; a later landing
+  drops one still waiting, and so does leaving the replay.
+
+The server keeps three spans per overlay configuration (`MAX_SPANS`), least recently used out
+first: a live chart, the region a replay stands in and the one it lands in next. A warm-up that
+fits in the server's 400-day entry span with the region last read (after a press, the one the
+replay stands in) is built as an extension of it and takes no span at all; a farther one takes the
+newest span and leaves the region the replay stands in second, so it never evicts that. A landing
+costs the server a span whether it is warmed or not -- the warm-up builds it sooner -- except one
+never pressed to (a Step past it, an alert edited), which one warm-up at a time keeps to one.
+Measured on one configuration read by a live chart and by a replay warming and then landing on
+three stops three weeks apart, a Step between each warm-up and its press: the live chart's reads
+stayed at 22-38 ms and the Steps at 18-97 ms (27-118 ms with no warm-ups), the presses 18-38 ms
+against 696-795 ms.
+
+Headless through these modules against the same server -- a real session, plugin host, MTF
+plugin and feed hub, the look-ahead stubbed to know the landing, six landings a week to two months
+on with the three panes reloaded there, each mode on a freshly started server: from the press
+until every overlay was covered, **253, 1,004, 2,359, 1,054, 704 and 2,007 ms cold; 52, 52, 103,
+102, 102 and 102 ms warmed** (the host's settle poll is 50 ms), the warm-up itself 0.2-2.1 s in
+the background before the press. What each store held after the landing was identical cold and
+warmed, row for row.
+
 **Future data is held in memory, a whole tile at a time** (2026-10-28; user: "bar replay should
 cache future data. the base timeframe should be pulled, so a whole tile from the current replay
 time to the end of the tile should be in memory. alerts should be cached into the future as well.
@@ -351,8 +515,13 @@ other timeframes should be cached as well to test price alerts").
 - **Bars** come through `TiledBarSource` (`tiled.ts`), one per page, for the walk, the skim, the
   quote probe and every pane's catch-up. The alert search and the Strategy Lab read through it too.
   - A read with bid and ask (`'all'`) loads a stored interval's whole tile and its `side=bidask`
-    half (the same rows, never fetched by the chart), joins them and holds them decoded:
-    `MAX_HELD_BARS`, least recently used out first.
+    half (the same rows, never fetched by the chart) and holds them decoded AS COLUMNS
+    (`MAX_HELD_BARS` rows, least recently used out first). A read builds `ReplayBar`s only for the
+    rows it returns (`barsBetween`, by binary search), and the columns are decoded one at a time
+    with the page handed a turn between (`decodeColumns`). The first cut (client-a117849) decoded
+    both halves whole and built every bar at once: 240-440 ms main-thread blocks per 5s week, a
+    Run to a price three weeks out held 1.8 s of long tasks on prod. Columnar, the same reads
+    decode in under a quarter of the time (a warm-up of four tiles 925 → 234 ms headless).
   - Loading one tile starts the next. After every advance the session warms the base and the
     skim's coarser intervals (1D, 1h, 1m over a 5s base) at the cursor (`warmAlerts` → `warm`).
   - Mid-only reads (`'core'`) take `barsFromTiles`, folding 3m or 4h out of a stored interval.
@@ -465,7 +634,8 @@ row about something that happened should not vanish when you leave; it is tagged
 rather than `watch` so it cannot be mistaken for an alert about the live market.
 
 A replay walks one instrument, so `canWatch` refuses any other pane's — a stored line nothing
-could ever evaluate is worse than a menu that says why.
+could ever evaluate is worse than a menu that says why. (A follow changes which instrument that
+is, never how many: the new wall's watches are the new instrument's.)
 
 ### Stopping at a price, quickly (2026-10-26)
 
@@ -540,7 +710,22 @@ the store's coarser candles are its finer ones aggregated (every hour and minute
 symbol-days agreed in all five fields), so the 45 forming 1h/4h/1D candles of a run of prod Go
 tos came out identical before and after. What the store holds is the walked instrument's probed
 ladder (`hub.setStored`), and for any other instrument on the wall a probe of its own at the
-cursor; with neither, the base alone, as before. And `BarCache.cover` now seeks when asked for a
+cursor; with neither, the base alone, as before.
+
+**Whether it is the same candle depends on the vendor**, measured on prod 2026-10-29 for each
+stored interval against its finer stored ones aggregated (every field, bid/ask included; the
+numbers are in `composeLadder`'s comment). **oanda** is exact: 1D against 1h on 1,003 session-days
+of seven instruments 2010-2026, against 1m and 5s too. **coinbase** is exact in price on its
+backfilled history; its volumes are rounded to whole units interval by interval, so a coarser rung
+is the *more* accurate volume (a BTC minute is ~2 BTC). **schwab** is not and cannot be: its daily
+is the exchange's official bar (auction close, consolidated volume 1.2-2.1x the minutes'), not an
+aggregate of anything stored. It stays the rung of a 1W/1M candle anyway, because the week is
+folded from those days (94 of 94 SPY weeks equal): composed from minutes instead, the forming week
+would end as a different bar from the one that replaces it, and show about a third less volume for
+every finished day than the 1D pane beside it. Its 1h is no rung at all now (see "The base
+timeframe"): simulated over 15 SPY sessions at every minute 10:00-16:00, 5,295 of 5,415 forming 1D
+candles built with it differed from the 1m base alone (volume, up to 0.85%), and all 5,415 where
+the hour came from the server's fold (open, low and high too); without it, none. And `BarCache.cover` now seeks when asked for a
 range past the end of its run: it used to extend from its own end, so after a jump of a day the
 5s cache read every bar of the gap -- about 11,000, a page after another -- for a candle that
 needed the last minute of it. Measured headless against prod (EURGBP, six panes 3m..1D, 5s base):
@@ -552,7 +737,9 @@ the push after a Go to "06:00 next trading day" took **30-109 ms** reading 400 1
 `sim_session` with `mode='replay'` via `PUT /sim/sessions/{id}/state` (optimistic `rev`); the
 blob holds cursor, engine state, base, advance setting, pause-on-fill and the replay's price
 watches. A blob written while Next signal existed also carries `starred` and `armed`; `restore`
-ignores them (not a version bump, which would have thrown those replays away). The alerts are
+ignores them (not a version bump, which would have thrown those replays away). Its `symbol` is
+the instrument walked NOW: a follow rewrites it (and `vendor`, and `base` when it had to change),
+while the server's own record of the session keeps the one it was created with. The alerts are
 not in the blob: they are the account's, and the replay only reads them. The intent (session id + cursor) lives in `sessionStorage` so it survives the wall
 rebuild entering/leaving replay needs.
 
@@ -575,19 +762,46 @@ the keys (kept from the chart, the repeat that must not cancel, a field's own ke
 presses, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
 Enter, its refusals and Random's range. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
 drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
-hub on a coinbase pane's own grid, and the refusal for a pane with no market hours.
+hub on a coinbase pane's own grid, the refusal for a pane with no market hours, and a forex day
+pane's reload window reaching the day forming since 17:00.
+`feed.test.ts` also holds `landingRange` to what the push really leaves (an append's range equal
+to the chart's after it, a reload predicted exactly where the push reloads) and counts the panes'
+bar loads; `landing.test.ts` pins when a warm-up is sent (two quiet looks, not while an advance
+runs nor once a press has landed there, a later landing or leaving dropping one waiting, the
+deadline).
 `timeframes.test.ts` pins `CandleGrid` against the wmarkettypes fixture for all three schedules,
 sweeps the FX grid against the old functions, and steps crypto through a weekend and equities
-across an overnight. `skim.test.ts` holds the skim to the walk's answer -- a real session and
+across an overnight. It runs in about 0.4 s: the next candle after a closed window is found by
+jumping to where the market reopens rather than stepping through it a candle at a time, which for
+5s was 34,560 steps across an FX weekend and took the fixture test past bun's 5 s limit under load.
+`e2e.test.ts` is the one test `bun test` skips: a whole wall over a real server and a real tile
+bucket (`REPLAY_E2E`, `REPLAY_E2E_TILES`; its header has the commands) -- a Step with nothing
+working seeks, a walk with resting orders skims and descends to the 5s bars for the fills, every
+bar the session reads comes out of the tiles, Next alert jumps, and the state persists. `skim.test.ts` holds the skim to the walk's answer -- a real session and
 real `ReplayWatches` over a synthetic week whose 1h and 1D candles are folded from its 1m bars:
 the same stopping minute as a brute-force walk at eleven levels, a sliver of the base bars read,
 a Step stopping there too, a run that never reaches its level taken back with the stop still
 armed, no skim with only the base stored, and a Stop heard (it fails with `neverWithin` made to
-skip, and with the descent removed). `goto.test.ts` pins Go to's day rule on all three schedules
+skip, and with the descent removed). `follow.test.ts` pins following the chart: the blockers and their wording, which pane change is
+a request, the base chosen (kept, replaced when not stored, finer across a straddle, none), the
+blob moved (same cursor and account, the old quote kept, a stale one of the target dropped) and
+read back by `restore`; then a real session -- followed with nothing open, the rebuild asked for
+once and nothing saved after; refused for an open trade, a pending order, an armed watch and an
+instrument that cannot be walked, each said and each followed once it is gone; an order on
+another instrument refused; and the three races above. `mount.test.ts` mounts `mountBarReplay`
+for real over a fake one-pane wall and a stubbed server (happy-dom, this file only): a pick on the
+active pane writes one blob walking the new instrument at the same cursor and asks for one
+rebuild, whose mount takes the follow's probe; an open trade writes nothing and shows the notice;
+a wall mounted with no pane on the instrument walked follows its active pane; a `409` still
+writes the blob; a save after Exit leaves the intent cleared. `controls.test.ts` renders the
+notice in each state. `goto.test.ts` pins Go to's day rule on all three schedules
 and across the DST change, and `onBaseBoundary`; `alerts.test.ts` pins the look-ahead (reused
 from a later cursor short of its hit, not past it; stale on an edit; a press waiting on it; a
 Stop's null never kept; one search at a time); `controls.test.ts` covers the Go to panel. `player.test.ts` pins the player alone (one loop however
-it is toggled, pause mid-step, an error ends it). happy-dom applies no stylesheet, so anything
+it is toggled, pause mid-step, an error ends it). `source.test.ts` pins the stored-ladder probe:
+a server that answers every interval (as prod folds schwab's 1h) still yields only what the vendor
+stores, an interval finer than the vendor's floor is never asked, and a server stating no
+`baseIntervals` is probed for the whole ladder as before. happy-dom applies no stylesheet, so anything
 that hinges on CSS (`[hidden]` against a `display: flex`, as the dialog's backdrop is) is checked
 in the browser, not here. `scripts/sync-engine-fixtures.sh` vendors the
 fixtures from wdashboard-server; `--check` (run by `fixtures.test.ts`) fails if they differ.

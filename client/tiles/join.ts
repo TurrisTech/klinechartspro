@@ -1,7 +1,7 @@
 import { getReadClock } from '../config'
 import { dayGeometryOf } from '../daygeometry'
 import { instrumentConfig } from '../instrumentconfig'
-import { knownThrough } from '../plugins/horizon'
+import { answerableTo, knownThrough } from '../plugins/horizon'
 import type { Page, Range } from '../plugins/types'
 import { gridFor } from '../replay/timeframes'
 
@@ -28,6 +28,18 @@ export interface Tiled<T> {
   coveredTo: number
 }
 
+/** Under a bar replay's read clock, how far one series can be read (`readHorizon`), on the
+ * clock `date` reads. */
+export interface ReadHorizon {
+  /** The date of the bar forming at the clock (`plugins/horizon.ts` `knownThrough`): the tiles
+   * stop here, because they hold that bar whole. */
+  at: number
+  /** Exclusive: nothing dated here or later can be answered at all (`answerableTo`) -- `at`
+   * itself when the bar forming at the clock opens exactly at it, the next bar's date when that
+   * one bar is all the server can still add. Unbounded when the schedule is unknown. */
+  answersTo: number
+}
+
 export interface TiledRead<T> {
   /** The window, wire clock, `to` exclusive. */
   range: Range
@@ -44,8 +56,9 @@ export interface TiledRead<T> {
   tiles: (range: Range, limit: number | null) => Promise<Tiled<T> | null>
   /** The API's answer for `range`, `limit` as `keep` means it. */
   api: (range: Range, limit: number | null) => Promise<Page<T>>
-  /** Under a bar replay, the date the tiles stop at (`readHorizon`); null live. */
-  horizon?: Promise<number | null> | number | null
+  /** Under a bar replay, where the tiles stop and where any answer at all does
+   * (`readHorizon`); null live. */
+  horizon?: Promise<ReadHorizon | null> | ReadHorizon | null
   /** Items no caller may be handed whichever half they came from (the bar labels that are not
    * a candle open), tested before `limit` is applied so a page still holds n of the rest. */
   admit?: Promise<((item: T) => boolean) | null>
@@ -63,9 +76,20 @@ export async function readTiled<T>(read: TiledRead<T>): Promise<Page<T>> {
   // that had, answers from there. The horizon is the host's own (`plugins/horizon.ts`): the
   // bar forming at the clock, a bar early inside a market-closed window -- which costs only that
   // the API serves one bar the tiles hold.
-  const coveredTo = tiled === null ? range.from : Math.min(tiled.coveredTo, horizon ?? Number.POSITIVE_INFINITY)
+  //
+  // ...and the API is asked no further than anything can be answered (`answersTo`). Past the
+  // bar forming at the clock nothing exists yet, and where that bar opened exactly at the clock
+  // it holds nothing either, so a read of that stretch is a round trip for an empty answer. The
+  // chart's widening sent one per attempt, in a row (`history.ts`): a pane reloaded after a Step
+  // was seen on prod making eleven `/getbars 5s` before it drew (2026-10-28), and a newer-in-time
+  // page from a Saturday cursor on prod's EURGBP 5s tiles makes four, every one `no_data`. That
+  // stretch is not asked for, and a window reaching past it asks only up to it -- which also
+  // makes every widening attempt's remainder the same request.
+  const coveredTo = tiled === null ? range.from : Math.min(tiled.coveredTo, horizon?.at ?? Number.POSITIVE_INFINITY)
+  const end = Math.min(range.to, horizon?.answersTo ?? Number.POSITIVE_INFINITY)
   if (tiled === null || coveredTo <= range.from) {
-    const page = await read.api(range, limit)
+    if (end <= range.from) return { points: [], nextFrom: null }
+    const page = await read.api({ from: range.from, to: end }, limit)
     return { ...page, points: pick(page.points) }
   }
   const items = coveredTo < tiled.coveredTo ? tiled.items.filter((item) => date(item) < coveredTo) : tiled.items
@@ -77,8 +101,8 @@ export async function readTiled<T>(read: TiledRead<T>): Promise<Page<T>> {
     if (page.length >= limit) return { points: page, nextFrom: date(page[page.length - 1]) + 1 }
     ask = limit - page.length
   }
-  if (coveredTo >= range.to) return { points: pick(items), nextFrom: null }
-  const rest = await read.api({ from: coveredTo, to: range.to }, ask)
+  if (coveredTo >= end) return { points: pick(items), nextFrom: null }
+  const rest = await read.api({ from: coveredTo, to: end }, ask)
   return { ...rest, points: pick(items.concat(rest.points)) }
 }
 
@@ -100,14 +124,16 @@ function select<T>(items: T[], keep: 'first' | 'last', limit: number | null, adm
   return kept.reverse()
 }
 
-/** Under a bar replay's read clock, where the tiles of `resolution` on `vendorSymbol` stop: the
- * WIRE date of the bar forming at the clock, on the instrument's own grid. Null live -- without
- * waiting on anything, so a live read is never held up by a schedule lookup. */
-export function readHorizon(vendorSymbol: string, resolution: string): Promise<number> | null {
+/** Under a bar replay's read clock, how far `resolution` on `vendorSymbol` can be read: where its
+ * tiles stop (the WIRE date of the bar forming at the clock) and where any answer does, on the
+ * instrument's own grid. Null live -- without waiting on anything, so a live read is never held
+ * up by a schedule lookup. */
+export function readHorizon(vendorSymbol: string, resolution: string): Promise<ReadHorizon> | null {
   const clock = getReadClock()
   if (clock === null) return null
   return instrumentConfig(vendorSymbol).then((config) => {
     const hours = config?.marketHours
-    return knownThrough(resolution, clock, gridFor({ timezone: hours?.timezone, dayGeometry: dayGeometryOf(hours) ?? undefined }))
+    const grid = gridFor({ timezone: hours?.timezone, dayGeometry: dayGeometryOf(hours) ?? undefined })
+    return { at: knownThrough(resolution, clock, grid), answersTo: answerableTo(resolution, clock, grid) }
   })
 }

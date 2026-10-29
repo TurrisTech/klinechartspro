@@ -1,8 +1,7 @@
-import type { ChartProPane, Datafeed, KLineChartPro } from '../../src'
+import type { ChartProPane, Datafeed, KLineChartPro, SymbolInfo } from '../../src'
 import { capabilities, hasFeature } from '../capabilities'
-import { apiGet, OhlcvApiError, setReadClock } from '../config'
+import { OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
-import { isNoData, type OHLCVBar } from '../ohlcv'
 import type { PluginHost } from '../plugins/host'
 import { periodToResolution } from '../periods'
 import { fetchSymbolInfo, symbolVendor } from '../symbols'
@@ -17,11 +16,14 @@ import { createReplayControls, openStartDialog } from './controls'
 import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
+import { LandingWarmer } from './landing'
+import { type FollowSources, followOnMount, followRequest, followTarget } from './follow'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
+import { probeStoredIntervals } from './source'
 import { TiledBarSource } from './tiled'
 import { ReplayWatches } from './watches'
-import { type CandleGrid, gridOf, nominalMs, scheduleOf, STORED_LADDER, sortByLength } from './timeframes'
+import { type CandleGrid, gridOf, scheduleOf, sortByLength } from './timeframes'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
 // session bound to the shared trading dock, the floating control window over the chart, and
@@ -46,6 +48,11 @@ export interface BarReplayController {
   watches: ReplayWatches
   /** The instrument's bid/ask at the cursor -- the replay's own market, so no fetch. */
   quote(key: string): Promise<SimQuote | undefined>
+  /** A pane's instrument changed (client/index.ts `onSymbolChange`). The active pane moved to
+   * another instrument is followed -- the same session, account and cursor, the wall rebuilt on
+   * it -- when nothing is left open on the instrument walked; otherwise the controls say why not
+   * and what to do (follow.ts). */
+  symbolChanged(paneId: string, symbol: SymbolInfo): void
   teardown(): void
 }
 
@@ -123,35 +130,16 @@ export function clearReplay(): void {
 /** The longest Play waits for the wall to load between two steps. */
 const PLAY_SETTLE_MS = 5_000
 
-/** How far back the stored-ladder probe looks: a store's finest series may lag the newest
- * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
-const PROBE_WINDOW_MS = 10 * 86_400_000
-
-/** Probe which of the stored ladder the store holds for the instrument around `at`. */
-async function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promise<string[]> {
-  // All at once, not one after another: they are independent one-bar reads, and the user is
-  // waiting on the last of them (the start dialog, or the replay wall's mount).
-  const held = await Promise.all(
-    STORED_LADDER.map(async (code) => {
-      try {
-        const shift = grid.toWire(code, at) - at
-        const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
-          symbol,
-          resolution: code,
-          from: at - Math.max(PROBE_WINDOW_MS, 30 * nominalMs(code)) + shift,
-          to: at + shift,
-          limit: 1,
-          asof: null
-        })
-        return Array.isArray(body) && body.length > 0 && !isNoData(body)
-      } catch (err) {
-        if (!(err instanceof OhlcvApiError)) throw err
-        return false
-      }
-    })
-  )
-  return STORED_LADDER.filter((_, i) => held[i])
+/** Which of the stored ladder the store holds for the instrument around `at` -- of the intervals
+ * its vendor stores, never one the server would only fold (`probeStoredIntervals`). */
+function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promise<string[]> {
+  return probeStoredIntervals(symbol, at, grid)
 }
+
+/** What a follow found the store holds of the instrument it moved to, at the cursor: the mount it
+ * rebuilds the wall into asks the same question at the same instant a moment later, and takes
+ * this answer instead (once). Only a follow writes it, so a retry after a refusal probes afresh. */
+let followProbe: { symbol: string; at: number; held: string[] } | null = null
 
 /** Open the start dialog on a live wall and, on confirm, create the replay session and
  * rebuild the wall in replay mode. Resolves once the dialog is open (or refused); a refusal
@@ -276,7 +264,9 @@ export async function mountBarReplay(
     return null
   }
   const grid = gridOf(schedule)
-  const storedIntervals = await storedIntervalsFor(stored.symbol, stored.cursor, grid)
+  const probed = followProbe?.symbol === stored.symbol && followProbe.at === stored.cursor ? followProbe.held : null
+  followProbe = null
+  const storedIntervals = probed ?? (await storedIntervalsFor(stored.symbol, stored.cursor, grid))
   const latest = capabilities().serverTime || Date.now()
   const hub = boot.hub
   hub.setBase(stored.base)
@@ -295,6 +285,15 @@ export async function mountBarReplay(
   // A fresh look-ahead per replay: the search caches what it read, and near the end of the data
   // a server value written since an earlier replay on this page would otherwise read as missing.
   ctx.alerts?.search.reset()
+  // Where the next press will land, warmed on the server before it (landing.ts): every pane's
+  // overlay reads there, over the bars the push will leave it holding, once the wall is quiet.
+  const landings = new LandingWarmer({
+    settled: (timeoutMs) => ctx.pluginHost.settled(timeoutMs),
+    loadsInFlight: () => hub.loadsInFlight,
+    busy: () => session.busy,
+    cursor: () => session.cursor,
+    warm: (at) => ctx.pluginHost.warmAhead(at, (pane) => hub.landingRange(pane, at))
+  })
   const session = new ReplayTradingSession({
     id: answer.session.id,
     name: answer.session.name,
@@ -311,6 +310,7 @@ export async function mountBarReplay(
     engine: Engine.fromState(stored.engine),
     observer: watches,
     alerts: ctx.alerts ? new ReplayAlerts(() => ctx.alerts?.enabled() ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
+    warmLanding: (at) => void landings.warm(at),
     barSource: replayBars,
     dataEnd: () => latest,
     save: async (state) => {
@@ -318,16 +318,20 @@ export async function mountBarReplay(
         const saved = await simApi.putState(answer.session.id, rev, state)
         rev = saved.session.rev
       } catch (err) {
-        if (err instanceof OhlcvApiError && err.status === 409) {
-          // Another tab saved: take its rev and save again on the next change.
-          const fresh = await simApi.get(answer.session.id)
-          rev = fresh.session.rev
-          console.warn(`${REPLAY_LOG} stale rev; resynced to ${rev}`)
-          return
-        }
-        throw err
+        if (!(err instanceof OhlcvApiError && err.status === 409)) throw err
+        // Another tab saved: take its rev and write this state over it. Until a replay could
+        // follow the chart this waited for the next change instead, which dropped THIS state --
+        // harmless for a cursor the next step rewrites, not for the blob a follow rebuilds the
+        // wall from, which has no next change.
+        const fresh = await simApi.get(answer.session.id)
+        rev = fresh.session.rev
+        console.warn(`${REPLAY_LOG} stale rev; resynced to ${rev}`)
+        rev = (await simApi.putState(answer.session.id, rev, state)).session.rev
       }
-      writeIntent(safeStorage(), { sessionId: answer.session.id, cursor: state.cursor })
+      // Only while the page is still in THIS replay: a save that lands after Exit -- a follow's,
+      // or one queued by the last step -- must not write back the intent Exit cleared, which would
+      // put the next rebuild or reload back into a replay the user left.
+      if (readIntent(safeStorage())?.sessionId === answer.session.id) writeIntent(safeStorage(), { sessionId: answer.session.id, cursor: state.cursor })
     },
     onAdvanced: async (result: AdvanceResult) => {
       // The one place the clock moves for the chart: every read from here on is clamped
@@ -353,7 +357,11 @@ export async function mountBarReplay(
       // A pane that was reloaded at the new cursor (a long jump) has a new oldest bar, which
       // is what every watch line is anchored to; re-emitting redraws them against it.
       watches.refresh()
-    }
+    },
+    // The blob now walks the instrument followed, at the same cursor (the save wrote the intent):
+    // the wall is rebuilt from it exactly as a reload builds it, which is what resolves that
+    // instrument's market hours and stored intervals, its base cache and its watches.
+    onFollowed: () => ctx.rebuild()
   })
   session.setIntervalsInUse(intervalsInUse())
   watches.attach(session)
@@ -428,6 +436,27 @@ export async function mountBarReplay(
   // however far away or rolled up the controls are (client/style.css `.wd-replay-wall`).
   container.classList.add(REPLAY_WALL_CLASS)
 
+  // FOLLOWING THE CHART (follow.ts). What a follow reads to know it can walk the instrument the
+  // active pane moved to: the two reads this mount made for the one it walks.
+  const followSources: FollowSources = {
+    schedule: (symbol) => replayScheduleFor(chartPro, symbol),
+    stored: async (symbol, at, onGrid) => {
+      const held = await storedIntervalsFor(symbol, at, onGrid)
+      followProbe = { symbol, at, held }
+      return held
+    },
+    intervalsInUse
+  }
+  const followPane = (info: SymbolInfo): void => {
+    void session.follow(followTarget({ symbol: symbolKey(info), vendor: symbolVendor(info), ticker: info.ticker }, followSources))
+  }
+  // A wall that came back with no pane on the instrument walked (Revert, a reload, a workspace
+  // switch) has moved off it: the replay follows its active pane, or says why it cannot. Read from
+  // the snapshots, which list every visible pane whether or not its chart has mounted yet.
+  const shown = chartPro.getPaneSnapshots()
+  const activeInfo = (shown.find((p) => p.id === chartPro.getActivePaneId()) ?? shown[0])?.symbol
+  if (activeInfo && followOnMount(shown.map((p) => symbolKey(p.symbol)), symbolKey(activeInfo), session.symbol)) followPane(activeInfo)
+
   return {
     watches,
     sync(panes: ChartProPane[]): void {
@@ -435,10 +464,19 @@ export async function mountBarReplay(
       const check = session.setIntervalsInUse(panes.map((p) => periodToResolution(p.getPeriod())))
       if (!check.ok) console.warn(`${REPLAY_LOG} base ${session.base} no longer fits the wall: ${check.reason}`)
       controls.refresh()
+      // A pane mounted since the last advance reads at the next landing too: warm it (what is
+      // warmed already is not sent again).
+      session.warmAlerts()
     },
     quote: async (key: string) => session.snapshot.quotes[key],
+    symbolChanged(paneId: string, info: SymbolInfo): void {
+      const request = followRequest(paneId, chartPro.getActivePaneId(), symbolKey(info), session.symbol)
+      if (request === 'back') session.dismissFollow()
+      else if (request === 'follow') followPane(info)
+    },
     teardown(): void {
       unsubscribeAlerts()
+      landings.dispose()
       container.classList.remove(REPLAY_WALL_CLASS)
       controls.dispose()
       dock.teardown()

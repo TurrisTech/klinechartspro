@@ -12,7 +12,7 @@
 // answers from there (`tiles/join.ts`); until 2026-10-11 a replay gave the tiles up outright.
 
 import type { Page, Range } from '../plugins/types'
-import { readTiled, type Tiled } from '../tiles/join'
+import { type ReadHorizon, readTiled, type Tiled } from '../tiles/join'
 import { manifestFor, readSeries, type TileHint } from './index'
 import { POINT_BUILDERS } from './points'
 
@@ -30,7 +30,7 @@ export function resetTileHints(): void {
 export function tieredFetch<P extends { date: number }>(
   key: string,
   server: Fetch<P>,
-  horizon: () => Promise<number> | number | null = () => null
+  horizon: () => Promise<ReadHorizon> | ReadHorizon | null = () => null
 ): Fetch<P> {
   return (range, limit) =>
     readTiled<P>({
