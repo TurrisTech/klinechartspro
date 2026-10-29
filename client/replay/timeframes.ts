@@ -507,21 +507,30 @@ export function isMarketOpen(ms: number, tz: string = MARKET_TZ): boolean {
   return true
 }
 
-function previousIntradayStart(code: string, start: number, tz: string): number {
-  return intervalStart(code, start - 1, tz)
+function previousIntradayStart(code: string, start: number, tz: string, day: DayGeometry): number {
+  return scheduleIntervalStart(code, start - 1, tz, day)
 }
 
-function nextIntradayStart(code: string, start: number, tz: string): number {
+/** The next open on `day`'s OWN intraday grid after the open `start`, closed window or not.
+ *
+ * The grid is the schedule's: until 2026-10-29 this floored on the FX week's (17:00-anchored)
+ * `intervalStart` whatever schedule was being walked. That is the same grid for every hourly
+ * length dividing 8 (17 and 9 are 8 apart), so 2h/4h/8h on New York equities were right -- they
+ * are what `fixtures/boundaries.json` pins -- but 3h and 6h stepped onto the FX grid (from 09:00
+ * the next 3h open came out 11:00, wmarkettypes says 12:00) and 12h never stepped onto the equity
+ * session at all (the FX grid's 05:00 and 17:00 both fall in its overnight), so the walk in
+ * `scheduleNextIntervalStart` never returned. */
+function nextIntradayStart(code: string, start: number, tz: string, day: DayGeometry = FX_DAY): number {
   const delta = nominalMs(code)
   const stepped = start + delta
-  let candidate = intervalStart(code, stepped, tz)
+  let candidate = scheduleIntervalStart(code, stepped, tz, day)
   if (candidate === stepped) return candidate
-  if (candidate <= start) candidate = intervalStart(code, fromWall(toWall(start, tz) + delta, tz), tz)
+  if (candidate <= start) candidate = scheduleIntervalStart(code, fromWall(toWall(start, tz) + delta, tz), tz, day)
   if (candidate <= start) throw new Error(`no ${code} candle opens after ${start}`)
-  let previous = previousIntradayStart(code, candidate, tz)
+  let previous = previousIntradayStart(code, candidate, tz, day)
   while (previous > start) {
     candidate = previous
-    previous = previousIntradayStart(code, previous, tz)
+    previous = previousIntradayStart(code, previous, tz, day)
   }
   return candidate
 }
@@ -556,7 +565,7 @@ export function nextIntervalStart(code: string, ms: number, tz: string = MARKET_
     return fromWall(shiftStart(iv, toWall(start, tz), 1), tz)
   }
   for (;;) {
-    start = nextIntradayStart(code, start, tz)
+    start = nextIntradayStart(code, start, tz, FX_DAY)
     if (isMarketOpen(start, tz)) return start
     start = lastStartBeforeReopening(code, start, tz, FX_DAY)
   }
@@ -571,7 +580,7 @@ export function nextIntervalStart(code: string, ms: number, tz: string = MARKET_
  * them that outran bun's five-second limit under load. Nothing can open in between, so skipping
  * it changes no answer; the grid is still walked the same way on either side, across DST. */
 function lastStartBeforeReopening(code: string, shut: number, tz: string, day: DayGeometry): number {
-  const resume = intervalStart(code, fromWall(reopening(toWall(shut, tz), day), tz) - 1, tz)
+  const resume = scheduleIntervalStart(code, fromWall(reopening(toWall(shut, tz), day), tz) - 1, tz, day)
   return resume > shut ? resume : shut
 }
 
@@ -800,7 +809,19 @@ export function scheduleIntervalEnd(code: string, ms: number, tz: string, day: D
   return fromWall(dayClose(lastDay, day), tz)
 }
 
-/** `nextIntervalStart` under `day`. */
+/** How far past its starting candle `scheduleNextIntervalStart` looks for the next open before it
+ * gives up: longer than any closed window a weekday market has (the FX weekend is two days, an
+ * equity one under three), so only a schedule the walk cannot meet at all reaches it. */
+const NEXT_START_SEARCH_MS = 8 * DAY
+
+/** `nextIntervalStart` under `day`.
+ *
+ * The walk always ends: it steps `day`'s own grid, every intraday grid opens at the day's anchor
+ * (`scheduleIntervalStart` counts from it), and the anchor is the day's open -- so the first
+ * weekday session after any instant holds an open. The search is bounded all the same, and
+ * throws past `NEXT_START_SEARCH_MS`, as `nextIntradayStart` does on a grid that will not step:
+ * an unbounded `for (;;)` here hung a tab for good (12h on NY equities, before the walk used
+ * the schedule's own grid), where an error is reported and the caller carries on. */
 export function scheduleNextIntervalStart(code: string, ms: number, tz: string, day: DayGeometry): number {
   if (day.everyDayTrades) return scheduleIntervalEnd(code, ms, tz, day)
   const iv = parseInterval(code)
@@ -809,11 +830,12 @@ export function scheduleNextIntervalStart(code: string, ms: number, tz: string, 
     return fromWall(unitStepFor(iv, sessionDateFor(toWall(start, tz), day), 1, day), tz)
   }
   let cursor = start
-  for (;;) {
-    cursor = nextIntradayStart(code, cursor, tz)
+  while (cursor - start <= NEXT_START_SEARCH_MS) {
+    cursor = nextIntradayStart(code, cursor, tz, day)
     if (scheduleIsMarketOpen(cursor, tz, day)) return cursor
     cursor = lastStartBeforeReopening(code, cursor, tz, day)
   }
+  throw new Error(`no ${code} candle opens within ${NEXT_START_SEARCH_MS / DAY} days of ${new Date(start).toISOString()} on ${tz} (${day.openOffset}, ${day.closeOffset})`)
 }
 
 /** `isMarketOpen` under `day` -- the BOUNDARY notion, which is not the schedule's own: an

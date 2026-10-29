@@ -199,6 +199,34 @@ describe('an instrument\'s grid', () => {
     expect(equities.toWire('1D', ny('2024-03-04 09:00'))).toBe(ny('2024-03-04 00:00'))
   })
 
+  test('an hourly grid that is not the FX grid steps on its own anchor, and 12h ends', () => {
+    // wmarkettypes `Interval(code).get_next_interval_start(t, market_hours=MARKET_HOURS_EQUITY_US)`,
+    // run 2026-10-29 at each of these New York instants. 2h/4h/8h are the fixture's; 3h, 6h and
+    // 12h are not, and they are the lengths on which the equity grid (from 09:00) and the FX grid
+    // (from 17:00) part: the walk stepped the FX one, so 3h and 6h came out on the wrong hours and
+    // 12h -- whose FX opens, 05:00 and 17:00, both lie in the equity overnight -- never returned.
+    const expected: Record<string, string[]> = {
+      '3h': ['2024-03-04 12:00', '2024-03-04 12:00', '2024-03-04 15:00', '2024-03-05 09:00', '2024-03-11 09:00'],
+      '6h': ['2024-03-04 15:00', '2024-03-04 15:00', '2024-03-04 15:00', '2024-03-05 09:00', '2024-03-11 09:00'],
+      '12h': ['2024-03-05 09:00', '2024-03-05 09:00', '2024-03-05 09:00', '2024-03-05 09:00', '2024-03-11 09:00']
+    }
+    const at = ['2024-03-04 09:00', '2024-03-04 10:00', '2024-03-04 12:00', '2024-03-04 15:00', '2024-03-08 15:00']
+    for (const [code, next] of Object.entries(expected)) {
+      expect(at.map((t) => equities.nextStart(code, ny(t)))).toEqual(next.map(ny))
+    }
+    // And the forms built on it: a 12h step from Monday's 21:00 close closes Tuesday's 09:00 candle.
+    expect(equities.advanceTarget('12h', ny('2024-03-04 21:00'), 1)).toBe(ny('2024-03-05 21:00'))
+    // The FX week's own 12h grid is unchanged: 05:00 and 17:00.
+    expect(scheduleNextIntervalStart('12h', ny('2024-03-04 06:00'), TZ, FX_DAY)).toBe(ny('2024-03-04 17:00'))
+  })
+
+  test('a schedule the grid can never open on throws rather than hang', () => {
+    // A day whose open IS its close (no `dayGeometryOf` answer looks like this) is never
+    // boundary-open, so no candle can open on it. The search gives up after eight days.
+    const shut = { openOffset: 9, closeOffset: 9, everyDayTrades: false }
+    expect(() => scheduleNextIntervalStart('1h', ny('2024-03-04 12:00'), TZ, shut)).toThrow(/no 1h candle opens within 8 days/)
+  })
+
   test('the schedule comes off the SymbolInfo, and none is none -- never a guess', () => {
     expect(scheduleOf({ timezone: 'America/New_York', dayGeometry: FX_DAY })).toEqual(FX_SCHEDULE)
     expect(scheduleOf({ timezone: 'UTC' })).toBeNull()

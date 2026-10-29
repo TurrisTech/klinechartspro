@@ -262,6 +262,14 @@ forming bar composed from the 1h base equals the server's `asof` rebuild in all 
 step; EURUSD steps and labels exactly as before (pinned by `timeframes.test.ts`, which sweeps the
 FX grid against the old functions).
 
+**Intraday steps walk the schedule's own grid** (2026-10-29). `scheduleNextIntervalStart` used to
+step the FX week's 17:00-anchored grid whatever the schedule, which is the same grid for 2h/4h/8h
+on New York equities (17 and 9 are 8 apart) but not for 3h or 6h -- from 09:00 the next 3h open came
+out 11:00, wmarkettypes says 12:00 -- and 12h, whose FX opens (05:00, 17:00) both fall in the
+equity overnight, never returned at all. On its own grid every intraday length opens at the day's
+anchor, so the walk always ends; it is bounded anyway (eight days), and throws past it rather than
+hang a tab.
+
 ## Following the chart to another instrument
 
 The user, 2026-10-29: a replay of EURGBP, the pane switched to EURUSD, and nothing followed --
