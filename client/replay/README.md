@@ -12,7 +12,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 
 | module | role |
 |---|---|
-| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
+| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`, `storedLadderFor`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
 | `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`; Go to's `goToInstant` (a time of day on the instrument's clock: next trading day, next occurrence, a date), `isTradingDay` and `onBaseBoundary`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run; `cover` past the run's end is a seek too. `composeLadder`/`composeSpans` (which stored bars a forming candle is made of), `composeForming`, `nonWeekendGaps`. |
@@ -24,7 +24,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
 | — glue — | |
-| `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. |
+| `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. `probeStoredIntervals`: which of the stored ladder an instrument holds -- one bar per interval its vendor stores (`storedLadderFor` against `/capabilities` `baseIntervals`), never one the server would only fold. |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
@@ -251,6 +251,15 @@ The interval the engine walks. It must be a common denominator of every pane int
 stored for the instrument (`validateBase`); the default is the GCD of the intervals in use
 floored to the coarsest stored interval dividing it (`defaultBase`): 3m+5m → 1m, 1h+4h → 1h,
 15m+1h → 1m, 1D+1W → 1D.
+
+"Stored" is the probe's answer (`probeStoredIntervals`): of `STORED_LADDER`, the intervals the
+instrument's vendor stores according to `/capabilities` `baseIntervals` and that hold a bar near
+the cursor. Until 2026-10-29 the probe asked about the whole ladder, and `/getbars` answers an
+interval it folds as readily as one it stores -- so schwab's 1h, a fold of its 30m, was offered
+as a base, used as a rung of every 4h/1D forming candle and as a step of the refinement, each
+time answering from whichever fold its period landed in (the browser's keeps the 09:00-09:30
+pre-market half hour of a stored read, the server's drops it: prod SPY's 09:00 hour differed in
+open and volume on 15 of 15 days, and no other hour did). A schwab wall now walks 1m or 1D.
 
 ## Advancing
 
@@ -540,7 +549,22 @@ the store's coarser candles are its finer ones aggregated (every hour and minute
 symbol-days agreed in all five fields), so the 45 forming 1h/4h/1D candles of a run of prod Go
 tos came out identical before and after. What the store holds is the walked instrument's probed
 ladder (`hub.setStored`), and for any other instrument on the wall a probe of its own at the
-cursor; with neither, the base alone, as before. And `BarCache.cover` now seeks when asked for a
+cursor; with neither, the base alone, as before.
+
+**Whether it is the same candle depends on the vendor**, measured on prod 2026-10-29 for each
+stored interval against its finer stored ones aggregated (every field, bid/ask included; the
+numbers are in `composeLadder`'s comment). **oanda** is exact: 1D against 1h on 1,003 session-days
+of seven instruments 2010-2026, against 1m and 5s too. **coinbase** is exact in price on its
+backfilled history; its volumes are rounded to whole units interval by interval, so a coarser rung
+is the *more* accurate volume (a BTC minute is ~2 BTC). **schwab** is not and cannot be: its daily
+is the exchange's official bar (auction close, consolidated volume 1.2-2.1x the minutes'), not an
+aggregate of anything stored. It stays the rung of a 1W/1M candle anyway, because the week is
+folded from those days (94 of 94 SPY weeks equal): composed from minutes instead, the forming week
+would end as a different bar from the one that replaces it, and show about a third less volume for
+every finished day than the 1D pane beside it. Its 1h is no rung at all now (see "The base
+timeframe"): simulated over 15 SPY sessions at every minute 10:00-16:00, 5,295 of 5,415 forming 1D
+candles built with it differed from the 1m base alone (volume, up to 0.85%), and all 5,415 where
+the hour came from the server's fold (open, low and high too); without it, none. And `BarCache.cover` now seeks when asked for a
 range past the end of its run: it used to extend from its own end, so after a jump of a day the
 5s cache read every bar of the gap -- about 11,000, a page after another -- for a candle that
 needed the last minute of it. Measured headless against prod (EURGBP, six panes 3m..1D, 5s base):
@@ -587,7 +611,10 @@ skip, and with the descent removed). `goto.test.ts` pins Go to's day rule on all
 and across the DST change, and `onBaseBoundary`; `alerts.test.ts` pins the look-ahead (reused
 from a later cursor short of its hit, not past it; stale on an edit; a press waiting on it; a
 Stop's null never kept; one search at a time); `controls.test.ts` covers the Go to panel. `player.test.ts` pins the player alone (one loop however
-it is toggled, pause mid-step, an error ends it). happy-dom applies no stylesheet, so anything
+it is toggled, pause mid-step, an error ends it). `source.test.ts` pins the stored-ladder probe:
+a server that answers every interval (as prod folds schwab's 1h) still yields only what the vendor
+stores, an interval finer than the vendor's floor is never asked, and a server stating no
+`baseIntervals` is probed for the whole ladder as before. happy-dom applies no stylesheet, so anything
 that hinges on CSS (`[hidden]` against a `display: flex`, as the dialog's backdrop is) is checked
 in the browser, not here. `scripts/sync-engine-fixtures.sh` vendors the
 fixtures from wdashboard-server; `--check` (run by `fixtures.test.ts`) fails if they differ.

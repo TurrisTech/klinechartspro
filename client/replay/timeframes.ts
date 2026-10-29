@@ -141,6 +141,26 @@ export const CANDIDATE_LADDER: readonly string[] = [
  * it -- callers pass the instrument's own list). */
 export const STORED_LADDER: readonly string[] = ['5s', '1m', '1h', '1D']
 
+/** The part of the stored ladder an instrument of one vendor can hold: `STORED_LADDER` cut to
+ * the intervals the server says that vendor stores (`/capabilities` `baseIntervals`), or all of
+ * it where the server states nothing (an older server: probe everything, as before).
+ *
+ * The cut is what keeps "stored" meaning stored. `/getbars` answers an interval the vendor does
+ * not hold as readily as one it does -- it folds it -- so a probe that only asks "is there a
+ * bar?" counted schwab's 1h as stored, though schwab stores 1m, 30m and 1D and every 1h bar is
+ * a fold of 30m. Two folds that disagree, as it happens: the browser's (client/tiles/derive.ts)
+ * keeps the 09:00-09:30 pre-market half hour a stored read carries, the server's drops it
+ * (prod SPY 2026-10-05..23: the 09:00 hour differed in open and volume on 15 of 15 days, in its
+ * high or low on 9, and no other hour differed at all). Taken for stored, it became a replay
+ * base (`validateBase` requires a stored one), a rung of every 4h/1D forming candle
+ * (`composeLadder`) and a step of the fill engine's refinement (`finerStored`), each answering
+ * from whichever fold its period landed in.
+ * The cut also spares the probe the reads the server can only refuse: 5s for schwab and
+ * coinbase is a 500. */
+export function storedLadderFor(advertised: readonly string[] | null): string[] {
+  return advertised === null ? [...STORED_LADDER] : STORED_LADDER.filter((code) => advertised.includes(code))
+}
+
 /** The greatest common divisor of a set of intervals: the coarsest interval that tiles every
  * one of them. Intraday sets reduce exactly (3m + 5m -> 1m, 15m + 1h -> 15m); a set with a
  * calendar interval picks the coarsest ladder entry dividing all (1D + 1W -> 1D, 4h + 1D ->

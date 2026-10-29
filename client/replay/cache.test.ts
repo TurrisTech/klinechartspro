@@ -190,6 +190,13 @@ describe('composeLadder', () => {
     // A 2m base does not tile 5m: nothing between 2m and 1h is used but what 2m tiles.
     expect(composeLadder('1h', '2m', ['2m', '5m', '10m'])).toEqual(['10m', '2m'])
   })
+  test("schwab, stored as the probe now reports it (1m, 1D -- its 1h is a fold): days from minutes, weeks from days", () => {
+    const schwab = ['1m', '1D']
+    expect(composeLadder('1D', '1m', schwab)).toEqual(['1m'])
+    expect(composeLadder('4h', '1m', schwab)).toEqual(['1m'])
+    expect(composeLadder('1W', '1m', schwab)).toEqual(['1D', '1m'])
+    expect(composeLadder('1M', '1m', schwab)).toEqual(['1D', '1m'])
+  })
 })
 
 describe('composeSpans', () => {
