@@ -115,3 +115,19 @@ test('autoPathInterval', () => {
   expect(autoPathInterval([])).toBeNull()
   expect(nominalMs('1m')).toBe(60_000)
 })
+
+test("autoPathInterval walks only what the instrument's vendor stores", () => {
+  // /capabilities baseIntervals on prod, 2026-10-29.
+  const SCHWAB = ['1m', '30m', '1D']
+  const OANDA = ['5s', '1m', '1h', '1D', '1M']
+  // Schwab's 1h is a server fold of its 30m, and 5s is a 500: neither is a path.
+  expect(autoPathInterval(['1h', '4h'], SCHWAB)).toBe('30m')
+  expect(autoPathInterval(['3m', '5m'], SCHWAB)).toBe('1m')
+  expect(autoPathInterval(['5s'], SCHWAB)).toBeNull()
+  expect(autoPathInterval(['1D'], SCHWAB)).toBe('1D')
+  // Oanda's answers are the stored ladder's; a stored 1M is not a path (nothing coarser than a day).
+  expect(autoPathInterval(['1h', '4h'], OANDA)).toBe('1h')
+  expect(autoPathInterval(['1M'], OANDA)).toBe('1D')
+  // A server that states nothing: the stored ladder, as before.
+  expect(autoPathInterval(['1h'], null)).toBe('1h')
+})
