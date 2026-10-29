@@ -39,6 +39,8 @@ interface Fake {
     setAdvance: Array<{ interval: string; multiple: number }>
     setBase: string[]
     setPauseOnFill: boolean[]
+    follow: number
+    dismissFollow: number
   }
   /** What the controller's own change notification does: every listener re-renders. */
   emit(): void
@@ -90,7 +92,7 @@ function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
 function fake(): Fake {
   const listeners = new Set<(change?: 'walk') => void>()
   const snapshotListeners = new Set<SessionListener>()
-  const calls: Fake['calls'] = { step: 0, nextAlert: 0, goTo: [], runToWatch: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
+  const calls: Fake['calls'] = { step: 0, nextAlert: 0, goTo: [], runToWatch: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [], follow: 0, dismissFollow: 0 }
   const emit = (): void => {
     for (const l of [...listeners]) l()
   }
@@ -169,6 +171,17 @@ function fake(): Fake {
     },
     persist() {
       calls.persist++
+    },
+    followNotice: null,
+    followBlockers: { trades: 0, orders: 0, watches: 0 },
+    async follow() {
+      calls.follow++
+      return 'followed'
+    },
+    dismissFollow() {
+      calls.dismissFollow++
+      controller.followNotice = null
+      emit()
     }
   }
   const emitSnapshot = (): void => {
@@ -1070,6 +1083,68 @@ describe('keys', () => {
     key({ key: 'ArrowRight', shiftKey: true })
     await flush()
     expect(m.calls.step).toBe(0)
+  })
+})
+
+describe('the follow notice', () => {
+  const notice = (m: Mounted): HTMLElement | null => m.q('.wd-replay-notice')
+
+  test('absent while the chart and the replay agree', () => {
+    const m = mount()
+    expect(notice(m)).toBeNull()
+  })
+
+  test('kept by something open: which instrument it walks, why it stayed, what to do', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: null, moving: false }
+    f.controller.followBlockers = { trades: 1, orders: 0, watches: 1 }
+    const m = mount(f)
+    const box = notice(m) as HTMLElement
+    expect(box.getAttribute('role')).toBe('status')
+    expect(box.textContent).toContain('The replay walks EURUSD, not GBPUSD: EURUSD has 1 open trade and 1 armed price watch. Close or remove them to follow GBPUSD, or exit the replay.')
+    // Below the transport and Next alert, above the footer.
+    const body = m.q('.wd-window-body') as HTMLElement
+    expect([...body.children].indexOf(box)).toBe([...body.children].indexOf(m.q('.wd-replay-toggles') as HTMLElement) - 1)
+    // Follow is offered, and refused until they are gone.
+    const follow = m.button('Follow GBPUSD')
+    expect(follow.disabled).toBe(true)
+    expect(follow.title).toContain('Close or remove them first')
+
+    // The trade closed and the watch removed: the same notice now offers the follow.
+    f.controller.followBlockers = { trades: 0, orders: 0, watches: 0 }
+    f.emit()
+    expect((notice(m) as HTMLElement).textContent).toContain('Nothing is open on it any more, so it can follow the chart to GBPUSD from here.')
+    expect(m.button('Follow GBPUSD').disabled).toBe(false)
+    m.button('Follow GBPUSD').click()
+    expect(f.calls.follow).toBe(1)
+  })
+
+  test('× keeps walking the instrument walked, and the notice goes', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: null, moving: false }
+    f.controller.followBlockers = { trades: 0, orders: 2, watches: 0 }
+    const m = mount(f)
+    const keep = m.q('.wd-replay-notice-close') as HTMLButtonElement
+    expect(keep.getAttribute('aria-label')).toBe('Keep walking EURUSD')
+    keep.click()
+    expect(f.calls.dismissFollow).toBe(1)
+    expect(notice(m)).toBeNull()
+  })
+
+  test('an instrument that cannot be walked: its reason, and Follow to try again', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: 'No stored bars for GBPUSD at the replay’s clock', moving: false }
+    const m = mount(f)
+    expect((notice(m) as HTMLElement).textContent).toContain('The replay walks EURUSD, not GBPUSD: no stored bars for GBPUSD at the replay’s clock.')
+    expect(m.button('Follow GBPUSD').disabled).toBe(false)
+  })
+
+  test('being made: it says so and offers nothing', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: null, moving: true }
+    const m = mount(f)
+    expect((notice(m) as HTMLElement).textContent).toBe('Following GBPUSD…')
+    expect(m.maybeButton('Follow GBPUSD')).toBeNull()
   })
 })
 

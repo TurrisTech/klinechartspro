@@ -6,6 +6,7 @@ import { BarCache, type BarSource, type ReplayBar } from './cache'
 import type { ReplayAlertBook } from './alerts'
 import { type AdvanceRequest, type AlertOccurrence, type StopReason, canFill, intersectsWorking, onBaseBoundary, planAdvance, targetOf } from './clock'
 import { type BidAskBar, type Engine, SimError } from './engine'
+import { blocked, type FollowBlockers, type FollowNotice, type FollowResolution, type FollowTarget, followBase, movedState } from './follow'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
 import { type BaseCheck, type CandleGrid, coarser, divides, finerStored, nominalMs, sortByLength, validateBase } from './timeframes'
 
@@ -162,7 +163,23 @@ export interface ReplayController {
   onControlChange(listener: (change?: 'walk') => void): () => void
   /** Persist now (a star/arm change). */
   persist(): void
+  /** The instrument the active pane moved to that the replay has not followed -- yet, or because
+   * it cannot -- with why; null while the chart and the replay agree (follow.ts). */
+  readonly followNotice: FollowNotice | null
+  /** What keeps the replay on its instrument as of now: the open trades, pending orders and armed
+   * price watches on it. Read live, so a notice follows a trade closed or an order cancelled. */
+  readonly followBlockers: FollowBlockers
+  /** Follow the instrument the notice names -- the retry once whatever kept the replay is gone. */
+  follow(): Promise<FollowOutcome>
+  /** Keep walking this instrument, and drop the notice. */
+  dismissFollow(): void
 }
+
+/** How a follow ended: the blob moved and the wall told to rebuild (`followed`); kept on the
+ * walked instrument by something open on it (`blocked`) or by the instrument followed
+ * (`refused`: no market hours, nothing stored, nothing that fits the panes, a failed save); or
+ * withdrawn before it was made (`withdrawn`: the pane went back, or the notice was dismissed). */
+export type FollowOutcome = 'followed' | 'blocked' | 'refused' | 'withdrawn'
 
 export interface ReplaySessionOptions {
   id: string
@@ -190,6 +207,9 @@ export interface ReplaySessionOptions {
   observer?: ReplayObserver
   /** Where the client alerts next trigger: what Next alert runs to. */
   alerts?: ReplayAlertBook
+  /** The blob for the instrument followed has been written (`follow`): rebuild the wall from it,
+   * as a reload would. Nothing of this session is used after it. */
+  onFollowed?: (state: ReplayState) => void
 }
 
 export class ReplayTradingSession implements TradingSession, ReplayController {
@@ -223,6 +243,16 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
    * the press (`warmAlerts`): the quote a seek takes there, so the press does not wait a round
    * trip for it before the cursor moves. */
   private landing: { base: string; at: number; bar: Promise<ReplayBar | null> } | null = null
+  /** The instrument the active pane moved to and the replay has not followed: the newest request
+   * (follow.ts). `moving` while an attempt is under way -- advances and orders wait for it. */
+  private pending: { target: FollowTarget; problem: string | null; moving: boolean } | null = null
+  /** The one follow attempt in flight: a newer request is taken up by it, never run beside it. */
+  private followRun: Promise<FollowOutcome> | null = null
+  /** The blob for another instrument has been queued: nothing this session saves after it may
+   * write the old instrument back over it. */
+  private moved = false
+  /** Who is waiting for the running advance to land (`idle`). */
+  private idleWaiters: Array<() => void> = []
 
   constructor(private readonly opts: ReplaySessionOptions) {
     this.symbol = opts.symbol
@@ -255,6 +285,11 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   async placeOrder(order: OrderRequest): Promise<void> {
     this.act(() => {
+      // A replay walks one instrument, and an order on any other would never be filled or marked
+      // -- nothing walks its bars. The engine's own "no price yet" used to be what refused these;
+      // since a replay can follow the chart (follow.ts) the instrument it left keeps its last
+      // quote in the account, frozen, and an order there would fill against it.
+      if (order.symbol !== this.symbol) throw new SimError(`This replay walks ${tickerOf(this.symbol)} only`)
       const { events } = this.engine.submit({
         symbol: order.symbol,
         side: order.side,
@@ -298,6 +333,9 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   /** Run an engine request; a refusal surfaces as the same error shape the paper session's
    * server would answer with (the panel shows `message`). */
   private act(fn: () => SimEvent[]): void {
+    // While a follow is being made the account is about to be written for another instrument: an
+    // order placed now would be left out of that blob, or keep the replay where it is.
+    if (this.following) throw new ReplayRequestError(`The replay is moving to ${this.pending?.target.ticker ?? 'another instrument'}`)
     let events: SimEvent[]
     try {
       events = fn()
@@ -367,7 +405,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 
   persist(): void {
-    if (this.disposed) return
+    if (this.disposed || this.moved) return
     // A watch placed or removed is persisted through here and must also re-render the controls
     // (it is what enables Next alert with no alert).
     this.controlsChanged()
@@ -553,7 +591,9 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 
   async advanceBy(request: AdvanceRequest, options: { alerts?: boolean; watches?: boolean } = {}): Promise<AdvanceResult | null> {
-    if (this.busy || this.disposed) return null
+    // Not while a follow is being made: it writes the new instrument's blob at the cursor it
+    // found, and an advance meanwhile would move the cursor under it. Play stops on the null.
+    if (this.busy || this.disposed || this.following) return null
     this.busy = true
     this.cancelRequested = false
     const from = this.cursor
@@ -727,6 +767,130 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // Look for the next alert from where this landed, while the chart loads and the user
       // reads it: the next Next alert then usually finds its answer waiting (alerts.ts).
       this.warmAlerts()
+      for (const resolve of this.idleWaiters.splice(0)) resolve()
+    }
+  }
+
+  /** Resolves once no advance is running: at once when idle, else when the running one lands. */
+  private idle(): Promise<void> {
+    if (!this.busy) return Promise.resolve()
+    return new Promise((resolve) => this.idleWaiters.push(resolve))
+  }
+
+  // -- following the chart (follow.ts) -------------------------------------------------------
+
+  get followNotice(): FollowNotice | null {
+    const p = this.pending
+    return p ? { symbol: p.target.symbol, ticker: p.target.ticker, problem: p.problem, moving: p.moving } : null
+  }
+
+  get followBlockers(): FollowBlockers {
+    return {
+      trades: this.engine.openTrades(this.symbol).length,
+      orders: this.engine.pendingOrders(this.symbol).length,
+      watches: this.opts.observer?.armedStops() ?? 0
+    }
+  }
+
+  /** A follow is being made: from the first check that passed until the wall rebuilds, or the
+   * attempt gives up. */
+  private get following(): boolean {
+    return this.pending?.moving === true
+  }
+
+  /** Follow `target` -- the instrument the active pane now shows -- or, with no target, the one
+   * the notice names (its Follow button). Resolves with how it ended; a request made while an
+   * attempt is in flight is taken up by that attempt, which then answers for the newest one. */
+  follow(target?: FollowTarget): Promise<FollowOutcome> {
+    if (target) {
+      if (target.symbol === this.symbol) {
+        this.dismissFollow()
+        return this.followRun ?? Promise.resolve('withdrawn')
+      }
+      const moving = this.pending?.moving === true
+      this.pending = { target, problem: null, moving }
+    } else if (this.pending) {
+      this.pending.problem = null
+    }
+    this.controlsChanged()
+    if (!this.followRun) {
+      this.followRun = this.runFollow().finally(() => {
+        this.followRun = null
+      })
+    }
+    return this.followRun
+  }
+
+  dismissFollow(): void {
+    if (!this.pending) return
+    this.pending = null
+    this.controlsChanged()
+  }
+
+  /** The follow itself, one attempt at a time, always for the NEWEST request: every await is
+   * followed by a look at whether the request changed meanwhile, and a changed one is started
+   * over. In order: nothing open on the walked instrument; the advance in flight, if any, landed
+   * (then nothing open, again -- the walk may have filled an order); the new instrument resolved
+   * as a mount resolves it (follow.ts `followTarget`) and a base chosen for it (`followBase`);
+   * nothing open, once more (a watch placed meanwhile); and the blob written for it -- after
+   * which nothing this session saves may land over it (`moved`), and the wall is rebuilt. */
+  private async runFollow(): Promise<FollowOutcome> {
+    for (;;) {
+      const pending = this.pending
+      if (!pending || this.disposed) return 'withdrawn'
+      const stay = (problem: string | null): FollowOutcome => {
+        pending.moving = false
+        pending.problem = problem
+        this.controlsChanged()
+        return problem === null ? 'blocked' : 'refused'
+      }
+      if (blocked(this.followBlockers)) return stay(null)
+      pending.moving = true
+      this.controlsChanged()
+      await this.idle()
+      if (this.pending !== pending) continue
+      if (this.disposed) return 'withdrawn'
+      if (blocked(this.followBlockers)) return stay(null)
+      let resolved: FollowResolution
+      try {
+        resolved = await pending.target.resolve(this.cursor)
+      } catch (err) {
+        console.error(`[replay] could not resolve ${pending.target.symbol}`, err)
+        resolved = { problem: `Could not look ${pending.target.ticker} up` }
+      }
+      if (this.pending !== pending) continue
+      if (this.disposed) return 'withdrawn'
+      if ('problem' in resolved) return stay(resolved.problem)
+      const base = followBase(this.base, resolved.inUse, resolved.stored, resolved.grid, this.cursor)
+      if (base === null) return stay(`Nothing stored for ${pending.target.ticker} fits these panes at this time`)
+      if (blocked(this.followBlockers)) return stay(null)
+      const state = movedState(this.toState(), pending.target, base)
+      this.moved = true
+      const saving = this.saveChain.then(() => this.opts.save(state))
+      this.saveChain = saving.catch(() => {})
+      try {
+        await saving
+      } catch (err) {
+        console.error('[replay] could not save the follow', err)
+        this.moved = false
+        // The blob may or may not have landed: write this instrument's back, so it is the one a
+        // reload finds either way.
+        this.persist()
+        return stay('Could not save the replay; try again')
+      }
+      if (this.pending !== pending) {
+        this.moved = false
+        // Withdrawn while the blob was being written: write this instrument's back over it. A
+        // newer request instead writes its own over it, next time round.
+        if (this.pending === null) {
+          this.persist()
+          return 'withdrawn'
+        }
+        continue
+      }
+      if (this.disposed) return 'withdrawn'
+      this.opts.onFollowed?.(state)
+      return 'followed'
     }
   }
 
@@ -948,6 +1112,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   dispose(): void {
     this.disposed = true
+    for (const resolve of this.idleWaiters.splice(0)) resolve()
     this.opts.alerts?.dispose?.()
     this.listeners.clear()
     this.controlListeners.clear()
@@ -1002,6 +1167,11 @@ export class ReplayRequestError extends OhlcvApiError {
     super(400, 'invalid_request', message)
     this.name = 'ReplayRequestError'
   }
+}
+
+/** `EURUSD` of `oanda:EURUSD`: how the controls and the refusals name an instrument. */
+function tickerOf(symbol: string): string {
+  return symbol.split(':').pop() ?? symbol
 }
 
 export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
