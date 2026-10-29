@@ -213,7 +213,9 @@ fetched-and-empty for good — a permanent blank column in its sub-pane, one per
 daily boundary**: they are computed on 1W/1M, so one can only appear or be spent at a 17:00
 market-day close. Invalidating them every step cost three slow `/levels` reads per 15-minute
 step, which saturated the browser's six-connection budget and starved the panes' own history
-loads.
+loads. And the boundary itself reads once per instrument, not once per pane: every view asks in
+the same task, and `levels/api.ts` sends one read of the union of their windows (six panes on
+EURUSD or EURGBP at 2023 clocks: 6 reads and 1.4-2.3 s before, 1 read and 0.44-0.79 s after).
 
 ## Every instrument on its own schedule
 
