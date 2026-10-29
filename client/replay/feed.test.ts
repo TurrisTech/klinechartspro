@@ -271,3 +271,81 @@ describe('ReplayFeedHub composes the forming candle from the coarsest stored bar
     expect(store.calls.some((c) => c.interval === '1h')).toBe(true)
   })
 })
+
+// THE BARS A PANE WILL HOLD AT THE NEXT LANDING (`landingRange`), which is what a bar replay warms
+// the server over before the press. It must be what the push will really leave -- worked out by
+// the same rule -- or the warm-up builds a region the panes then do not read.
+
+describe('ReplayFeedHub.landingRange', () => {
+  const M = 60_000
+  const range = (data: KLineData[]) => ({ from: data[0].timestamp, to: (data.at(-1)?.timestamp ?? 0) + 1 })
+
+  test('short of the append threshold: the pane keeps its bars, to the bar open at the landing -- what the push leaves', async () => {
+    const before = ny(19, 6)
+    for (const at of [ny(19, 9, 30), ny(19, 10)]) {
+      const store = STORE.fresh()
+      const hub = new ReplayFeedHub(store, '1m', before)
+      hub.setStored('oanda:EURUSD', ['1m', '1h', '1D'])
+      const hour = fxPane('hour', '1h', store.all('1h').filter((b) => b.open < before).slice(-20).map(asKLine))
+      const predicted = hub.landingRange(hour.pane, at)
+      // Inside the 09:00 bar it is forming; on 10:00 it has closed and none has opened yet.
+      expect(predicted).toEqual({ from: hour.data[0].timestamp, to: ny(19, 9) + 1 })
+      hub.cursor = at
+      const [report] = await hub.push([hour.pane], before)
+      expect([report.reloaded, report.problem]).toEqual([false, null])
+      expect(range(hour.data)).toEqual(predicted as { from: number; to: number })
+    }
+  })
+
+  test("past it: the window the pane is reloaded into, from at or before the reload's first bar", async () => {
+    const store = STORE.fresh()
+    const before = ny(19, 6)
+    const hub = new ReplayFeedHub(store, '1m', before)
+    hub.setStored('oanda:EURUSD', ['1m', '1h', '1D'])
+    const minute = fxPane('minute', '1m', store.all('1m').filter((b) => b.open < before).slice(-20).map(asKLine))
+    let resets = 0
+    ;(minute.pane as unknown as { getChart: () => unknown }).getChart = () => ({ getDataList: () => minute.data, resetData: () => resets++ })
+    // 210 minutes on: past the 100-bar threshold.
+    const at = ny(19, 9, 30)
+    expect(hub.landingRange(minute.pane, at)).toEqual({ from: at - 500 * M, to: ny(19, 9, 29) + 1 })
+    hub.cursor = at
+    const [report] = await hub.push([minute.pane], before)
+    expect([report.reloaded, resets]).toEqual([true, 1])
+    // ...and 99 minutes on is not, by the same rule.
+    expect(new ReplayFeedHub(store, '1m', before).landingRange(minute.pane, before + 99 * M)?.from).toBe(minute.data[0].timestamp)
+  })
+
+  test('a pane a push would leave alone has none: no bars, or no subscription', () => {
+    const hub = new ReplayFeedHub(STORE.fresh(), '1m', ny(19, 6))
+    expect(hub.landingRange(fxPane('empty', '1h', []).pane, ny(19, 9))).toBeNull()
+    const unsubscribed = fxPane('off', '1h', [bar(ny(19, 5))])
+    ;(unsubscribed.pane as unknown as { getDatafeed: () => unknown }).getDatafeed = () => ({ callbackFor: () => undefined })
+    expect(hub.landingRange(unsubscribed.pane, ny(19, 9))).toBeNull()
+  })
+
+  test("the panes' bar loads are counted while in flight: a reloaded pane's overlays have not asked yet", async () => {
+    const realFetch = globalThis.fetch
+    const { error: realError, warn: realWarn } = console
+    globalThis.fetch = (async () => {
+      throw new Error('offline')
+    }) as unknown as typeof fetch
+    // What a failed load says on the way out is not this test's business.
+    console.error = console.warn = () => {}
+    try {
+      const hub = new ReplayFeedHub(STORE.fresh(), '1m', ny(19, 9))
+      const feed = hub.createFeed()
+      const symbol = { ticker: 'EURUSD', exchange: 'oanda', timezone: FX_SCHEDULE.timezone, dayGeometry: FX_SCHEDULE.day } as SymbolInfo
+      const period = resolutionToPeriod('1m')
+      if (!period) throw new Error('no 1m period')
+      const loading = feed.getHistoryKLineData(symbol, period, ny(19, 1), ny(19, 9))
+      expect(hub.loadsInFlight).toBe(1)
+      // A load that fails still ends.
+      expect(await loading).toEqual([])
+      expect(hub.loadsInFlight).toBe(0)
+    } finally {
+      globalThis.fetch = realFetch
+      console.error = realError
+      console.warn = realWarn
+    }
+  })
+})

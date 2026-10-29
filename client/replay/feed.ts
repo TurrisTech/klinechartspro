@@ -1,7 +1,7 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src'
 import { fetchBarsWidened } from '../history'
-import type { PluginStream } from '../plugins/types'
+import type { PluginStream, Range } from '../plugins/types'
 import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
 import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
@@ -34,6 +34,15 @@ export const HISTORY_WINDOW_BARS = 500
  * 100 sits about where the two cost the same on that wall with prod's round trip; it was 300. */
 export const SEEK_THRESHOLD_BARS = 100
 
+/** Whether a push from `previous` to `cursor` reloads a pane whose last bar opened at `lastOpen`,
+ * rather than appending to it: the jump, from the later of the two, is longer than the append
+ * threshold. The one rule both the push and the landing it is predicted for (`landingRange`)
+ * follow. */
+function reloads(interval: string, lastOpen: number, previous: number, cursor: number): boolean {
+  const nominal = Math.max(1, Math.floor((cursor - Math.max(lastOpen, previous)) / nominalMs(interval)))
+  return nominal > SEEK_THRESHOLD_BARS
+}
+
 export class ReplayDatafeed implements Datafeed {
   private readonly callbacks = new Map<string, DatafeedSubscribeCallback>()
 
@@ -60,11 +69,14 @@ export class ReplayDatafeed implements Datafeed {
       t = cursor
       f = t - span
     }
+    this.hub.loadsInFlight++
     try {
       return await fetchBarsWidened(`${vendor}:${symbol.ticker}`, interval, f, t, direction === 'older' ? HISTORY_WINDOW_BARS : null, direction)
     } catch (err) {
       console.error('[replay] history fetch failed', err)
       return []
+    } finally {
+      this.hub.loadsInFlight--
     }
   }
 
@@ -106,6 +118,10 @@ export type StoredProbe = (symbol: string, at: number, grid: CandleGrid) => Prom
  * pushes stepped bars into the wall's panes. */
 export class ReplayFeedHub {
   cursor: number
+  /** History loads the panes have in flight through the replay's datafeed: a pane reloaded at the
+   * cursor is loading its bars, and its plugins have not asked for anything yet. What the next
+   * landing's warm-up waits out (landing.ts). */
+  loadsInFlight = 0
   private readonly paneCaches = new Map<string, BarCache>()
   /** Per instrument and interval of its compose ladder (`composeLadder`): the base, and the
    * stored intervals between it and the panes'. */
@@ -229,23 +245,55 @@ export class ReplayFeedHub {
   /** Reload `pane` at the cursor when the jump since its last bar is longer than the append
    * threshold, and say so; null for a pane to append to (or one `pushPane` reports on). */
   private reloadIfFar(pane: ChartProPane, previous: number): PushReport | null {
+    const held = this.held(pane)
+    if (!held || !reloads(held.interval, held.grid.fromWire(held.interval, held.last), previous, this.cursor)) return null
     const symbolInfo = pane.getSymbol()
     const vendor = symbolVendor(symbolInfo)
+    this.reload(pane, `${vendor}:${symbolInfo.ticker}`, held.interval, held.grid)
+    return { paneId: pane.id, key: feedKey(vendor, symbolInfo.ticker, held.interval), pushed: 0, forming: false, reloaded: true, problem: null }
+  }
+
+  /**
+   * The bars `pane` will hold once a push brings it from the hub's cursor to `at`, as the plugin
+   * host reads a chart's range: from its first bar's date to just past its last one's. What a
+   * bar replay warms its next landing over (`PluginHost.warmAhead`), so it is worked out by the
+   * same rule the push follows (`reloads`):
+   * - a jump past the append threshold reloads the pane at the cursor, into ChartPane's 500-bar
+   *   window ending there (`ReplayDatafeed.getHistoryKLineData`). Its first bar is taken at the
+   *   window's start, at or before the first one the reload will hold, so a window worked out
+   *   from it holds everything the pane will ask for;
+   * - anything shorter keeps the pane's bars and appends up to the bar open at `at`: forming
+   *   there, or closing on it.
+   *
+   * Null for a pane a push would leave as it is: no bars, no subscription, no schedule.
+   */
+  landingRange(pane: ChartProPane, at: number): Range | null {
+    const held = this.held(pane)
+    if (!held) return null
+    const { interval, grid } = held
+    const to = grid.toWire(interval, grid.start(interval, at - 1)) + 1
+    if (reloads(interval, grid.fromWire(interval, held.last), this.cursor, at)) return { from: at - HISTORY_WINDOW_BARS * nominalMs(interval), to }
+    return { from: held.first, to }
+  }
+
+  /** What a push needs to know about `pane` before reading anything: its interval and schedule,
+   * and its first and last bars' dates. Null for a pane it cannot push to. */
+  private held(pane: ChartProPane): { interval: string; grid: CandleGrid; first: number; last: number } | null {
+    const symbolInfo = pane.getSymbol()
     const interval = periodToResolution(pane.getPeriod())
     const feed = pane.getDatafeed() as ReplayDatafeed
-    if (typeof feed?.callbackFor !== 'function' || !feed.callbackFor(vendor, symbolInfo.ticker, interval)) return null
-    let last: number | undefined
+    if (typeof feed?.callbackFor !== 'function' || !feed.callbackFor(symbolVendor(symbolInfo), symbolInfo.ticker, interval)) return null
+    let data: KLineData[]
     try {
-      last = pane.getChart().getDataList().at(-1)?.timestamp
+      data = pane.getChart().getDataList()
     } catch {
       return null
     }
+    const first = data[0]?.timestamp
+    const last = data.at(-1)?.timestamp
     const grid = gridFor(symbolInfo)
-    if (last === undefined || !grid) return null
-    const nominal = Math.max(1, Math.floor((this.cursor - Math.max(grid.fromWire(interval, last), previous)) / nominalMs(interval)))
-    if (nominal <= SEEK_THRESHOLD_BARS) return null
-    this.reload(pane, `${vendor}:${symbolInfo.ticker}`, interval, grid)
-    return { paneId: pane.id, key: feedKey(vendor, symbolInfo.ticker, interval), pushed: 0, forming: false, reloaded: true, problem: null }
+    if (first === undefined || last === undefined || !grid) return null
+    return { interval, grid, first, last }
   }
 
   /** Read, per instrument and compose interval, the one range every forming candle of its

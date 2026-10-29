@@ -17,6 +17,7 @@ import { createReplayControls, openStartDialog } from './controls'
 import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
+import { LandingWarmer } from './landing'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
 import { TiledBarSource } from './tiled'
@@ -295,6 +296,15 @@ export async function mountBarReplay(
   // A fresh look-ahead per replay: the search caches what it read, and near the end of the data
   // a server value written since an earlier replay on this page would otherwise read as missing.
   ctx.alerts?.search.reset()
+  // Where the next press will land, warmed on the server before it (landing.ts): every pane's
+  // overlay reads there, over the bars the push will leave it holding, once the wall is quiet.
+  const landings = new LandingWarmer({
+    settled: (timeoutMs) => ctx.pluginHost.settled(timeoutMs),
+    loadsInFlight: () => hub.loadsInFlight,
+    busy: () => session.busy,
+    cursor: () => session.cursor,
+    warm: (at) => ctx.pluginHost.warmAhead(at, (pane) => hub.landingRange(pane, at))
+  })
   const session = new ReplayTradingSession({
     id: answer.session.id,
     name: answer.session.name,
@@ -311,6 +321,7 @@ export async function mountBarReplay(
     engine: Engine.fromState(stored.engine),
     observer: watches,
     alerts: ctx.alerts ? new ReplayAlerts(() => ctx.alerts?.enabled() ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
+    warmLanding: (at) => void landings.warm(at),
     barSource: replayBars,
     dataEnd: () => latest,
     save: async (state) => {
@@ -435,10 +446,14 @@ export async function mountBarReplay(
       const check = session.setIntervalsInUse(panes.map((p) => periodToResolution(p.getPeriod())))
       if (!check.ok) console.warn(`${REPLAY_LOG} base ${session.base} no longer fits the wall: ${check.reason}`)
       controls.refresh()
+      // A pane mounted since the last advance reads at the next landing too: warm it (what is
+      // warmed already is not sent again).
+      session.warmAlerts()
     },
     quote: async (key: string) => session.snapshot.quotes[key],
     teardown(): void {
       unsubscribeAlerts()
+      landings.dispose()
       container.classList.remove(REPLAY_WALL_CLASS)
       controls.dispose()
       dock.teardown()
