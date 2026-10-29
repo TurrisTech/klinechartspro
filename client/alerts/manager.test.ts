@@ -9,6 +9,7 @@ GlobalRegistrator.register({ url: 'http://test/' })
 afterAll(() => GlobalRegistrator.unregister())
 
 const { createAlertManager } = await import('./manager')
+const { setReadClock } = await import('../config')
 const { ClientAlertStore } = await import('./store')
 const { toEditable, fromEditable } = await import('./editable')
 import type { Rule } from './types'
@@ -242,6 +243,31 @@ describe('a date and time', () => {
       op: 'crosses_above',
       right: { value: Date.UTC(2026, 10, 3, 14, 30) }
     })
+  })
+
+  test("under a bar replay a new one starts the morning after the replay's clock, not today's", async () => {
+    // Tuesday 2023-10-24 11:00 New York (EDT): the cursor of a replay three years back.
+    setReadClock(Date.UTC(2023, 9, 24, 15))
+    try {
+      const m = mount()
+      m.manager.create()
+      await settle()
+      m.change(m.root.querySelector('.wd-alert-source') as HTMLSelectElement, 'tim:datetime')
+      expect((m.root.querySelector('[aria-label="Date and time"]') as HTMLInputElement).value).toBe('2023-10-25T09:30')
+      // A band made from it keeps it.
+      m.change(m.root.querySelector('.wd-alert-op') as HTMLSelectElement, 'inside')
+      expect((m.root.querySelector('[aria-label="From"]') as HTMLInputElement).value).toBe('2023-10-25T09:30')
+      m.change(m.root.querySelector('.wd-alert-op') as HTMLSelectElement, 'crosses_above')
+      m.button('Create alert').click()
+      await settle()
+      expect(m.store.list()[0].rule).toEqual({
+        left: { kind: 'time', interval: '1h', field: 'datetime', zone: 'America/New_York' },
+        op: 'crosses_above',
+        right: { value: Date.UTC(2023, 9, 25, 13, 30) }
+      })
+    } finally {
+      setReadClock(null)
+    }
   })
 })
 

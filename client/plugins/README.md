@@ -81,7 +81,11 @@ a chart window. The bars (`history.ts` `fetchBars`), the books and a tiered indi
 (`indicatortiles/source.ts`) all call it. Under a bar replay it stops the tiles at the bar
 forming at the clock (`readHorizon`, the host's own horizon) and lets the server, which clamps
 to the cursor, answer the rest. Nothing on the server clamps a tile, so a source with tiles must
-read through it.
+read through it. **It asks the server nothing that cannot be answered** (`horizon.ts`
+`answerableTo`): past the bar forming at the clock nothing exists, and when the clock sits on
+that bar's open -- where a Step leaves every pane whose interval divides the Step's -- not even that bar,
+so the remainder is not sent at all. Tested on the store clock, not the wire: a forex day dated
+Wednesday 00:00 forms from Tuesday 17:00 and is answerable from then on.
 
 ## Settings per pane
 

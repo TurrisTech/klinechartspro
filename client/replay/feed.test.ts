@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { KLineData } from 'klinecharts'
-import type { ChartProPane, SymbolInfo } from '../../src'
+import type { ChartProPane, Period, SymbolInfo } from '../../src'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import { CONTINUOUS_DAY, type CandleGrid } from './timeframes'
 
@@ -269,5 +269,78 @@ describe('ReplayFeedHub composes the forming candle from the coarsest stored bar
     await hub.push([day.pane], cursor)
     expect(probes).toEqual([{ symbol: 'oanda:EURUSD', at: cursor }])
     expect(store.calls.some((c) => c.interval === '1h')).toBe(true)
+  })
+})
+
+// THE WINDOW A PANE RELOADS INTO ENDS PAST THE BAR FORMING AT THE CURSOR. A forex day forming
+// from Tuesday 17:00 is dated Wednesday 00:00 on the wire -- after the cursor -- so a window
+// ending at the cursor left it out: a 1D pane reloaded between 17:00 and midnight drew Tuesday
+// as its last candle (prod EURGBP at 2023-10-24 19:00 New York), the day it was in nowhere.
+const { setReadClock } = await import('../config')
+
+describe('ReplayDatafeed re-anchors a window at what the cursor lets be answered', () => {
+  const DAY = resolutionToPeriod('1D') as Period
+
+  /** `/getbars` under `asof` over the store's bars, as `services/ohlcv.py` answers it: the closed
+   * bars dated inside the window and the day forming at the clock rebuilt from the 5s rows that
+   * had closed. No tiles and the FX week's schedule. */
+  function server(store: AggregatedStore) {
+    const asked: Array<{ from: number; to: number }> = []
+    const fetch = async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input))
+      if (url.pathname.endsWith('/instrument')) {
+        const sessions = [{ openDay: 'sun', openTime: '17:00', closeDay: 'fri', closeTime: '17:00' }]
+        return Response.json({ vendor: 'oanda', symbol: 'EURUSD', marketHours: { timezone: 'America/New_York', sessions } })
+      }
+      if (!url.pathname.endsWith('/getbars')) return new Response('not found', { status: 404 })
+      const from = Number(url.searchParams.get('from'))
+      const to = Number(url.searchParams.get('to'))
+      const asof = Number(url.searchParams.get('asof'))
+      asked.push({ from, to })
+      const answer = store.all('1D').filter((b) => b.end <= asof && b.date >= from && b.date < to)
+      const open = FX_GRID.start('1D', asof)
+      if (open < asof && asof < FX_GRID.end('1D', open)) {
+        const forming = composeForming('1D', open, store.all('5s').filter((b) => b.open >= open && b.end <= asof), FX_GRID)
+        if (forming && forming.date >= from && forming.date < to) answer.push(forming)
+      }
+      const bars = answer.map((b) => ({ date: b.date, open: b.o, high: b.h, low: b.l, close: b.c, volume: b.v }))
+      return Response.json(bars.length === 0 ? { s: 'no_data' } : bars)
+    }
+    return { asked, fetch: fetch as typeof globalThis.fetch }
+  }
+
+  test('a forex day pane reloaded at 19:00 gets the day forming since 17:00, dated tomorrow', async () => {
+    const store = STORE.fresh()
+    const api = server(store)
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = api.fetch
+    try {
+      for (const [cursor, last] of [
+        // Two hours into the day dated Wednesday: it has rows, and is the pane's last candle.
+        [ny(19, 19), ny(20, 0)],
+        // On its open nothing of it exists: Tuesday's day, closed at 17:00, is the last.
+        [ny(19, 17), ny(19, 0)],
+        // Mid-session the day is dated before the cursor, and was answered before too.
+        [ny(20, 11), ny(20, 0)]
+      ] as const) {
+        setReadClock(cursor)
+        const hub = new ReplayFeedHub(store, '5s', cursor)
+        const symbol = { ticker: 'EURUSD', exchange: 'oanda', timezone: FX_SCHEDULE.timezone, dayGeometry: FX_SCHEDULE.day } as SymbolInfo
+        const now = Date.now()
+        const bars = await hub.createFeed().getHistoryKLineData(symbol, DAY, now - 500 * 86_400_000, now)
+        expect(bars.at(-1)?.timestamp).toBe(last)
+        if (last > cursor) {
+          const open = FX_GRID.start('1D', cursor)
+          const parts = store.all('5s').filter((b) => b.open >= open && b.end <= cursor)
+          expect(bars.at(-1)).toEqual(asKLine(composeForming('1D', open, parts, FX_GRID) as ReplayBar))
+        }
+        // And never a date past the forming day: the window stops at the next day's.
+        expect(Math.max(...api.asked.map((a) => a.to))).toBeLessThanOrEqual(FX_GRID.toWire('1D', FX_GRID.nextStart('1D', cursor)))
+        api.asked.length = 0
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+      setReadClock(null)
+    }
   })
 })

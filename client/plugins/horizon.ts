@@ -37,4 +37,32 @@ export function knownThrough(resolution: string | undefined, clock: number, grid
   return grid.toWire(resolution, grid.start(resolution, clock))
 }
 
+/** Exclusive, on the WIRE clock: where an answer for `resolution` under read clock `clock` can
+ * hold nothing at all -- not from the tiles, not from the server.
+ *
+ * Past `knownThrough` an answer can carry one bar only, the one dated AT it: forming at the
+ * clock and rebuilt by the server from the rows that had closed by then -- or, inside a
+ * market-closed window, the bar that closed before it. Every later bar opens after the clock,
+ * so none of it exists yet. That bounds the answer at the next bar's date.
+ *
+ * And when the clock sits exactly on the open of the bar forming at it, not even that bar: no
+ * row can have closed inside a bar no time has passed in (`services/asof.py` `forming_bucket`
+ * answers None there), so the answer ends where the horizon does and a read past it is a round
+ * trip for nothing. A Step lands on exactly that instant for every pane whose interval divides
+ * the Step's.
+ *
+ * The test is made on the store clock, never the wire: a forex day forming from Tuesday 17:00 is
+ * dated Wednesday 00:00, after the clock, and holds rows from 17:00 on; it is only at 17:00
+ * itself that it holds none. A wire-date comparison would skip the one and read the other.
+ *
+ * Unbounded wherever `knownThrough` is guessing (no resolution, no schedule): a bound there
+ * could only be a guess too, and a guess here drops a bar rather than costing a read.
+ */
+export function answerableTo(resolution: string | undefined, clock: number, grid: CandleGrid | null): number {
+  if (!resolution || !isInterval(resolution) || !grid) return Number.POSITIVE_INFINITY
+  const open = grid.start(resolution, clock)
+  if (open >= clock) return grid.toWire(resolution, open)
+  return grid.toWire(resolution, grid.nextStart(resolution, clock))
+}
+
 const DAY_MS = 86_400_000

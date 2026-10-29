@@ -538,7 +538,21 @@ export function nextIntervalStart(code: string, ms: number, tz: string = MARKET_
   for (;;) {
     start = nextIntradayStart(code, start, tz)
     if (isMarketOpen(start, tz)) return start
+    start = lastStartBeforeReopening(code, start, tz, FX_DAY)
   }
+}
+
+/** Where a walk of `code`'s candles, at `shut` inside a closed window, resumes: the last of them
+ * to open before the market reopens, so the next step is the first one after it does.
+ *
+ * Without it the walk stepped through the closed window a candle at a time -- 34,560 5s candles
+ * from Friday's close to Sunday's FX open, 46,800 across an equity weekend, each a timezone
+ * conversion or several: a quarter of a second per call, and a parity test over a few hundred of
+ * them that outran bun's five-second limit under load. Nothing can open in between, so skipping
+ * it changes no answer; the grid is still walked the same way on either side, across DST. */
+function lastStartBeforeReopening(code: string, shut: number, tz: string, day: DayGeometry): number {
+  const resume = intervalStart(code, fromWall(reopening(toWall(shut, tz), day), tz) - 1, tz)
+  return resume > shut ? resume : shut
 }
 
 /** Close of the candle containing `ms` -- exclusive, and NOT the next candle's open: a week
@@ -658,6 +672,18 @@ function dayClose(sessionDay: number, day: DayGeometry): number {
   return sessionDay + day.closeOffset * HOUR
 }
 
+/** The naive wall clock at which a market shut at `wall` next opens -- the BOUNDARY notion, as
+ * `scheduleIsMarketOpen` has it: the open of the first weekday session after the one `wall`
+ * belongs to. A session date never lies after its own open (`sessionDateFor`), so an instant
+ * shut on a weekday is past that day's close and the next weekday's open is the answer, and one
+ * shut over a weekend reopens on Monday's session -- Sunday 17:00 for the FX week. Only for an
+ * instant that IS shut on a market that closes. */
+function reopening(wall: number, day: DayGeometry): number {
+  let next = sessionDateFor(wall, day) + DAY
+  while (weekday(next) >= 5) next += DAY
+  return dayOpen(next, day)
+}
+
 /** The session date that NAMES the bucket `sessionDay` falls in, for a market-day market.
  * `unitStartForSessionDate` answers with that bucket's FOREX open, so adding the FX offset
  * back off it leaves the midnight the bucket is named for -- the half of the answer that is
@@ -766,6 +792,7 @@ export function scheduleNextIntervalStart(code: string, ms: number, tz: string, 
   for (;;) {
     cursor = nextIntradayStart(code, cursor, tz)
     if (scheduleIsMarketOpen(cursor, tz, day)) return cursor
+    cursor = lastStartBeforeReopening(code, cursor, tz, day)
   }
 }
 

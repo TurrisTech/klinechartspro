@@ -25,7 +25,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. |
-| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
+| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
 | `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
@@ -214,6 +214,18 @@ daily boundary**: they are computed on 1W/1M, so one can only appear or be spent
 market-day close. Invalidating them every step cost three slow `/levels` reads per 15-minute
 step, which saturated the browser's six-connection budget and starved the panes' own history
 loads.
+
+**A pane's own history read ends just past the bar forming at the cursor** (`feed.ts`,
+`plugins/horizon.ts` `answerableTo`), on the wire clock its bars are dated by. That is the cursor
+itself for an intraday pane, but a forex day forming from Tuesday 17:00 is dated Wednesday 00:00:
+ending the window at the cursor left a 1D pane reloaded between 17:00 and midnight without its
+forming candle (prod EURGBP, 2023-10-24 19:00 New York). The read through the tiles
+(`tiles/join.ts`) then asks `/getbars` for **nothing that cannot be answered**: past that bar
+nothing exists, and on its open -- where a Step leaves every pane whose interval divides the Step's --
+not even that bar. The chart's widening (`history.ts` `fetchBarsWidened`) used to send one such
+empty read per attempt, one after another: a 5s pane's newer-in-time page from a Saturday cursor
+made four on prod, and a pane reloaded after a 1h Step was seen making eleven. What a widening
+still has to ask is the same request on every attempt, and it is asked once.
 
 ## Every instrument on its own schedule
 
@@ -575,10 +587,17 @@ the keys (kept from the chart, the repeat that must not cancel, a field's own ke
 presses, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
 Enter, its refusals and Random's range. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
 drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
-hub on a coinbase pane's own grid, and the refusal for a pane with no market hours.
+hub on a coinbase pane's own grid, the refusal for a pane with no market hours, and a forex day
+pane's reload window reaching the day forming since 17:00.
 `timeframes.test.ts` pins `CandleGrid` against the wmarkettypes fixture for all three schedules,
 sweeps the FX grid against the old functions, and steps crypto through a weekend and equities
-across an overnight. `skim.test.ts` holds the skim to the walk's answer -- a real session and
+across an overnight. It runs in about 0.4 s: the next candle after a closed window is found by
+jumping to where the market reopens rather than stepping through it a candle at a time, which for
+5s was 34,560 steps across an FX weekend and took the fixture test past bun's 5 s limit under load.
+`e2e.test.ts` is the one test `bun test` skips: a whole wall over a real server and a real tile
+bucket (`REPLAY_E2E`, `REPLAY_E2E_TILES`; its header has the commands) -- a Step with nothing
+working seeks, a walk with resting orders skims and descends to the 5s bars for the fills, every
+bar the session reads comes out of the tiles, Next alert jumps, and the state persists. `skim.test.ts` holds the skim to the walk's answer -- a real session and
 real `ReplayWatches` over a synthetic week whose 1h and 1D candles are folded from its 1m bars:
 the same stopping minute as a brute-force walk at eleven levels, a sliver of the base bars read,
 a Step stopping there too, a run that never reaches its level taken back with the stop still
