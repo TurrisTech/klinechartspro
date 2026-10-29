@@ -33,7 +33,7 @@ const plugin: IndicatorPlugin = {
       key: `mine|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,   // shared across panes
       resolution: ctx.interval,                                  // what its points are dated on
       fetch: (range, limit) => facilities.points({ pluginId: 'mine', legacyPath: '/mine/values', ... }),
-      // optional: window(chartRange), createStore(key), subscribe(store, notify)
+      // optional: window(chartRange), createStore(key), subscribe(store, notify), warm
     }],
     label: (state) => phaseLabel('MINE', [state.sources[0]?.store]) ?? 'MINE',   // legend.ts
     // optional: extendData(state), overrides, yAxisGap, attach()
@@ -176,6 +176,19 @@ coverage arithmetic instead of copying it. If it dedups rows, **prune the dedup 
 rows it drops** — otherwise the refetch is deduplicated away and the row never comes back,
 which is worse than the hole.
 
+## Warming a replay's next landing
+
+A source whose first read of a region is expensive on the server, and cached there, may offer
+`warm` (`SourceWarm`): `window(chartRange, at)` -- the window it will read once the read clock
+stands at `at`, for the bars the pane will hold then -- and `read(window, at)`, which asks the
+server for it and throws the answer away. A bar replay calls `PluginHost.warmAhead(at,
+landingRange)` for where its next Next alert press will land (`client/replay/landing.ts`); the
+host sends one read per store over the union of the windows of the panes reading it, and nothing
+for a store already warmed for that instant over as much. Nothing is filed: the answer lies past
+the chart's clock, and a store holding it would draw it before the replay got there. Only the MTF
+overlays offer it (`mtf/plugin.ts`: `/mtf/graph` with `asof` the landing and `limit` 1); a cold
+`/mtf/graph` region took 0.2-4.9 s on prod data, a warm one ~50 ms.
+
 ## Signals
 
 A plugin whose points carry discrete events **labels** them on the server
@@ -203,7 +216,7 @@ rule). Tests: `signals.test.ts`.
 | plugin | templates | sources | notes |
 |---|---|---|---|
 | `tsregistry/plugin.ts` (`registry`) | one per enabled row of `GET /indicators/registry`: `S:…`, `AREV:…`, `KREV:krev01:p`, `TS:…` | one per binding, on the wire its row names | every server indicator; see "The registry plugin" below |
-| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per binding: the server's answer (`GET /mtf/graph`) for the timeframes drawn, the roots and the largest step -- every signal at the instant it became knowable, and the graph's nodes and entry stars as an auxiliary array -- in an `MtfGraphStore` keyed by those settings, its windows absolute instants | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay; the server builds and caches signals and graphs (wdashboard-server 0.56.0), the template only places them on the chart's bars |
+| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per binding: the server's answer (`GET /mtf/graph`) for the timeframes drawn, the roots and the largest step -- every signal at the instant it became knowable, and the graph's nodes and entry stars as an auxiliary array -- in an `MtfGraphStore` keyed by those settings, its windows absolute instants | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay; the server builds and caches signals and graphs (wdashboard-server 0.56.0), the template only places them on the chart's bars; in a bar replay the read at the next landing is warmed on the server before the press (`warm`) |
 | `mtf01/plugin.ts` | `MTF01:mtf01` | one: the cascade's events with its trades as an auxiliary array | |
 | `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, reaching back exactly the rule's window), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed level or a client-side rank/median/prior over a window of DAYS; every bar with a usable `p` is compared unless `samplesOnly`; per-pane settings, own panel; the quantile, the band and the entry rule are locked to the server's by `arevlab/fixtures/rules_parity.json` |
 | `arev21div/plugin.ts` | `DIV:arev21` (sub-pane), `DIV:arev21:price` (price pane) | one: the registry's own arev21 `storedSource`, unmodified -- the AREV21 pane's store, key and all, so beside one it costs no request | where price and arev21's `p` disagree at a swing (a lower low with a higher `p` is `bull`, a higher high with a lower `p` `bear`; the hidden pair on param `hidden`), computed entirely in the browser from the pane's own bars in `calc`; swings strict on `left` (10, arev21's lookback, so every swing is a sample bar) and confirmed by `right` (5), each compared with the swing immediately before it; the arrow is on the CONFIRMING bar and a line joins the two swings in each pane (thick dotted by default); rule, line style, width and colours are one per-pane config (`paneConfigs`), shared by both templates and persisted as `PersistedPane.dv`, so an edit recomputes or redraws without refetching; calcParams stay empty; no server change |

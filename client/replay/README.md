@@ -23,9 +23,10 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
+| `landing.ts` | `LandingWarmer`: WHEN the next landing is warmed on the server -- once the wall is quiet, never while an advance runs, one landing at a time. The wall it waits on and the warm-up it sends are injected. |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. `probeStoredIntervals`: which of the stored ladder an instrument holds -- one bar per interval its vendor stores (`storedLadderFor` against `/capabilities` `baseIntervals`), never one the server would only fold. |
-| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below). Also `inertStream`. |
+| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk. |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
 | `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
@@ -367,6 +368,57 @@ landing was done: 530, 181, 202, 341, 1,014, 532, 276 and 190 ms on `main`; 372,
 ~0.85 s for the 5m overlay on a cold read) and, after a jump short enough to append, the forming
 candle's read before the overlays'.
 
+**...and so are the overlays there, on the server** (2026-10-29). The server's `/mtf/graph` cache
+(wdashboard-server 0.56.1's read-ahead, 0.56.2's three spans) makes every read of a region it has
+built 6-13 ms, but the FIRST read of a region is the expensive one: it reads the signals of every
+graph root's run back from the window, often months, and walks them. A Next alert jumping weeks
+or months lands in such a region, and every overlay on the wall waited for it. Measured against
+prod data (a local server on `2e5cb73`, EURUSD 3m, 5m and 1h panes with the rank 85 overlay, roots
+1D 8h 4h 2h): a landing a week to two months on took **0.2-4.9 s** per overlay read, and 0.3-2.0 s
+until all three panes were drawn.
+
+The landing is known before the press (the look-ahead above), so it is warmed then:
+- The session tells the wall where a press would land (`ReplaySessionOptions.warmLanding`, the
+  same `alertStop` instant the press stops on), whenever the look-ahead has found it and no
+  advance is running -- a press that got there first reads it itself. The wall also asks again
+  when its panes change (`BarReplayController.sync`), for a pane mounted since.
+- `ReplayFeedHub.landingRange` says what each pane will hold there, by the rule the push follows
+  (`reloads`): the 500-bar window a reload loads, from at or before its first bar, or the pane's
+  bars to the landing's for a jump short enough to append.
+- `PluginHost.warmAhead` asks each source that offers it (`SourceSpec.warm`; the MTF overlays) for
+  the window it will read there under the landing's clock, and sends ONE read per store over the
+  union of its panes' windows, `asof` the landing and `limit` 1 -- the server builds and keeps the
+  whole window whatever the limit, so the body is one signal -- past the HTTP cache (`no-store`: a
+  revalidation would be answered with a 304 before anything was built). The answer is thrown
+  away, never filed: it lies past the chart's clock, and a store holding it would draw it early.
+  A store already warmed for that instant over as much sends nothing, so the ask after every
+  Step short of the landing costs nothing.
+- `LandingWarmer` (`landing.ts`) sends it once the wall is quiet -- no pane loading bars through
+  the replay's datafeed and no plugin read in flight, on two looks 50 ms apart (a reloaded pane's
+  bars arrive before its overlays ask, and in between the wall looks idle) -- or after 5 s
+  regardless. Not while an advance runs or once the cursor is at the landing; a later landing
+  drops one still waiting, and so does leaving the replay.
+
+The server keeps three spans per overlay configuration (`MAX_SPANS`), least recently used out
+first: a live chart, the region a replay stands in and the one it lands in next. A warm-up that
+fits in the server's 400-day entry span with the region last read (after a press, the one the
+replay stands in) is built as an extension of it and takes no span at all; a farther one takes the
+newest span and leaves the region the replay stands in second, so it never evicts that. A landing
+costs the server a span whether it is warmed or not -- the warm-up builds it sooner -- except one
+never pressed to (a Step past it, an alert edited), which one warm-up at a time keeps to one.
+Measured on one configuration read by a live chart and by a replay warming and then landing on
+three stops three weeks apart, a Step between each warm-up and its press: the live chart's reads
+stayed at 22-38 ms and the Steps at 18-97 ms (27-118 ms with no warm-ups), the presses 18-38 ms
+against 696-795 ms.
+
+Headless through these modules against the same server -- a real session, plugin host, MTF
+plugin and feed hub, the look-ahead stubbed to know the landing, six landings a week to two months
+on with the three panes reloaded there, each mode on a freshly started server: from the press
+until every overlay was covered, **253, 1,004, 2,359, 1,054, 704 and 2,007 ms cold; 52, 52, 103,
+102, 102 and 102 ms warmed** (the host's settle poll is 50 ms), the warm-up itself 0.2-2.1 s in
+the background before the press. What each store held after the landing was identical cold and
+warmed, row for row.
+
 **Future data is held in memory, a whole tile at a time** (2026-10-28; user: "bar replay should
 cache future data. the base timeframe should be pulled, so a whole tile from the current replay
 time to the end of the tile should be in memory. alerts should be cached into the future as well.
@@ -620,6 +672,11 @@ Enter, its refusals and Random's range. `results.test.ts` pins the score (the sp
 drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
 hub on a coinbase pane's own grid, the refusal for a pane with no market hours, and a forex day
 pane's reload window reaching the day forming since 17:00.
+`feed.test.ts` also holds `landingRange` to what the push really leaves (an append's range equal
+to the chart's after it, a reload predicted exactly where the push reloads) and counts the panes'
+bar loads; `landing.test.ts` pins when a warm-up is sent (two quiet looks, not while an advance
+runs nor once a press has landed there, a later landing or leaving dropping one waiting, the
+deadline).
 `timeframes.test.ts` pins `CandleGrid` against the wmarkettypes fixture for all three schedules,
 sweeps the FX grid against the old functions, and steps crypto through a weekend and equities
 across an overnight. It runs in about 0.4 s: the next candle after a closed window is found by

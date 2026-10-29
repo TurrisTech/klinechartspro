@@ -191,6 +191,12 @@ export interface ReplaySessionOptions {
   observer?: ReplayObserver
   /** Where the client alerts next trigger: what Next alert runs to. */
   alerts?: ReplayAlertBook
+  /** Told where a Next alert press would land, once the look-ahead has found it and while no
+   * advance is running: the instant the cursor -- and the read clock -- will stand at. For the
+   * wall to have the server compute ahead what its panes will read there (client/replay/index.ts,
+   * `PluginHost.warmAhead`). Told again after every advance that leaves the landing where it was;
+   * whoever listens keeps it to one warm-up per landing. */
+  warmLanding?: (at: number) => void
 }
 
 export class ReplayTradingSession implements TradingSession, ReplayController {
@@ -740,10 +746,13 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     void this.opts.barSource.warm?.(this.symbol, [this.base, ...this.summaryIntervals()], this.cursor, this.grid).catch(() => {})
     const end = this.opts.dataEnd()
     const found = this.opts.alerts?.prefetch?.(this.cursor, end)
-    // ...and once it has found one, the base bar a press would land on (`landing`).
+    // ...and once it has found one, the base bar a press would land on (`landing`), and what the
+    // wall will read there (`warmLanding`). Not when a press has got there first and is landing
+    // on it already: the panes are about to read it themselves.
     void found?.then((at) => {
       if (at === null || this.disposed) return
       const stopAt = this.alertStop(at, end)
+      if (!this.busy) this.opts.warmLanding?.(stopAt)
       if (this.landing?.at === stopAt && this.landing.base === this.base) return
       this.landing = { base: this.base, at: stopAt, bar: this.readBarAt(stopAt).catch(() => null) }
     })

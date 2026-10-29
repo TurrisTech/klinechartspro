@@ -17,6 +17,7 @@ import type {
   SettingsRequest,
   SourceSpec,
   SourceStore,
+  SourceWarm,
   ValidateRequest
 } from './types'
 
@@ -34,6 +35,10 @@ import type {
 //
 // Built per MOUNT, not once per page: it holds per-pane state keyed by pane id, and
 // `sync([])` at teardown is the only signal it gets.
+//
+// One thing it does that is not coverage: on a bar replay's word, it has the server compute
+// ahead what the sources will read at the replay's next landing (`warmAhead`) -- only for the
+// sources that offer it, and never filing what comes back.
 
 const POLL_MS = 500
 const RANGE_DEBOUNCE_MS = 250
@@ -101,6 +106,13 @@ export interface PluginHost {
   /** The read clock moved forward off `clock` (a replay step): forget the coverage that
    * `clock` made incomplete and re-cover every binding. */
   invalidateFrom(clock: number): void
+  /** Have the server work out ahead of time what every source that offers it (`SourceSpec.warm`)
+   * will read once the read clock stands at `at` -- a bar replay's next landing -- for the bars
+   * `landingRange` says each pane will hold then. One read per store, over the union of the
+   * windows of the panes reading it; a store already warmed for `at` over as much is skipped, so
+   * asking again for the same landing sends nothing. Sends at once (when is the caller's call)
+   * and resolves, with how many reads it sent, once they are all answered. Nothing is filed. */
+  warmAhead(at: number, landingRange: (pane: ChartProPane) => Range | null): Promise<number>
   /** Resolves once no binding has a fetch in flight, or when `timeoutMs` is up -- for a caller
    * that must wait for what the panes draw AFTER a step, rather than what they drew before it
    * (the replay's Play). A timeout is not an error here: the caller reads whatever
@@ -341,6 +353,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     const span = { from: Math.max(from, fetch.range.from), to: fetch.range.to }
     return span.from < span.to ? span : null
   }
+
+  // What each store was last warmed for (`warmAhead`): the read clock and the window. Every
+  // advance that stops short of the next landing asks for it again, and none of those asks may
+  // reach the server: each would be a read of what the first one built, one per store per Step.
+  // One entry per store, so the next landing replaces the last.
+  const warmed = new Map<string, { at: number; window: Range }>()
 
   const scheduleRetry = (entry: WiredPane, b: Binding, afterMs: number): void => {
     if (b.retryTimer) clearTimeout(b.retryTimer)
@@ -787,6 +805,45 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // gets the weakest true statement: nothing past the cursor was knowable.
       for (const [key, store] of liveStores()) if (!seen.has(key)) store.forgetAfter?.(clock)
       for (const entry of wired.values()) coverAll(entry)
+    },
+    async warmAhead(at: number, landingRange: (pane: ChartProPane) => Range | null): Promise<number> {
+      // One read per store: two panes on one key read one series, so the server is asked once,
+      // for everything either will ask -- the union of their windows.
+      const wanted = new Map<string, { window: Range; read: SourceWarm['read'] }>()
+      for (const entry of wired.values()) {
+        let range: Range | null | undefined
+        for (const b of entry.bindings.values()) {
+          if (b.disposed) continue
+          for (const s of b.sources) {
+            const warm = s.spec.warm
+            if (!warm) continue
+            if (range === undefined) range = landingRange(entry.pane)
+            if (range === null) break
+            const window = warm.window(range, at)
+            if (!window || window.to <= window.from) continue
+            const held = wanted.get(s.key)
+            if (held) held.window = { from: Math.min(held.window.from, window.from), to: Math.max(held.window.to, window.to) }
+            else wanted.set(s.key, { window, read: warm.read })
+          }
+        }
+      }
+      const reads: Promise<void>[] = []
+      for (const [key, { window, read }] of wanted) {
+        const done = warmed.get(key)
+        if (done && done.at === at && done.window.from <= window.from && done.window.to >= window.to) continue
+        const mark = { at, window }
+        warmed.set(key, mark)
+        reads.push(
+          read(window, at).catch((err) => {
+            // A warm-up that failed costs the press nothing it would not have paid anyway; it is
+            // forgotten, so the next ask for this landing tries again.
+            if (warmed.get(key) === mark) warmed.delete(key)
+            console.debug(`[plugins] warm-up of ${key} failed`, err)
+          })
+        )
+      }
+      await Promise.all(reads)
+      return reads.length
     },
     teardown(): void {
       host.sync([])

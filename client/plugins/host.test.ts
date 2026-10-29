@@ -851,3 +851,137 @@ describe('per-pane settings', () => {
     expect(host.paneDocs()).toEqual({})
   })
 })
+
+// A BAR REPLAY'S NEXT LANDING, WARMED ON THE SERVER (`warmAhead`). The host asks each source that
+// offers it for the window it will read at the landing, over the bars the replay says the pane
+// will hold then, and sends one read per store -- never a fetch into it, and never twice for one
+// landing.
+describe('warmAhead', () => {
+  /** A plugin whose source is keyed by instrument only, so two panes on one share a store, and
+   * which warms over the predicted bars to just past the landing. */
+  function warmPlugin(opts: { fail?: () => boolean } = {}) {
+    const fetches: Range[] = []
+    const reads: Array<{ key: string; window: Range; at: number }> = []
+    const plugin: IndicatorPlugin = {
+      id: 'warm',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'WARM',
+      bind: (ctx: BindContext) => {
+        const key = `warm|${ctx.ticker}`
+        return {
+          sources: [
+            {
+              id: 'v',
+              key,
+              fetch: async (range): Promise<Page<Point>> => {
+                fetches.push({ ...range })
+                return { points: [], nextFrom: null }
+              },
+              warm: {
+                window: (chartRange: Range, at: number) => ({ from: chartRange.from - 1, to: at + 1 }),
+                read: async (window: Range, at: number) => {
+                  reads.push({ key, window, at })
+                  if (opts.fail?.()) throw new Error('503')
+                }
+              }
+            }
+          ],
+          label: () => 'WARM'
+        }
+      }
+    }
+    return { plugin, fetches, reads }
+  }
+
+  async function wall(plugins: IndicatorPlugin[], panes: Array<{ id: string; ticker: string; data: number[]; template?: string }>) {
+    const host = await createPluginHost({ plugins, facilities: facilities() })
+    hosts.push(host)
+    const made = panes.map((p) => {
+      const fc = fakeChart()
+      fc.data = p.data.map((timestamp) => ({ timestamp }))
+      fc.indicators = [fakeIndicator(p.template ?? 'WARM', `${p.id}-i`)]
+      return fakePane(p.id, fc.chart, p.ticker)
+    })
+    host.sync(made)
+    await flush()
+    return host
+  }
+
+  test("one read per store, over the union of its panes' windows, under the landing's clock -- nothing filed", async () => {
+    const { plugin, fetches, reads } = warmPlugin()
+    const host = await wall(
+      [plugin],
+      [
+        { id: 'a', ticker: 'EURUSD', data: [10, 20] },
+        { id: 'b', ticker: 'EURUSD', data: [30, 40] },
+        { id: 'c', ticker: 'GBPUSD', data: [50, 60] }
+      ]
+    )
+    const before = fetches.length
+    // Where each pane will be at the landing: `a` reloads further on, `b` and `c` append.
+    const landing: Record<string, Range> = { a: { from: 70, to: 101 }, b: { from: 30, to: 101 }, c: { from: 50, to: 101 } }
+    const sent = await host.warmAhead(100, (pane) => landing[pane.id])
+    expect(sent).toBe(2)
+    expect(reads.sort((x, y) => x.key.localeCompare(y.key))).toEqual([
+      { key: 'warm|EURUSD', window: { from: 29, to: 101 }, at: 100 },
+      { key: 'warm|GBPUSD', window: { from: 49, to: 101 }, at: 100 }
+    ])
+    // The stores were not touched: the answer lies past the chart's clock.
+    expect(fetches.length).toBe(before)
+    expect(peekStore<InstanceType<typeof WindowStore<Point, number>>>('warm|EURUSD')?.size).toBe(0)
+  })
+
+  test('the same landing again sends nothing; more of a window, or another landing, sends again', async () => {
+    const { plugin, reads } = warmPlugin()
+    const host = await wall([plugin], [{ id: 'a', ticker: 'EURUSD', data: [10, 20] }])
+    let range: Range = { from: 30, to: 101 }
+    expect(await host.warmAhead(100, () => range)).toBe(1)
+    // Every advance that stops short of the landing asks again: a duplicate each time.
+    expect(await host.warmAhead(100, () => range)).toBe(0)
+    expect(await host.warmAhead(100, () => ({ from: 40, to: 101 }))).toBe(0)
+    // A pane reloaded further back reads more: that part is new to the server.
+    range = { from: 20, to: 101 }
+    expect(await host.warmAhead(100, () => range)).toBe(1)
+    // The landing after it.
+    expect(await host.warmAhead(200, () => ({ from: 150, to: 201 }))).toBe(1)
+    expect(reads.map((r) => [r.at, r.window.from])).toEqual([
+      [100, 29],
+      [100, 19],
+      [200, 149]
+    ])
+  })
+
+  test('a source that offers no warm-up, and a pane with no landing, are left alone', async () => {
+    const { plugin: warm, reads } = warmPlugin()
+    const { plugin: plain, fetches } = pointsPlugin([])
+    const host = await wall(
+      [warm, plain],
+      [
+        { id: 'a', ticker: 'EURUSD', data: [10, 20] },
+        { id: 'b', ticker: 'GBPUSD', data: [10, 20], template: 'PTS' }
+      ]
+    )
+    const before = fetches.length
+    expect(await host.warmAhead(100, (pane) => (pane.id === 'a' ? null : { from: 10, to: 101 }))).toBe(0)
+    expect(reads).toEqual([])
+    expect(fetches.length).toBe(before)
+  })
+
+  test('a failed warm-up is tried again at the next ask', async () => {
+    let failing = true
+    const { plugin, reads } = warmPlugin({ fail: () => failing })
+    const host = await wall([plugin], [{ id: 'a', ticker: 'EURUSD', data: [10, 20] }])
+    const realDebug = console.debug
+    console.debug = () => {}
+    try {
+      expect(await host.warmAhead(100, () => ({ from: 30, to: 101 }))).toBe(1)
+    } finally {
+      console.debug = realDebug
+    }
+    failing = false
+    expect(await host.warmAhead(100, () => ({ from: 30, to: 101 }))).toBe(1)
+    expect(await host.warmAhead(100, () => ({ from: 30, to: 101 }))).toBe(0)
+    expect(reads).toHaveLength(2)
+  })
+})

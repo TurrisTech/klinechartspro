@@ -122,6 +122,44 @@ describe('each overlay', () => {
     expect(closeKnown(FX_GRID, '1h', thursday, thursday + H, thursday + 2 * H)).toBe(false)
   })
 
+  test("a replay's next landing is warmed under the clock the landing sets, for the server alone", async () => {
+    const { setReadClock } = await import('../config')
+    const { spec } = bound(2, '1h')
+    const source = spec?.sources[0]
+    if (!source?.warm) throw new Error('no warm-up')
+    const H = 3_600_000
+    const t = Date.parse('2026-10-05T13:00Z')
+    // The bars the pane will hold at the landing: 13:00Z .. 15:00Z, the press landing on 15:00's close.
+    const landing = { from: t, to: t + 2 * H + 1 }
+    const at = t + 3 * H
+    const requests: Array<{ url: URL; init?: RequestInit }> = []
+    globalThis.fetch = (async (url: URL, init?: RequestInit) => {
+      requests.push({ url: new URL(String(url)), init })
+      return new Response(JSON.stringify({ s: 'no_data', nextFrom: null, computedThrough: null }), { status: 200 })
+    }) as unknown as typeof fetch
+    try {
+      // The replay stands two hours earlier: under ITS clock the last close is not knowable, under
+      // the landing's it is -- and the landing's is the one the press's read will be under.
+      setReadClock(at - 2 * H)
+      expect(source.window?.(landing)?.to).toBe(at)
+      const window = source.warm.window(landing, at)
+      expect(window).toEqual({ from: t - 4 * 86_400_000, to: at + 1 })
+      await source.warm.read(window as { from: number; to: number }, at)
+    } finally {
+      setReadClock(null)
+    }
+    expect(requests).toHaveLength(1)
+    const q = requests[0].url.searchParams
+    expect(requests[0].url.pathname.endsWith('/mtf/graph')).toBe(true)
+    // The pane's own configuration, so the server builds what the press will ask it for...
+    expect([q.get('source'), q.get('timeframes'), q.get('roots'), q.get('maxStep')]).toEqual([MTF_OVERLAYS[2].source, '1h,2h,4h,8h,1D', '1D', '8'])
+    // ...under the landing's clock, not the page's; one signal back, since the server builds and
+    // keeps the whole window whatever the limit; and past the HTTP cache, whose revalidation the
+    // server would answer with a 304 before building anything.
+    expect([q.get('from'), q.get('to'), q.get('asof'), q.get('limit')]).toEqual([String(t - 4 * 86_400_000), String(at + 1), String(at), '1'])
+    expect(requests[0].init?.cache).toBe('no-store')
+  })
+
   test('nothing drawn, nothing read', () => {
     const { spec } = bound(2, '1D')
     // Only 1D is not finer than a daily chart; with it off nothing is drawable.
