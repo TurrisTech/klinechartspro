@@ -1,8 +1,7 @@
 import type { ChartProPane, Datafeed, KLineChartPro } from '../../src'
 import { capabilities, hasFeature } from '../capabilities'
-import { apiGet, OhlcvApiError, setReadClock } from '../config'
+import { OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
-import { isNoData, type OHLCVBar } from '../ohlcv'
 import type { PluginHost } from '../plugins/host'
 import { periodToResolution } from '../periods'
 import { fetchSymbolInfo, symbolVendor } from '../symbols'
@@ -19,9 +18,10 @@ import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
+import { probeStoredIntervals } from './source'
 import { TiledBarSource } from './tiled'
 import { ReplayWatches } from './watches'
-import { type CandleGrid, gridOf, nominalMs, scheduleOf, STORED_LADDER, sortByLength } from './timeframes'
+import { type CandleGrid, gridOf, scheduleOf, sortByLength } from './timeframes'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
 // session bound to the shared trading dock, the floating control window over the chart, and
@@ -123,34 +123,10 @@ export function clearReplay(): void {
 /** The longest Play waits for the wall to load between two steps. */
 const PLAY_SETTLE_MS = 5_000
 
-/** How far back the stored-ladder probe looks: a store's finest series may lag the newest
- * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
-const PROBE_WINDOW_MS = 10 * 86_400_000
-
-/** Probe which of the stored ladder the store holds for the instrument around `at`. */
-async function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promise<string[]> {
-  // All at once, not one after another: they are independent one-bar reads, and the user is
-  // waiting on the last of them (the start dialog, or the replay wall's mount).
-  const held = await Promise.all(
-    STORED_LADDER.map(async (code) => {
-      try {
-        const shift = grid.toWire(code, at) - at
-        const body = await apiGet<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
-          symbol,
-          resolution: code,
-          from: at - Math.max(PROBE_WINDOW_MS, 30 * nominalMs(code)) + shift,
-          to: at + shift,
-          limit: 1,
-          asof: null
-        })
-        return Array.isArray(body) && body.length > 0 && !isNoData(body)
-      } catch (err) {
-        if (!(err instanceof OhlcvApiError)) throw err
-        return false
-      }
-    })
-  )
-  return STORED_LADDER.filter((_, i) => held[i])
+/** Which of the stored ladder the store holds for the instrument around `at` -- of the intervals
+ * its vendor stores, never one the server would only fold (`probeStoredIntervals`). */
+function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promise<string[]> {
+  return probeStoredIntervals(symbol, at, grid)
 }
 
 /** Open the start dialog on a live wall and, on confirm, create the replay session and
