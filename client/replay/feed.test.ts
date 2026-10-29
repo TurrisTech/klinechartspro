@@ -272,6 +272,88 @@ describe('ReplayFeedHub composes the forming candle from the coarsest stored bar
   })
 })
 
+// THE FORMING CANDLE TAKES THE ROWS ITS CLOSED BAR WILL. Schwab stores 1m bars from 08:00, and the
+// server folds its 1h out of 30m rows the instrument TRADES at (09:30-16:00, under a grid anchored
+// at 09:00): so a forming 1h candle made of every stored minute since 09:00 opened on a pre-market
+// price and carried pre-market volume, then jumped to the server's bar at 10:00. A stored bar (30m,
+// 1D) and a fold of daily bars (1W) are the store's rows as they are, and their candles still are.
+
+const EQUITY_PANE: Partial<SymbolInfo> = {
+  ticker: 'SPY',
+  exchange: 'schwab',
+  timezone: 'America/New_York',
+  dayGeometry: { openOffset: 9, closeOffset: 16, everyDayTrades: false },
+  tradingWeek: {
+    timezone: 'America/New_York',
+    sessions: ['mon', 'tue', 'wed', 'thu', 'fri'].map((d) => ({ openDay: d, openTime: '09:30', closeDay: d, closeTime: '16:00' }))
+  }
+}
+
+/** Monday 4 March 2024: a stored minute from 08:00, priced 100 and volume 1 before 09:30, 200 and
+ * 10 after; nothing else stored. */
+class EquityMinutes implements BarSource {
+  async fetch(_symbol: string, interval: string, from: number, to: number): Promise<ReplayBar[]> {
+    if (interval !== '1m') return []
+    const out: ReplayBar[] = []
+    for (let open = ny(4, 8); open < ny(4, 16); open += 60_000) {
+      if (open < from || open >= to) continue
+      const rth = open >= ny(4, 9, 30)
+      const p = rth ? 200 : 100
+      out.push({ open, end: open + 60_000, date: open, o: p, h: p + 1, l: p - 1, c: p, v: rth ? 10 : 1 })
+    }
+    return out
+  }
+}
+
+describe('ReplayFeedHub composes a folded candle from the rows the server folds', () => {
+  const SCHWAB = (): string[] => ['1m', '30m', '1D']
+  const equityPane = (interval: string, last: number): { pane: ChartProPane; data: KLineData[] } => pane(EQUITY_PANE, interval, [bar(last)])
+
+  test("a schwab 1h candle forming at 09:45 is the 09:30-09:44 minutes, as the server's 09:00 bar is", async () => {
+    const cursor = ny(4, 9, 45)
+    const hub = new ReplayFeedHub(new EquityMinutes(), '1m', cursor, null, SCHWAB)
+    hub.setStored('schwab:SPY', ['1m', '1D'])
+    const hour = equityPane('1h', ny(1, 15))
+    const [report] = await hub.push([hour.pane], cursor - 60_000)
+    expect(report.problem).toBeNull()
+    expect(report.forming).toBe(true)
+    expect(hour.data.at(-1)).toEqual({ timestamp: ny(4, 9), open: 200, high: 201, low: 199, close: 200, volume: 15 * 10 })
+  })
+
+  test('a 5m candle with no trading minute in it yet is no candle, as the server has none at 09:00', async () => {
+    const cursor = ny(4, 9, 3)
+    const hub = new ReplayFeedHub(new EquityMinutes(), '1m', cursor, null, SCHWAB)
+    hub.setStored('schwab:SPY', ['1m', '1D'])
+    const five = equityPane('5m', ny(1, 15, 55))
+    const [report] = await hub.push([five.pane], cursor - 60_000)
+    expect(report.forming).toBe(false)
+    expect(five.data.map((b) => b.timestamp)).toEqual([ny(1, 15, 55)])
+  })
+
+  test('stored and daily-folded candles keep every stored minute: 30m, 1D and 1W at 09:45', async () => {
+    const cursor = ny(4, 9, 45)
+    const hub = new ReplayFeedHub(new EquityMinutes(), '1m', cursor, null, SCHWAB)
+    hub.setStored('schwab:SPY', ['1m', '1D'])
+    const half = equityPane('30m', ny(1, 15, 30))
+    const day = equityPane('1D', ny(1, 0))
+    const week = equityPane('1W', ny(1, 0) - 4 * 86_400_000)
+    await hub.push([half.pane, day.pane, week.pane], cursor - 60_000)
+    expect(half.data.at(-1)).toMatchObject({ timestamp: ny(4, 9, 30), open: 200, volume: 15 * 10 })
+    // 09:00-09:29 at 1 and 09:30-09:44 at 10: the stored daily is the vendor's, not a fold.
+    expect(day.data.at(-1)).toMatchObject({ timestamp: ny(4, 0), open: 100, low: 99, high: 201, volume: 30 + 150 })
+    expect(week.data.at(-1)).toMatchObject({ open: 100, volume: 30 + 150 })
+  })
+
+  test('without the vendor saying 1h is folded (an older server), the candle is composed as before', async () => {
+    const cursor = ny(4, 9, 45)
+    const hub = new ReplayFeedHub(new EquityMinutes(), '1m', cursor, null, () => ['5s', '1m', '1h', '1D', '1M'])
+    hub.setStored('schwab:SPY', ['1m', '1D'])
+    const hour = equityPane('1h', ny(1, 15))
+    await hub.push([hour.pane], cursor - 60_000)
+    expect(hour.data.at(-1)).toMatchObject({ timestamp: ny(4, 9), open: 100, volume: 30 + 150 })
+  })
+})
+
 // THE WINDOW A PANE RELOADS INTO ENDS PAST THE BAR FORMING AT THE CURSOR. A forex day forming
 // from Tuesday 17:00 is dated Wednesday 00:00 on the wire -- after the cursor -- so a window
 // ending at the cursor left it out: a 1D pane reloaded between 17:00 and midnight drew Tuesday

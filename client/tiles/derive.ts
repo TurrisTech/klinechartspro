@@ -39,6 +39,20 @@
 // A manifest from before the field existed says nothing about its day, and nothing is not a
 // licence to assume the FX week: that build might have been describing any of the three. Such
 // a series is simply not folded until its tree is next built.
+//
+// The geometry is the GRID, and the grid is not which rows count. Folding intraday rows, the
+// server keeps the ones its schedule TRADES at (`aggregate_ohlcv` -> `market_open_mask` ->
+// `MarketHours.is_open`), and a schedule says that separately: a US equity's sessions open at
+// 09:30 under a 09:00 anchor, a lira cross trades Istanbul's day on New York's FX grid, a metal
+// stops for an hour at 17:00. So `fold` takes the trading week (`TradingWeek`, from
+// `/instrument`; the manifest does not carry one) and filters an intraday source on it. Until
+// 2026-10-29 it filtered on the boundary rule, and every schwab bar folded across 09:00 kept the
+// pre-market half hour the server's drops (prod SPY 2026-09-01..10-23: the 09:00 1h, 2h, 4h and
+// 8h bar differed on every day, 38 of 38 (37 of 37 at 8h), in open and volume; 3m/5m/15m/20m
+// carried 200/120/40/20 bars the server has none of; XAUUSD 2h-8h differed on 165-172 of the
+// 2006 history's 17:00 bars, where the store holds hours inside the metals' break). Daily-and-coarser sources keep the boundary rule, as the server does
+// (`keep_market_closed_rows` + `drop_non_candle_rows`): a daily bar is a whole session, labelled
+// 09:00 on an equity, and the trading rule would drop every one of them.
 
 import type { KLineData } from 'klinecharts'
 import {
@@ -47,7 +61,9 @@ import {
   scheduleIntervalStart,
   scheduleIsMarketOpen,
   scheduleNextIntervalStart,
-  scheduleWireShift
+  scheduleWireShift,
+  type TradingWeek,
+  tradingFilter
 } from '../replay/timeframes'
 import type { TileManifest } from './manifest'
 
@@ -128,6 +144,14 @@ export function sourceInterval(code: string, bases: string[]): string | null {
     if (coarsest !== null) return coarsest
   }
   return null
+}
+
+/** Whether `code`'s closed bar is a fold of INTRADAY rows on this vendor -- the bars whose rows
+ * the server filters on the trading week. A stored interval is the vendor's own bar, and a fold
+ * of daily bars keeps every daily row the grid allows; neither is filtered by trading hours. */
+export function foldsIntradayRows(code: string, bases: string[]): boolean {
+  const source = sourceInterval(code, bases)
+  return source !== null && span(source)?.[0] === 'intraday'
 }
 
 /** The day geometry a manifest states, or null when it states none (a build from before the
@@ -221,9 +245,12 @@ export function sourceWindow(
  * Fold source bars into `code` candles.
  *
  * `bars` are the source's, on its own wire clock and ascending; the result is on the target's.
- * Market-closed rows are dropped first, which is what `aggregate_ohlcv` does server-side and
- * the reason `isMarketOpen` is in the port at all -- stored data can carry rows the calculation
- * must not see.
+ * Rows the calculation must not see are dropped first, by the server's rule
+ * (`aggregate_ohlcv`): an INTRADAY source's rows count only where `trading` -- the instrument's
+ * trading week -- is open, and must be given one (null throws: there is no rule to guess with);
+ * a daily-or-coarser source's rows count where a candle of it may open (`scheduleIsMarketOpen`,
+ * the boundary rule), and `trading` is not read. A bucket left with no row is no bar, as it is
+ * no bar on the server (schwab's 09:00 5m).
  *
  * Grouping is a single pass over already-sorted rows rather than a map keyed by bucket: the
  * source is ordered, so a bucket ends exactly where its open changes.
@@ -233,8 +260,12 @@ export function fold(
   source: string,
   bars: readonly KLineData[],
   tz: string,
-  day: DayGeometry
+  day: DayGeometry,
+  trading: TradingWeek | null
 ): KLineData[] {
+  const intraday = span(source)?.[0] === 'intraday'
+  if (intraday && trading === null) throw new Error(`folding ${code} from ${source} rows needs the instrument's trading week`)
+  const counts = intraday && trading !== null ? tradingFilter(trading) : (at: number) => scheduleIsMarketOpen(at, tz, day)
   const out: KLineData[] = []
   const sourceShift = scheduleWireShift(source, day)
   const shift = scheduleWireShift(code, day)
@@ -242,7 +273,7 @@ export function fold(
   let current: KLineData | null = null
   for (const bar of bars) {
     const at = bar.timestamp - sourceShift
-    if (!scheduleIsMarketOpen(at, tz, day)) continue
+    if (!counts(at)) continue
     const bucket = scheduleIntervalStart(code, at, tz, day)
     if (current === null || bucket !== openMs) {
       if (current !== null) out.push(current)

@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { tradingWeekOf } from '../daygeometry'
+import type { MarketHours } from '../symbols'
 import boundaries from './fixtures/boundaries.json'
+import trading from './fixtures/trading.json'
 import {
   CONTINUOUS_DAY,
   FX_DAY,
@@ -24,6 +27,7 @@ import {
   scheduleNextIntervalStart,
   toWall,
   toWireDate,
+  tradingFilter,
   validateBase
 } from './timeframes'
 
@@ -98,6 +102,45 @@ describe('boundaries match wmarkettypes (fixtures/boundaries.json)', () => {
       }
     })
   }
+})
+
+describe('the trading week matches wmarkettypes (fixtures/trading.json)', () => {
+  // `MarketHours.is_open`, the FILTERING rule every server-side fold applies, swept every 15
+  // minutes over three DST changes on prod's own schedules: SPY (09:30-16:00 sessions under a
+  // 09:00 grid, no `trading` block), XAUUSD (the FX grid, trading with a daily 17:00-18:00 break),
+  // USDTRY (the FX grid, trading 09:00-18:00 Istanbul), EURUSD and BTCUSD (trading = grid).
+  for (const { symbol, marketHours, sweeps } of trading.schedules) {
+    test(symbol, () => {
+      const week = tradingWeekOf(marketHours as MarketHours)
+      expect(week).not.toBeNull()
+      const trades = tradingFilter(week as NonNullable<typeof week>)
+      for (const sweep of sweeps) {
+        let got = ''
+        for (let i = 0; i < sweep.open.length; i++) got += trades(sweep.from + i * sweep.stepMs) ? '1' : '0'
+        expect(got).toBe(sweep.open)
+      }
+    })
+  }
+
+  test("the grid's isTrading is the trading week, and the boundary rule where none is known", () => {
+    const day = { openOffset: 9, closeOffset: 16, everyDayTrades: false }
+    const spy = trading.schedules.find((s) => s.symbol === 'schwab:SPY')?.marketHours as MarketHours
+    const known = gridOf({ timezone: TZ, day, trading: tradingWeekOf(spy) ?? undefined })
+    const unknown = gridOf({ timezone: TZ, day })
+    for (const [wall, trades, boundary] of [
+      ['2024-03-04 09:00', false, true],
+      ['2024-03-04 09:29', false, true],
+      ['2024-03-04 09:30', true, true],
+      ['2024-03-04 15:59', true, true],
+      ['2024-03-04 16:00', false, false]
+    ] as const) {
+      expect([known.isTrading(ny(wall)), known.isOpen(ny(wall)), unknown.isTrading(ny(wall))]).toEqual([trades, boundary, boundary])
+    }
+    // It travels on the SymbolInfo with the rest of the schedule.
+    const week = tradingWeekOf(spy) ?? undefined
+    expect(scheduleOf({ timezone: TZ, dayGeometry: day, tradingWeek: week })?.trading).toEqual(week)
+    expect(gridFor({ timezone: TZ, dayGeometry: day, tradingWeek: week })?.isTrading(ny('2024-03-04 09:15'))).toBe(false)
+  })
 })
 
 describe('advanceTarget', () => {

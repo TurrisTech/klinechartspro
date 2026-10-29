@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { dayGeometryOf } from './daygeometry'
+import { dayGeometryOf, tradingWeekOf } from './daygeometry'
 
 const session = (openDay: string, openTime: string, closeDay: string, closeTime: string) => ({
   openDay,
@@ -35,5 +35,31 @@ describe('dayGeometryOf', () => {
   test('no schedule, no geometry', () => {
     expect(dayGeometryOf(undefined)).toBeNull()
     expect(dayGeometryOf({ timezone: 'UTC', sessions: [] })).toBeNull()
+  })
+})
+
+// wmarkettypes' `trading_hours`: the schedule's `trading` block where it has one, its own sessions
+// otherwise -- never the grid's geometry, which floors a 09:30 open to 09:00.
+describe('tradingWeekOf', () => {
+  const fxGrid = [session('sun', '17:00', 'fri', '17:00')]
+
+  test('a US equity trades its own sessions: 09:30, not the 09:00 its grid anchors on', () => {
+    const days = ['mon', 'tue', 'wed', 'thu', 'fri']
+    const hours = { timezone: 'America/New_York', sessions: days.map((d) => session(d, '09:30', d, '16:00')), trading: null }
+    expect(tradingWeekOf(hours)).toEqual({ timezone: 'America/New_York', sessions: hours.sessions })
+  })
+
+  test('a lira cross trades its `trading` block, on its own clock', () => {
+    const trading = { timezone: 'Europe/Istanbul', sessions: [session('mon', '09:00', 'mon', '18:00')] }
+    expect(tradingWeekOf({ timezone: 'America/New_York', sessions: fxGrid, trading })).toEqual(trading)
+    // The grid is still the FX week: the two questions have two answers.
+    expect(dayGeometryOf({ timezone: 'America/New_York', sessions: fxGrid, trading })).toEqual({ openOffset: -7, closeOffset: 17, everyDayTrades: false })
+  })
+
+  test('no schedule, or one this port cannot read, is no trading week -- never a guess', () => {
+    expect(tradingWeekOf(undefined)).toBeNull()
+    expect(tradingWeekOf({ timezone: 'UTC', sessions: [] })).toBeNull()
+    expect(tradingWeekOf({ timezone: 'UTC', sessions: [session('monday', '00:00', 'mon', '00:00')] })).toBeNull()
+    expect(tradingWeekOf({ timezone: 'America/New_York', sessions: fxGrid, trading: { timezone: 'UTC', sessions: [] } })).toBeNull()
   })
 })

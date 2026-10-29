@@ -12,7 +12,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 
 | module | role |
 |---|---|
-| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`, `storedLadderFor`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`). Parity asserted against `fixtures/boundaries.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
+| `timeframes.ts` | PURE. Interval algebra (`divides`, `gcdInterval`, `defaultBase`, `validateBase`, `finerStored`, `storedLadderFor`) and the boundary math mirroring wmarkettypes' `Interval`, for all three schedules the store carries (`schedule*`), and the **`CandleGrid`** the replay asks every boundary question of: those functions bound to one instrument's zone and day geometry (`gridOf`, `gridFor(symbolInfo)`), plus its trading week (`isTrading`, the port of `MarketHours.is_open`: `tradingFilter`). Parity asserted against `fixtures/boundaries.json` and `fixtures/trading.json`, generated from wmarkettypes. The unparameterised `intervalStart`/… are the FX week, kept for the FX-only callers outside the replay. |
 | `engine.ts` | PURE. The port of `engine.py`: same types (the wire's `SimOrder`/`SimTrade`), same events, same ids (`o1`, `t2`, …), no I/O. Parity asserted by running `fixtures/engine_cases.json` — the *same file* the Python suite runs. |
 | `clock.ts` | PURE. `planAdvance(cursor, request, alert)` → target / stopAt / reason; `intersectsWorking` (the descend-to-finer rule); `canFill`; Go to's `goToInstant` (a time of day on the instrument's clock: next trading day, next occurrence, a date), `isTradingDay` and `onBaseBoundary`. |
 | `cache.ts` | `BarCache` per (instrument, timeframe) over an injected `BarSource`: a contiguous run ahead of an anchor; **walked** (`ensure`/`take`) or **seeked** (`seek`: dump and reload), never a partial append onto a stale run; `cover` past the run's end is a seek too. `composeLadder`/`composeSpans` (which stored bars a forming candle is made of), `composeForming`, `nonWeekendGaps`. |
@@ -262,6 +262,14 @@ forming bar composed from the 1h base equals the server's `asof` rebuild in all 
 step; EURUSD steps and labels exactly as before (pinned by `timeframes.test.ts`, which sweeps the
 FX grid against the old functions).
 
+**A schedule answers two questions** (CLAUDE.md), and the grid carries both. `isOpen` is the
+BOUNDARY rule -- may a candle open here -- read off `dayGeometry`; `isTrading` is the FILTERING
+rule -- does a row here count -- read off `SymbolInfo.tradingWeek` (`tradingWeekOf`: the
+schedule's `trading` block, or its own sessions where it has none). They differ wherever the
+trading week is not the grid: SPY is boundary-open from 09:00 and trades from 09:30, a lira cross
+trades Istanbul's day on New York's FX grid, a metal stops 17:00-18:00. Only the feed hub's
+forming candles ask `isTrading` (see "A forming candle takes the rows its closed bar will").
+
 **Intraday steps walk the schedule's own grid** (2026-10-29). `scheduleNextIntervalStart` used to
 step the FX week's 17:00-anchored grid whatever the schedule, which is the same grid for 2h/4h/8h
 on New York equities (17 and 9 are 8 apart) but not for 3h or 6h -- from 09:00 the next 3h open came
@@ -369,9 +377,10 @@ instrument's vendor stores according to `/capabilities` `baseIntervals` and that
 the cursor. Until 2026-10-29 the probe asked about the whole ladder, and `/getbars` answers an
 interval it folds as readily as one it stores -- so schwab's 1h, a fold of its 30m, was offered
 as a base, used as a rung of every 4h/1D forming candle and as a step of the refinement, each
-time answering from whichever fold its period landed in (the browser's keeps the 09:00-09:30
-pre-market half hour of a stored read, the server's drops it: prod SPY's 09:00 hour differed in
-open and volume on 15 of 15 days, and no other hour did). A schwab wall now walks 1m or 1D.
+time answering from whichever fold its period landed in (the browser's kept the 09:00-09:30
+pre-market half hour of a stored read until 2026-10-29, the server's drops it: prod SPY's 09:00
+hour differed in open and volume on 15 of 15 days, and no other hour did; `client/tiles/derive.ts`
+now folds on the trading week and the two agree). A schwab wall walks 1m or 1D.
 
 ## Advancing
 
@@ -739,6 +748,15 @@ range past the end of its run: it used to extend from its own end, so after a ju
 needed the last minute of it. Measured headless against prod (EURGBP, six panes 3m..1D, 5s base):
 the push after a Go to "06:00 next trading day" took **30-109 ms** reading 400 1m bars, against
 **482-616 ms** reading ~11,000 5s bars.
+
+**A forming candle takes the rows its closed bar will** (2026-10-29). Where the pane's interval
+is the server's fold of intraday rows (`tiles/derive.ts` `foldsIntradayRows`, against the vendor's
+`/capabilities` `baseIntervals`: schwab's 1h and 5m, any vendor's 4h), only the parts the
+instrument trades at go in (`grid.isTrading`), because `aggregate_ohlcv` folds only those: schwab
+stores minutes from 08:00, and a forming 1h candle made of every one since 09:00 opened on a
+pre-market price and jumped to the server's bar at its close. A stored interval (schwab's 30m and
+1D) and a fold of daily bars (1W) are the store's rows as they are, and so are their forming
+candles. The server's own `asof` rebuild (`partial_bar`) does not filter yet.
 
 ## Persistence
 

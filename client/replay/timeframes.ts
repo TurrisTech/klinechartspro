@@ -850,6 +850,49 @@ export function scheduleIsMarketOpen(ms: number, tz: string, day: DayGeometry): 
   return dayOpen(sessionDay, day) <= wall && wall < dayClose(sessionDay, day)
 }
 
+/** When an instrument trades, as `/instrument` states it (`client/daygeometry.ts`
+ * `tradingWeekOf`): half-open spans of the repeating week on `timezone`'s wall clock. The same
+ * shape as the library's `TradingWeek`, restated so this file keeps no imports. */
+export interface TradingWeek {
+  timezone: string
+  sessions: ReadonlyArray<{ openDay: string; openTime: string; closeDay: string; closeTime: string }>
+}
+
+const WEEK_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+const WEEK = 7 * DAY
+
+/** Milliseconds from Monday 00:00 of a session's day and time-of-day ('HH:MM[:SS]'). */
+function weekPosition(dayName: string, time: string): number {
+  const [h = 0, m = 0, sec = 0] = time.split(':').map(Number)
+  return WEEK_DAYS.indexOf(dayName) * DAY + ((h * 60 + m) * 60 + sec) * 1000
+}
+
+/**
+ * The FILTERING rule of a schedule -- wmarkettypes' `MarketHours.is_open` / `is_open_index`,
+ * ported: does a row at `ms` count. Each instant is reduced to its place in the repeating week on
+ * the trading week's own wall clock (where DST is handled) and tested against every
+ * `[open, close)` span; a span whose close equals its open is the whole week.
+ *
+ * Not `scheduleIsMarketOpen`, which is the BOUNDARY rule (may a candle open here), and the two are
+ * different questions wherever the trading week is not the grid: a US equity is boundary-open
+ * from 09:00 and trades from 09:30; a lira cross keeps Istanbul's day on New York's FX grid. The
+ * spans are read once, so the returned test costs one wall-clock conversion per row.
+ */
+export function tradingFilter(week: TradingWeek): (ms: number) => boolean {
+  const spans = week.sessions.map((session) => {
+    const open = weekPosition(session.openDay, session.openTime)
+    const span = (((weekPosition(session.closeDay, session.closeTime) - open) % WEEK) + WEEK) % WEEK
+    return { open, length: span === 0 ? WEEK : span }
+  })
+  const tz = week.timezone
+  return (ms) => {
+    // 1970-01-01 was a Thursday, three days after a Monday.
+    const position = (((toWall(ms, tz) + 3 * DAY) % WEEK) + WEEK) % WEEK
+    for (const { open, length } of spans) if ((((position - open) % WEEK) + WEEK) % WEEK < length) return true
+    return false
+  }
+}
+
 /** The wire offset for daily-and-coarser bars under `day`: the negation of its open offset,
  * so a bar's label is the midnight that dates its session. +7h forex, 0 crypto, -9h equities
  * -- `wdashboard_server/services/wiredate.py` computes the identical number. */
@@ -872,6 +915,11 @@ export function scheduleWireShift(code: string, day: DayGeometry): number {
 export interface Schedule {
   timezone: string
   day: DayGeometry
+  /** When its rows count (`SymbolInfo.tradingWeek`), where the grid does not say: a US equity's
+   * 09:30 open under its 09:00 anchor, a lira cross's Istanbul day. Absent, `CandleGrid.isTrading`
+   * falls back to the boundary rule -- the same answer only where the trading week is the grid
+   * (forex and crypto without a `trading` block). */
+  trading?: TradingWeek
 }
 
 /** The FX week on New York -- what every OANDA instrument resolves to. A value for tests and
@@ -879,8 +927,13 @@ export interface Schedule {
 export const FX_SCHEDULE: Schedule = { timezone: MARKET_TZ, day: FX_DAY }
 
 /** The schedule a `SymbolInfo` carries, or null when the server resolved none for it. */
-export function scheduleOf(symbol: { timezone?: string; dayGeometry?: DayGeometry } | null | undefined): Schedule | null {
-  return symbol?.timezone && symbol.dayGeometry ? { timezone: symbol.timezone, day: symbol.dayGeometry } : null
+export function scheduleOf(
+  symbol: { timezone?: string; dayGeometry?: DayGeometry; tradingWeek?: TradingWeek } | null | undefined
+): Schedule | null {
+  if (!symbol?.timezone || !symbol.dayGeometry) return null
+  const schedule: Schedule = { timezone: symbol.timezone, day: symbol.dayGeometry }
+  if (symbol.tradingWeek) schedule.trading = symbol.tradingWeek
+  return schedule
 }
 
 /** Every boundary question the replay asks, on one instrument's schedule. */
@@ -894,6 +947,9 @@ export interface CandleGrid {
   nextStart(code: string, ms: number): number
   /** The BOUNDARY notion of open: may a candle open here. */
   isOpen(ms: number): boolean
+  /** The FILTERING notion: is the instrument trading at `ms`, so that a row there counts in a
+   * fold of rows (`tradingFilter` on the schedule's trading week; `isOpen` without one). */
+  isTrading(ms: number): boolean
   /** A bar's wire label from its open (daily-and-coarser are dated by session). */
   toWire(code: string, openMs: number): number
   /** A bar's open from its wire label. */
@@ -914,12 +970,14 @@ export function gridOf(schedule: Schedule): CandleGrid {
   const end = (code: string, ms: number): number => scheduleIntervalEnd(code, ms, tz, day)
   const nextStart = (code: string, ms: number): number => scheduleNextIntervalStart(code, ms, tz, day)
   const isOpen = (ms: number): boolean => scheduleIsMarketOpen(ms, tz, day)
+  const isTrading = schedule.trading ? tradingFilter(schedule.trading) : isOpen
   return {
     schedule,
     start,
     end,
     nextStart,
     isOpen,
+    isTrading,
     nextDayAnchor(ms) {
       const wall = toWall(ms, tz)
       const anchor = floorDay(wall) + ((((day.closeOffset % 24) + 24) % 24) * HOUR)
@@ -946,7 +1004,9 @@ export const FX_GRID: CandleGrid = gridOf(FX_SCHEDULE)
 
 /** The grid of the instrument a `SymbolInfo` describes -- a pane's, say -- or null when the
  * server resolved no market hours for it. */
-export function gridFor(symbol: { timezone?: string; dayGeometry?: DayGeometry } | null | undefined): CandleGrid | null {
+export function gridFor(
+  symbol: { timezone?: string; dayGeometry?: DayGeometry; tradingWeek?: TradingWeek } | null | undefined
+): CandleGrid | null {
   const schedule = scheduleOf(symbol)
   return schedule ? gridOf(schedule) : null
 }

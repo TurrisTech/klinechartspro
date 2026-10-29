@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
-import { fold, foldedCoveredFrom, foldedCoveredTo, manifestDay, sourceInterval, sourceWindow } from './derive'
+import { tradingWeekOf } from '../daygeometry'
+import type { MarketHours } from '../symbols'
+import { scheduleIsMarketOpen, type TradingWeek, tradingFilter } from '../replay/timeframes'
+import { fold, foldedCoveredFrom, foldedCoveredTo, foldsIntradayRows, manifestDay, sourceInterval, sourceWindow } from './derive'
+import prod from './fixtures/trading-folds.json'
 import type { TileManifest } from './manifest'
 
 // Folding a derived timeframe out of the base tiles, in the browser.
@@ -19,6 +23,15 @@ const UTC = 'UTC'
 const FX = { openOffset: -7, closeOffset: 17, everyDayTrades: false }
 const CRYPTO = { openOffset: 0, closeOffset: 24, everyDayTrades: true }
 const EQUITY = { openOffset: 9, closeOffset: 16, everyDayTrades: false }
+
+// And when each trades, as `/instrument` states it -- which is what decides the rows of an
+// intraday fold. Forex and crypto trade their grid; a US equity's sessions open at 09:30.
+const FX_WEEK = { timezone: TZ, sessions: [{ openDay: 'sun', openTime: '17:00', closeDay: 'fri', closeTime: '17:00' }] }
+const CRYPTO_WEEK = { timezone: UTC, sessions: [{ openDay: 'mon', openTime: '00:00', closeDay: 'mon', closeTime: '00:00' }] }
+const EQUITY_WEEK = {
+  timezone: TZ,
+  sessions: ['mon', 'tue', 'wed', 'thu', 'fri'].map((d) => ({ openDay: d, openTime: '09:30', closeDay: d, closeTime: '16:00' }))
+}
 
 /** Monday 4 March 2024 17:00 New York — a session open, so the 4h grid starts on it. */
 const MON_1700 = Date.UTC(2024, 2, 4, 22)
@@ -171,7 +184,7 @@ describe('folding', () => {
     }))
 
   test('open of the first, extremes of the bucket, close of the last, volume summed', () => {
-    const out = fold('4h', '1h', bars(8), TZ, FX)
+    const out = fold('4h', '1h', bars(8), TZ, FX, FX_WEEK)
     expect(out.map((b) => b.timestamp)).toEqual([MON_1700, MON_1700 + 4 * HOUR])
     expect(out[0].open).toBe(1)
     expect(out[0].high).toBe(2.003)
@@ -190,7 +203,7 @@ describe('folding', () => {
       { timestamp: friday1600, open: 1, high: 1, low: 1, close: 1, volume: 10 },
       { timestamp: friday1600 + HOUR, open: 9, high: 9, low: 9, close: 9, volume: 99 }
     ]
-    const out = fold('4h', '1h', rows, TZ, FX)
+    const out = fold('4h', '1h', rows, TZ, FX, FX_WEEK)
     expect(out).toHaveLength(1)
     expect(out[0].high).toBe(1)
     expect(out[0].volume).toBe(10)
@@ -199,12 +212,98 @@ describe('folding', () => {
   test('a continuous market keeps every row and buckets on its own calendar', () => {
     const midnight = Date.UTC(2024, 2, 9) // a Saturday: closed for FX, open for crypto
     const rows = bars(8, midnight)
-    const out = fold('4h', '1h', rows, UTC, CRYPTO)
+    const out = fold('4h', '1h', rows, UTC, CRYPTO, CRYPTO_WEEK)
     expect(out.map((b) => b.timestamp)).toEqual([midnight, midnight + 4 * HOUR])
     expect(out[0].volume).toBe(1 + 2 + 3 + 4)
   })
 
   test('an empty source folds to nothing rather than to a bar with no rows', () => {
-    expect(fold('4h', '1h', [], TZ, FX)).toEqual([])
+    expect(fold('4h', '1h', [], TZ, FX, FX_WEEK)).toEqual([])
+  })
+})
+
+// THE ROWS A FOLD TAKES ARE THE ONES THE INSTRUMENT TRADES AT, as `aggregate_ohlcv` takes them.
+// `fixtures/trading-folds.json` is prod, 2026-10-29: the tile rows the browser folds, and
+// `/getbars`' answer for the same window. Schwab stores SPY's 30m and 1m bars from 07:00 and the
+// server folds only those inside the 09:30-16:00 sessions, under a grid anchored at 09:00; a metal
+// has stored hours inside its daily 17:00-18:00 break (XAUUSD, Monday 2020-12-07). Folded on the
+// boundary rule instead, every SPY bar across 09:00 kept the pre-market half hour.
+
+type Row = number[]
+const kline = ([timestamp, open, high, low, close, volume]: Row): KLineData => ({ timestamp, open, high, low, close, volume })
+
+describe('a fold takes the rows the server takes', () => {
+  const expectedDropped: Record<string, number> = { 'SPY week': 5, 'SPY morning': 30, 'XAUUSD week': 1 }
+  const series = [
+    { name: 'SPY week', hours: prod.spy.hours, day: prod.spy.day, source: '30m', part: prod.spy.week },
+    { name: 'SPY morning', hours: prod.spy.hours, day: prod.spy.day, source: '1m', part: prod.spy.minutes },
+    { name: 'XAUUSD week', hours: prod.xauusd.hours, day: prod.xauusd.day, source: '1h', part: prod.xauusd.week }
+  ]
+
+  for (const { name, hours, day, source, part } of series) {
+    const tz = (hours as MarketHours).timezone
+    const trading = tradingWeekOf(hours as MarketHours)
+    const rows = part.rows.map(kline)
+    for (const [code, server] of Object.entries(part.server as Record<string, Row[]>)) {
+      test(`${name}: ${code} from ${source} is /getbars' ${code}, bar for bar`, () => {
+        expect(server.length).toBeGreaterThan(0)
+        const folded = fold(code, source, rows, tz, day, trading).filter((b) => b.timestamp >= part.from && b.timestamp < part.to)
+        expect(folded).toEqual(server.map(kline))
+      })
+    }
+    test(`${name}: the fixture holds rows the boundary rule keeps and the trading week drops`, () => {
+      // What makes the cases above a test of the rule: folded on the boundary rule these rows
+      // went in (SPY's 09:00-09:29, the metal's 17:00 hour), and no server bar has them.
+      const trades = tradingFilter(trading as TradingWeek)
+      const dropped = rows.filter((b) => scheduleIsMarketOpen(b.timestamp, tz, day) && !trades(b.timestamp))
+      expect(dropped.length).toBe(expectedDropped[name])
+    })
+  }
+
+  test('an intraday fold with no trading week has no rule to guess with, and says so', () => {
+    expect(() => fold('4h', '1h', [], TZ, FX, null)).toThrow(/trading week/)
+  })
+
+  test('a daily source keeps its 09:00-labelled sessions: the trading week is not read', () => {
+    // Equity daily bars are labelled at the 09:00 anchor, which the 09:30 sessions do not
+    // include: filtered on them, a week folded from its days would have none (the 68-row SPY
+    // bug `keep_market_closed_rows` exists for).
+    // On the wire a session-dated bar is the midnight of its date: 00:00 New York, 05:00Z in March.
+    const days = [4, 5, 6, 7, 8].map((d, i) => ({ timestamp: Date.UTC(2024, 2, d, 5), open: 10 + i, high: 20, low: 5, close: 11 + i, volume: 100 }))
+    const week = fold('1W', '1D', days, TZ, EQUITY, EQUITY_WEEK)
+    expect(week).toEqual([{ timestamp: Date.UTC(2024, 2, 4, 5), open: 10, high: 20, low: 5, close: 15, volume: 500 }])
+    expect(fold('1W', '1D', days, TZ, EQUITY, null)).toEqual(week)
+  })
+
+  test('a lira cross folds Istanbul trading hours on the New York grid', () => {
+    // USDTRY on prod: the FX week's grid, trading 09:00-18:00 Europe/Istanbul Monday to Friday
+    // (UTC+3 all year: 01:00-10:00 New York in early March 2024, 02:00-11:00 after the 10th).
+    const usdtry: MarketHours = {
+      timezone: TZ,
+      sessions: [{ openDay: 'sun', openTime: '17:00', closeDay: 'fri', closeTime: '17:00' }],
+      trading: {
+        timezone: 'Europe/Istanbul',
+        sessions: ['mon', 'tue', 'wed', 'thu', 'fri'].map((d) => ({ openDay: d, openTime: '09:00', closeDay: d, closeTime: '18:00' }))
+      }
+    }
+    // Tuesday 5 March: 1h rows from Monday 17:00 to Tuesday 17:00 New York, volume = the NY hour.
+    const rows = Array.from({ length: 24 }, (_, i) => ({ timestamp: MON_1700 + i * HOUR, open: 1, high: 1, low: 1, close: 1, volume: (17 + i) % 24 }))
+    const out = fold('4h', '1h', rows, TZ, FX, tradingWeekOf(usdtry))
+    // 4h candles open 17, 21, 01, 05, 09, 13 New York; only 01:00-09:59 trades.
+    expect(out.map((b) => [new Date(b.timestamp).getUTCHours(), b.volume])).toEqual([
+      [6, 1 + 2 + 3 + 4], // the 01:00 candle, whole
+      [10, 5 + 6 + 7 + 8], // the 05:00 candle, whole
+      [14, 9] // the 09:00 candle: its 09:00 row alone
+    ])
+  })
+
+  test('a vendor folds intraday rows into its derived intervals only', () => {
+    expect(foldsIntradayRows('1h', SCHWAB)).toBe(true) // from 30m
+    expect(foldsIntradayRows('5m', SCHWAB)).toBe(true) // from 1m
+    expect(foldsIntradayRows('30m', SCHWAB)).toBe(false) // stored
+    expect(foldsIntradayRows('1D', SCHWAB)).toBe(false) // stored
+    expect(foldsIntradayRows('1W', SCHWAB)).toBe(false) // from 1D
+    expect(foldsIntradayRows('4h', OANDA)).toBe(true)
+    expect(foldsIntradayRows('1h', OANDA)).toBe(false)
   })
 })
