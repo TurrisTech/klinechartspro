@@ -77,6 +77,9 @@ and "is before" make a window of dates, as for a time of day.
   there are no bars while it is shut. A time of day fires on trading days only. A date and time
   that falls on a weekend fires at the first close after the market opens.
 - In a bar replay either is a Next alert stop like any other.
+- A new one starts at 09:30 the next morning -- by the replay's clock in a bar replay
+  (`ruletree.ts` `nextMorning` reads `getReadClock()`), so a condition written at a 2023 cursor
+  defaults to the 2023 day after it, which the replay can reach, rather than to tomorrow.
 
 OBV and PVT are not offered: they are running sums from the first bar loaded, so their value
 depends on where a window starts and never converges -- every alert reads a window, and a

@@ -140,12 +140,12 @@ describe('a replay', () => {
       calls.push({ ...range, limit })
       return { points: [], nextFrom: null, tiles: hint(c.path) }
     }
-    let horizon: number | null = null
+    let horizon: { at: number; answersTo: number } | null = null
     const fetch = tieredFetch('replay', server, () => horizon)
     await fetch({ from: 0, to: 1 }, 10)
-    horizon = c.points[5].date
+    horizon = { at: c.points[5].date, answersTo: Number.POSITIVE_INFINITY }
     const page = await fetch({ from: c.points[0].date, to: c.points[10].date }, 10)
     expect(page.points).toEqual(c.points.slice(0, 5) as never)
-    expect(calls.at(-1)).toEqual({ from: horizon, to: c.points[10].date, limit: 5 })
+    expect(calls.at(-1)).toEqual({ from: c.points[5].date, to: c.points[10].date, limit: 5 })
   })
 })

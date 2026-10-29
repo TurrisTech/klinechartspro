@@ -1,6 +1,7 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src'
 import { fetchBarsWidened } from '../history'
+import { answerableTo } from '../plugins/horizon'
 import type { PluginStream } from '../plugins/types'
 import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
@@ -12,8 +13,9 @@ import { type CandleGrid, gridFor, nominalMs } from './timeframes'
 //
 // History loads go through the ordinary `/getbars` path, which the page-wide read clock
 // (config.ts) clamps to the cursor -- the server answers the closed bars plus the forming
-// one. A window the chart asks for "ending now" is re-anchored to end at the cursor, so a
-// pane opening a year back does not load an empty window and widen into nothing.
+// one. A window the chart asks for "ending now" is re-anchored to end at the cursor -- just
+// past the bar forming there, on the wire clock -- so a pane opening a year back does not load
+// an empty window and widen into nothing.
 //
 // Stepping pushes through the pane's subscribe callback -- klinecharts' updateData path,
 // which appends a bar newer than the last and replaces one at the same timestamp. The hub
@@ -51,13 +53,20 @@ export class ReplayDatafeed implements Datafeed {
   async getHistoryKLineData(symbol: SymbolInfo, period: Period, from: number, to: number, direction: 'older' | 'newer' = 'older'): Promise<KLineData[]> {
     const vendor = symbolVendor(symbol)
     const interval = periodToResolution(period)
-    const cursor = this.hub.cursor
-    // A window ending after the cursor (ChartPane's "now") is re-anchored to end at it.
+    // A window ending after what the cursor lets be answered (ChartPane's "now") is re-anchored
+    // to end there. That is the cursor itself only for a bar dated by its open: a forex day
+    // forming from Tuesday 17:00 is dated Wednesday 00:00, AFTER the cursor, so a window ending
+    // at the cursor left it out -- a 1D pane reloaded between 17:00 and midnight drew no forming
+    // candle (prod EURGBP, 2023-10-24 19:00 New York: Tuesday's bar last). The end is the date
+    // after the bar forming at the cursor (`plugins/horizon.ts` `answerableTo`), which holds it
+    // and nothing later; with no schedule to find it on, the cursor.
+    const reach = answerableTo(interval, this.hub.cursor, gridFor(symbol))
+    const end = Number.isFinite(reach) ? reach : this.hub.cursor
     let f = from
     let t = to
-    if (t > cursor) {
+    if (t > end) {
       const span = t - f
-      t = cursor
+      t = end
       f = t - span
     }
     try {
