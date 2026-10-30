@@ -1,7 +1,9 @@
-import type { Chart } from 'klinecharts'
+import type { Chart, OverlayEvent } from 'klinecharts'
 import type { ChartProPane, SymbolInfo } from '../../src'
 import { onViewMoved } from '../chartview'
 import { symbolVendor } from '../symbols'
+import type { PriceAlerts } from './alerts/hub'
+import { LayerAlertView } from './alerts/view'
 import { overlaySignature } from './paint'
 import { type LayerConfigCodec, layerConfigCodec } from './persist'
 import { loadLayerConfig } from './store'
@@ -111,6 +113,12 @@ function buildContext(chart: Chart, symbol: SymbolInfo): LayerContext | null {
   }
 }
 
+// klinecharts REMOVES an overlay on right-click unless its handler prevents it
+// (OverlayView._figureMouseRightClickEvent), locked or not -- and a layer whose paint signature
+// still says the overlay is drawn would never put it back. So every overlay a layer paints
+// keeps itself, unless the layer handles the right-click on its own.
+const keepOnRightClick = (event: OverlayEvent<unknown>): void => event.preventDefault?.()
+
 function windowOf(ctx: LayerContext): LayerWindow {
   return { priceMin: ctx.priceMin, priceMax: ctx.priceMax, from: ctx.from, to: ctx.to }
 }
@@ -161,9 +169,12 @@ interface PaneHold<TDatum> {
   owner: object | null
 }
 
+/** `alerts`: the wall's price alerts, for a layer that offers its data to them
+ * (`ChartLayer.alerts`); ignored for one that does not. */
 export function createLayerController<TDatum, TConfig extends object>(
   layer: ChartLayer<TDatum, TConfig>,
-  template: string
+  template: string,
+  alerts?: PriceAlerts
 ): LayerController<TConfig> {
   const codec = layerConfigCodec(layer.defaults, layer.fields)
   // What a pane never configured draws with. Until the layers became indicators their
@@ -175,7 +186,16 @@ export function createLayerController<TDatum, TConfig extends object>(
     baseline = codec.normalise(stored)
   })
   const holds = new WeakMap<Chart, PaneHold<TDatum>>()
-  const views = new Set<{ invalidate(): void }>()
+  const views = new Set<{ invalidate(): void; repaint(): void }>()
+  // The clicks, hovers and bells of the layer's price alerts (alerts/view.ts), added to what
+  // the layer builds before it is compared with what is drawn. An alert made, edited, removed
+  // or fired changes which bells a pane draws, so each view repaints from what it holds.
+  const alertView = layer.alerts && alerts ? new LayerAlertView(layer.id, alerts, layer.alerts) : null
+  if (alertView) {
+    alerts?.subscribe(() => {
+      for (const view of views) view.repaint()
+    })
+  }
 
   // Adjacent windows share an edge, and a level sitting on one is returned by both, so a
   // merge is a union by the layer's own datum identity rather than a concatenation.
@@ -230,6 +250,7 @@ export function createLayerController<TDatum, TConfig extends object>(
     }
 
     const clearOverlays = (): void => {
+      alertView?.clear(chart)
       if (owned.painted === '') return
       try {
         chart.removeOverlay({ groupId: layer.id })
@@ -245,10 +266,13 @@ export function createLayerController<TDatum, TConfig extends object>(
     // two chart invalidations, and on a live chart the redraw that reaches here is several
     // times a second and almost always draws the same lines.
     const paint = (data: TDatum[], ctx: LayerContext): void => {
-      const overlays =
-        data.length === 0
-          ? []
-          : layer.toOverlays(data, ctx, config).map((overlay) => ({ ...overlay, groupId: layer.id }))
+      const built = data.length === 0 ? [] : layer.toOverlays(data, ctx, config)
+      // Decorated even with no data: a bell is how an alert whose line has gone is reached.
+      const overlays = (alertView ? alertView.decorate(built, ctx, config) : built).map((overlay) => ({
+        onRightClick: keepOnRightClick,
+        ...overlay,
+        groupId: layer.id
+      }))
       const signature = overlaySignature(overlays)
       if (signature === owned.painted) return
       chart.removeOverlay({ groupId: layer.id })
@@ -368,7 +392,8 @@ export function createLayerController<TDatum, TConfig extends object>(
       invalidate: (): void => {
         owned.cache = null
         void redraw()
-      }
+      },
+      repaint: (): void => void redraw()
     }
     views.add(view)
     sample()

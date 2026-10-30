@@ -142,8 +142,8 @@ function spanToOverlay(
     // These are server-computed reference lines, not user drawings: dragging one would
     // imply it means something, and it would silently diverge from what the server says.
     lock: true,
-    // Stashes the source datum on the overlay so future code (a click handler, a tooltip)
-    // can read it back without re-deriving it from the price/groupId alone.
+    // The source datum, which is how a click finds the level it landed on (the layer's
+    // price alerts, chartlayers/alerts/view.ts) without re-deriving it from the price alone.
     extendData: level,
     styles: { line: toLineStyle(appearance) }
   }
@@ -232,6 +232,15 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
   },
 
   staleAt,
+
+  // A live level is a price worth being told about: click it for an alert when price comes
+  // within its zone (chartlayers/alerts). A spent one is not offered -- its line stops where
+  // the market finished it, and an alert is about where the market goes next. The levels'
+  // overlays carry their level as `extendData`, which is how a click finds it.
+  alerts: {
+    target: (level) => (level.active ? { price: level.price, label: `${level.interval} level` } : null),
+    zonePips: (config) => config.alerts.zonePips
+  },
 
   fetch(ctx, config, window) {
     return fetchLevels({

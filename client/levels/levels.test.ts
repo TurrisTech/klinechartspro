@@ -239,6 +239,29 @@ describe('datumKey', () => {
   })
 })
 
+// ----------------------------------------------------------------------------- price alerts
+//
+// What a click does with what is offered is chartlayers/alerts/alerts.test.ts; the layer's own
+// part is what it offers.
+
+describe('alerts', () => {
+  test('a live level is offered by its price and timeframe; a spent one is not', () => {
+    expect(levelsLayer.alerts?.target(level({ price: 1.1, interval: '1M' }))).toEqual({ price: 1.1, label: '1M level' })
+    expect(levelsLayer.alerts?.target(level({ active: false }))).toBeNull()
+  })
+
+  test('a new alert takes the pane\'s default zone', () => {
+    expect(levelsLayer.alerts?.zonePips(DEFAULT_LEVELS_CONFIG)).toBe(5)
+    expect(levelsLayer.alerts?.zonePips({ ...DEFAULT_LEVELS_CONFIG, alerts: { zonePips: 12 } })).toBe(12)
+  })
+
+  test('every stretch of a level carries the level, which is how a click finds it', () => {
+    const tested = level({ invalidations: [1_300_000] })
+    const overlays = levelsLayer.toOverlays([tested], context(VIEW), DEFAULT_LEVELS_CONFIG)
+    expect(overlays.map((overlay) => overlay.extendData)).toEqual([tested, tested])
+  })
+})
+
 // ----------------------------------------------------------------------------- what it draws
 
 describe('toOverlays', () => {
