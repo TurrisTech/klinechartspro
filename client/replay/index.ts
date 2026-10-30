@@ -12,6 +12,7 @@ import type { ServerCatalogue } from '../alerts/catalogue'
 import type { AlertSearch } from '../alerts/search'
 import type { Alert } from '../alerts/types'
 import { ReplayAlerts } from './alerts'
+import { passesDailyClose } from './clock'
 import { createReplayControls, openStartDialog } from './controls'
 import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
@@ -352,7 +353,7 @@ export async function mountBarReplay(
       // DAILY boundary. Refetching on every step instead cost three slow reads per 15-minute
       // step, which saturated the browser's six-connection budget and starved the panes' own
       // history loads (measured: 31 `/levels` reads, the slowest 4.5s, during a short run).
-      if (grid.start('1D', result.from) !== grid.start('1D', result.to)) ctx.levelsController.invalidate()
+      if (passesDailyClose(result.from, result.to, grid)) ctx.levelsController.invalidate()
       dock.overlays.update(session.snapshot)
       // A pane that was reloaded at the new cursor (a long jump) has a new oldest bar, which
       // is what every watch line is anchored to; re-emitting redraws them against it.
