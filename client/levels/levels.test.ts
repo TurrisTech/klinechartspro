@@ -250,8 +250,8 @@ describe('alerts', () => {
     expect(levelsLayer.alerts?.target(level({ active: false }))).toBeNull()
   })
 
-  test('a new alert takes the pane\'s default zone', () => {
-    expect(levelsLayer.alerts?.zonePips(DEFAULT_LEVELS_CONFIG)).toBe(5)
+  test('a new alert takes the pane\'s default zone: 3 pips each side, 6 wide', () => {
+    expect(levelsLayer.alerts?.zonePips(DEFAULT_LEVELS_CONFIG)).toBe(3)
     expect(levelsLayer.alerts?.zonePips({ ...DEFAULT_LEVELS_CONFIG, alerts: { zonePips: 12 } })).toBe(12)
   })
 

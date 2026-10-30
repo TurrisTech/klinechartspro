@@ -101,3 +101,13 @@ describe('loading a saved document from before 1D was dropped', () => {
     expect(loaded.base.intervalColors).toEqual(DEFAULT_LEVELS_CONFIG.base.intervalColors)
   })
 })
+
+describe('alerts', () => {
+  test('the default zone of a new alert is a setting of its own, near the top of the panel', () => {
+    expect(DEFAULT_LEVELS_CONFIG.alerts.zonePips).toBe(3)
+    const index = LEVELS_FIELDS.findIndex((field) => field.kind === 'group' && field.label === 'Alerts')
+    expect(index).toBeGreaterThanOrEqual(0)
+    expect(index).toBeLessThanOrEqual(2)
+    expect(fieldKeys([LEVELS_FIELDS[index]])).toEqual(['alerts.zonePips'])
+  })
+})
