@@ -26,7 +26,7 @@ export type SettingsField = IndicatorSettingField
 // `key` against a full defaults object, so there is nothing to auto-vivify. A numeric path
 // segment (e.g. 'emphasis.age.domain.1') indexes into an array the same way it indexes into
 // an object property, which is what lets a field reach one element of a [min, max] tuple.
-function getByPath(source: object, path: string): unknown {
+export function getByPath(source: object, path: string): unknown {
   return path.split('.').reduce<unknown>((acc, key) => {
     if (acc === null || typeof acc !== 'object') return undefined
     return (acc as Record<string, unknown>)[key]

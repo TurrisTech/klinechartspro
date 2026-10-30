@@ -112,6 +112,11 @@ it), asks the app to save, writes the document's fields (`PluginHost.paneDocs`, 
 settings with it when panes change places. A config whose plugin this server does not mount is
 carried through verbatim, so a save there does not cost a pane its settings.
 
+A binding that draws a control of its own can write a setting too: `ctx.editConfig(key, value)`
+(a dotted key into its config) goes through the same write as the panel and the manager -- kept
+for the pane, the wall saved, the pane rebound -- so the binding is replaced by one made with the
+new config. The level alerts' "Make default" is the first user (`client/chartlayers/alerts/`).
+
 `doc` is a field of its own (`'mtf'`, `'al'`, `'dv'`, `'vp'`) or a key inside a shared one
 (`['mx', 'mtf_<name>']`, `['ly', 'levels']`). Until 2026-10-11 each of the five plugins with
 settings carried its own copy of all this -- six optional `IndicatorPlugin` members -- and
