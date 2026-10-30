@@ -171,6 +171,15 @@ export function onBaseBoundary(at: number, base: string, grid: CandleGrid): numb
   return close > at ? close : at
 }
 
+/** Whether an advance from `from` to `to` passed a daily close -- the only instants a 1W or 1M
+ * level can appear or be spent (every such candle closes at a day's close). Tested on the day
+ * `from` stands in reaching its close, not on two daily floors: a step landing exactly on
+ * Friday's 17:00 close floors, like the cursor before it, to the day that just closed, so a
+ * floor comparison saw no boundary and the week's new levels came one step late. */
+export function passesDailyClose(from: number, to: number, grid: CandleGrid): boolean {
+  return to > from && grid.end('1D', grid.start('1D', from)) <= to
+}
+
 function floorDay(wall: number): number {
   return Math.floor(wall / DAY_MS) * DAY_MS
 }

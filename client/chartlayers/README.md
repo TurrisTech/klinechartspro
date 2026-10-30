@@ -156,9 +156,8 @@ are gathered per instrument and per everything else that decides the answer (int
 spent levels, read clock) into ONE read of the union of their windows, and each pane is handed
 exactly what the server would have sent for its own window, picked out by the server's own
 filter (`levelsIn`). The controller is untouched: every view still holds and extends its own
-window, so it draws precisely what it drew when it read alone -- under a replay clock with spent
-levels shown, less a lookahead the server's own per-window answer had (`levelsIn` says which
-levels, and why none of them was ever on screen). An ask inside a read already in
+window, so it draws precisely what it drew when it read alone (under a replay clock too, since
+wdashboard-server 0.56.4 tests a level's lifespan on the clamped record). An ask inside a read already in
 flight waits on it, and one inside a window read recently re-reads that window's URL, so the
 browser revalidates the answer it already holds and the server's ETag answers 304. Measured on
 prod with six-pane EURUSD and EURGBP walls at four 2023 replay clocks: a day boundary went from

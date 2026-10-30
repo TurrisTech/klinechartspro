@@ -154,7 +154,9 @@ The user chose all of these when asked what the lab lacked:
   and the close is when an entry can be taken. `live.test.ts` is the check.
 - **Entries fill at the entry bar's close**, at its bid (sell) or ask (buy), through the same engine
   as paper trading and replay. A path bar must close AT the entry — the path timeframe is the
-  longest stored one tiling every entry's (`autoPathInterval`: 1m for 3m and 5m entries); an entry
+  longest one the instrument's vendor stores (`/capabilities` `baseIntervals`, up to a day) tiling
+  every entry's (`autoPathInterval`: 1m for 3m and 5m entries; 30m for 1h on schwab, whose 1h is a
+  server fold and whose 5s does not exist); an entry
   no path bar closes at is refused, never moved.
 - **Levels are computed from the mid close and filled on the bid/ask**: a long pays the spread in
   and is stopped on the bid. One R is measured from the fill. P&L is in the quote currency, as the

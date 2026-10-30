@@ -180,11 +180,12 @@ export class BarCache {
  * - oanda: exact. 1D against 1h on 1,003 session-days of seven instruments 2010-2026 (Sunday
  *   opens, month ends, both DST changes), against 1m on 56 and 5s on 4; 1h and 1m against 5s on
  *   five symbol-days.
- * - coinbase: prices exact on the backfilled history; a few recent live-written hours differ in
- *   one price by up to 0.06% (at most 6 of 336 an instrument). Volume differs on most bars,
- *   because each interval's decimal volume is rounded to a whole unit on its own (wmarketdata
- *   `sources/coinbase/_util`): a BTC minute is about 2 BTC, so the coarser rung is the more
- *   accurate volume, not the less.
+ * - coinbase: the stored bars equal the vendor's own candles, but the vendor's 1h is not its 1m
+ *   folded: on ~0.4% of hours one price differs by up to 0.06% (prod, 31 of 7,110 hours since
+ *   2026-08-31, and the same in the backfilled history), and the vendor never revises them.
+ *   Volume differs on most bars, because each interval's decimal volume is rounded to a whole
+ *   unit on its own (wmarketdata `sources/coinbase/_util`): a BTC minute is about 2 BTC, so the
+ *   coarser rung is the more accurate volume, not the less.
  * - schwab: not exact, and nothing could make it so. Its daily is the exchange's official bar --
  *   closing-auction close (differs from the last minute's on 56 of 59 SPY days), consolidated
  *   volume (1.2-2.1x the minutes') -- not an aggregate of anything stored. It stays a rung of

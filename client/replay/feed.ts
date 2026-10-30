@@ -1,12 +1,14 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src'
+import { baseIntervalsFor } from '../capabilities'
 import { fetchBarsWidened } from '../history'
 import { answerableTo } from '../plugins/horizon'
 import type { PluginStream, Range } from '../plugins/types'
 import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
+import { foldsIntradayRows } from '../tiles/derive'
 import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
-import { type CandleGrid, gridFor, nominalMs } from './timeframes'
+import { type CandleGrid, gridFor, isIntraday, nominalMs } from './timeframes'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
 // every pane. No stream: only this client moves the clock.
@@ -144,7 +146,10 @@ export class ReplayFeedHub {
     cursor: number,
     /** How an instrument the hub was not told about is probed; without one it composes from
      * the base alone. */
-    private readonly probe: StoredProbe | null = null
+    private readonly probe: StoredProbe | null = null,
+    /** A vendor's stored intervals (`/capabilities` `baseIntervals`): what says which pane
+     * intervals are the server's folds, whose forming candles take only trading rows. */
+    private readonly bases: (vendor: string) => string[] = baseIntervalsFor
   ) {
     this.cursor = cursor
   }
@@ -383,15 +388,21 @@ export class ReplayFeedHub {
     }
     // The forming bar: the bucket containing the cursor, composed from the stored bars inside
     // it that closed by the cursor, coarsest first. Its label is the same open `/getbars`
-    // labels the whole bar with.
+    // labels the whole bar with, and it takes the rows the whole bar will: where that bar is the
+    // server's fold of intraday rows (schwab's 1h, any 4h), only those of them the instrument
+    // trades at (`grid.isTrading`, aggregate_ohlcv's filter) -- schwab's 09:00-09:29 minutes are
+    // stored and are in no folded bar. A stored bar, or a fold of daily ones, is the store's
+    // rows as they are, and so is the candle forming towards it.
     let forming = false
     const bucketOpen = grid.start(interval, cursor - 1)
     if (bucketOpen < cursor && (whole.length === 0 || bucketOpen > whole[whole.length - 1].open) && bucketOpen >= lastOpen) {
+      const filtered = foldsIntradayRows(interval, this.bases(vendor))
       const parts: ReplayBar[] = []
       for (const span of await this.formingSpans(symbol, interval, bucketOpen, grid)) {
         const c = this.composeCache(symbol, span.interval, grid)
         await c.cover(span.from, span.to)
-        for (const b of c.slice(span.from, span.to)) if (b.end <= cursor) parts.push(b)
+        const counts = filtered && isIntraday(span.interval)
+        for (const b of c.slice(span.from, span.to)) if (b.end <= cursor && (!counts || grid.isTrading(b.open))) parts.push(b)
       }
       const bar = composeForming(interval, bucketOpen, parts, grid)
       if (bar) {

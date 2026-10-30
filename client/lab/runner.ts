@@ -20,6 +20,7 @@ import { leadInFor, type ServerCatalogue } from '../alerts/catalogue'
 import { operandKey } from '../alerts/rules'
 import { pointSource } from '../alerts/search'
 import type { Operand } from '../alerts/types'
+import { advertisedBaseIntervals } from '../capabilities'
 import { resolutionDurationMs } from '../periods'
 import type { ReplayBar } from '../replay/cache'
 import { type CandleGrid, defaultBase, nominalMs, STORED_LADDER } from '../replay/timeframes'
@@ -110,10 +111,15 @@ export function runWindow(strategy: Strategy, options: Pick<RunOptions, 'from' |
   return { from: now - strategy.window.days * DAY, to: now }
 }
 
-/** The bars of `interval` that tile every one of `entryIntervals`, among what is stored. */
-export function autoPathInterval(entryIntervals: readonly string[]): string | null {
+/** The bars of `interval` that tile every one of `entryIntervals`, among what the instrument's
+ * vendor stores up to a day (`stored`, /capabilities `baseIntervals`; the stored ladder where the
+ * server states none). Never an interval the vendor only has as a fold, or not at all: schwab's 1h
+ * is a server fold of 30m and its 5s a 500, so a 1h strategy walks 30m there, and a 5s one has no
+ * path. Its 30m and not the replay's 1m-or-1D ladder (`storedLadderFor`): on prod SPY's 30m reaches
+ * 2025-12-23 and its 1m 2026-07-27. */
+export function autoPathInterval(entryIntervals: readonly string[], stored: readonly string[] | null = null): string | null {
   if (entryIntervals.length === 0) return null
-  return defaultBase([...new Set(entryIntervals)], STORED_LADDER)
+  return defaultBase([...new Set(entryIntervals)], stored?.filter((code) => nominalMs(code) <= nominalMs('1D')) ?? STORED_LADDER)
 }
 
 export async function runStrategy(strategy: Strategy, data: LabData, options: RunOptions): Promise<LabRun> {
@@ -312,7 +318,7 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   stage('graphs')
 
   // -- path: outcomes and trades --------------------------------------------------------------
-  const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval))
+  const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval), advertisedBaseIntervals(symbol.split(':', 2)[0]))
   const outcomes = new Map<string, EntryOutcome>()
   let sim: SimResult | null = null
   if (pathInterval && entries.length > 0) {

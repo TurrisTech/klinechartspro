@@ -18,6 +18,10 @@
 
 import type { KLineData } from 'klinecharts'
 import { advertisedBaseIntervals, baseIntervalsFor } from '../capabilities'
+import { tradingWeekOf } from '../daygeometry'
+import { instrumentConfig } from '../instrumentconfig'
+import { isIntraday } from '../replay/timeframes'
+import type { MarketHours } from '../symbols'
 import { barsForTile } from './cache'
 import { fold, foldedCoveredTo, manifestDay, manifestTz, sourceInterval, sourceWindow } from './derive'
 import type { Tiled } from './join'
@@ -46,19 +50,29 @@ async function barsInWindow(manifest: TileManifest, from: number, to: number): P
   return bars
 }
 
+/** The instrument's resolved schedule, from the page's one `/instrument` cache (it never rejects:
+ * a failure is null). */
+function marketHoursOf(vendorSymbol: string): Promise<MarketHours | null> {
+  return instrumentConfig(vendorSymbol).then((config) => config?.marketHours ?? null)
+}
+
 /**
  * Bars from tiles for as much of `[from, to]` as tiled history reaches.
  *
  * Null means tiles can contribute nothing to this window and the caller should fetch the
  * whole of it — never "no data". A non-null answer may still stop short of `to`, at
  * `coveredTo`; the caller owns the remainder.
+ *
+ * `hours` is where a fold of intraday tiles learns which rows count (the schedule's trading
+ * week, which a manifest does not carry); only such a fold asks it.
  */
 export async function barsFromTiles(
   vendorSymbol: string,
   resolution: string,
   from: number,
   to: number,
-  advertised: (vendor: string) => string[] | null = advertisedBaseIntervals
+  advertised: (vendor: string) => string[] | null = advertisedBaseIntervals,
+  hours: (vendorSymbol: string) => Promise<MarketHours | null> = marketHoursOf
 ): Promise<Tiled<KLineData> | null> {
   const [vendor, symbol] = vendorSymbol.includes(':')
     ? vendorSymbol.split(':', 2)
@@ -77,7 +91,7 @@ export async function barsFromTiles(
     const bars = await barsInWindow(manifest, from, Math.min(to, span.coveredTo))
     return bars === null ? null : { items: bars, coveredTo: span.coveredTo }
   }
-  return foldedFromTiles(vendor, symbol, resolution, from, to, tiled ?? baseIntervalsFor(vendor))
+  return foldedFromTiles(vendor, symbol, resolution, from, to, tiled ?? baseIntervalsFor(vendor), hours)
 }
 
 /**
@@ -88,6 +102,10 @@ export async function barsFromTiles(
  * part of its rows, which is a wrong bar rather than a missing one — and the source rows are
  * read over a window widened to whole candles, because a candle opening inside the requested
  * window closes outside it.
+ *
+ * Folding intraday rows needs the instrument's trading week as well as the manifest's grid (see
+ * `derive.ts`): without one -- `/instrument` unreachable, a schedule with no sessions -- the fold
+ * declines and `/getbars` answers, which filters on the schedule it has.
  */
 async function foldedFromTiles(
   vendor: string,
@@ -95,14 +113,20 @@ async function foldedFromTiles(
   resolution: string,
   from: number,
   to: number,
-  bases: string[]
+  bases: string[],
+  hours: (vendorSymbol: string) => Promise<MarketHours | null>
 ): Promise<Tiled<KLineData> | null> {
   const code = sourceInterval(resolution, bases)
   if (code === null) return null
+  // Asked alongside the manifest rather than after it: both are cached for the page, so only the
+  // first fold per instrument waits on either, and then on the slower of the two, not the sum.
+  const week = isIntraday(code) ? hours(`${vendor}:${symbol}`).then(tradingWeekOf, () => null) : Promise.resolve(null)
   const manifest = await manifestFor(vendor, symbol, code)
   if (manifest === null) return null
   const day = manifestDay(manifest)
   if (day === null) return null
+  const trading = await week
+  if (isIntraday(code) && trading === null) return null
 
   const tz = manifestTz(manifest)
   const coveredTo = foldedCoveredTo(resolution, code, manifest.coveredTo, tz, day)
@@ -119,7 +143,7 @@ async function foldedFromTiles(
   const rows = await barsInWindow(manifest, window.from, sourceTo)
   if (rows === null) return null
 
-  const bars = fold(resolution, code, rows, tz, day).filter(
+  const bars = fold(resolution, code, rows, tz, day, trading).filter(
     (bar) => bar.timestamp >= from && bar.timestamp < Math.min(to, coveredTo)
   )
   return { items: bars, coveredTo }

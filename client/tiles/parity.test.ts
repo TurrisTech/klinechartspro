@@ -46,9 +46,17 @@ async function getbars(symbol: string, resolution: string, from: number, to: num
   })) as KLineData[]
 }
 
+/** The schedule `/instrument` resolves, from the same server: a derived interval folded out of
+ * intraday tiles filters its rows on the trading week, which no manifest carries, and without one
+ * the fold declines -- every derived case below would compare the API against itself. */
+async function hours(symbol: string) {
+  const body = await (await realFetch(`${API}/instrument?symbol=${encodeURIComponent(symbol)}`)).json()
+  return body?.marketHours ?? null
+}
+
 /** What fetchBars does: tiles for the closed part, API for the forming part, joined. */
 async function tiledThenApi(symbol: string, resolution: string, from: number, to: number) {
-  const tiled = await barsFromTiles(symbol, resolution, from, to)
+  const tiled = await barsFromTiles(symbol, resolution, from, to, undefined, hours)
   if (tiled === null) return { bars: await getbars(symbol, resolution, from, to), tiles: 0 }
   if (tiled.coveredTo > to) return { bars: tiled.items, tiles: tiled.items.length }
   const tail = await getbars(symbol, resolution, tiled.coveredTo, to)

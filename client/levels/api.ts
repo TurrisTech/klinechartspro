@@ -51,8 +51,7 @@ export interface FetchLevelsParams {
 // UNION of their windows (the smallest rectangle of the price/time plane containing them all).
 // Each ask is then answered with exactly what the server would have sent for its own window,
 // picked out of the union's answer by the server's own filter (`levelsIn`, below), so a pane
-// holds -- and draws -- precisely what it did when it asked alone. (Under a replay clock with
-// spent levels shown, less a lookahead the server's own answer had: see `levelsIn`.)
+// holds -- and draws -- precisely what it did when it asked alone.
 //
 // Three things make an ask share instead of read:
 //
@@ -162,21 +161,9 @@ function unionOf(windows: LevelsWindow[]): LevelsWindow {
  * every number in it: the prices are the doubles the server parsed the same decimal strings
  * into.
  *
- * One thing is not restated, because the wire does not carry it: under a read clock the
- * server tests a level's lifespan BEFORE it clamps the level to the clock (ohlcv.py
- * `_clamp_level_asof`), so whether a level is in a window can depend on invalidations that
- * have not happened yet at the clock. Here the test is made on the level as the clock left it,
- * which is the answer without that lookahead, and it differs from the server's in two places:
- *
- * - a level already spent at the clock and invalidated again after it was sent for a window
- *   starting after its last invalidation AS OF the clock; it is left out here. Only with spent
- *   levels shown, and never on screen: everything it draws ends before the window, and the
- *   window starts before the view. Prod EURUSD at 2023-06-14 12:00Z, six panes: 43 such
- *   levels across three panes, each ending 6 to 179 days before its pane's window.
- * - a level still active at the clock whose final, spending invalidation is a candle that has
- *   not closed yet was left out of a window starting after that candle's date -- on a pane
- *   looking at the last few days only, while a wider pane on the same instrument drew it. It is
- *   kept here, on every pane whose window it crosses.
+ * Under a read clock the server tests the lifespan on the level as the clock left it (since
+ * wdashboard-server 0.56.4; before it, future invalidations decided which spent levels a window
+ * held), which is the record the wire carries -- so the restatement holds there too.
  */
 export function levelsIn(levels: Level[], window: LevelsWindow): Level[] {
   return levels.filter((level) => {

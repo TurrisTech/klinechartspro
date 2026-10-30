@@ -49,6 +49,8 @@ export type {
   Period,
   SymbolInfo,
   DayGeometry,
+  TradingSession,
+  TradingWeek,
   SyncOptions
 } from './types'
 export type { LayoutPreset } from './config/layouts'

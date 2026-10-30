@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
+import { tradingWeekOf } from '../daygeometry'
+import type { MarketHours } from '../symbols'
 import boundaries from './fixtures/boundaries.json'
+import trading from './fixtures/trading.json'
 import {
   CONTINUOUS_DAY,
   FX_DAY,
@@ -24,6 +27,7 @@ import {
   scheduleNextIntervalStart,
   toWall,
   toWireDate,
+  tradingFilter,
   validateBase
 } from './timeframes'
 
@@ -98,6 +102,45 @@ describe('boundaries match wmarkettypes (fixtures/boundaries.json)', () => {
       }
     })
   }
+})
+
+describe('the trading week matches wmarkettypes (fixtures/trading.json)', () => {
+  // `MarketHours.is_open`, the FILTERING rule every server-side fold applies, swept every 15
+  // minutes over three DST changes on prod's own schedules: SPY (09:30-16:00 sessions under a
+  // 09:00 grid, no `trading` block), XAUUSD (the FX grid, trading with a daily 17:00-18:00 break),
+  // USDTRY (the FX grid, trading 09:00-18:00 Istanbul), EURUSD and BTCUSD (trading = grid).
+  for (const { symbol, marketHours, sweeps } of trading.schedules) {
+    test(symbol, () => {
+      const week = tradingWeekOf(marketHours as MarketHours)
+      expect(week).not.toBeNull()
+      const trades = tradingFilter(week as NonNullable<typeof week>)
+      for (const sweep of sweeps) {
+        let got = ''
+        for (let i = 0; i < sweep.open.length; i++) got += trades(sweep.from + i * sweep.stepMs) ? '1' : '0'
+        expect(got).toBe(sweep.open)
+      }
+    })
+  }
+
+  test("the grid's isTrading is the trading week, and the boundary rule where none is known", () => {
+    const day = { openOffset: 9, closeOffset: 16, everyDayTrades: false }
+    const spy = trading.schedules.find((s) => s.symbol === 'schwab:SPY')?.marketHours as MarketHours
+    const known = gridOf({ timezone: TZ, day, trading: tradingWeekOf(spy) ?? undefined })
+    const unknown = gridOf({ timezone: TZ, day })
+    for (const [wall, trades, boundary] of [
+      ['2024-03-04 09:00', false, true],
+      ['2024-03-04 09:29', false, true],
+      ['2024-03-04 09:30', true, true],
+      ['2024-03-04 15:59', true, true],
+      ['2024-03-04 16:00', false, false]
+    ] as const) {
+      expect([known.isTrading(ny(wall)), known.isOpen(ny(wall)), unknown.isTrading(ny(wall))]).toEqual([trades, boundary, boundary])
+    }
+    // It travels on the SymbolInfo with the rest of the schedule.
+    const week = tradingWeekOf(spy) ?? undefined
+    expect(scheduleOf({ timezone: TZ, dayGeometry: day, tradingWeek: week })?.trading).toEqual(week)
+    expect(gridFor({ timezone: TZ, dayGeometry: day, tradingWeek: week })?.isTrading(ny('2024-03-04 09:15'))).toBe(false)
+  })
 })
 
 describe('advanceTarget', () => {
@@ -197,6 +240,34 @@ describe('an instrument\'s grid', () => {
     expect(equities.advanceTarget('1D', ny('2024-03-08 16:00'), 1)).toBe(ny('2024-03-11 16:00'))
     // Daily bars are dated 9h before their 09:00 open: the midnight of their date.
     expect(equities.toWire('1D', ny('2024-03-04 09:00'))).toBe(ny('2024-03-04 00:00'))
+  })
+
+  test('an hourly grid that is not the FX grid steps on its own anchor, and 12h ends', () => {
+    // wmarkettypes `Interval(code).get_next_interval_start(t, market_hours=MARKET_HOURS_EQUITY_US)`,
+    // run 2026-10-29 at each of these New York instants. 2h/4h/8h are the fixture's; 3h, 6h and
+    // 12h are not, and they are the lengths on which the equity grid (from 09:00) and the FX grid
+    // (from 17:00) part: the walk stepped the FX one, so 3h and 6h came out on the wrong hours and
+    // 12h -- whose FX opens, 05:00 and 17:00, both lie in the equity overnight -- never returned.
+    const expected: Record<string, string[]> = {
+      '3h': ['2024-03-04 12:00', '2024-03-04 12:00', '2024-03-04 15:00', '2024-03-05 09:00', '2024-03-11 09:00'],
+      '6h': ['2024-03-04 15:00', '2024-03-04 15:00', '2024-03-04 15:00', '2024-03-05 09:00', '2024-03-11 09:00'],
+      '12h': ['2024-03-05 09:00', '2024-03-05 09:00', '2024-03-05 09:00', '2024-03-05 09:00', '2024-03-11 09:00']
+    }
+    const at = ['2024-03-04 09:00', '2024-03-04 10:00', '2024-03-04 12:00', '2024-03-04 15:00', '2024-03-08 15:00']
+    for (const [code, next] of Object.entries(expected)) {
+      expect(at.map((t) => equities.nextStart(code, ny(t)))).toEqual(next.map(ny))
+    }
+    // And the forms built on it: a 12h step from Monday's 21:00 close closes Tuesday's 09:00 candle.
+    expect(equities.advanceTarget('12h', ny('2024-03-04 21:00'), 1)).toBe(ny('2024-03-05 21:00'))
+    // The FX week's own 12h grid is unchanged: 05:00 and 17:00.
+    expect(scheduleNextIntervalStart('12h', ny('2024-03-04 06:00'), TZ, FX_DAY)).toBe(ny('2024-03-04 17:00'))
+  })
+
+  test('a schedule the grid can never open on throws rather than hang', () => {
+    // A day whose open IS its close (no `dayGeometryOf` answer looks like this) is never
+    // boundary-open, so no candle can open on it. The search gives up after eight days.
+    const shut = { openOffset: 9, closeOffset: 9, everyDayTrades: false }
+    expect(() => scheduleNextIntervalStart('1h', ny('2024-03-04 12:00'), TZ, shut)).toThrow(/no 1h candle opens within 8 days/)
   })
 
   test('the schedule comes off the SymbolInfo, and none is none -- never a guess', () => {
