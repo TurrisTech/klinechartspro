@@ -756,6 +756,35 @@ describe('per-pane settings', () => {
     expect(host.paneDocs()).toEqual({ 0: { sz: { size: 9 } }, 1: { sz: { size: 3 } } })
   })
 
+  test('a binding edits its own pane\'s settings as the panel would: kept, saved, rebound', async () => {
+    const edits: Array<(key: string, value: unknown) => void> = []
+    const bound: unknown[] = []
+    const plugin: IndicatorPlugin = {
+      id: 'sized',
+      feature: null as never,
+      paneConfigs: [SIZE_CONFIG('SZ')],
+      register: () => [],
+      matches: (name) => name === 'SZ',
+      bind: (ctx) => {
+        bound.push(ctx.config)
+        if (ctx.editConfig) edits.push(ctx.editConfig)
+        return { sources: [], label: () => 'SZ' }
+      }
+    }
+    let persisted = 0
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities(), requestPersist: () => void persisted++ })
+    hosts.push(host)
+    const charts = [fakeChart(), fakeChart()]
+    for (const [i, c] of charts.entries()) c.indicators = [fakeIndicator('SZ', `i${i}`)]
+    host.sync(charts.map((c, i) => fakePane(`p${i + 1}`, c.chart)))
+    expect(edits).toHaveLength(2)
+    // The second pane's binding edits the second pane, clamped like any other edit.
+    edits[1]('size', 42)
+    expect(bound.at(-1)).toEqual({ size: 9 })
+    expect(persisted).toBe(1)
+    expect(host.paneDocs()).toEqual({ 1: { sz: { size: 9 } } })
+  })
+
   test("the gear and the manager are the host's, addressed by wall pane, not pane index", async () => {
     const { plugin } = sized()
     const opened: SettingsPanelOptions<object>[] = []

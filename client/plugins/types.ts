@@ -165,6 +165,12 @@ export interface BindContext {
    * the pane's own, or what an unconfigured pane draws with. An edit rebinds, so a binding
    * reads this once and never has to watch it. */
   config: object | undefined
+  /** Change one of those settings (a dotted `key` into `config`), exactly as the gear's panel or
+   * the indicator manager would: kept for the pane, the wall saved, and the pane rebound -- so
+   * this binding is replaced by one made with the new `config`. For a control the binding draws
+   * itself (the level alerts' "Make default"). Absent when the plugin declares no settings for
+   * this template. */
+  editConfig?(key: string, value: unknown): void
   /** What the plugin's `follows` answered for this indicator, or undefined for a plugin that
    * follows nothing. Part of the binding's identity, so like `config` it is read once. */
   follows?: unknown

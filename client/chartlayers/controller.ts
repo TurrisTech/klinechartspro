@@ -138,8 +138,9 @@ export interface LayerController<TConfig extends object = object> {
    * timeframes. */
   readonly ready: Promise<void>
   /** Draws the layer on `pane` with `config` while the binding of `indicatorId` lives there.
-   * Returns the release. */
-  attach(pane: ChartProPane, indicatorId: string, config: TConfig): () => void
+   * `editConfig` changes one of the pane's settings for the layer, as its panel would (the
+   * binding's `BindContext.editConfig`). Returns the release. */
+  attach(pane: ChartProPane, indicatorId: string, config: TConfig, editConfig?: (key: string, value: unknown) => void): () => void
   /** Forget every pane's fetched data and redraw: the read clock moved (a replay step), so
    * what the server answers for the same window has changed. */
   invalidate(): void
@@ -216,7 +217,12 @@ export function createLayerController<TDatum, TConfig extends object>(
   const staleAt = (fetchedAt: number, ctx: LayerContext): number =>
     layer.staleAt ? layer.staleAt(fetchedAt, ctx) : fetchedAt + CACHE_TTL_MS
 
-  const attach = (pane: ChartProPane, indicatorId: string, config: TConfig): (() => void) => {
+  const attach = (
+    pane: ChartProPane,
+    indicatorId: string,
+    config: TConfig,
+    editConfig?: (key: string, value: unknown) => void
+  ): (() => void) => {
     const chart = pane.getChart()
     let hold = holds.get(chart)
     if (!hold) {
@@ -268,7 +274,7 @@ export function createLayerController<TDatum, TConfig extends object>(
     const paint = (data: TDatum[], ctx: LayerContext): void => {
       const built = data.length === 0 ? [] : layer.toOverlays(data, ctx, config)
       // Decorated even with no data: a bell is how an alert whose line has gone is reached.
-      const overlays = (alertView ? alertView.decorate(built, ctx, config) : built).map((overlay) => ({
+      const overlays = (alertView ? alertView.decorate(built, ctx, config, editConfig) : built).map((overlay) => ({
         onRightClick: keepOnRightClick,
         ...overlay,
         groupId: layer.id

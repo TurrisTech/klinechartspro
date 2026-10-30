@@ -239,7 +239,7 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
   // overlays carry their level as `extendData`, which is how a click finds it.
   alerts: {
     target: (level) => (level.active ? { price: level.price, label: `${level.interval} level` } : null),
-    zonePips: (config) => config.alerts.zonePips
+    zonePipsSetting: 'alerts.zonePips'
   },
 
   fetch(ctx, config, window) {

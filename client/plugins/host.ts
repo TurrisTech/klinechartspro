@@ -175,6 +175,17 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     if (entry) reconcile(entry)
   }
 
+  /** One field of a pane's settings, by its dotted key: the indicator manager's edit, and a
+   * binding's own (`BindContext.editConfig`). The pane is looked up at the moment of the edit,
+   * so one that has since moved on the wall is written at its new index. */
+  const editField = (config: PaneConfig, paneId: string, key: string, value: unknown): void => {
+    const entry = wired.get(paneId)
+    if (!entry) return
+    const next = structuredClone(paneConfigs.read(config, entry.paneIndex))
+    setByPath(next, key, value)
+    writeConfig(config, entry.paneIndex, paneId, next)
+  }
+
   const openConfigPanel = (config: PaneConfig, paneId: string): boolean => {
     const entry = wired.get(paneId)
     if (!entry) return false
@@ -597,11 +608,19 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // binding still holds it is unreachable by key -- the template's `peekStore` finds
       // nothing and the pane stays blank however much the orphan is filled.
       const config = configByTemplate.get(ind.name)
+      const paneId = entry.pane.id
       const b = bind(
         entry,
         plugin,
         ind,
-        { ...base, indicator: ind, siblings, config: config && paneConfigs.read(config, entry.paneIndex), follows },
+        {
+          ...base,
+          indicator: ind,
+          siblings,
+          config: config && paneConfigs.read(config, entry.paneIndex),
+          editConfig: config ? (key: string, value: unknown) => editField(config, paneId, key, value) : undefined,
+          follows
+        },
         sig
       )
       if (b) entry.bindings.set(ind.id, b)
@@ -751,13 +770,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
           const entry = wired.get(paneId)
           return entry ? paneConfigs.read(config, entry.paneIndex) : null
         },
-        write: (paneId, key, value) => {
-          const entry = wired.get(paneId)
-          if (!entry) return
-          const next = structuredClone(paneConfigs.read(config, entry.paneIndex))
-          setByPath(next, key, value)
-          writeConfig(config, entry.paneIndex, paneId, next)
-        }
+        write: (paneId, key, value) => editField(config, paneId, key, value)
       }
     },
     paneDocs(): Record<number, PaneDoc> {

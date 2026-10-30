@@ -1,6 +1,6 @@
 // The small card a price alert opens beside its bell: the buffer in pips, the zone it makes,
-// whether it has fired, and Remove. Opened by a click on an enabled line or its bell, and at
-// once by the click that enables one, so the buffer can be set while the line is in view.
+// "Make default" for that buffer, whether it has fired, and Remove. Opened by a click on the
+// bell; a click on the line itself only turns the alert on or off.
 //
 // A popover rather than a modal: it belongs to one line on one pane and should not hide the
 // chart it describes. Appended into the themed chart root and `position: fixed`, for the reason
@@ -18,6 +18,10 @@ export interface PriceAlertEditorOptions {
   /** `pips`, or `ticks` for an instrument not priced in pips. */
   unitLabel: string
   pips: number
+  /** What a new alert is given on this pane, shown beside "Make default". */
+  defaultPips: number
+  /** Make a buffer the pane's default for new alerts. Absent: no such control. */
+  onMakeDefault?(pips: number): void
   /** Whether it has fired, and when. */
   status: string
   /** The zone a buffer makes, as text: shown under the input while it is typed. */
@@ -74,6 +78,24 @@ export function openPriceAlertEditor(options: PriceAlertEditorOptions): PriceAle
 
   const zone = el('div', 'wd-price-alert-zone', options.describe(options.pips))
   card.appendChild(zone)
+
+  // The pane's default for a new alert, and the control that makes the buffer in the box it.
+  // Disabled while the box already holds the default, so a press always changes something.
+  let defaultPips = options.defaultPips
+  const defaultText = el('span', 'wd-price-alert-default-text')
+  const makeDefault = el('button', 'kc-button wd-price-alert-make-default', 'Make default')
+  makeDefault.type = 'button'
+  const showDefault = (): void => {
+    defaultText.textContent = `New alerts: ${defaultPips} ${options.unitLabel} each side`
+    const typed = parsePips(input.value)
+    makeDefault.disabled = typed === null || typed === defaultPips
+  }
+  if (options.onMakeDefault) {
+    const row = el('div', 'wd-price-alert-default')
+    row.append(defaultText, makeDefault)
+    card.appendChild(row)
+    showDefault()
+  }
   card.appendChild(el('div', 'wd-price-alert-status', options.status))
 
   const actions = el('div', 'wd-price-alert-actions')
@@ -99,6 +121,7 @@ export function openPriceAlertEditor(options: PriceAlertEditorOptions): PriceAle
   input.addEventListener('input', () => {
     const pips = typed()
     input.classList.toggle('is-invalid', pips === null)
+    showDefault()
     if (pips === null) return
     zone.textContent = options.describe(pips)
     options.onPreview(pips)
@@ -109,6 +132,16 @@ export function openPriceAlertEditor(options: PriceAlertEditorOptions): PriceAle
       commit()
       close()
     }
+  })
+  makeDefault.addEventListener('click', () => {
+    const pips = typed()
+    if (pips === null || !options.onMakeDefault) return
+    // The buffer in the box is this alert's too: a default it does not have itself would be a
+    // strange thing to have just pressed.
+    commit()
+    defaultPips = pips
+    options.onMakeDefault(pips)
+    showDefault()
   })
   remove.addEventListener('click', () => {
     options.onRemove()
