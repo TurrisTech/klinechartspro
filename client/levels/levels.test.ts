@@ -250,9 +250,9 @@ describe('alerts', () => {
     expect(levelsLayer.alerts?.target(level({ active: false }))).toBeNull()
   })
 
-  test('a new alert takes the pane\'s default zone: 3 pips each side, 6 wide', () => {
-    expect(levelsLayer.alerts?.zonePips(DEFAULT_LEVELS_CONFIG)).toBe(3)
-    expect(levelsLayer.alerts?.zonePips({ ...DEFAULT_LEVELS_CONFIG, alerts: { zonePips: 12 } })).toBe(12)
+  test('a new alert takes the pane\'s default zone, 3 pips each side by default, which Make default writes', () => {
+    expect(levelsLayer.alerts?.zonePipsSetting).toBe('alerts.zonePips')
+    expect(DEFAULT_LEVELS_CONFIG.alerts.zonePips).toBe(3)
   })
 
   test('every stretch of a level carries the level, which is how a click finds it', () => {

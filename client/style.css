@@ -3160,6 +3160,28 @@ body.wd-has-dock > #app {
   font-variant-numeric: tabular-nums;
 }
 
+.wd-price-alert-default {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.wd-price-alert-default-text {
+  color: var(--muted-foreground);
+}
+
+.wd-price-alert-make-default {
+  flex: none;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-price-alert-make-default:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .wd-price-alert-actions {
   display: flex;
   align-items: center;

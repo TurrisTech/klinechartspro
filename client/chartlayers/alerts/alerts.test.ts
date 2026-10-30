@@ -250,7 +250,7 @@ function alertLayer(data: Datum[]): ChartLayer<Datum, { zonePips: number }> {
       })),
     alerts: {
       target: (datum) => (datum.live ? { price: datum.price, label: 'test line' } : null),
-      zonePips: (config) => config.zonePips
+      zonePipsSetting: 'zonePips'
     }
   }
 }
@@ -301,18 +301,35 @@ afterEach(() => {
   for (const release of releases) release()
   releases = []
   editor()?.remove()
+  // A confirmation lingers for its own 1.6 s, in the root of the pane that raised it.
+  for (const note of document.querySelectorAll('.wd-watch-flash')) note.remove()
 })
 
-async function mountPane(data: Datum[], options: { alerts?: InstanceType<typeof PriceAlerts>; zonePips?: number } = {}) {
+async function mountPane(
+  data: Datum[],
+  options: { alerts?: InstanceType<typeof PriceAlerts>; zonePips?: number; editable?: boolean } = {}
+) {
   const hub = options.alerts ?? backend().alerts
   const controller = createLayerController(alertLayer(data), TEMPLATE, hub)
   const pane = paneChart()
   const fake = fakePane('p1', pane.chart, 'EURUSD')
   ;(fake.getSymbol() as { pipSize?: number }).pipSize = 0.0001
-  releases.push(controller.attach(fake, 'ind1', { zonePips: options.zonePips ?? 5 }))
+  /** What the binding's `editConfig` was asked to write -- the host's half is host.test.ts. */
+  const edits: Array<[string, unknown]> = []
+  const edit = options.editable === false ? undefined : (key: string, value: unknown) => void edits.push([key, value])
+  releases.push(controller.attach(fake, 'ind1', { zonePips: options.zonePips ?? 5 }, edit))
   await flush()
   await flush()
-  return { pane, alerts: hub }
+  return { pane, alerts: hub, edits }
+}
+
+const flashed = () => document.querySelector('.wd-watch-flash')?.textContent ?? null
+
+/** Clicks and lets the store's answer land. */
+async function clickAndSettle(overlay: OverlayCreate | undefined) {
+  click(overlay)
+  await flush()
+  await flush()
 }
 
 describe('on a pane', () => {
@@ -328,19 +345,43 @@ describe('on a pane', () => {
     expect(lines(pane)[0].onClick).toBeUndefined()
   })
 
-  test('a click on a line enables it, draws its bell and opens its editor', async () => {
+  test('a click on a line turns its alert on and says so -- no dialog -- and a second turns it off', async () => {
     const { pane, alerts } = await mountPane([{ price: 1.085, live: true }])
-    expect(bells(pane)).toHaveLength(0)
-    click(lines(pane)[0])
-    await flush()
-    await flush()
+    await clickAndSettle(lines(pane)[0])
     expect(alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(1)
     expect(bells(pane)).toHaveLength(1)
     expect(bells(pane)[0].points?.[0]?.value).toBeCloseTo(1.085, 9)
+    expect(editor()).toBeNull()
+    expect(flashed()).toBe('Alert on · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
+
+    await clickAndSettle(lines(pane)[0])
+    expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
+    expect(bells(pane)).toHaveLength(0)
+    expect(flashed()).toBe('Alert off · test line 1.08500')
+  })
+
+  test('the bell opens the dialog', async () => {
+    const { pane } = await mountPane([{ price: 1.085, live: true }])
+    await clickAndSettle(lines(pane)[0])
+    click(bells(pane)[0])
     expect(editor()?.querySelector('.wd-price-alert-title')?.textContent).toBe('EURUSD test line 1.08500')
     expect(editor()?.querySelector<HTMLInputElement>('input')?.value).toBe('5')
-    // The zone it set is shown while the editor is open.
+    // The zone it has is shown while the dialog is open.
     expect(zoneBand(pane)?.extendData).toMatchObject({ low: 1.0845, high: 1.0855, preview: false })
+  })
+
+  test('a line never rises over its bell, hovered or not', async () => {
+    const { pane } = await mountPane([{ price: 1.085, live: true }])
+    await clickAndSettle(lines(pane)[0])
+    // A hovered overlay is raised over every other unless it holds its level; the bell is the
+    // only thing that must win a click where the two overlap.
+    expect(lines(pane).every((line) => line.fixedZLevel === true)).toBe(true)
+    // ...and klinecharts numbers an overlay without a zLevel by the pane's overlay COUNT, so a
+    // layer's own lines reach the hundreds: the bell must be above any count, and below the
+    // hover raise (MAX_SAFE_INTEGER) so that a hovered bell still rises.
+    const z = bells(pane)[0].zLevel ?? 0
+    expect(z).toBeGreaterThan(1_000_000)
+    expect(z).toBeLessThan(Number.MAX_SAFE_INTEGER)
   })
 
   test('a line that cannot have an alert is not clickable', async () => {
@@ -348,7 +389,7 @@ describe('on a pane', () => {
     expect(lines(pane)[0].onClick).toBeUndefined()
   })
 
-  test('hovering shows the zone: the one a click would make, then the alert\'s own', async () => {
+  test('hovering shows the zone and what a click on that thing does', async () => {
     const { pane } = await mountPane([{ price: 1.085, live: true }], { zonePips: 3 })
     lines(pane)[0].onMouseEnter?.({} as never)
     expect(zoneBand(pane)?.extendData).toMatchObject({
@@ -360,20 +401,21 @@ describe('on a pane', () => {
     lines(pane)[0].onMouseLeave?.({} as never)
     expect(zoneBand(pane)).toBeUndefined()
 
-    click(lines(pane)[0])
-    await flush()
-    await flush()
-    editor()?.querySelector<HTMLButtonElement>('.kc-button-primary')?.click()
-    expect(zoneBand(pane)).toBeUndefined()
+    await clickAndSettle(lines(pane)[0])
+    lines(pane)[0].onMouseEnter?.({} as never)
+    expect(zoneBand(pane)?.extendData).toMatchObject({
+      preview: false,
+      label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · click to turn off'
+    })
+    lines(pane)[0].onMouseLeave?.({} as never)
     bells(pane)[0].onMouseEnter?.({} as never)
-    expect(zoneBand(pane)?.extendData).toMatchObject({ preview: false, label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530' })
+    expect(zoneBand(pane)?.extendData).toMatchObject({ label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · click for options' })
   })
 
-  test('the editor sets the buffer -- previewed while typed, applied on Enter -- and removes the alert', async () => {
+  test('the dialog sets the buffer -- previewed while typed, applied on Enter -- and removes the alert', async () => {
     const { pane, alerts } = await mountPane([{ price: 1.085, live: true }])
-    click(lines(pane)[0])
-    await flush()
-    await flush()
+    await clickAndSettle(lines(pane)[0])
+    click(bells(pane)[0])
     const input = must(editor()?.querySelector<HTMLInputElement>('input'))
     input.value = '10'
     input.dispatchEvent(new Event('input'))
@@ -395,6 +437,37 @@ describe('on a pane', () => {
     expect(bells(pane)).toHaveLength(0)
   })
 
+  test('"Make default" writes the layer\'s own setting with the buffer in the box, and gives the alert it too', async () => {
+    const { pane, alerts, edits } = await mountPane([{ price: 1.085, live: true }], { zonePips: 3 })
+    await clickAndSettle(lines(pane)[0])
+    click(bells(pane)[0])
+    const button = must(editor()?.querySelector<HTMLButtonElement>('.wd-price-alert-make-default'))
+    const said = () => editor()?.querySelector('.wd-price-alert-default-text')?.textContent
+    expect(said()).toBe('New alerts: 3 pips each side')
+    // The box holds the default already: nothing to make.
+    expect(button.disabled).toBe(true)
+
+    const input = must(editor()?.querySelector<HTMLInputElement>('input'))
+    input.value = '4'
+    input.dispatchEvent(new Event('input'))
+    expect(button.disabled).toBe(false)
+    button.click()
+    await flush()
+    expect(edits).toEqual([['zonePips', 4]])
+    expect(said()).toBe('New alerts: 4 pips each side')
+    expect(button.disabled).toBe(true)
+    const [alert] = alerts.forInstrument('oanda', 'EURUSD')
+    expect([alert.zone.low, alert.zone.high]).toEqual([1.0846, 1.0854])
+  })
+
+  test('with nowhere to write a default, the dialog offers none', async () => {
+    const { pane } = await mountPane([{ price: 1.085, live: true }], { editable: false })
+    await clickAndSettle(lines(pane)[0])
+    click(bells(pane)[0])
+    expect(editor()).not.toBeNull()
+    expect(editor()?.querySelector('.wd-price-alert-make-default')).toBeNull()
+  })
+
   test('an alert whose line is not drawn keeps its bell, so it can still be removed', async () => {
     const hub = backend().alerts
     await hub.enable(EURUSD, { price: 1.09, label: '1W level' }, 5)
@@ -407,17 +480,15 @@ describe('on a pane', () => {
     const { pane } = await mountPane([{ price: 1.085, live: true }], { alerts })
     lines(pane)[0].onMouseEnter?.({} as never)
     expect(zoneBand(pane)).toBeUndefined()
-    click(lines(pane)[0])
-    await flush()
+    await clickAndSettle(lines(pane)[0])
     expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
-    expect(document.querySelector('.wd-watch-flash')?.textContent).toBe('This replay walks GBPUSD')
+    expect(flashed()).toBe('This replay walks GBPUSD')
   })
 
-  test('taking the layer off the pane takes its zone and its editor with it', async () => {
+  test('taking the layer off the pane takes its zone and its dialog with it', async () => {
     const { pane } = await mountPane([{ price: 1.085, live: true }])
-    click(lines(pane)[0])
-    await flush()
-    await flush()
+    await clickAndSettle(lines(pane)[0])
+    click(bells(pane)[0])
     expect(editor()).not.toBeNull()
     releases.pop()?.()
     expect(editor()).toBeNull()
@@ -459,9 +530,8 @@ describe('across panes', () => {
   test('one editor at a time, its zone on its own pane; an edit or a removal there reaches the others', async () => {
     const { alerts, panes } = await wall()
     const [a, b] = panes
-    click(lines(a)[0])
-    await flush()
-    await flush()
+    await clickAndSettle(lines(a)[0])
+    click(bells(a)[0])
     expect(zoneBand(a)).toBeDefined()
 
     // The bell on the other pane opens it there, and closes the first.

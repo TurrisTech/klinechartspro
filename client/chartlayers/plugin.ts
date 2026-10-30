@@ -122,7 +122,7 @@ export function createLayerPlugin(options: { id: string; group: string; layers: 
         sources: [],
         label: () => legend(entry, ctx, config),
         overrides: typeof precision === 'number' ? { precision } : undefined,
-        attach: () => entry.controller.attach(ctx.pane, ctx.indicator.id, config)
+        attach: () => entry.controller.attach(ctx.pane, ctx.indicator.id, config, ctx.editConfig)
       }
     }
   }
