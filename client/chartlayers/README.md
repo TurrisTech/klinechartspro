@@ -39,6 +39,58 @@ samples only its own pane, and only while its binding lives.
 | `store.ts` | the toolbar-era wall-wide settings, read once as the starting point of an unconfigured pane |
 | `settings.ts` | the declarative field schema and its plain-DOM renderer |
 | `encoding.ts`, `color.ts` | metrics → line width/opacity/colour |
+| `alerts/` | price alerts on a layer's lines -- see below |
+
+## Price alerts on a layer's lines (`alerts/`)
+
+A layer that declares `alerts` (types.ts `LayerAlerts`) makes its lines alertable: **click** a
+line to enable an alert when price enters a zone around it -- the line's price plus or minus a
+buffer in the instrument's pips (ticks where it has none) -- and set the buffer in the small
+editor that opens beside its **bell** at the pane's right edge. **Hovering** a line or a bell
+draws the zone across the pane with its width; on a line not yet enabled, the zone a click would
+give it, fainter. Levels is the one layer that offers it so far: a live level, by its price and
+timeframe, with the pane's default buffer under the gear's "Alerts".
+
+The layer only says what is alertable (`target(datum)` -> price + label, or null) and the
+default buffer (`zonePips(config)`); everything else is here, and the controller applies it to
+every layer that opts in. It finds a datum through the layer's own overlays, by their
+`extendData` -- so a layer that offers alerts puts its datum there, and nothing else.
+
+| file | what it is |
+|---|---|
+| `zone.ts` | **pure**: the alert's shape -- `any(price crosses_above low, price crosses_below high)`, entering the zone from either side -- its pips, its name |
+| `hub.ts` | `PriceAlerts`: one wall's view of a watch backend, narrowed to the alerts; enable / new buffer / remove |
+| `view.ts` | a layer's pane: the click and hover handlers, the bells, the zone band, opening the editor |
+| `figures.ts` | the registered overlays: the bell (`wdPriceAlert`) and the band (`wdPriceAlertZone`) |
+| `editor.ts` | the card beside a bell |
+
+**An alert is a price watch** (`client/watch`), on the same backend as the chart's price-watch
+lines, handed to the hub by `client/index.ts`: the server's `/watch` on a live wall, so it fires
+with the tab closed and lands in the Notification Center, and the replay's own registry on a
+replay wall. Nothing here evaluates anything: the condition is the server's language, and the
+crossing baseline is the server's to seed when it arms. It keeps watching once it has fired
+(`repeat: 'always'` -- the line is *enabled*, not set once), five minutes apart at the closest
+(`PRICE_ALERT_COOLDOWN_MS`); entering needs leaving first, so price wandering inside the zone
+raises nothing more. Armed with price already inside the zone, it waits for the next arrival.
+
+**The shape is the identity.** Nothing stores which line an alert belongs to: the zone's middle
+is the line's price, matched to half a tick. So two lines at one price share one alert, and an
+alert outlives its line -- a bell is drawn for every alert in the price band whether or not its
+line still is (a level spent since, a timeframe switched off), which is how it stays reachable.
+Its watch has two leaves, so `client/watch/overlays.ts` (one `price` leaf only) never draws it a
+second time. The bells are a layer's: two layers offering alerts on one pane would each draw them.
+
+The handlers are left out of the paint signature (paint.ts), so a paint that changes nothing
+visible leaves the previous paint's handlers on the chart; they read the pane's context from the
+view at the moment of the event, never from what they captured. The zone band is the one thing
+drawn outside the layer's group (`<layer id>-alert-zone`), because it follows the pointer; the
+controller clears it, and closes an open editor, whenever it clears the layer.
+
+**Every overlay a layer paints keeps itself on a right-click.** klinecharts removes an overlay on
+right-click unless its handler prevents it, locked or not
+(`OverlayView._figureMouseRightClickEvent`), and a layer whose signature still said the line was
+drawn never put it back. The controller gives every overlay a preventing `onRightClick` unless
+the layer brings its own.
 
 ## Not fetching, and not repainting
 
@@ -104,7 +156,12 @@ closed 1W/1M bar and `/levels` answers a conditional GET.
 
 ## Tests
 
-`bun test client` — `indicator.test.ts` (drawn only on panes carrying the template, off when
+`bun test client` — `alerts/alerts.test.ts` (the shape, when it fires through the real
+condition language and firing policy, the hub over a real local registry, and panes driven
+through the real controller in happy-dom: click, bell, hover, editor, remove, refusal, teardown,
+and across panes -- a bell on every pane of the instrument, one editor at a time, an edit or a
+removal on one pane reaching the others),
+`indicator.test.ts` (drawn only on panes carrying the template, off when
 hidden or removed, settings per pane, the wall document's shape, the legend), `persist.test.ts`
 (what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
 `paint.test.ts` (the signature is blind to nothing visible and to everything invisible),

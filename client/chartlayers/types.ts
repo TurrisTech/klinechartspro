@@ -70,4 +70,28 @@ export interface ChartLayer<TDatum, TConfig> {
   staleAt?(fetchedAt: number, ctx: LayerContext): number
   /** Defaults to the controller's own redraw debounce when omitted. */
   debounceMs?: number
+  /** Price alerts on the layer's data (`alerts/`): a click on a datum's line enables an alert
+   * when price enters a zone around it, an enabled one carries a bell at the pane's right
+   * edge, and hovering shows the zone. Omit it and the layer's lines are read-only. */
+  alerts?: LayerAlerts<TDatum, TConfig>
+}
+
+/** What a datum is to a price alert: the price it watches, and the words that name it. */
+export interface AlertTarget {
+  price: number
+  /** What the price is, after the ticker and before the price: `1W level` names the alert
+   * `EURUSD 1W level 1.08500`, which is the notification's title. */
+  label: string
+}
+
+/** How a layer offers its data to price alerts. The controller finds a datum through its
+ * overlays: each overlay `toOverlays` builds whose `extendData` is a datum is that datum's line,
+ * so an overlay that carries something else must carry nothing there. */
+export interface LayerAlerts<TDatum, TConfig> {
+  /** What an alert on `datum` would watch, or null when it cannot have one -- a spent level,
+   * whose line stops where the market finished it. */
+  target(datum: TDatum): AlertTarget | null
+  /** The buffer a click gives a new alert, in the instrument's pips, from the pane's settings.
+   * Each alert then keeps its own, edited beside its bell. */
+  zonePips(config: TConfig): number
 }

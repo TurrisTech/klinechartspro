@@ -1,3 +1,4 @@
+import { PriceAlerts } from '../chartlayers/alerts/hub'
 import { createLayerController, type LayerController } from '../chartlayers/controller'
 import { createLayerPlugin } from '../chartlayers/plugin'
 import { levels2Layer } from '../levels2/layer'
@@ -18,10 +19,16 @@ export interface LevelsIndicators {
   plugin: IndicatorPlugin
   levels: LayerController
   zones: LayerController
+  /** The price alerts the Levels layer offers its levels to, waiting for the wall's watch
+   * backend (`connect`). */
+  alerts: PriceAlerts
+  /** Lets go of the backend. */
+  dispose(): void
 }
 
 export function createLevelsIndicators(): LevelsIndicators {
-  const levels = createLayerController(levelsLayer, LEVELS_TEMPLATE)
+  const alerts = new PriceAlerts()
+  const levels = createLayerController(levelsLayer, LEVELS_TEMPLATE, alerts)
   const zones = createLayerController(levels2Layer, ZONES_TEMPLATE)
   const plugin = createLayerPlugin({
     id: 'levels',
@@ -30,7 +37,7 @@ export function createLevelsIndicators(): LevelsIndicators {
       {
         controller: levels,
         description:
-          'Support and resistance lines computed on weekly and monthly bars, each drawn from where it was confirmed and a shade darker after every test. Timeframes, spent levels, line style and emphasis on the gear.'
+          'Support and resistance lines computed on weekly and monthly bars, each drawn from where it was confirmed and a shade darker after every test. Click a live level to be alerted when price comes within its zone. Timeframes, spent levels, line style, emphasis and the default alert zone on the gear.'
       },
       {
         controller: zones,
@@ -40,5 +47,13 @@ export function createLevelsIndicators(): LevelsIndicators {
       }
     ]
   })
-  return { plugin, levels, zones }
+  return {
+    plugin,
+    levels,
+    zones,
+    alerts,
+    dispose(): void {
+      alerts.connect(null)
+    }
+  }
 }

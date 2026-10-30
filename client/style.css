@@ -3115,6 +3115,65 @@ body.wd-has-dock > #app {
   background: color-mix(in oklab, var(--destructive, #ef5350) 16%, transparent);
 }
 
+/* --- Price alerts on a chart layer (client/chartlayers/alerts/editor.ts) ---------------- */
+
+/* The card beside an enabled line's bell. Compound selector so it wins over `.kc-popover`'s
+   own width. */
+.kc-popover.wd-price-alert {
+  z-index: 65;
+  display: flex;
+  width: 15rem;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-price-alert-title {
+  padding: 0 0 0.125rem;
+  font-size: 0.8125rem;
+}
+
+.wd-price-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-price-alert-label,
+.wd-price-alert-unit,
+.wd-price-alert-status {
+  color: var(--muted-foreground);
+}
+
+.wd-price-alert-input {
+  width: 4.5rem;
+  height: 1.75rem;
+  padding: 0 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-price-alert-input.is-invalid {
+  border-color: var(--destructive, #ef5350);
+}
+
+.wd-price-alert-zone {
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-price-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-price-alert-spacer {
+  flex: 1;
+}
+
+.wd-price-alert-remove {
+  color: var(--destructive, #ef5350);
+}
+
 /* --- Touch ------------------------------------------------------------------------------ */
 
 /* The app's own controls at a fingertip's size, alongside src/app.css's `(pointer: coarse)`
@@ -3213,7 +3272,8 @@ body.wd-has-dock > #app {
   .wd-replay-input,
   .wd-replay-field .wd-replay-input,
   .wd-replay-field .wd-replay-select,
-  .wd-watch-input {
+  .wd-watch-input,
+  .wd-price-alert-input {
     height: 2.5rem;
   }
 
@@ -3236,6 +3296,7 @@ body.wd-has-dock > #app {
       .wd-replay-input,
       .wd-replay-select,
       .wd-watch-input,
+      .wd-price-alert-input,
       .wd-layer-panel input,
       .wd-layer-panel select
     ) {

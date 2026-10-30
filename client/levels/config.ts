@@ -53,6 +53,12 @@ export interface LevelsConfig {
     invalidations: Encoding
     age: Encoding
   }
+  alerts: {
+    /** The buffer a level is given when a click enables its alert, in the instrument's pips
+     * (its ticks where it has none, client/levels/alertzone.ts). Each alert then keeps its
+     * own, edited beside its bell. */
+    zonePips: number
+  }
 }
 
 // Dotted, 1px, the server's own advisory color, with both emphasis encodings turned on —
@@ -103,6 +109,11 @@ export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
       range: [1, 0.45],
       invert: false
     }
+  },
+  alerts: {
+    // Five pips is a few minutes' range on a major in an ordinary session: enough warning to
+    // look before the level, not so much that the alert says nothing about it.
+    zonePips: 5
   }
 }
 
@@ -202,5 +213,19 @@ export const LEVELS_FIELDS: SettingsField[] = [
     ]
   },
   encodingFields('invalidations', 'invalidations'),
-  encodingFields('age', 'age')
+  encodingFields('age', 'age'),
+  {
+    kind: 'group',
+    label: 'Alerts',
+    fields: [
+      {
+        kind: 'number',
+        key: 'alerts.zonePips',
+        label: 'Zone of a new alert (± pips)',
+        min: 0,
+        max: 10_000,
+        step: 0.5
+      }
+    ]
+  }
 ]

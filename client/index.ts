@@ -29,7 +29,7 @@ import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
 import { symbolKey } from './trading/format'
 import { Arming } from './trading/kit'
-import { mountPriceWatches, type PriceWatchesController } from './watch'
+import { loadWatches, mountPriceWatches, type PriceWatchesController } from './watch'
 import { createRemoteNotifications } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { createWorkspaceSaveControls, type WorkspaceSaveControls } from './workspaces/save'
@@ -545,6 +545,18 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // waited for from onPanesChange -- which does not fire again until the layout changes.
   watches?.sync(chartPro.getPanes())
 
+  // LEVEL ALERTS: a level clicked on the Levels indicator is a price watch too -- price entering
+  // the level's zone -- on the same backend as the lines above, so it fires with the tab
+  // closed on a live wall and against the walked bars on a replay wall. Without `watch` a live
+  // wall has no backend, and the levels stay read-only.
+  levels.alerts.connect(
+    replay
+      ? { store: replay.watches.store, canWatch: (target) => replay?.watches.canWatch(target) ?? null }
+      : hasFeature('watch')
+        ? { store: await loadWatches() }
+        : null
+  )
+
   // The Notification Center, and the server store behind it. The two modules meet only
   // here: `client/watch/notifications.ts` is a `NotificationBackend` (client/notifications
   // knows nothing about watches), and a row arriving live also means a watch just changed
@@ -591,6 +603,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       alertManager.teardown()
       watches?.teardown()
       watches = null
+      levels.dispose()
       notificationCenter.teardown()
       setFocusSource(null)
       if (remoteNotifications) {
