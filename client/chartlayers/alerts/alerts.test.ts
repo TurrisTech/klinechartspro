@@ -77,7 +77,7 @@ describe('the zone', () => {
   })
 
   test('is described by its width and its edges', () => {
-    expect(zones.describeZone(zones.zoneAround(1.085, 5, FX, 5), FX, 5)).toBe('±5 pips · 1.08450–1.08550')
+    expect(zones.describeZone(zones.zoneAround(1.085, 5, FX, 5), FX, 5)).toBe('±5 pips (10 wide) · 1.08450–1.08550')
     expect(zones.describeZone(zones.zoneAround(1.085, 0, FX, 5), FX, 5)).toBe('at the price')
     expect(zones.alertName('EURUSD', { price: 1.085, label: '1W level' }, 5)).toBe('EURUSD 1W level 1.08500')
   })
@@ -161,7 +161,7 @@ describe('PriceAlerts', () => {
       source: 'price',
       target: 'oanda:EURUSD',
       name: 'EURUSD 1W level 1.08500',
-      note: 'alert zone ±5 pips · 1.08450–1.08550',
+      note: 'alert zone ±5 pips (10 wide) · 1.08450–1.08550',
       trigger: 'edge',
       repeat: 'always',
       cooldownMs: PRICE_ALERT_COOLDOWN_MS
@@ -181,7 +181,7 @@ describe('PriceAlerts', () => {
     expect(alert.zone.low).toBe(1.08398)
     expect(alert.zone.high).toBe(1.08648)
     expect(zones.centredOn(alert.zone, 1.08523, 5)).toBe(true)
-    expect(alert.watch.note).toBe('alert zone ±12.5 pips · 1.08398–1.08648')
+    expect(alert.watch.note).toBe('alert zone ±12.5 pips (25 wide) · 1.08398–1.08648')
     await alerts.remove(id)
     expect(store.list()).toEqual([])
     expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
@@ -355,7 +355,7 @@ describe('on a pane', () => {
       low: 1.0847,
       high: 1.0853,
       preview: true,
-      label: 'Click to alert · zone ±3 pips · 1.08470–1.08530'
+      label: 'Click to alert · zone ±3 pips (6 wide) · 1.08470–1.08530'
     })
     lines(pane)[0].onMouseLeave?.({} as never)
     expect(zoneBand(pane)).toBeUndefined()
@@ -366,7 +366,7 @@ describe('on a pane', () => {
     editor()?.querySelector<HTMLButtonElement>('.kc-button-primary')?.click()
     expect(zoneBand(pane)).toBeUndefined()
     bells(pane)[0].onMouseEnter?.({} as never)
-    expect(zoneBand(pane)?.extendData).toMatchObject({ preview: false, label: 'Alert zone ±3 pips · 1.08470–1.08530' })
+    expect(zoneBand(pane)?.extendData).toMatchObject({ preview: false, label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530' })
   })
 
   test('the editor sets the buffer -- previewed while typed, applied on Enter -- and removes the alert', async () => {
@@ -378,7 +378,7 @@ describe('on a pane', () => {
     input.value = '10'
     input.dispatchEvent(new Event('input'))
     expect(zoneBand(pane)?.extendData).toMatchObject({ low: 1.084, high: 1.086 })
-    expect(editor()?.querySelector('.wd-price-alert-zone')?.textContent).toBe('±10 pips · 1.08400–1.08600')
+    expect(editor()?.querySelector('.wd-price-alert-zone')?.textContent).toBe('±10 pips (20 wide) · 1.08400–1.08600')
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
     await flush()
     expect(editor()).toBeNull()

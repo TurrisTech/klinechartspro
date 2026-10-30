@@ -55,8 +55,8 @@ export interface LevelsConfig {
   }
   alerts: {
     /** The buffer a level is given when a click enables its alert, in the instrument's pips
-     * (its ticks where it has none, client/levels/alertzone.ts). Each alert then keeps its
-     * own, edited beside its bell. */
+     * on EACH side of the level (its ticks where it has none, chartlayers/alerts/zone.ts), so
+     * the zone is twice this wide. Each alert then keeps its own, edited beside its bell. */
     zonePips: number
   }
 }
@@ -111,9 +111,8 @@ export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
     }
   },
   alerts: {
-    // Five pips is a few minutes' range on a major in an ordinary session: enough warning to
-    // look before the level, not so much that the alert says nothing about it.
-    zonePips: 5
+    // Three pips each side, six wide (the user's default, 2026-10-30).
+    zonePips: 3
   }
 }
 
@@ -168,6 +167,22 @@ export const LEVELS_FIELDS: SettingsField[] = [
     }))
   },
   { kind: 'switch', key: 'showSpent', label: 'Show spent levels' },
+  // Near the top rather than after the styling: it is the one lever here that is about what
+  // a click does, and the panel runs several groups deep below it.
+  {
+    kind: 'group',
+    label: 'Alerts',
+    fields: [
+      {
+        kind: 'number',
+        key: 'alerts.zonePips',
+        label: 'Zone of a new alert, pips each side',
+        min: 0,
+        max: 10_000,
+        step: 0.5
+      }
+    ]
+  },
   {
     kind: 'group',
     label: 'Line',
@@ -213,19 +228,5 @@ export const LEVELS_FIELDS: SettingsField[] = [
     ]
   },
   encodingFields('invalidations', 'invalidations'),
-  encodingFields('age', 'age'),
-  {
-    kind: 'group',
-    label: 'Alerts',
-    fields: [
-      {
-        kind: 'number',
-        key: 'alerts.zonePips',
-        label: 'Zone of a new alert (± pips)',
-        min: 0,
-        max: 10_000,
-        step: 0.5
-      }
-    ]
-  }
+  encodingFields('age', 'age')
 ]

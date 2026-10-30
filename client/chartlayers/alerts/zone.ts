@@ -110,11 +110,13 @@ export function zonePips(zone: Pick<Zone, 'half'>, unit: ZoneUnit): number {
   return Math.round((zone.half / unit.size) * 100) / 100
 }
 
-/** `±5 pips · 1.08450–1.08550`, or `at the price` for a zone of no width. */
+/** `±3 pips (6 wide) · 1.08470–1.08530`, or `at the price` for a zone of no width. The buffer
+ * is each side of the price, so the width is said too. */
 export function describeZone(zone: Zone, unit: ZoneUnit, precision: number): string {
   const pips = zonePips(zone, unit)
   if (pips <= 0) return 'at the price'
-  return `±${pips} ${unit.label} · ${zone.low.toFixed(precision)}–${zone.high.toFixed(precision)}`
+  const wide = Math.round(pips * 2 * 100) / 100
+  return `±${pips} ${unit.label} (${wide} wide) · ${zone.low.toFixed(precision)}–${zone.high.toFixed(precision)}`
 }
 
 /** The alert's name, which is the notification's title: the line it was set on. */
