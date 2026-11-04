@@ -102,6 +102,12 @@ export function manifestFor(
   return pending
 }
 
+/** Test seam: the manifests and the base they load from are per page load by design. */
+export function resetManifests(next: string | null = null): void {
+  cache.clear()
+  base.set(next)
+}
+
 /**
  * Tiles answering as much of `[from, to]` as the tiled history reaches, in order.
  *
