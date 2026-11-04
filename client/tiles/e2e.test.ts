@@ -1,45 +1,44 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { existsSync, readFileSync } from 'node:fs'
-import { LAYOUT_VERSION } from './manifest'
+import { LAYOUT_VERSION, resetManifests } from './manifest'
 
 // End-to-end over the real tiles bin/build_chart_tiles.py wrote: manifest -> fetch -> decode
 // -> KLineData, through the same code the browser runs. The positive half of the contract;
 // manifest.test.ts pins where tiles stop and parity.test.ts pins that the join is exact.
 //
-// Opt-in: it reads a local tile tree only when TILES_ROOT names one (laid out like the bucket,
-// `<root>/v2/<vendor>/<symbol>/<interval>/...`), and skips every case otherwise. There is no
-// default directory -- the one there used to be, /mnt/d/marketdata/dev/tiles, is a damaged,
-// ephemeral volume being retired.
+// Opt-in: it reads a tile store only when TILES_BASE_URL names one (anything serving the bucket's
+// layout, `<base>/v2/<vendor>/<symbol>/<interval>/...`; parity.test.ts has the choices), and skips
+// every case otherwise, saying so.
 //
-// Every test is gated on the series IT reads, not on the store as a whole. A local store is
-// routinely partial -- on 2026-09-15 this workstation's v2 tree held EURUSD and EURTRY and
-// nothing else, the rest of it still v1 -- and a single EURUSD gate let the USDJPY test run
-// against a manifest that did not exist, failing with `expected tiled bars, got null`. A
+// Every test is gated on the series IT reads, not on the store as a whole. A store is routinely
+// partial -- dev's holds EURUSD 1m and not USDJPY 1m -- and a single EURUSD gate let the USDJPY
+// test run against a manifest that did not exist, failing with `expected tiled bars, got null`. A
 // missing series now skips its test by name; the precision rule that test was the only
 // cover for is pinned against a committed fixture in `precision.test.ts`, which needs no
 // store at all.
 //
-// Likewise nothing here keys off the wall clock. A local tree is built by hand and ages; a
-// window measured back from `Date.now()` stopped overlapping it thirty days after the last
-// build. The live-edge tests are measured from the manifest's own `coveredTo`.
+// Likewise nothing here keys off the wall clock. A store can age; a window measured back from
+// `Date.now()` stopped overlapping one thirty days after its last build. The live-edge tests are
+// measured from the manifest's own `coveredTo`.
 
-const ROOT = process.env.TILES_ROOT?.trim().replace(/\/+$/, '') || undefined
+const BASE = process.env.TILES_BASE_URL?.trim().replace(/\/+$/, '') || undefined
+if (BASE === undefined) console.warn('e2e.test: TILES_BASE_URL unset; skipping')
 
-function manifestPath(vendor: string, symbol: string, interval: string): string {
-  return `${ROOT}/${LAYOUT_VERSION}/${vendor}/${symbol}/${interval}/manifest.json`
+/** The store's manifest for this series under the layout the client reads, null when it holds
+ * none. `Bun.fetch` for the reason parity.test.ts gives. */
+async function stored(vendor: string, symbol: string, interval: string) {
+  if (BASE === undefined) return null
+  const url = `${BASE}/${LAYOUT_VERSION}/${vendor}/${symbol}/${interval}/manifest.json`
+  const response = await Bun.fetch(url).catch(() => null)
+  return response?.ok ? ((await response.json()) as { coveredTo: number }) : null
 }
 
-/** Whether the local store holds this series under the layout the client reads. */
-function stored(vendor: string, symbol: string, interval: string): boolean {
-  return ROOT !== undefined && existsSync(manifestPath(vendor, symbol, interval))
-}
-
-const eurusd = stored('oanda', 'EURUSD', '1m')
-const usdjpy = stored('oanda', 'USDJPY', '1m')
+// At module load, not in beforeAll: `test.skipIf` is evaluated while the file is being collected.
+const eurusd = await stored('oanda', 'EURUSD', '1m')
+const usdjpy = await stored('oanda', 'USDJPY', '1m')
 
 /** Where the stored EURUSD 1m tiles stop, read from the manifest the client will read. */
 function eurusdCoveredTo(): number {
-  return (JSON.parse(readFileSync(manifestPath('oanda', 'EURUSD', '1m'), 'utf8')) as { coveredTo: number }).coveredTo
+  return present(eurusd, 'a manifest').coveredTo
 }
 
 let barsFromTiles: typeof import('./index').barsFromTiles
@@ -52,15 +51,11 @@ function present<T>(value: T | null | undefined, what: string): T {
 }
 
 beforeAll(async () => {
-  // The modules read window.location on first use and fetch over HTTP; both are stubbed to
-  // the local tile directory so this needs no server.
+  // The modules read window.location on first use, and fetch over HTTP. The manifest memo and
+  // its base are shared with every other file in this process; see parity.test.ts.
   ;(globalThis as { window?: unknown }).window = { location: { origin: 'http://tiles.test' } }
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = String(input)
-    const file = Bun.file(`${ROOT}${new URL(url).pathname.replace(/^\/tiles/, '')}`)
-    if (!(await file.exists())) return new Response('no such tile', { status: 404 })
-    return new Response(await file.arrayBuffer(), { status: 200 })
-  }) as typeof globalThis.fetch
+  globalThis.fetch = Bun.fetch
+  resetManifests(BASE ?? null)
   ;({ barsFromTiles } = await import('./index'))
 })
 
@@ -69,6 +64,7 @@ afterAll(() => {
   // entry: another file in this suite stubs it permanently at module load, and putting
   // that back would leak it onward to every later file.
   globalThis.fetch = Bun.fetch
+  resetManifests()
 })
 
 describe('barsFromTiles over the real tile store', () => {
