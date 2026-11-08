@@ -46,9 +46,9 @@ export interface RemoteNotifications extends NotificationBackend {
 export function createRemoteNotifications(
   onPush: (row: RemoteNotification) => void
 ): RemoteNotifications {
-  // Both identities: the bearer where the user is signed in (dev), the owner token
-  // otherwise. The server resolves them in that order, exactly as the REST routes do -- see
-  // stream.ts's subscribeNotifications for why the bearer cannot be a header here.
+  // Both identities: the bearer where the user is signed in (dev and prod), the owner token
+  // where the login is off. The server resolves them in that order, exactly as the REST routes
+  // do -- see stream.ts's subscribeNotifications for why the bearer rides in this frame too.
   const unsubscribe = stream.subscribeNotifications(
     { owner: ownerToken(), token: getToken() },
     (row) => onPush(toRemote(row))

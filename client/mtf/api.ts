@@ -1,4 +1,4 @@
-import { apiUrl, OhlcvApiError } from '../config'
+import { apiUrl, OhlcvApiError, serverFetch } from '../config'
 
 // The multi-timeframe overlays' data, as the server builds it: `GET /mtf/graph`
 // (wdashboard-server services/mtfgraph.py, 0.56.0).
@@ -130,7 +130,7 @@ function graphUrl(request: MtfGraphRequest): URL {
  * ETag (`Cache-Control: no-cache`), so asking again costs a header exchange. */
 export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphAnswer> {
   const url = graphUrl(request)
-  const response = await fetch(url)
+  const response = await serverFetch(url)
   const body = (await response.json().catch(() => null)) as (Envelope & { code?: string; detail?: string; field?: string }) | null
   if (!response.ok || body === null) {
     throw new OhlcvApiError(response.status, body?.code ?? 'internal', body?.detail ?? `${response.status} from ${url.pathname}`, body?.field)
@@ -159,7 +159,7 @@ export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphA
  */
 export async function warmMtfGraph(request: MtfGraphRequest): Promise<void> {
   const url = graphUrl({ ...request, limit: 1 })
-  const response = await fetch(url, { cache: 'no-store' })
+  const response = await serverFetch(url, { cache: 'no-store' })
   await response.text().catch(() => '')
   if (!response.ok) throw new OhlcvApiError(response.status, 'internal', `${response.status} from ${url.pathname}`)
 }

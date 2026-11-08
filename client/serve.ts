@@ -12,6 +12,7 @@
 //     is also exactly how it is served in production (client at `/`, API at `/ohlcv` on the
 //     same host). So the dev topology matches the deployed one instead of needing a
 //     CORS-only code path.
+import { forwardedClose, forwardHeaders } from './devproxy'
 import { describeTileSource, tileHandler, tileSourceFromEnv } from './devtiles'
 import index from './index.html'
 
@@ -48,15 +49,8 @@ function upstreamUrl(req: Request): string {
   return `${UPSTREAM}${upstreamPath(url.pathname)}${url.search}`
 }
 
-// Hop-by-hop and origin-bound headers must not be forwarded verbatim: `host` would route
-// the upstream request to the wrong vhost, and `origin`/`referer` naming localhost would be
-// rejected by the upstream CORS allowlist on preflighted requests.
-function forwardHeaders(req: Request): Headers {
-  const headers = new Headers(req.headers)
-  for (const name of ['host', 'origin', 'referer', 'connection']) headers.delete(name)
-  return headers
-}
-
+// The browser's headers go upstream as they came, `Authorization` included: the server requires
+// the session's bearer on every route where the login is on. See devproxy.ts.
 async function proxyRest(req: Request): Promise<Response> {
   const target = upstreamUrl(req)
   try {
@@ -90,7 +84,8 @@ async function proxyRest(req: Request): Promise<Response> {
 
 // Per-connection proxy state. `pending` exists because the browser may send frames before
 // the upstream socket finishes opening; dropping those would silently lose the very first
-// `subscribe`, which is the only one that matters on a fresh page load.
+// frames of a page load -- the auth frame and the subscribes behind it -- and the queue keeps
+// their order, which the server's login depends on (the auth frame must arrive first).
 interface SocketProxy {
   upstream: WebSocket | null
   pending: string[]
@@ -130,8 +125,11 @@ const server = Bun.serve<SocketProxy, '/ohlcv/stream' | '/ohlcv/*' | '/tiles/*' 
       upstream.addEventListener('error', (event) => {
         console.error('[proxy/ws] upstream error', event)
       })
-      upstream.addEventListener('close', () => {
-        if (!ws.data.closed) ws.close()
+      // The server's own close code, not the proxy's: 4401 is how it says the session is gone.
+      upstream.addEventListener('close', (event: CloseEvent) => {
+        if (ws.data.closed) return
+        const [code, reason] = forwardedClose(event.code, event.reason)
+        ws.close(code, reason)
       })
     },
     message(ws, message) {

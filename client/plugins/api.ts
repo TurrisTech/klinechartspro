@@ -1,6 +1,6 @@
 import type { TileHint } from '../indicatortiles/index'
 import { hasFeature } from '../capabilities'
-import { apiGet, apiUrl, OhlcvApiError } from '../config'
+import { apiGet, apiUrl, OhlcvApiError, serverFetch } from '../config'
 import type { Page, PointsRequest, SignalCatalogueEntry, SignalSpec } from './types'
 
 // The unified plugin wire (wdashboard_server/plugins/host.py):
@@ -70,7 +70,7 @@ export type PointsEnvelope<P> =
   | { s: 'replaying'; phase?: string; progress: number | null; retryAfterMs: number; [extra: string]: unknown }
 
 export async function fetchEnvelope<P>(url: URL): Promise<PointsEnvelope<P>> {
-  const response = await fetch(url)
+  const response = await serverFetch(url)
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) {
     const b = body as { code?: string; detail?: string; field?: string } | null

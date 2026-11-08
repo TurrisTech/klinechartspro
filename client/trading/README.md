@@ -29,8 +29,9 @@ mode only for its title.
 
 ## Pieces
 
-- `api.ts` — the `/sim` wire (types + `simApi`). Owner is the signed-in user (dev) or a minted
-  `X-Sim-Owner` token kept in `localStorage`, sent on every call.
+- `api.ts` — the `/sim` wire (types + `simApi`). Owner is the signed-in user where the server
+  has the login on (dev and prod; the bearer rides on every server request, `config.ts`
+  `serverFetch`), else a minted `X-Sim-Owner` token kept in `localStorage`, sent on every call.
 - `session.ts` — the `TradingSession` interface and `PaperTradingSession` (load, poll, act).
 - `panel.ts` — the account window's contents: account strip (balance / equity / unrealized /
   open + New order + flatten-all) and the positions / orders / history tabs. A click on a row

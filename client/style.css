@@ -116,6 +116,31 @@ body {
   color: var(--foreground);
 }
 
+/* index.ts sessionEnded(): the server refused the session mid-page. Shown only while a
+   reload is held by the unsaved-settings prompt; otherwise the page is gone before it paints. */
+.wd-session-ended {
+  position: fixed;
+  top: 0.75rem;
+  left: 50%;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 6px;
+  background: #131722;
+  color: #d1d4dc;
+  transform: translateX(-50%);
+}
+
+.wd-session-ended-button {
+  color: #d1d4dc;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 /* client/chartlayers/settings.ts's settings panel. Wider than the library's default
    `.kc-popover` (16rem) — a layer's field list runs several groups deep — and scrolls
    internally rather than growing past the viewport.
