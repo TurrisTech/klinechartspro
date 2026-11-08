@@ -3,6 +3,7 @@ import { mountAlertManager, startAlerts } from './alerts'
 import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './alerts/graphentry'
 import type { MtfConfig } from './mtf/config'
 import { currentSession, logout } from './auth'
+import { whenSessionRejected } from './authtoken'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot } from './chrome/slot'
 import { setFocusSource } from './chrome/focus'
@@ -37,8 +38,8 @@ import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
 
 import './style.css'
 
-// Used only when the server doesn't advertise 'preferences' (prod, today) or a fetch of the
-// user's own set fails — the account's real starred set otherwise comes from
+// Used only when the server doesn't advertise 'preferences' (one without the dashboard login)
+// or a fetch of the user's own set fails — the account's real starred set otherwise comes from
 // loadStarredTimeframes(), seeded server-side by wdashboard-server's appstate migration.
 const DEFAULT_STARRED_TIMEFRAMES = ['1m', '1h', '1D', '1W', '1M']
 
@@ -61,10 +62,11 @@ async function bootstrap(): Promise<void> {
   const appContainer = document.getElementById('app')
   if (!appContainer) throw new Error('#app not found')
 
-  // The login gate is dev-only, and the client is one bundle deployed to both dev and
-  // prod: gating unconditionally would leave prod (which has no appstate database, so
-  // 'auth' is never advertised) stuck at a login form nothing could ever satisfy. See
-  // capabilities.ts's Feature union and appstate.py's module docstring.
+  // The sign-in, wherever the server has the dashboard login on (it advertises 'auth'; dev and
+  // prod both do). The server enforces it on every route -- this form is how a browser gets the
+  // session it must present, not the protection itself (config.ts `serverFetch`, stream.ts).
+  // Gated on the feature rather than unconditional because one bundle is served everywhere,
+  // and a server without the login would leave the page at a form nothing can satisfy.
   if (hasFeature('auth')) {
     const session = await currentSession()
     if (!session) {
@@ -73,6 +75,9 @@ async function bootstrap(): Promise<void> {
       })
       return
     }
+    // From here on a refusal means the session has gone while the page was open (expired,
+    // signed out in another tab, revoked): back to this form, the same way Sign out gets there.
+    whenSessionRejected(sessionEnded)
   }
 
   // The Strategy Lab is a page of its own (client/lab/page.ts): `/lab`, which both the dev server
@@ -84,6 +89,27 @@ async function bootstrap(): Promise<void> {
   }
 
   await runWall(appContainer)
+}
+
+/** The server refused the session mid-page (authtoken.ts `sessionRejected`, once however many
+ * requests it refused). The token is already gone, so a reload lands on the sign-in form --
+ * Sign out's own path. A wall with unsaved settings holds the reload behind the browser's
+ * leave-page prompt (runWall's `beforeunload`), so the notice says why nothing is loading to a
+ * user who chooses to stay. */
+function sessionEnded(): void {
+  const notice = document.createElement('div')
+  notice.className = 'wd-session-ended'
+  notice.setAttribute('role', 'alert')
+  const text = document.createElement('span')
+  text.textContent = 'Your session has ended.'
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'wd-session-ended-button'
+  button.textContent = 'Sign in again'
+  button.addEventListener('click', () => window.location.reload())
+  notice.append(text, button)
+  document.body.append(notice)
+  window.location.reload()
 }
 
 function isLabPage(): boolean {

@@ -78,11 +78,13 @@ export type Feature =
   // advertised where the server sets BOOKS_DEV_S3_* (prod). Registers the "dev data" BOOKDEV
   // templates, so they never masquerade as this environment's own books.
   | 'books_dev'
-  // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
-  // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
-  // ungated experience rather than a login form nothing can ever satisfy.
+  // POST /auth/login, /auth/logout, GET /auth/session: the dashboard login, on dev and prod.
+  // Where advertised the server requires the session on every route but /capabilities and
+  // the login's own two (a bearer on HTTP, an auth frame first on WS /stream), and the client
+  // shows its sign-in form. A server that doesn't advertise it serves everyone and gets no
+  // form, rather than one nothing could ever satisfy.
   | 'auth'
-  // GET/PUT /preferences — dev only, requires 'auth'.
+  // GET/PUT /preferences — wherever 'auth' is (it needs the session).
   | 'preferences'
   // GET /notifications, POST /notifications/{seen,clear}, and `notification` frames on
   // WS /stream — what the server has raised for this owner (wdashboard_server/notify).

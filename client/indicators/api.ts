@@ -1,4 +1,4 @@
-import { apiUrl } from '../config'
+import { apiUrl, serverFetch } from '../config'
 
 // What is left of the client's own knowledge of the server-computed indicator surface
 // (wdashboard-server services/indicators.py): the node document a series is addressed by,
@@ -68,7 +68,7 @@ export async function resolveSeries(
       resolution,
       series: JSON.stringify(series)
     })
-    const response = await fetch(url)
+    const response = await serverFetch(url)
     if (response.status === 404) return null // older server: question unavailable, not "no"
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {

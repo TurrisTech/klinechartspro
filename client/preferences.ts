@@ -1,5 +1,4 @@
 import { apiSend, OhlcvApiError } from './config'
-import { authHeaders } from './auth'
 
 // GET/PUT /preferences — a single JSON blob per user, versioned by an integer `revision`
 // (wdashboard-server's appstate.py). Starred timeframes were the first key this held; per-
@@ -66,9 +65,7 @@ export function preferencesLoaded(): boolean {
 // unconditionally", the same last-write-wins fallback a first-ever save takes.
 async function read(): Promise<PreferencesDocument | undefined> {
   try {
-    const { data } = await apiSend<PreferencesDocument>('GET', '/preferences', {
-      headers: authHeaders()
-    })
+    const { data } = await apiSend<PreferencesDocument>('GET', '/preferences')
     return data
   } catch (err) {
     console.warn('[preferences] load failed, using defaults', err)
@@ -166,7 +163,7 @@ export function settled(): Promise<void> {
 // workspaces merge instead of clobbering each other (see workspaces/store.ts).
 async function flush(changes: Record<string, unknown>): Promise<void> {
   for (let attempt = 1; ; attempt += 1) {
-    const headers = { ...authHeaders() }
+    const headers: Record<string, string> = {}
     // No If-Match at all is the deliberate first-ever-write path: the server treats an absent
     // If-Match as an unconditional upsert. Quoting a revision we never read would be a lie.
     if (known) headers['If-Match'] = `"${known.revision}"`

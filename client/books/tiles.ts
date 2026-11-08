@@ -22,6 +22,7 @@
 // over a window the tile does not carry.
 
 import { parquetRead } from 'hyparquet'
+import { objectStoreFetch } from '../objectstore'
 import { bucketBase, tileBytes } from '../tiles/cachestore'
 import type { Tiled } from '../tiles/join'
 import { tilesUpTo } from '../tiles/manifest'
@@ -83,7 +84,7 @@ async function loadManifest(
   interval: string
 ): Promise<BookTileManifest | null> {
   try {
-    const response = await fetch(`${seriesUrl(kind, vendor, symbol, interval)}/manifest.json`)
+    const response = await objectStoreFetch(`${seriesUrl(kind, vendor, symbol, interval)}/manifest.json`)
     // No manifest is the normal case for a series nobody has tiled, not an error: the
     // caller reads the API, which answers every series regardless.
     if (!response.ok) return null

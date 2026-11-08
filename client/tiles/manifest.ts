@@ -5,6 +5,7 @@
 // them — it is the only thing the client must not cache, because it is how a new tile
 // becomes visible. See that script's docstring for the format and why it exists.
 
+import { objectStoreFetch } from '../objectstore'
 import { bucketBase } from './cachestore'
 
 const base = bucketBase(() => window.TILES_BASE_URL ?? `${window.location.origin}/tiles`)
@@ -76,7 +77,7 @@ export function tileUrl(manifest: TileManifest, entry: TileEntry): string {
 async function load(vendor: string, symbol: string, interval: string): Promise<TileManifest | null> {
   const url = `${tilesBaseUrl()}/${LAYOUT_VERSION}/${vendor}/${symbol}/${interval}/manifest.json`
   try {
-    const response = await fetch(url)
+    const response = await objectStoreFetch(url)
     // A series with no tiles is the normal case for most symbols, not an error: the caller
     // falls back to /getbars, which serves every interval for every symbol regardless.
     if (!response.ok) return null
