@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
+import { assertSignedIn, liveHeaders } from '../livetest'
 import { LAYOUT_VERSION, resetManifests } from './manifest'
 
 // The contract this whole layer has to hold: for any window, tiles-plus-API must return
@@ -16,7 +17,11 @@ import { LAYOUT_VERSION, resetManifests } from './manifest'
 // stack (bin/dev-stack.sh). Skipped without either, and says so. A deployment is both:
 //
 //   TILES_BASE_URL=https://wdashboard.dev.turris.app/tiles \
-//   OHLCV_API_URL=https://wdashboard.dev.turris.app/ohlcv bun test client/tiles/parity.test.ts
+//   OHLCV_API_URL=https://wdashboard.dev.turris.app/ohlcv OHLCV_API_TOKEN=... \
+//     bun test client/tiles/parity.test.ts
+//
+// A server with the login on wants OHLCV_API_TOKEN (client/livetest.ts says how to get one).
+// Without it the first read fails with "sign in: set OHLCV_API_TOKEN", not as a tile mismatch.
 
 const BASE = process.env.TILES_BASE_URL?.trim().replace(/\/+$/, '') || undefined
 const API = (
@@ -50,9 +55,16 @@ if (ready && !serverUp) console.warn(`parity.test: no server at ${API}; skipping
 const usdjpy = await stored('oanda/USDJPY/1m')
 const gbpusd5s = await stored('oanda/GBPUSD/5s')
 
+/** One read from the server, signed in when there is a token. */
+async function serverJson(url: string) {
+  const response = await realFetch(url, { headers: liveHeaders() })
+  assertSignedIn(response, url)
+  return response.json()
+}
+
 async function getbars(symbol: string, resolution: string, from: number, to: number) {
   const url = `${API}/getbars?symbol=${symbol}&resolution=${resolution}&from=${from}&to=${to}`
-  const body = await (await realFetch(url)).json()
+  const body = await serverJson(url)
   if (!Array.isArray(body)) return [] as KLineData[]
   return body.map((b: Record<string, number>) => ({
     timestamp: b.date, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume
@@ -63,7 +75,7 @@ async function getbars(symbol: string, resolution: string, from: number, to: num
  * intraday tiles filters its rows on the trading week, which no manifest carries, and without one
  * the fold declines -- every derived case below would compare the API against itself. */
 async function hours(symbol: string) {
-  const body = await (await realFetch(`${API}/instrument?symbol=${encodeURIComponent(symbol)}`)).json()
+  const body = await serverJson(`${API}/instrument?symbol=${encodeURIComponent(symbol)}`)
   return body?.marketHours ?? null
 }
 
