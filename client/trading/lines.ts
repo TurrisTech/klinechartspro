@@ -13,9 +13,14 @@ import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './a
 //
 // `wdTradeBracket` -- what connects a position's entry to its stop and target: a translucent
 // loss band from the entry to the stop, a profit band from the entry to the target, both from
-// the bar the position opened on to the right edge, a connector down that bar, and a dot
-// where the entry filled. Every figure ignores events, so the bracket never steals a pan or a
-// click from the chart underneath it.
+// the bar the position opened on to the right edge, a connector from the stop to the target,
+// and a dot where the entry filled. Every figure ignores events, so the bracket never steals a
+// pan or a click from the chart underneath it.
+//
+// The connector is NOT a wick (user, 2026-11-11: drawn green or red down the bar's centre it
+// read as one -- for a draft that bar is the live candle). So it is grey, never a candle colour,
+// and it runs down the gap before the anchor bar, where no wick can be; the bands start at that
+// same edge. Only the fill dot sits on the bar itself.
 
 export const TRADE_LINE = 'wdTradeLine'
 export const TRADE_BRACKET = 'wdTradeBracket'
@@ -77,6 +82,8 @@ export interface TradeBracketData {
     lossColor: string
     profitColor: string
     entryColor: string
+    /** The connector's colour: a neutral, never the side's -- see the header. */
+    connectorColor: string
     /** A pending order or a draft has not filled: no fill dot, and a fainter band. */
     pending: boolean
   }
@@ -120,50 +127,67 @@ export function withAlpha(hex: string, alpha: number): string {
   return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`
 }
 
+/** The bracket's figures, given the anchor bar's centre `barX` (which may be off either side of
+ * the pane), half the bar spacing, the pane's width and the price -> y conversion. The bands and
+ * the connector start at the anchor bar's LEFT EDGE, half a bar before its centre: in the gap
+ * between two candles, so the connector can never sit on a wick. Pure. */
+export function bracketFigures(
+  datum: TradeBracketData['wd'],
+  barX: number,
+  halfBar: number,
+  width: number,
+  toY: (price: number) => number
+): OverlayFigure[] {
+  const edge = barX - halfBar
+  // The anchor bar may be scrolled off either side; the bands still run to the right edge.
+  const x = Math.min(Math.max(edge, 0), width)
+  const yEntry = toY(datum.entry)
+  const alpha = (datum.selected ? 0.16 : 0.06) * (datum.pending ? 0.6 : 1)
+  const figures: OverlayFigure[] = []
+  const band = (price: number | null, color: string): number | null => {
+    if (price === null) return null
+    const y = toY(price)
+    figures.push({
+      type: 'rect',
+      attrs: { x, y: Math.min(y, yEntry), width: Math.max(width - x, 0), height: Math.abs(y - yEntry) },
+      styles: { style: 'fill', color: withAlpha(color, alpha) },
+      ignoreEvent: true
+    })
+    return y
+  }
+  const yStop = band(datum.stop, datum.lossColor)
+  const yTarget = band(datum.target, datum.profitColor)
+  if (datum.selected && (yStop !== null || yTarget !== null) && edge >= 0 && edge <= width) {
+    figures.push({
+      type: 'line',
+      attrs: { coordinates: [{ x, y: yStop ?? yEntry }, { x, y: yTarget ?? yEntry }] },
+      styles: { style: 'solid', color: datum.connectorColor, size: 1 },
+      ignoreEvent: true
+    })
+  }
+  if (!datum.pending && barX >= 0 && barX <= width) {
+    figures.push({
+      type: 'circle',
+      attrs: { x: barX, y: yEntry, r: datum.selected ? 4 : 3 },
+      styles: { style: 'fill', color: datum.entryColor },
+      ignoreEvent: true
+    })
+  }
+  return figures
+}
+
 const bracketTemplate: OverlayTemplate<TradeBracketData> = {
   name: TRADE_BRACKET,
   totalStep: 2,
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+  createPointFigures: ({ chart, overlay, coordinates, bounding, yAxis }) => {
     const datum = overlay.extendData?.wd
     if (!datum || coordinates.length === 0 || !yAxis) return []
-    // The anchor bar may be scrolled off either side; the bands still run to the right edge.
-    const x = Math.min(Math.max(coordinates[0].x, 0), bounding.width)
-    const yEntry = yAxis.convertToPixel(datum.entry)
-    const alpha = (datum.selected ? 0.16 : 0.06) * (datum.pending ? 0.6 : 1)
-    const figures: OverlayFigure[] = []
-    const band = (price: number | null, color: string): number | null => {
-      if (price === null) return null
-      const y = yAxis.convertToPixel(price)
-      figures.push({
-        type: 'rect',
-        attrs: { x, y: Math.min(y, yEntry), width: Math.max(bounding.width - x, 0), height: Math.abs(y - yEntry) },
-        styles: { style: 'fill', color: withAlpha(color, alpha) },
-        ignoreEvent: true
-      })
-      return y
-    }
-    const yStop = band(datum.stop, datum.lossColor)
-    const yTarget = band(datum.target, datum.profitColor)
-    if (datum.selected && (yStop !== null || yTarget !== null) && coordinates[0].x >= 0) {
-      figures.push({
-        type: 'line',
-        attrs: { coordinates: [{ x, y: yStop ?? yEntry }, { x, y: yTarget ?? yEntry }] },
-        styles: { style: 'solid', color: withAlpha(datum.entryColor, 0.7), size: 1 },
-        ignoreEvent: true
-      })
-    }
-    if (!datum.pending && coordinates[0].x >= 0 && coordinates[0].x <= bounding.width) {
-      figures.push({
-        type: 'circle',
-        attrs: { x, y: yEntry, r: datum.selected ? 4 : 3 },
-        styles: { style: 'fill', color: datum.entryColor },
-        ignoreEvent: true
-      })
-    }
-    return figures
+    return bracketFigures(datum, coordinates[0].x, chart.getBarSpace().halfBar, bounding.width, (p) =>
+      yAxis.convertToPixel(p)
+    )
   }
 }
 
@@ -174,13 +198,17 @@ export interface OverlayColors {
   sell: string
   stop: string
   target: string
+  /** The bracket's connector: a mid grey that reads on light and dark themes alike, and is
+   * neither candle colour (see the header). */
+  connector: string
 }
 
 export const DEFAULT_COLORS: OverlayColors = {
   buy: '#26a69a',
   sell: '#ef5350',
   stop: '#ef5350',
-  target: '#26a69a'
+  target: '#26a69a',
+  connector: '#787b86'
 }
 
 /** One line on the pane, as both the canvas and the HTML layer see it. */

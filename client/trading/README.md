@@ -153,9 +153,13 @@ window is open** — an order placed from the ticket appears on the chart at onc
   for an entry; a pending order is heavier — with the label: a pending order's price, an open trade's entry, every stop and
   target, each with its price on the axis. The entry is locked; the rest are draggable.
 - **Bracket** (`wdTradeBracket`): what connects an entry to its stop and target — a loss band
-  and a profit band from the bar the position opened on to the right edge, a connector,
-  and a dot at the fill. Strong for the selected entry, faint for the rest. No figure takes
-  events, so it never steals a pan.
+  and a profit band from the bar the position opened on to the right edge, a connector from
+  stop to target, and a dot at the fill. Strong for the selected entry, faint for the rest. No
+  figure takes events, so it never steals a pan. **The connector is not a wick** (user,
+  2026-11-11): it is grey, never a candle colour, and runs down the gap *before* the anchor bar
+  rather than its centre, with the bands starting at that edge — drawn green or red down the
+  bar's centre it read as that candle's wick, and a draft's bar is the live candle. Only the
+  fill dot sits on the bar. `bracketFigures` is the geometry, pure and tested.
 - **Labels**, against the right edge beside each line's axis tag: `Long 10K −1.8p −1.80 ×`,
   `SL −20.0p −20.00 ×`, `Buy limit 10K 14.5p away ×`. Close lines are placed by `layoutLabels`
   so none overlap, with a leader back to the line; a line off the pane pins its label to that
