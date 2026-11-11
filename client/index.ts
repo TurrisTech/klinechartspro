@@ -548,6 +548,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     })
   } else {
     paper = mountPaperTrading(chartPro, container)
+    // The panes usually mounted during the awaits above, when `paper` was still undefined, and
+    // onPanesChange does not fire again until the layout changes -- so without this first sync
+    // nothing working was drawn on the chart after a page load (the same race `watches` covers
+    // below; the replay dock syncs itself).
+    paper?.sync(chartPro.getPanes())
   }
 
   // PRICE WATCHES: a line per level on every pane showing its instrument. One view, two
