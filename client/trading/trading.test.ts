@@ -8,7 +8,8 @@ import type { DraftOrder } from './lines'
 installWindow()
 const { pipsToPrice, toPips, tradePips, tradePnl } = await import('./format')
 const { DEFAULT_COLORS, linesFor, overlaysFor } = await import('./overlays')
-const { applyAmendment, currentLevel, isComposing } = await import('./lines')
+const { applyAmendment, bracketFigures, currentLevel, isComposing } = await import('./lines')
+const { bracketDatum } = await import('./overlays')
 
 const KEY = 'oanda:EUR_USD'
 const SPAN = { first: 1_000, last: 2_000 }
@@ -220,5 +221,46 @@ describe('pip math', () => {
     const quote = { bid: 1.101, ask: 1.1012 }
     expect(tradePnl(t, quote)).toBeCloseTo(10, 6) // (1.1010 - 1.1000) * 10000
     expect(tradePips(t, quote, 0.0001)).toBeCloseTo(10, 6)
+  })
+})
+
+describe('bracketFigures', () => {
+  // A price -> y that is easy to read back: 1.10 -> 100, one pip a pixel... near enough.
+  const toY = (p: number) => Math.round((1.2 - p) * 1000)
+  const connector = (figures: ReturnType<typeof bracketFigures>) => figures.filter((f) => f.type === 'line')
+  const datum = (owner: 'trade' | 'draft', side: 'buy' | 'sell', selected = true) =>
+    bracketDatum(owner, 'x', side, 1.1, 1.09, 1.12, selected, DEFAULT_COLORS).wd
+
+  test('the connector runs down the gap before the anchor bar, never down its centre (a wick)', () => {
+    // The draft's anchor is the live candle: drawn at its centre, the connector read as its wick.
+    const lines = connector(bracketFigures(datum('draft', 'buy'), 400, 5, 800, toY))
+    expect(lines).toHaveLength(1)
+    const xs = (lines[0].attrs as { coordinates: { x: number; y: number }[] }).coordinates.map((c) => c.x)
+    expect(xs).toEqual([395, 395])
+    expect((lines[0].attrs as { coordinates: { y: number }[] }).coordinates.map((c) => c.y)).toEqual([toY(1.09), toY(1.12)])
+  })
+
+  test('the connector is neither candle colour, whichever side the position is', () => {
+    for (const side of ['buy', 'sell'] as const) {
+      const [line] = connector(bracketFigures(datum('trade', side), 400, 5, 800, toY))
+      const color = (line.styles as { color: string }).color
+      expect(color).toBe(DEFAULT_COLORS.connector)
+      expect([DEFAULT_COLORS.buy, DEFAULT_COLORS.sell]).not.toContain(color)
+    }
+  })
+
+  test('the bands start at the same edge; only the fill dot sits on the bar', () => {
+    const figures = bracketFigures(datum('trade', 'buy'), 400, 5, 800, toY)
+    const rects = figures.filter((f) => f.type === 'rect').map((f) => f.attrs as { x: number; width: number })
+    expect(rects).toEqual([expect.objectContaining({ x: 395, width: 405 }), expect.objectContaining({ x: 395, width: 405 })])
+    const dot = figures.find((f) => f.type === 'circle')
+    expect(dot?.attrs).toMatchObject({ x: 400, y: toY(1.1) })
+  })
+
+  test('no connector when it is not selected, or its edge is off the pane; bands still drawn', () => {
+    expect(connector(bracketFigures(datum('trade', 'buy', false), 400, 5, 800, toY))).toHaveLength(0)
+    const scrolled = bracketFigures(datum('trade', 'buy'), 3, 5, 800, toY)
+    expect(connector(scrolled)).toHaveLength(0)
+    expect(scrolled.filter((f) => f.type === 'rect').map((f) => (f.attrs as { x: number }).x)).toEqual([0, 0])
   })
 })

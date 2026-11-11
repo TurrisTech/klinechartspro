@@ -137,6 +137,7 @@ export function bracketDatum(
       lossColor: colors.stop,
       profitColor: colors.target,
       entryColor: side === 'buy' ? colors.buy : colors.sell,
+      connectorColor: colors.connector,
       pending: owner !== 'trade'
     }
   }
