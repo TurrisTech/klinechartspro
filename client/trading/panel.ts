@@ -2,6 +2,8 @@ import { OhlcvApiError } from '../config'
 import type { SimSnapshot } from './api'
 import {
   formatInstant,
+  formatMoney,
+  formatShare,
   formatPips,
   formatPnl,
   formatPrice,
@@ -13,8 +15,11 @@ import {
 import { amendmentRefusal, describeAmendment, type ProposedChange } from './amend'
 import type { InstrumentInfo } from './instrument'
 import { Arming, armKey, ConfirmBar, kbtn } from './kit'
+import { balancesBefore, closedMove, closedShareOfBalance, closedTrades } from './ledger'
 import { type Amendment, applyAmendment } from './lines'
-import { tradePrefs } from './prefs'
+import { pricingContext, tradeFigures } from './metrics'
+import { type PerfContext, PerformanceView } from './perfview'
+import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 
 // The trading panel: an account strip and the working-orders / open-positions / history tables.
@@ -42,6 +47,15 @@ import type { TradingSession } from './session'
 // and Cancel one press with one-click trading on; Flatten all always two), and its buttons and its
 // confirm bar are the trading kit's (kit.ts), so the account window reads like the rest.
 //
+// PERCENT beside pips and P&L (user, 2026-11-13): the `% bal` columns state a position's P&L as a
+// share of the balance -- an open one's of the balance now (metrics.ts `outcome().ofBalance`), a
+// closed one's of the balance it was realised against (ledger.ts) -- the same unit the trade box
+// states a stop in. Blank where the P&L does not convert to the account currency exactly.
+//
+// HISTORY ON THE CHART: the History tab's "Show on chart" draws every closed trade on the panes of
+// its instrument (overlays.ts), one preference for every pane and tab. PERFORMANCE, beside it, is
+// the balance or equity per period over a chosen range (perfview.ts).
+//
 // Hand-built plain DOM, the house style for app-side chrome (client/chartlayers/settings.ts):
 // the library owns Svelte, the app owns the chrome around it.
 
@@ -56,6 +70,8 @@ export interface PanelContext {
   inspect(id: string): void
   /** Show the trade box. */
   openTicket(): void
+  /** The Performance tab's clock, grid and bars. */
+  perf: PerfContext
 }
 
 export interface PanelAmendments {
@@ -70,7 +86,7 @@ export interface PanelAmendments {
 /** Below this width the account strip wraps tighter and the tables scroll sideways. */
 const NARROW_PANEL = 620
 
-type Tab = 'positions' | 'orders' | 'history'
+type Tab = 'positions' | 'orders' | 'history' | 'performance'
 
 export class TradingPanel {
   readonly element: HTMLElement
@@ -88,7 +104,9 @@ export class TradingPanel {
   private tabsBar: HTMLElement
   private tab: Tab = 'positions'
   private unsub: () => void
+  private unsubPrefs: () => void
   private shape: ResizeObserver
+  private perf: PerformanceView
 
   constructor(
     private session: TradingSession,
@@ -117,7 +135,10 @@ export class TradingPanel {
     // The focus leaving a table settles whatever was skipped while it was there.
     this.tablesHost.addEventListener('focusout', () => this.scheduleRender())
 
+    this.perf = new PerformanceView(session, ctx.perf)
     this.unsub = session.subscribe(() => this.render())
+    // "Show on chart" is one preference for every pane and tab; another tab may change it.
+    this.unsubPrefs = subscribeTradePrefs(() => this.scheduleRender())
     this.unsubAmendments = ctx.amendments.onChange(() => this.scheduleRender())
     this.unsubSelection = ctx.onSelectionChange(() => this.scheduleRender())
     // The panel is as wide as whatever window it is in, which the user can resize; the
@@ -157,7 +178,12 @@ export class TradingPanel {
       b.dataset.tab = id
       return b
     }
-    tabs.append(make('positions', 'Positions'), make('orders', 'Orders'), make('history', 'History'))
+    tabs.append(
+      make('positions', 'Positions'),
+      make('orders', 'Orders'),
+      make('history', 'History'),
+      make('performance', 'Performance')
+    )
     return tabs
   }
 
@@ -177,6 +203,15 @@ export class TradingPanel {
       b.classList.toggle('is-active', b.dataset.tab === this.tab)
     }
     this.renderConfirm(s)
+    // The histogram is kept, not rebuilt: it redraws itself, and keeps what is hovered.
+    if (this.tab === 'performance') {
+      if (this.tableContent.firstChild !== this.perf.element || this.tableContent.childNodes.length !== 1) {
+        this.tableContent.innerHTML = ''
+        this.tableContent.appendChild(this.perf.element)
+      }
+      this.perf.render()
+      return
+    }
     // Never under the cursor: while a cell is being edited the table waits for the focus to leave.
     const active = document.activeElement
     if (active instanceof HTMLInputElement && this.tableContent.contains(active)) return
@@ -238,10 +273,13 @@ export class TradingPanel {
     const c = s.account.currency
     const upnlCls =
       s.account.unrealizedPnl > 0 ? 'is-up' : s.account.unrealizedPnl < 0 ? 'is-down' : ''
+    const share = s.account.balance > 0 ? (s.account.unrealizedPnl / s.account.balance) * 100 : null
+    const unrealized = stat('Unrealized', `${formatPnl(s.account.unrealizedPnl)} ${c} · ${formatShare(share)}`, upnlCls)
+    unrealized.title = 'The open trades’ P&L, and that as a share of the balance'
     this.accountStrip.append(
       stat('Balance', `${s.account.balance.toFixed(2)} ${c}`),
       stat('Equity', `${s.account.equity.toFixed(2)} ${c}`),
-      stat('Unrealized', `${formatPnl(s.account.unrealizedPnl)} ${c}`, upnlCls),
+      unrealized,
       stat('Open', String(s.trades.filter((t) => t.closedAt === null).length))
     )
     const newOrder = kbtn('New order', () => this.ctx.openTicket(), ['primary'], 'Open the trade box')
@@ -262,7 +300,7 @@ export class TradingPanel {
   private renderPositions(s: SimSnapshot): HTMLElement {
     const open = s.trades.filter((t) => t.closedAt === null)
     if (open.length === 0) return emptyRow('No open positions')
-    const table = tableEl(['', 'Instrument', 'Units', 'Entry', 'Price', 'SL', 'TP', 'Pips', 'P&L', ''])
+    const table = tableEl(['', 'Instrument', 'Units', 'Entry', 'Price', 'SL', 'TP', 'Pips', 'P&L', PERCENT_HEADER, ''])
     const tbody = table.tBodies[0]
     for (const trade of open) {
       const key = trade.symbol
@@ -272,6 +310,7 @@ export class TradingPanel {
       const mark = quote ? (trade.side === 'buy' ? quote.bid : quote.ask) : null
       const pnl = tradePnl(trade, quote)
       const pips = tradePips(trade, quote, info.pipSize)
+      const share = tradeFigures(trade, pricingContext(key, info, s.account, quote, s.quotes)).pnl?.ofBalance ?? null
       const dir = pnl !== null && pnl > 0 ? 'is-up' : pnl !== null && pnl < 0 ? 'is-down' : ''
       const row = this.row(trade.id)
       row.append(
@@ -284,6 +323,7 @@ export class TradingPanel {
         editableCell(formatPrice(trade.takeProfit, prec), (raw) => this.edit('trade', trade.id, 'target', raw), this.proposedState('trade', trade.id, 'target')),
         cell(formatPips(pips), dir),
         cell(formatPnl(pnl), dir),
+        cell(formatShare(share), dir),
         cell(this.armedButton(armKey.close(trade.id, 1), 'Close', 'Confirm close', () => this.session.closeTrade(trade.id)))
       )
       if (trade.label) row.title = `${trade.label} — show this position`
@@ -317,26 +357,24 @@ export class TradingPanel {
   }
 
   private renderHistory(s: SimSnapshot): HTMLElement {
-    const closed = s.trades
-      .filter((t) => t.closedAt !== null)
-      .sort((a, b) => (b.closedAt ?? 0) - (a.closedAt ?? 0))
-    if (closed.length === 0) return emptyRow('No closed trades')
-    const table = tableEl(['', 'Instrument', 'Units', 'Entry', 'Exit', 'Reason', 'Pips', 'P&L', 'Closed'])
+    const closed = closedTrades(s).reverse()
+    const wrap = el('div', 'wd-trade-history')
+    wrap.appendChild(this.historyBar(s, closed))
+    if (closed.length === 0) {
+      wrap.appendChild(emptyRow('No closed trades'))
+      return wrap
+    }
+    const before = balancesBefore(s)
+    const table = tableEl(['', 'Instrument', 'Units', 'Entry', 'Exit', 'Reason', 'Pips', 'P&L', PERCENT_HEADER, 'Opened', 'Closed'])
     const tbody = table.tBodies[0]
     for (const trade of closed) {
       const info = this.ctx.instrumentFor(trade.symbol)
       const prec = info.precision
       const pnl = trade.realizedPnl ?? 0
       const dir = pnl > 0 ? 'is-up' : pnl < 0 ? 'is-down' : ''
-      const pips =
-        trade.closePrice !== null
-          ? toPips(
-              trade.side === 'buy'
-                ? trade.closePrice - trade.entryPrice
-                : trade.entryPrice - trade.closePrice,
-              info.pipSize
-            )
-          : null
+      const move = closedMove(trade)
+      const pips = move !== null ? toPips(move, info.pipSize) : null
+      const share = closedShareOfBalance(trade, before.get(trade.id), s.account)
       const row = this.row(trade.id)
       row.append(
         cell(sideBadge(trade.side)),
@@ -347,11 +385,40 @@ export class TradingPanel {
         cell((trade.closeReason ?? '').replace('_', ' ')),
         cell(formatPips(pips), dir),
         cell(formatPnl(pnl), dir),
+        cell(formatShare(share), dir),
+        cell(formatInstant(trade.openedAt)),
         cell(formatInstant(trade.closedAt))
       )
+      if (trade.label) row.title = `${trade.label} — show this trade`
       tbody.appendChild(row)
     }
-    return table
+    wrap.appendChild(table)
+    return wrap
+  }
+
+  /** Above the history: whether it is drawn on the chart, and what it adds up to. */
+  private historyBar(s: SimSnapshot, closed: SimSnapshot['trades']): HTMLElement {
+    const bar = el('div', 'wd-trade-history-bar')
+    const label = document.createElement('label')
+    label.className = 'wd-trade-history-toggle'
+    const box = document.createElement('input')
+    box.type = 'checkbox'
+    box.checked = tradePrefs().historyOnChart
+    box.addEventListener('change', () => setTradePrefs({ historyOnChart: box.checked }))
+    label.append(box, document.createTextNode(' Show on chart'))
+    label.title = 'Draw every closed trade on the panes of its instrument: where it opened, where it closed, and the path between'
+    bar.appendChild(label)
+    if (closed.length > 0) {
+      const net = closed.reduce((sum, t) => sum + (t.realizedPnl ?? 0), 0)
+      const won = closed.filter((t) => (t.realizedPnl ?? 0) > 0).length
+      // The realised total as a share of the balance before the first of these closed.
+      const start = balancesBefore(s).get(closed[closed.length - 1].id)
+      const share = start !== undefined && start > 0 ? (net / start) * 100 : null
+      const totals = el('span', `wd-trade-history-totals ${net > 0 ? 'is-up' : net < 0 ? 'is-down' : ''}`)
+      totals.textContent = `${closed.length} closed · ${won} won · net ${formatMoney(net, s.account.currency)} · ${formatShare(share)}`
+      bar.appendChild(totals)
+    }
+    return bar
   }
 
   /** A table's Close or Cancel: the second press sends it, or the first with one-click trading. */
@@ -399,6 +466,8 @@ export class TradingPanel {
 
   dispose(): void {
     this.unsub()
+    this.unsubPrefs()
+    this.perf.dispose()
     this.unsubAmendments()
     this.unsubSelection()
     if (this.renderTimer) clearTimeout(this.renderTimer)
@@ -408,6 +477,9 @@ export class TradingPanel {
 }
 
 // -- small DOM helpers ---------------------------------------------------------------------
+
+/** The percent column's header: a share of the balance, the unit the trade box calls "% bal". */
+const PERCENT_HEADER = '% bal'
 
 function el(tag: string, className: string): HTMLElement {
   const node = document.createElement(tag)
@@ -432,6 +504,7 @@ function tableEl(headers: string[]): HTMLTableElement {
   for (const h of headers) {
     const th = document.createElement('th')
     th.textContent = h
+    if (h === PERCENT_HEADER) th.title = 'The P&L as a share of the balance: now for an open trade, before it closed for a closed one'
     tr.appendChild(th)
   }
   thead.appendChild(tr)

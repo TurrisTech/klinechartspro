@@ -1,6 +1,8 @@
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { createDockableWindow } from '../chrome/window'
-import { formatPnl, symbolKey } from './format'
+import { fetchClosedBars } from '../plugins/bars'
+import { gridFor } from '../replay/timeframes'
+import { formatShare, formatPnl, symbolKey } from './format'
 import { PositionInspector } from './inspector'
 import { instrumentInfo, seedInstrument, type InstrumentInfo } from './instrument'
 import type { DraftController } from './lines'
@@ -131,7 +133,9 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     selected: () => overlays.selectedId(),
     select: (id) => overlays.select(id),
     onSelectionChange: (listener) => overlays.onSelectionChange(listener),
-    amendments
+    amendments,
+    showClosed: (id) => overlays.showClosed(id),
+    showsInstrument: (symbol) => overlays.showsInstrument(symbol)
   })
   const unsubscribeInspect = overlays.onInspect((id) => inspector.show(id))
 
@@ -142,7 +146,15 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     inspect: (id) => overlays.inspect(id),
     openTicket: () => setTicketOpen(true),
     // Table edits are confirmed through the same waiting change the chart shows.
-    amendments
+    amendments,
+    // The Performance tab's periods are the active chart's candles; its clock is the replay's
+    // under a replay. Past equity is marked on closed stored bars, which under a replay stop at
+    // the clock (plugins/bars.ts).
+    perf: {
+      grid: () => gridFor(activeSymbol()),
+      now: () => session.cursor ?? Date.now(),
+      fetchBars: fetchClosedBars
+    }
   })
 
   const win = createDockableWindow({
@@ -198,7 +210,10 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     const pnl = document.createElement('span')
     const unrealized = s.account.unrealizedPnl
     pnl.className = `wd-trade-summary-pnl ${unrealized > 0 ? 'is-up' : unrealized < 0 ? 'is-down' : ''}`
-    pnl.textContent = formatPnl(unrealized)
+    // Beside the P&L, its share of the balance -- the unit every trading surface states it in.
+    const share = s.account.balance > 0 ? (unrealized / s.account.balance) * 100 : null
+    pnl.textContent = `${formatPnl(unrealized)} · ${formatShare(share)}`
+    pnl.title = 'Open P&L, and that as a share of the balance'
     summary.append(equity, pnl)
     const open = s.trades.filter((t) => t.closedAt === null).length
     if (open > 0) {

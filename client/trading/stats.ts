@@ -4,13 +4,14 @@ import {
   formatInstant,
   formatLots,
   formatMoney,
-  formatPercent,
+  formatShare,
   formatPrice,
   formatUnits,
   formatUnitsShort,
   moveText
 } from './format'
 import type { InstrumentInfo } from './instrument'
+import { balancesBefore, closedShareOfBalance } from './ledger'
 import { amountText, type LevelBasis, levelReadout } from './levels'
 import { orderFigures, outcome, type PricingContext, pricingContext, sizeFigures, tradeFigures } from './metrics'
 
@@ -125,13 +126,18 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     const rows: StatRow[] = [
       { label: 'Entry', value: formatPrice(trade.entryPrice, info.precision) },
       { label: 'Exit', value: `${formatPrice(trade.closePrice, info.precision)} · ${reason}` },
-      { label: 'Move', value: moveText(exit), tone: tone(exit?.move) },
+      { label: 'Move', value: moveText(exit), tone: tone(exit?.move) }
+    ]
+    // Of the balance it was realised against, not of today's.
+    const share = closedShareOfBalance(trade, balancesBefore(snapshot).get(trade.id), snapshot.account)
+    if (share !== null) rows.push({ label: 'Of balance', value: formatShare(share), tone: tone(share) })
+    rows.push(
       { label: 'Size', value: `${formatUnits(trade.units)} units` },
       { label: 'Opened', value: formatInstant(trade.openedAt) },
       { label: 'Closed', value: formatInstant(trade.closedAt) },
       { label: 'Held', value: formatDuration(trade.closedAt - trade.openedAt) },
       ...noteRows(trade.label)
-    ]
+    )
     return {
       kind: 'closed',
       title,
@@ -149,7 +155,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     { label: 'Move', value: moveText(f.pnl), tone: tone(f.pnl?.move) }
   ]
   if (f.pnl?.ofBalance !== null && f.pnl?.ofBalance !== undefined) {
-    rows.push({ label: 'Of balance', value: formatPercent(f.pnl.ofBalance), tone: tone(f.pnl.ofBalance) })
+    rows.push({ label: 'Of balance', value: formatShare(f.pnl.ofBalance), tone: tone(f.pnl.ofBalance) })
   }
   // Where the trade stands in units of what it risks: +1.0R is a full stop's distance in profit.
   if (f.pnl && f.stop && f.stop.amount < 0) {

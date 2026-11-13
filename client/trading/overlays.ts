@@ -1,8 +1,11 @@
 import type { Chart, OverlayCreate, OverlayEvent } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import type { SimSide, SimSnapshot } from './api'
-import { formatPips, formatPrice, formatUnitsShort, symbolKey } from './format'
+import { periodToResolution } from '../periods'
+import { gridFor } from '../replay/timeframes'
+import type { SimSide, SimSnapshot, SimTrade } from './api'
+import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText, symbolKey } from './format'
 import type { InstrumentInfo } from './instrument'
+import { balancesBefore, closedMove, closedShareOfBalance } from './ledger'
 import {
   type Amendment,
   applyAmendment,
@@ -12,6 +15,7 @@ import {
   type DraftController,
   type DraftOrder,
   draftFor,
+  historyFor,
   isComposing,
   type LineOwner,
   type LineSpec,
@@ -21,8 +25,10 @@ import {
   type OverlayColors,
   registerTradeOverlays,
   TRADE_BRACKET,
+  TRADE_HISTORY,
   TRADE_LINE,
   type TradeBracketData,
+  type TradeHistoryData,
   type TradeLineData,
   withAlpha,
   workingFor
@@ -62,6 +68,13 @@ import type { TradingSession } from './session'
 // too (`ctx.draft`): its entry, stop and target, a bracket, outlined labels and a row on
 // the card. Its lines drag like the rest, but a drag lands in the ticket's fields as it moves --
 // nothing is sent until it is placed, from the ticket or from the chart.
+//
+// HISTORY. With the History tab's "Show on chart" on (one preference, every pane and tab), every
+// closed trade on a pane's instrument is drawn too (lines.ts `wdTradeHistory`): its fill, its exit
+// and the result. Its ends are placed on the bar of THIS pane that was open at the instant --
+// floored on the instrument's own candle grid and labelled the way the pane labels it, so a 1D
+// pane puts a Tuesday 03:00 fill on Tuesday's session, not seven hours off. A click selects it and
+// opens its popup; a closed trade is selectable only while it is drawn.
 
 export { DEFAULT_COLORS, linesFor, type LineSpec, type OverlayColors } from './lines'
 
@@ -158,18 +171,64 @@ function bracketOverlay(
   }
 }
 
-/** Every overlay for one snapshot on one pane's instrument: brackets first (so lines draw over
- * them), then lines. Pure. */
+/** How a pane draws the closed trades, when it does. */
+export interface HistoryOptions {
+  /** A real instant -> the timestamp of this pane's bar that was open then. */
+  toBar(ms: number): number
+  /** What is written beside a closed trade's exit. */
+  text(trade: SimTrade, selected: boolean): string
+}
+
+function historyOverlay(trade: SimTrade, history: HistoryOptions, selected: boolean, colors: OverlayColors): OverlayCreate<TradeHistoryData> {
+  const pnl = trade.realizedPnl ?? 0
+  return {
+    name: TRADE_HISTORY,
+    paneId: CANDLE_PANE,
+    lock: true,
+    mode: 'normal',
+    extendData: {
+      wd: {
+        owner: 'history',
+        id: trade.id,
+        side: trade.side,
+        entry: trade.entryPrice,
+        exit: trade.closePrice as number,
+        stop: trade.stopLoss,
+        target: trade.takeProfit,
+        text: history.text(trade, selected),
+        result: pnl > 0 ? 1 : pnl < 0 ? -1 : 0,
+        selected,
+        entryColor: trade.side === 'buy' ? colors.buy : colors.sell,
+        profitColor: colors.target,
+        lossColor: colors.stop,
+        flatColor: colors.connector
+      }
+    },
+    points: [
+      { timestamp: history.toBar(trade.openedAt), value: trade.entryPrice },
+      { timestamp: history.toBar(trade.closedAt as number), value: trade.closePrice as number }
+    ]
+  }
+}
+
+/** Every overlay for one snapshot on one pane's instrument: closed trades (when `history` is
+ * given) and brackets first, so lines draw over them, then lines. Pure. */
 export function overlaysFor(
   snapshot: SimSnapshot,
   key: string,
   span: DataSpan,
   colors: OverlayColors,
   selected: string | null = null,
-  draft: DraftOrder | null = null
+  draft: DraftOrder | null = null,
+  history: HistoryOptions | null = null
 ): OverlayCreate[] {
   const { trades, orders } = workingFor(snapshot, key)
   const out: OverlayCreate[] = []
+  if (history) {
+    for (const trade of historyFor(snapshot, key, span.first)) {
+      out.push(historyOverlay(trade, history, trade.id === selected, colors) as OverlayCreate)
+    }
+  }
   const d = draftFor(draft, key)
   const drafting = isComposing(d)
   if (drafting && (d.stop !== null || d.target !== null)) {
@@ -233,15 +292,92 @@ export class TradingOverlays {
   private colors: OverlayColors
 
   private readonly unsubscribePrefs: () => void
+  private historyShown = tradePrefs().historyOnChart
 
   constructor(private ctx: TradingOverlayContext) {
     this.colors = ctx.colors ?? DEFAULT_COLORS
     registerTradeOverlays()
     // The card's rolled-up state and its preset numbers are shared: a change from any pane, the
-    // ticket or another tab redraws every card.
-    this.unsubscribePrefs = subscribeTradePrefs(() => {
+    // ticket or another tab redraws every card -- and "Show on chart" every pane's canvas.
+    this.unsubscribePrefs = subscribeTradePrefs((prefs) => {
+      if (prefs.historyOnChart !== this.historyShown) {
+        this.historyShown = prefs.historyOnChart
+        if (!this.historyShown && this.selected && this.snapshot && !isWorking(this.snapshot, this.selected)) this.selected = null
+        this.refreshAll()
+        return
+      }
       for (const entry of this.panes.values()) entry.layer.render(this.view())
     })
+  }
+
+  /** Whether `id` is something a pane draws: working, or closed while the history is shown. */
+  private isDrawn(snapshot: SimSnapshot, id: string): boolean {
+    return isWorking(snapshot, id) || (this.historyShown && snapshot.trades.some((t) => t.id === id && t.closedAt !== null))
+  }
+
+  /** Show a closed trade on the chart: the history drawn, the trade selected, and every pane on its
+   * instrument brought to where it was open (the popup's "Show on chart"). False when no pane
+   * shows that instrument. */
+  showClosed(id: string): boolean {
+    const trade = this.snapshot?.trades.find((t) => t.id === id && t.closedAt !== null)
+    if (!trade) return false
+    if (!this.historyShown) setTradePrefs({ historyOnChart: true })
+    this.select(id)
+    let shown = false
+    for (const entry of this.panes.values()) {
+      if (symbolKey(entry.pane.getSymbol()) !== trade.symbol) continue
+      const history = this.historyOptions(entry)
+      // The middle of the trade, a little left of centre, so the result beside the exit reads.
+      const mid = trade.openedAt + ((trade.closedAt as number) - trade.openedAt) / 2
+      try {
+        entry.pane.seekTo(history.toBar(mid), 0.45)
+        shown = true
+      } catch (err) {
+        console.warn(`[${this.ctx.tag}] seek to a closed trade failed`, err)
+      }
+    }
+    return shown
+  }
+
+  /** Whether some pane shows `symbol` (the popup offers "Show on chart" only then). */
+  showsInstrument(symbol: string): boolean {
+    for (const entry of this.panes.values()) if (symbolKey(entry.pane.getSymbol()) === symbol) return true
+    return false
+  }
+
+  /** How `entry`'s pane places and labels a closed trade. */
+  private historyOptions(entry: PaneEntry): HistoryOptions {
+    const pane = entry.pane
+    let code: string | null = null
+    try {
+      code = periodToResolution(pane.getPeriod())
+    } catch {
+      code = null
+    }
+    const grid = gridFor(pane.getSymbol())
+    const view = this.view()
+    const before = view ? balancesBefore(view) : new Map<string, number>()
+    return {
+      // On the instrument's own grid when it has one; without one klinecharts' nearest bar is the
+      // best there is (as for the brackets), rather than a guessed schedule.
+      toBar: (ms) => {
+        if (!grid || !code) return ms
+        try {
+          return grid.toWire(code, grid.start(code, ms))
+        } catch {
+          return ms
+        }
+      },
+      text: (trade, selected) => {
+        const info = this.ctx.instrumentFor(trade.symbol)
+        const move = closedMove(trade)
+        const pips = move !== null && info.pipSize ? move / info.pipSize : null
+        const head = moveText(move === null ? null : { pips, percent: trade.entryPrice > 0 ? (move / trade.entryPrice) * 100 : 0 })
+        if (!selected) return head
+        const share = closedShareOfBalance(trade, before.get(trade.id), view?.account ?? { currency: '' })
+        return [head, formatMoney(trade.realizedPnl), share === null ? null : formatShare(share)].filter(Boolean).join(' ')
+      }
+    }
   }
 
   /** Called from the wall's onPanesChange, exactly like a ChartLayer's sync. */
@@ -305,7 +441,7 @@ export class TradingOverlays {
     const previous = this.snapshot
     this.snapshot = snapshot
     if (snapshot && previous && previous.id === snapshot.id) this.announce(previous, snapshot)
-    if (this.selected && snapshot && !isWorking(snapshot, this.selected)) this.selected = null
+    if (this.selected && snapshot && !this.isDrawn(snapshot, this.selected)) this.selected = null
     // An amendment to something that has since filled, closed or been cancelled has nothing left to
     // amend.
     const a = this.amendment
@@ -337,7 +473,7 @@ export class TradingOverlays {
    * and tell whoever shows its stats (the position popup). A closed trade has nothing on the
    * panes to select, but its stats can still be shown. */
   inspect(id: string): void {
-    if (this.snapshot && isWorking(this.snapshot, id)) this.select(id)
+    if (this.snapshot && this.isDrawn(this.snapshot, id)) this.select(id)
     for (const listener of [...this.inspectListeners]) listener(id)
   }
 
@@ -459,6 +595,7 @@ export class TradingOverlays {
     const wasPending = new Map(previous.orders.filter((o) => o.status === 'pending').map((o) => [o.id, o]))
     const messages: Array<{ key: string; text: string; tone: 'up' | 'down' | 'info' }> = []
     let newest: { id: string; at: number } | null = null
+    const before = balancesBefore(next)
     for (const trade of next.trades) {
       if (trade.closedAt !== null && wasOpen.has(trade.id)) {
         const info = this.ctx.instrumentFor(trade.symbol)
@@ -476,9 +613,10 @@ export class TradingOverlays {
             : trade.closeReason === 'take_profit'
               ? 'Target hit'
               : 'Closed'
+        const share = closedShareOfBalance(trade, before.get(trade.id), next.account)
         messages.push({
           key: trade.symbol,
-          text: `${reason} ${pips}${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(2)}`,
+          text: `${reason} ${pips}${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(2)}${share === null ? '' : ` ${formatShare(share)}`}`,
           tone: pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'info'
         })
       }
@@ -541,7 +679,15 @@ export class TradingOverlays {
     entry.span = span
     const view = this.view()
     const specs = view && span && this.ctx.session.ready
-      ? overlaysFor(view, symbolKey(pane.getSymbol()), span, this.colors, this.selected, this.ctx.draft?.draft() ?? null)
+      ? overlaysFor(
+          view,
+          symbolKey(pane.getSymbol()),
+          span,
+          this.colors,
+          this.selected,
+          this.ctx.draft?.draft() ?? null,
+          this.historyShown ? this.historyOptions(entry) : null
+        )
       : []
     const signature = JSON.stringify(specs)
     if (!force && signature === entry.signature) return
@@ -553,6 +699,15 @@ export class TradingOverlays {
   private create(entry: PaneEntry, spec: OverlayCreate): void {
     const created: OverlayCreate = { ...spec, groupId: GROUP }
     const line = (spec.extendData as TradeLineData | undefined)?.wd
+    if (spec.name === TRADE_HISTORY) {
+      const id = (spec.extendData as TradeHistoryData).wd.id
+      created.onClick = () => {
+        this.inspect(id)
+      }
+      created.onRightClick = (event) => {
+        ;(event as { preventDefault?: () => void }).preventDefault?.()
+      }
+    }
     if (spec.name === TRADE_LINE && line) {
       const find = (): LineSpec | null => {
         const view = this.view()

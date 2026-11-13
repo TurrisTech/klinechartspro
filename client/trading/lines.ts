@@ -21,9 +21,18 @@ import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './a
 // read as one -- for a draft that bar is the live candle). So it is grey, never a candle colour,
 // and it runs down the gap before the anchor bar, where no wick can be; the bands start at that
 // same edge. Only the fill dot sits on the bar itself.
+//
+// `wdTradeHistory` -- a CLOSED trade (user, 2026-11-13: "allow historical trades to be shown on
+// the chart"), drawn while the History tab's "Show on chart" is on: the fill dot where it opened
+// (the same dot an open trade's bracket has), a ring where it closed, a dashed path between them
+// in the colour of its result, and the result beside the ring. Selected -- a click on it, or
+// "Show on chart" in its popup -- it is drawn stronger, with its last stop and target as bands
+// over the time it was open, the bracket it had. The dots and the path take clicks; the bands do
+// not.
 
 export const TRADE_LINE = 'wdTradeLine'
 export const TRADE_BRACKET = 'wdTradeBracket'
+export const TRADE_HISTORY = 'wdTradeHistory'
 
 export type LineRole = 'entry' | 'order' | 'stop' | 'target'
 
@@ -86,6 +95,27 @@ export interface TradeBracketData {
     connectorColor: string
     /** A pending order or a draft has not filled: no fill dot, and a fainter band. */
     pending: boolean
+  }
+}
+
+export interface TradeHistoryData {
+  wd: {
+    owner: 'history'
+    id: string
+    side: SimSide
+    entry: number
+    exit: number
+    stop: number | null
+    target: number | null
+    /** The result beside the exit: '+12.3p' (or a percent off the pip instruments). */
+    text: string
+    /** The realised P&L's sign: the path's colour. */
+    result: 1 | -1 | 0
+    selected: boolean
+    entryColor: string
+    profitColor: string
+    lossColor: string
+    flatColor: string
   }
 }
 
@@ -176,6 +206,81 @@ export function bracketFigures(
   return figures
 }
 
+/** A closed trade's figures, given where its entry and exit land on the pane and the price -> y
+ * conversion. Pure. Either end may be off the pane; the path is still drawn between them. */
+export function historyFigures(
+  datum: TradeHistoryData['wd'],
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  width: number,
+  toY: (price: number) => number
+): OverlayFigure[] {
+  const figures: OverlayFigure[] = []
+  const color = datum.result > 0 ? datum.profitColor : datum.result < 0 ? datum.lossColor : datum.flatColor
+  if (datum.selected) {
+    const left = Math.max(Math.min(from.x, to.x), 0)
+    const right = Math.min(Math.max(from.x, to.x), width)
+    const band = (price: number | null, bandColor: string): void => {
+      if (price === null || right <= left) return
+      const y = toY(price)
+      figures.push({
+        type: 'rect',
+        attrs: { x: left, y: Math.min(y, from.y), width: right - left, height: Math.abs(y - from.y) },
+        styles: { style: 'fill', color: withAlpha(bandColor, 0.12) },
+        ignoreEvent: true
+      })
+    }
+    band(datum.stop, datum.lossColor)
+    band(datum.target, datum.profitColor)
+  }
+  figures.push({
+    type: 'line',
+    attrs: { coordinates: [from, to] },
+    styles: { style: 'dashed', dashedValue: [4, 3], color: withAlpha(color, datum.selected ? 1 : 0.75), size: datum.selected ? 1.5 : 1 }
+  })
+  const r = datum.selected ? 4 : 3
+  figures.push({ type: 'circle', attrs: { x: from.x, y: from.y, r }, styles: { style: 'fill', color: datum.entryColor } })
+  figures.push({
+    type: 'circle',
+    attrs: { x: to.x, y: to.y, r },
+    styles: { style: 'stroke', borderColor: color, borderSize: 1.5, color: 'transparent' }
+  })
+  if (datum.text) {
+    // Beside the ring, to its right -- or to its left where it would run under the price axis (a
+    // trade closed at the live edge). The width is estimated: a canvas text figure has no
+    // measure before it is drawn, and 10px digits run about 6px.
+    const fits = to.x + r + 4 + datum.text.length * 6 + 6 <= width
+    figures.push({
+      type: 'text',
+      attrs: { x: fits ? to.x + r + 4 : to.x - r - 4, y: to.y, text: datum.text, align: fits ? 'left' : 'right', baseline: 'middle' },
+      styles: {
+        color: '#ffffff',
+        size: 10,
+        backgroundColor: withAlpha(color, datum.selected ? 0.95 : 0.7),
+        paddingLeft: 3,
+        paddingRight: 3,
+        paddingTop: 1,
+        paddingBottom: 1,
+        borderRadius: 2
+      }
+    })
+  }
+  return figures
+}
+
+const historyTemplate: OverlayTemplate<TradeHistoryData> = {
+  name: TRADE_HISTORY,
+  totalStep: 3,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+    const datum = overlay.extendData?.wd
+    if (!datum || coordinates.length < 2 || !yAxis) return []
+    return historyFigures(datum, coordinates[0], coordinates[1], bounding.width, (p) => yAxis.convertToPixel(p))
+  }
+}
+
 const bracketTemplate: OverlayTemplate<TradeBracketData> = {
   name: TRADE_BRACKET,
   totalStep: 2,
@@ -223,6 +328,14 @@ export interface LineSpec {
 
 export function lineKey(line: Pick<LineSpec, 'role' | 'id'>): string {
   return `${line.role}:${line.id}`
+}
+
+/** The closed trades of one instrument that end at or after `since` (the oldest bar a pane has
+ * loaded: anything older is off its left edge), oldest first. */
+export function historyFor(snapshot: SimSnapshot, key: string, since: number): SimTrade[] {
+  return snapshot.trades
+    .filter((t) => t.symbol === key && t.closedAt !== null && t.closePrice !== null && t.closedAt >= since)
+    .sort((a, b) => a.openedAt - b.openedAt)
 }
 
 /** The open trades and pending orders of one instrument, oldest first. */
@@ -334,4 +447,5 @@ export function registerTradeOverlays(): void {
   registered = true
   registerOverlay(lineTemplate)
   registerOverlay(bracketTemplate)
+  registerOverlay(historyTemplate)
 }
