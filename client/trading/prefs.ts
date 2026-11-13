@@ -1,6 +1,6 @@
 // The trading choices a user makes once and expects to find again: how the ticket sizes an
-// order (and the number behind each way of sizing it) and states a stop, the risk and reward numbers, and whether the on-chart order card is
-// rolled up. One document per browser, read by the ticket and by every pane's card.
+// order (and the number behind each way of sizing it) and states a stop, the risk and reward numbers, whether the on-chart order card is
+// rolled up, whether closed trades are drawn on the chart, and what the Performance tab shows. One document per browser, read by the ticket and by every pane's card.
 //
 // It is also the channel that keeps those consumers in step: a change from any of them notifies
 // the rest (rolling the card up on one pane rolls it up on every pane), and a change in another
@@ -18,6 +18,9 @@ export function sizedByStop(mode: SizeMode): boolean {
   return mode === 'risk' || mode === 'riskAmount'
 }
 export type ProtectMode = 'pips' | 'price' | 'percent'
+export type PerfMetric = 'balance' | 'equity'
+export type PerfRange = '1M' | '3M' | '6M' | '1Y' | 'all'
+const PERF_RANGE_IDS: readonly PerfRange[] = ['1M', '3M', '6M', '1Y', 'all']
 
 export interface TradePrefs {
   /** The ticket's size when it is given in units. */
@@ -45,6 +48,12 @@ export interface TradePrefs {
    * confirming press within three seconds -- in the trade box, on the pane and in the popup alike.
    * A change to a working stop, target or price is confirmed either way (user, 2026-09-15). */
   oneClick: boolean
+  /** Closed trades drawn on the panes of their instrument: entry, exit and the path between
+   * (user, 2026-11-13). Off until chosen -- a busy history is a lot of marks on a chart. */
+  historyOnChart: boolean
+  /** The account window's Performance tab: which measure, over which range. */
+  perfMetric: PerfMetric
+  perfRange: PerfRange
 }
 
 export const DEFAULT_PREFS: TradePrefs = {
@@ -58,7 +67,10 @@ export const DEFAULT_PREFS: TradePrefs = {
   protectMode: 'pips',
   rewardRatio: 2,
   cardCollapsed: null,
-  oneClick: false
+  oneClick: false,
+  historyOnChart: false,
+  perfMetric: 'balance',
+  perfRange: '1M'
 }
 
 const STORAGE_KEY = 'wd-trade-prefs'
@@ -89,7 +101,10 @@ export function parsePrefs(raw: unknown): TradePrefs {
         : DEFAULT_PREFS.protectMode,
     rewardRatio: positive(p.rewardRatio, 100) ? p.rewardRatio : DEFAULT_PREFS.rewardRatio,
     cardCollapsed: typeof p.cardCollapsed === 'boolean' ? p.cardCollapsed : null,
-    oneClick: p.oneClick === true
+    oneClick: p.oneClick === true,
+    historyOnChart: p.historyOnChart === true,
+    perfMetric: p.perfMetric === 'equity' ? 'equity' : 'balance',
+    perfRange: PERF_RANGE_IDS.includes(p.perfRange as PerfRange) ? (p.perfRange as PerfRange) : DEFAULT_PREFS.perfRange
   }
 }
 

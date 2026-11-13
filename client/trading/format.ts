@@ -25,16 +25,21 @@ export function formatUnits(units: number): string {
   return Number.isInteger(units) ? String(units) : units.toFixed(2)
 }
 
+// To the second (user, 2026-11-13): a paper fill lands on a tick, and two trades a few seconds
+// apart read as one instant without them. `hourCycle: 'h23'` rather than `hour12: false`, which
+// prints midnight as "24:00" in some engines.
 const timeFormat = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
   month: 'short',
   day: '2-digit',
   hour: '2-digit',
   minute: '2-digit',
-  hour12: false
+  second: '2-digit',
+  hourCycle: 'h23'
 })
 
-/** An instant on the market's clock, the timezone every chart on the wall uses. */
+/** An instant on the market's clock, the timezone every chart on the wall uses, to the second:
+ * 'Nov 13, 14:05:09'. */
 export function formatInstant(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return '—'
   return timeFormat.format(new Date(ms))
@@ -130,6 +135,17 @@ export function formatPercent(value: number | null | undefined, digits = 2): str
   const text = Math.abs(value).toFixed(digits)
   const sign = Number(text) === 0 ? '' : value > 0 ? '+' : '−'
   return `${sign}${text}%`
+}
+
+/** A P&L as a share of the balance: two decimals from 0.1% up, and below that two significant
+ * figures, to at most four places -- '+1.25%', '−0.012%', '−0.0023%'. A 10K position on a 100K
+ * paper account moves it by thousandths of a percent, which two decimals print as 0.00% on
+ * nearly every trade. */
+export function formatShare(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
+  const abs = Math.abs(value)
+  const digits = abs >= 0.1 || abs === 0 ? 2 : Math.min(4, Math.max(2, 1 - Math.floor(Math.log10(abs))))
+  return formatPercent(value, digits)
 }
 
 /** A move in pips, or in percent for an instrument not priced in pips. */

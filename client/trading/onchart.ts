@@ -2,7 +2,7 @@ import type { Chart, Coordinate, Crosshair, Point } from 'klinecharts'
 import type { ChartProPane } from '../../src'
 import { OhlcvApiError } from '../config'
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
-import { formatMoney, formatPrice, formatUnitsShort, symbolKey } from './format'
+import { formatMoney, formatShare, formatPrice, formatUnitsShort, symbolKey } from './format'
 import { type InstrumentInfo, seedInstrument } from './instrument'
 import {
   type Amendment,
@@ -133,6 +133,8 @@ class LineLabel {
   readonly name: HTMLElement
   readonly move: HTMLElement
   readonly amount: HTMLElement
+  /** The P&L as a share of the balance, beside the pips and the amount (user, 2026-11-13). */
+  readonly share: HTMLElement
   readonly addStop: HTMLButtonElement
   readonly addTarget: HTMLButtonElement
   readonly remove: HTMLButtonElement
@@ -149,6 +151,7 @@ class LineLabel {
     this.name = h('span', 'wd-oc-tag-name')
     this.move = h('span', 'wd-oc-tag-move')
     this.amount = h('span', 'wd-oc-tag-amount')
+    this.share = h('span', 'wd-oc-tag-share')
     const make = (className: string, text: string, action: LabelAction): HTMLButtonElement => {
       const b = h('button', `wd-oc-tag-btn ${className}`, text)
       b.type = 'button'
@@ -170,6 +173,7 @@ class LineLabel {
       this.name,
       this.move,
       this.amount,
+      this.share,
       this.addStop,
       this.addTarget,
       this.place,
@@ -475,6 +479,7 @@ export class OnChartLayer {
     let name = ''
     let move = ''
     let amount: number | null = null
+    let share: number | null = null
     let title = ''
     label.addStop.hidden = true
     label.addTarget.hidden = true
@@ -509,6 +514,7 @@ export class OnChartLayer {
       name = line.role === 'stop' ? 'SL' : 'TP'
       move = o ? moveText(o) : ''
       amount = o?.amount ?? null
+      share = o?.ofBalance ?? null
       label.remove.textContent = '×'
       label.remove.setAttribute('aria-label', line.role === 'stop' ? 'Remove the draft stop loss' : 'Remove the draft take profit')
       title = `Draft ${line.role === 'stop' ? 'stop loss' : 'take profit'} ${formatPrice(price, precision)} — drag to move`
@@ -517,6 +523,7 @@ export class OnChartLayer {
       name = `${trade.side === 'buy' ? (this.compact ? 'L' : 'Long') : this.compact ? 'S' : 'Short'} ${formatUnitsShort(units)}`
       move = moveText(f.pnl)
       amount = f.pnl?.amount ?? null
+      share = f.pnl?.ofBalance ?? null
       label.addStop.hidden = trade.stopLoss !== null
       label.addTarget.hidden = trade.takeProfit !== null
       const armed = this.armed === armKey.close(trade.id, 1)
@@ -544,6 +551,7 @@ export class OnChartLayer {
       name = line.role === 'stop' ? 'SL' : 'TP'
       move = moveText(o)
       amount = o.amount
+      share = o.ofBalance
       label.remove.textContent = '×'
       label.remove.setAttribute('aria-label', line.role === 'stop' ? 'Remove the stop loss' : 'Remove the take profit')
       title = `${formatPrice(price, precision)} — drag to move`
@@ -552,7 +560,9 @@ export class OnChartLayer {
     label.move.textContent = move
     label.amount.textContent = amount === null ? '' : formatMoney(amount)
     label.amount.hidden = amount === null
-    for (const node of [label.move, label.amount]) {
+    label.share.textContent = share === null ? '' : formatShare(share)
+    label.share.hidden = share === null
+    for (const node of [label.move, label.amount, label.share]) {
       node.classList.toggle('is-up', amount !== null && amount > 0)
       node.classList.toggle('is-down', amount !== null && amount < 0)
     }
@@ -580,6 +590,7 @@ export class OnChartLayer {
       if (amendment.price === null) {
         label.move.textContent = 'remove?'
         label.amount.hidden = true
+        label.share.hidden = true
       }
       title = 'Confirm to send this change, or × (Escape) to put it back'
     } else {

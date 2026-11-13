@@ -1715,6 +1715,169 @@ body.wd-has-dock > #app {
   color: var(--muted-foreground);
 }
 
+/* History: whether it is on the chart, and what it adds up to. */
+.wd-trade-history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-trade-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.wd-trade-history-totals {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-history-totals.is-up {
+  color: #26a69a;
+}
+
+.wd-trade-history-totals.is-down {
+  color: #ef5350;
+}
+
+/* --- Performance: the balance or equity per period (client/trading/perfview.ts) ----------- */
+
+.wd-perf {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-perf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.wd-perf-seg {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.wd-perf-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.wd-perf-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.wd-perf-change {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wd-perf-change.is-up {
+  color: #26a69a;
+}
+
+.wd-perf-change.is-down {
+  color: #ef5350;
+}
+
+.wd-perf-since,
+.wd-perf-readout,
+.wd-perf-note {
+  color: var(--muted-foreground);
+}
+
+.wd-perf-note {
+  font-size: 0.6875rem;
+}
+
+.wd-perf-note[hidden] {
+  display: none;
+}
+
+.wd-perf-plot {
+  position: relative;
+  min-height: 132px;
+  /* A drawing measured a scrollbar ago may be a few pixels wide; it is redrawn on the next
+     resize or poll, and must not scroll the window sideways meanwhile. */
+  overflow-x: hidden;
+}
+
+.wd-perf-plot.is-loading {
+  opacity: 0.55;
+}
+
+.wd-perf-svg {
+  display: block;
+  overflow: visible;
+  color: var(--muted-foreground);
+}
+
+.wd-perf-grid {
+  stroke: color-mix(in oklab, var(--border) 70%, transparent);
+  stroke-width: 1;
+}
+
+.wd-perf-base {
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+}
+
+.wd-perf-tick {
+  fill: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-perf-tick.is-base {
+  fill: var(--foreground);
+}
+
+/* The period still running is the account now: the same colour, lighter until it closes. */
+.wd-perf-bar.is-live {
+  opacity: 0.6;
+}
+
+.wd-perf-plot.has-hover .wd-perf-bar:not(.is-hover) {
+  opacity: 0.45;
+}
+
+.wd-perf-bar.is-flat {
+  opacity: 0.5;
+}
+
+.wd-perf-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.wd-perf-hit:focus {
+  outline: none;
+}
+
+.wd-perf-hit:focus-visible {
+  fill: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.wd-perf-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 :root .wd-trade-cell-input.is-proposed {
   border-color: #f59e0b;
   background: color-mix(in oklab, #f59e0b 14%, transparent);
@@ -1819,6 +1982,10 @@ body.wd-has-dock > #app {
   padding: 0 5px 0 0;
 }
 
+.wd-oc-tag-share {
+  padding: 0 5px 0 0;
+}
+
 /* A drag the engine would refuse: said before it is sent. */
 .wd-oc-tag.is-invalid {
   border-style: dashed;
@@ -1887,7 +2054,8 @@ body.wd-has-dock > #app {
   display: none;
 }
 
-.wd-oc.is-compact .wd-oc-tag-amount {
+.wd-oc.is-compact .wd-oc-tag-amount,
+.wd-oc.is-compact .wd-oc-tag-share {
   display: none;
 }
 
@@ -2122,7 +2290,7 @@ body.wd-has-dock > #app {
 
 .wd-oc-row-main {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
@@ -2186,10 +2354,15 @@ body.wd-has-dock > #app {
 }
 
 .wd-oc-row-pips,
-.wd-oc-row-pnl {
+.wd-oc-row-pnl,
+.wd-oc-row-share {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+}
+
+.wd-oc.is-compact .wd-oc-row-share {
+  display: none;
 }
 
 .wd-oc-row-pnl {

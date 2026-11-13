@@ -345,7 +345,7 @@ describe('the title bar and the transport', () => {
     const m = mount()
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
     // With the weekday: a cursor in the weekend has to read as one.
-    expect(clock.textContent).toBe('Mon, Mar 04, 09:00')
+    expect(clock.textContent).toBe('Mon, Mar 04, 09:00:00')
     expect(clock.textContent).toBe(formatClock(m.controller.cursor, NY_TZ))
     expect(clock.title).toStartWith(new Date(m.controller.cursor).toISOString())
 
@@ -452,7 +452,7 @@ describe('the title bar and the transport', () => {
     const m = mount(f)
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
     // 14:00 UTC, which New York would have shown as 09:00.
-    expect(clock.textContent).toBe('Mon, Mar 04, 14:00')
+    expect(clock.textContent).toBe('Mon, Mar 04, 14:00:00')
     expect(clock.title).toContain('UTC')
   })
 
@@ -1226,7 +1226,7 @@ describe('the start dialog', () => {
     // On whatever base the dialog suggests (here 1h, for 1h + 4h panes)...
     for (const base of ['1m', '1h', '4h']) expect(formatClock(defaultStartAt(base, saturday, FX_GRID), NY_TZ).startsWith('Fri, Jul 12')).toBe(true)
     // ...and the daily base's own session floor already lands on a trading day.
-    expect(formatClock(defaultStartAt('1D', saturday, FX_GRID), NY_TZ)).toBe('Thu, Jul 11, 17:00')
+    expect(formatClock(defaultStartAt('1D', saturday, FX_GRID), NY_TZ)).toBe('Thu, Jul 11, 17:00:00')
   })
 
   test('a coinbase replay is chosen on its own clock: UTC, named so, and its weekend is a market', () => {

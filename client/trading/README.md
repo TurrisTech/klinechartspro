@@ -34,7 +34,7 @@ mode only for its title.
   `serverFetch`), else a minted `X-Sim-Owner` token kept in `localStorage`, sent on every call.
 - `session.ts` — the `TradingSession` interface and `PaperTradingSession` (load, poll, act).
 - `panel.ts` — the account window's contents: account strip (balance / equity / unrealized /
-  open + New order + flatten-all) and the positions / orders / history tabs. A click on a row
+  open + New order + flatten-all) and the positions / orders / history / performance tabs. A click on a row
   selects that position on every pane and opens its popup. Plain DOM, `wd-trade-*` with the
   kit's buttons and confirm bar. It owns no chrome — the title bar, close and drag are the window's —
   but it does own its shape: below 620px (a window floated small) the three grid areas stop
@@ -62,7 +62,12 @@ mode only for its title.
   it; shared by the chart and the tables.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
-- `format.ts` — pure price / pip / P&L helpers.
+- `format.ts` — pure price / pip / P&L helpers; `formatInstant` (to the second) and `formatShare`
+  (a P&L as a share of the balance).
+- `ledger.ts` — PURE (tested): the account through time from its trades — the balance before each
+  close, a closed trade's share of it, the balance and the equity at any instant.
+- `performance.ts` + `perfview.ts` — the Performance tab: the pure periods and bars (tested), and
+  the view that reads the bars past equity needs and draws them.
 - `dock.ts` — `mountTradingDock(session, opts)`: the mode-agnostic dock — panel, ticket, popup,
   overlays, the three windows they live in, open/close, teardown. The window is a `DockableWindow`
   (`client/chrome/window.ts`): **docked below the chart by default** (the account strip, the
@@ -112,6 +117,53 @@ They are now built from ONE kit (`kit.ts`, styles `wd-tk-*` under a `.wd-tk` roo
   is on. Flatten, Flatten all and Cancel orders always take two. Changes to a working stop, target
   or price are always confirmed, one-click or not (user, 2026-09-15). The armed state is one key
   space (`armKey`), so a label's × and the card's All arm the same thing.
+
+## History on the chart, Performance, percent and seconds (2026-11-13)
+
+The user asked (2026-11-13) for historical trades on the chart, a balance/equity histogram beside
+History for 1M / 3M / 6M / 1Y / all time, seconds on every replay and paper-trade timestamp, and a
+percentage beside pips and P&L — "and other changes that are consistent with the UX".
+
+- **History on the chart.** The History tab's **Show on chart** (one preference, `prefs.ts`
+  `historyOnChart`, every pane and tab, off until chosen) draws every closed trade on the panes of
+  its instrument (`lines.ts` `wdTradeHistory`): the fill as the same dot an open trade's bracket
+  has, a ring at the exit, a dashed path between them in the colour of the result, and the result
+  beside the ring (pips, or a percent off the pip instruments). Each end is placed on the pane's bar
+  that was open at that instant — floored on the instrument's own candle grid and labelled the way
+  the pane labels it (`grid.toWire(code, grid.start(code, ms))`), so a 1D pane does not put a fill
+  seven hours off. A click selects it (a closed trade is selectable only while drawn) and opens its
+  popup; selected it is drawn stronger, says `pips P&L %`, and shows its last stop and target as
+  bands over the time it was open. Near the live edge the result goes left of the ring rather than
+  under the price axis. The popup's **Show on chart** turns the history on, selects the trade and
+  brings every pane on its instrument to it (`pane.seekTo`).
+- **Performance** (`perfview.ts`), the tab after History: **Balance | Equity** and
+  **1M 3M 6M 1Y All**, kept per browser. One bar per period — the value at the period's end —
+  growing from a line at the value when the window began, green above and red below; the axis
+  states the line and the extremes; hover or focus a bar (←/→ move between bars) for its period and
+  figures. The last bar is the account now (lighter: the period is still running). Periods are
+  candles of the ACTIVE chart's instrument — FX days close at 17:00 New York and skip the weekend —
+  at the finest step that keeps the bars at or under 120 (`STEP_LADDER`); with no market hours
+  resolved, plain equal steps. A range older than the account begins at the account. Under a replay
+  the clock is the replay's (`session.cursor`, and `startedAt` for its start).
+  - The **balance** at an instant is today's less every close after it (`ledger.ts`), anchored on
+    the balance the server reports — the engine moves it only by a close.
+  - Past **equity** adds the trades open then, each marked at the close of its instrument's last
+    CLOSED stored bar (`1m` below an hour's step, `1h` from there), read once per window through
+    `fetchClosedBars` (tiles + `/getbars`, stopping at the replay clock) and kept while the window
+    and the trades are unchanged — a poll reads nothing. Bars are mids, so past equity reads up to
+    half a spread above the engine's; the tab says so, and counts any period with an unpriced open
+    trade (counted at entry). The last bar is the engine's own equity.
+- **Percent** (`formatShare`): a P&L as a share of the balance, beside pips and P&L everywhere they
+  appear — the `% bal` columns of Positions and History, the chart labels (not compact), the order
+  card's rows and header, the account strip's Unrealized, the title bar, the close announcement, the
+  popup's "Of balance", History's totals, the replay's Results. An open trade's is of the balance
+  now (`outcome().ofBalance`); a closed one's of the balance it was realised against, and only where
+  its own close gives the rate (account = quote, or = base at the close price) — a cross gets none.
+  Two decimals from 0.1% up and two significant figures below (`−0.0023%`): a 10K position on a
+  100K paper balance is thousandths of a percent, and two decimals printed 0.00% on nearly every
+  trade.
+- **Seconds**: `formatInstant` (every trading timestamp) and the replay's `formatClock` print
+  `hh:mm:ss`, with `hourCycle: 'h23'` so midnight is never `24:00`. History gained an Opened column.
 
 ## The trade box (2026-09-19)
 

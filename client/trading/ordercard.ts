@@ -1,5 +1,5 @@
 import type { SimOrder, SimTrade } from './api'
-import { formatInstant, formatMoney, formatPrice, formatUnitsShort, moveText } from './format'
+import { formatInstant, formatMoney, formatShare, formatPrice, formatUnitsShort, moveText } from './format'
 import {
   allow,
   armKey,
@@ -214,7 +214,9 @@ export class OrderCard {
     this.count.textContent = parts.join(' · ')
     this.count.hidden = parts.length === 0
     if (summary.pnlAccount !== null || trades.length > 0) {
-      this.pnl.textContent = formatMoney(summary.pnl, model.compact ? '' : ctx.currencies.quote)
+      const balance = ctx.account.balance
+      const share = summary.pnlAccount !== null && balance > 0 && !model.compact ? (summary.pnlAccount / balance) * 100 : null
+      this.pnl.textContent = `${formatMoney(summary.pnl, model.compact ? '' : ctx.currencies.quote)}${share === null ? '' : ` · ${formatShare(share)}`}`
       setTone(this.pnl, summary.pnl)
       this.pnl.hidden = false
     } else {
@@ -504,6 +506,7 @@ class TradeRow {
   private readonly prices: HTMLElement
   private readonly pips: HTMLElement
   private readonly pnl: HTMLElement
+  private readonly share: HTMLElement
   private readonly detail: HTMLElement
   private readonly stop: WorkingLevel
   private readonly target: WorkingLevel
@@ -524,7 +527,8 @@ class TradeRow {
     this.prices = h('span', 'wd-oc-row-prices')
     this.pips = h('span', 'wd-oc-row-pips')
     this.pnl = h('span', 'wd-oc-row-pnl')
-    this.main.append(this.badge, this.size, this.prices, this.pips, this.pnl)
+    this.share = h('span', 'wd-oc-row-share')
+    this.main.append(this.badge, this.size, this.prices, this.pips, this.pnl, this.share)
 
     this.detail = h('div', 'wd-oc-row-detail')
     this.stop = new WorkingLevel('stop', 'trade', id, dispatch)
@@ -555,8 +559,12 @@ class TradeRow {
     this.prices.textContent = `${formatPrice(trade.entryPrice, ctx.info.precision)} → ${formatPrice(f.mark, ctx.info.precision)}`
     this.pips.textContent = moveText(f.pnl)
     this.pnl.textContent = f.pnl ? formatMoney(f.pnl.amount) : '—'
+    // Its share of the balance, where the P&L converts to the account currency exactly.
+    this.share.textContent = formatShare(f.pnl?.ofBalance)
+    this.share.hidden = f.pnl?.ofBalance === null || f.pnl?.ofBalance === undefined
     setTone(this.pips, f.pnl?.amount)
     setTone(this.pnl, f.pnl?.amount)
+    setTone(this.share, f.pnl?.amount)
     this.main.title = `${long ? 'Long' : 'Short'} ${formatUnitsShort(trade.units)} ${model.symbol} from ${formatPrice(trade.entryPrice, ctx.info.precision)}${
       f.pnl ? `, ${amountText(f.pnl.amount, f.pnl.amountAccount, ctx)}` : ''
     }${trade.label ? ` — ${trade.label}` : ''}`
