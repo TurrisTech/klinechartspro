@@ -8,6 +8,7 @@ import { type AdvanceRequest, type AlertOccurrence, type StopReason, canFill, in
 import { type BidAskBar, type Engine, SimError } from './engine'
 import { blocked, type FollowBlockers, type FollowNotice, type FollowResolution, type FollowTarget, followBase, movedState } from './follow'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
+import { snapshotOf } from './sessions'
 import { type BaseCheck, type CandleGrid, coarser, divides, finerStored, nominalMs, sortByLength, validateBase } from './timeframes'
 import { nextTask } from './yield'
 
@@ -366,28 +367,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     this.persist()
   }
 
+  /** The same snapshot the Sessions list scores a stored engine with (sessions.ts), so the
+   * Results panel and the list can never disagree about one session. */
   private buildSnapshot(): SimSnapshot {
-    const e = this.engine
-    const quotes: SimSnapshot['quotes'] = {}
-    for (const [k, q] of e.quotes) quotes[k] = { time: q.time, bid: q.bid, ask: q.ask }
-    return {
-      id: this.opts.id,
-      mode: 'replay',
-      name: this.opts.name,
-      createdAt: this.opts.createdAt,
-      rev: this.rev,
-      account: {
-        currency: e.currency,
-        initialBalance: e.initialBalance,
-        balance: e.balance,
-        unrealizedPnl: e.unrealizedPnl(),
-        equity: e.equity()
-      },
-      quotes,
-      orders: [...e.orders.values()].map((o) => ({ ...o })),
-      trades: [...e.trades.values()].map((t) => ({ ...t })),
-      symbols: [...new Set([this.symbol, ...e.quotes.keys()])].sort()
-    }
+    return snapshotOf(this.engine, { id: this.opts.id, name: this.opts.name, createdAt: this.opts.createdAt, rev: this.rev, symbol: this.symbol })
   }
 
   // -- persistence -------------------------------------------------------------------------

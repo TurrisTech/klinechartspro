@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { LocalWatchState } from '../watch/local'
 import { Engine } from './engine'
-import { readIntent, restore, serialize, writeIntent } from './persist'
+import { readIntent, restore, serialize, stampSaved, writeIntent } from './persist'
 
 /** A stored replay watch, as `LocalWatchRegistry.toState()` writes one. */
 function watchState(): LocalWatchState {
@@ -54,6 +54,27 @@ describe('replay state blob', () => {
     const copy = Engine.fromState((back as NonNullable<typeof back>).engine)
     expect(copy.balance).toBe(5000)
     expect(copy.submit({ symbol: 'oanda:EURUSD', side: 'sell', type: 'market', units: 1 }).order.id).toBe('o3')
+  })
+  test('the save stamp rides in the blob: kept when it is a number, dropped when it is not', () => {
+    const blob = serialize({
+      vendor: 'oanda',
+      symbol: 'oanda:EURUSD',
+      cursor: 10,
+      startedAt: 0,
+      base: '1m',
+      advance: { interval: '1h', multiple: 1 },
+      pauseOnFill: false,
+      watches: [],
+      engine: new Engine().toState()
+    })
+    // serialize stays a function of the session alone: no clock in it.
+    expect('savedAt' in blob).toBe(false)
+    const stamped = stampSaved(blob, 1_700_000_000_000)
+    expect('savedAt' in blob).toBe(false)
+    expect(restore(JSON.parse(JSON.stringify(stamped)))?.savedAt).toBe(1_700_000_000_000)
+    // A blob from before the stamp, or a stamp that is not a time: no savedAt at all.
+    expect(restore(blob)).not.toHaveProperty('savedAt')
+    expect(restore({ ...blob, savedAt: 'yesterday' })).not.toHaveProperty('savedAt')
   })
   test('restore refuses another version or a malformed blob', () => {
     expect(restore(null)).toBeNull()

@@ -2846,6 +2846,9 @@ body.wd-has-dock > #app {
 
 .wd-replay-dialog {
   width: min(28rem, 92vw);
+  /* A short window (a phone held sideways) scrolls the card rather than cutting off Start. */
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   background: var(--background);
   color: var(--foreground);
   border: 1px solid var(--border);
@@ -2931,6 +2934,102 @@ body.wd-has-dock > #app {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+/* Its two tabs, New replay and Sessions (client/replay/controls.ts `mountSessionsTab`): the
+   replay window's own footer toggles, so the two read as one family. */
+.wd-replay-dialog-tabs {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wd-replay-dialog-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wd-replay-dialog-pane[hidden] {
+  display: none;
+}
+
+/* Past replays: a column of cards that scrolls inside the dialog, so thirty of them never push
+   the dialog off the screen. */
+.wd-replay-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: min(60vh, 32rem);
+  overflow-y: auto;
+  padding-right: 0.125rem;
+}
+
+.wd-replay-session {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 0.375rem);
+}
+
+.wd-replay-session-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.wd-replay-session-ticker {
+  font-weight: 600;
+}
+
+.wd-replay-session-base {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-replay-session-net {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wd-replay-session-span,
+.wd-replay-session-facts {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.wd-replay-session-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.125rem;
+}
+
+.wd-replay-session-actions .kc-button {
+  height: 1.625rem;
+  padding: 0 0.625rem;
+  font-size: 0.75rem;
+}
+
+.wd-replay-session-actions .wd-replay-session-delete:hover {
+  color: #ef5350;
+}
+
+.wd-replay-session-actions .wd-replay-session-delete.is-armed {
+  background: color-mix(in oklab, #ef5350 80%, var(--background));
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.wd-replay-session .wd-tk-figs {
+  margin-top: 0.125rem;
 }
 
 /* A replay's dock holds the account, ticket and tables alone -- the controls float over the

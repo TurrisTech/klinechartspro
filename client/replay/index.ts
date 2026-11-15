@@ -13,14 +13,15 @@ import type { AlertSearch } from '../alerts/search'
 import type { Alert } from '../alerts/types'
 import { ReplayAlerts } from './alerts'
 import { passesDailyClose } from './clock'
-import { createReplayControls, openStartDialog } from './controls'
+import { createReplayControls, type ListedSession, openStartDialog } from './controls'
 import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
 import { LandingWarmer } from './landing'
 import { type FollowSources, followOnMount, followRequest, followTarget } from './follow'
-import { type ReplayIntent, readIntent, restore, writeIntent } from './persist'
+import { type ReplayIntent, type ReplayState, readIntent, restore, stampSaved, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
+import { type ReplaySessionSummary, summarizeSessions } from './sessions'
 import { probeStoredIntervals } from './source'
 import { TiledBarSource } from './tiled'
 import { ReplayWatches } from './watches'
@@ -146,6 +147,9 @@ let followProbe: { symbol: string; at: number; held: string[] } | null = null
  * rebuild the wall in replay mode. Resolves once the dialog is open (or refused); a refusal
  * comes back as the reason, for the caller to show. */
 export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLElement, rebuild: () => void): Promise<string | null> {
+  // Asked for at once, beside the store probe below: the Sessions tab fills as soon as it lands.
+  const sessions = listSessions()
+  sessions.catch(() => {})
   const active = chartPro.getPane(chartPro.getActivePaneId()) ?? chartPro.getPanes()[0]
   const symbolInfo = active?.getSymbol() ?? chartPro.getSymbol()
   const symbol = symbolKey(symbolInfo)
@@ -175,6 +179,13 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
     pickOnChart: (done) => {
       pickBarOnChart(chartPro.getPanes(), (pick) => done(pick?.startAt ?? null))
     },
+    sessions: {
+      load: () => sessions,
+      resume: (session) => {
+        void resumeReplay(chartPro, session, rebuild).catch((err) => console.error(`${REPLAY_LOG} could not resume ${session.id}`, err))
+      },
+      remove: (id) => simApi.remove(id)
+    },
     onStart: ({ startAt, balance, base }) => {
       void (async () => {
         const cursor = grid.start(base, startAt)
@@ -202,13 +213,55 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
           // No observer: this session exists only to write the opening blob, which starts
           // with no watches.
         }).toState()
-        await simApi.putState(session.id, session.rev, state)
+        await simApi.putState(session.id, session.rev, stampSaved(state, Date.now()))
         writeIntent(safeStorage(), { sessionId: session.id, cursor })
         rebuild()
       })().catch((err) => console.error(`${REPLAY_LOG} could not start`, err))
     }
   })
   return null
+}
+
+// -- past sessions -------------------------------------------------------------------------------
+
+/** This owner's replays for the Sessions tab, each with the zone its dates read in: the
+ * instrument's own clock, resolved once per instrument (`fetchSymbolInfo` is cached per page). */
+async function listSessions(): Promise<ListedSession[]> {
+  const summaries = summarizeSessions(await simApi.list())
+  const zones = new Map<string, Promise<string>>()
+  const zoneOf = (symbol: string): Promise<string> => {
+    let zone = zones.get(symbol)
+    if (!zone) {
+      const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+      zone = fetchSymbolInfo(ticker, vendor)
+        .then((info) => scheduleOf(info)?.timezone ?? 'UTC')
+        .catch(() => 'UTC')
+      zones.set(symbol, zone)
+    }
+    return zone
+  }
+  return Promise.all(summaries.map(async (summary) => ({ summary, zone: summary.symbol ? await zoneOf(summary.symbol) : 'UTC' })))
+}
+
+/** Reopen a past replay where it was left: the same intent a reload reads, then the wall rebuilt
+ * into it -- the mount restores the clock, account, orders and watches from the session's blob.
+ *
+ * The wall is put on the replay's instrument first when no pane shows it. Left as it was, the
+ * mount would take the wall for one that had moved off the instrument and follow its active pane
+ * (follow.ts `followOnMount`): the past session would be rewritten to walk whatever the wall
+ * happened to show. Changing the active pane is the same draft change a symbol pick makes. */
+export async function resumeReplay(chartPro: KLineChartPro, session: ReplaySessionSummary, rebuild: () => void): Promise<void> {
+  const state: ReplayState | null = session.state
+  if (!state) return
+  const shown = chartPro.getPaneSnapshots()
+  if (!shown.some((p) => symbolKey(p.symbol) === state.symbol)) {
+    const ticker = state.symbol.split(':').pop() ?? state.symbol
+    const info = await fetchSymbolInfo(ticker, state.vendor)
+    const active = chartPro.getPane(chartPro.getActivePaneId()) ?? chartPro.getPanes()[0]
+    active?.setSymbol(info)
+  }
+  writeIntent(safeStorage(), { sessionId: session.id, cursor: state.cursor })
+  rebuild()
 }
 
 // -- the replay wall -------------------------------------------------------------------------------
@@ -314,7 +367,8 @@ export async function mountBarReplay(
     warmLanding: (at) => void landings.warm(at),
     barSource: replayBars,
     dataEnd: () => latest,
-    save: async (state) => {
+    save: async (unstamped) => {
+      const state = stampSaved(unstamped, Date.now())
       try {
         const saved = await simApi.putState(answer.session.id, rev, state)
         rev = saved.session.rev

@@ -24,6 +24,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
 | `watches.ts` | Price watches over the walk: the `price` source built from base bars, the local backend `client/watch` draws, the Go to panel's stop price (one watch of its own), and `quietOver` -- what lets the walk skim. |
 | `landing.ts` | `LandingWarmer`: WHEN the next landing is warmed on the server -- once the wall is quiet, never while an advance runs, one landing at a time. The wall it waits on and the warm-up it sends are injected. |
+| `sessions.ts` | PURE. The Sessions list: `summarizeSessions` (this owner's replays out of `GET /sim/sessions`, most recently played first, each scored from its OWN blob's engine), `snapshotOf` (the one engine-to-snapshot the running session and the list share), `sessionFacts`, `resumable`. |
 | `follow.ts` | PURE. Following the chart to another instrument: what keeps the replay where it is (`FollowBlockers`), which pane change is a request (`followRequest`), the target resolved as a mount resolves it (`followTarget`), the base it walks there (`followBase`) and the blob moved to it (`movedState`). |
 | — glue — | |
 | `source.ts` | `HttpBarSource` (`/getbars columns=all`, paged, 413-split). The only module here that fetches bars. It reads past the page-wide read clock on purpose (`asof: null`), and so does the alert search built on it. `probeStoredIntervals`: which of the stored ladder an instrument holds -- one bar per interval its vendor stores (`storedLadderFor` against `/capabilities` `baseIntervals`), never one the server would only fold. |
@@ -97,10 +98,12 @@ chart grid (`.wd-replay-wall`, on the container), so the wall reads as history a
 far away or rolled up the controls are. Round the grid rather than each pane: every pane is on the
 one replay clock, and a per-pane edge would collide with the active pane's ring.
 
-**Exit takes two presses** — the trading kit's `Arming`, the same rule as its own irreversible
-buttons: nothing lists a replay to reopen, and Exit sits beside Step, the button pressed most.
-The rail's Replay button does the same while in replay, and the rail's stream status reads
-**replay** (orange) instead of a green "live" under a chart frozen in the past.
+**Exit is one press** (since 2026-11-15). It took two -- the trading kit's `Arming`, its rule for
+buttons that cannot be taken back -- while nothing listed a replay to reopen. The start dialog's
+**Sessions** tab now does ("Past sessions", below), so leaving is no longer losing, and its
+title says where to find the replay again. The rail's Replay button is one press too while in
+replay, and the rail's stream status reads **replay** (orange) instead of a green "live" under a
+chart frozen in the past.
 
 The status line says what was asked — **"Stepped 1h"**, **"Stepped 3 × 15m"** — not how the
 session did it: whether the span was walked or seeked (nothing working could fill) is the
@@ -199,6 +202,48 @@ its last): a draw range does not need a time of day, and two `datetime-local`s s
 a 28rem dialog render their value under the picker icon.
 
 Because the snap is a floor, a pick can sit up to one candle before the range's own start.
+
+## Past sessions: resume, score, delete
+
+The user, 2026-11-15: "in bar replay, let me see my past sessions, allow me to delete and to see
+the stats. also, let me resume replay on the session." Every replay was always kept -- each is a
+`sim_session` row whose blob is saved on every change -- but nothing listed them, so Exit left
+one behind for good.
+
+The Replay button's dialog has two tabs, **New replay** (the start form above) and **Sessions**,
+which lists this owner's replays, most recently played first (`sessions.ts`). It opens on the tab
+last used (per browser), on New when the list turns out empty.
+
+- **A row** names the instrument and base, gives the net P&L once anything was traded (as the
+  Results panel heads it), where the replay started and how far it got on the instrument's own
+  clock (the year once), and its trades, win rate, time replayed and when it was last played (on
+  the viewer's clock).
+- **Stats** opens the Results panel's figures for that session (`resultRows`, the kit's
+  `FigureList`). Only for a session that traded.
+- **Delete** takes two presses -- that one cannot be taken back -- then `DELETE /sim/sessions/{id}`;
+  a refusal keeps the row and says so.
+- **Resume** writes the same intent a reload reads (session, cursor) and rebuilds the wall into it
+  (`index.ts` `resumeReplay`): clock, account, orders and watches come back from the blob exactly
+  as on a reload. **When no pane shows the replay's instrument, the active pane is put on it
+  first.** Left alone, the mount would read the wall as one that had moved off the instrument and
+  follow its active pane (`followOnMount`), rewriting the PAST session onto whatever the wall
+  showed. That pane change is the same draft change a symbol pick makes.
+
+**The score is the blob's.** A replay's engine runs in this tab, so the server's snapshot of a
+replay session is its opening balance with no trades however much was traded; the list rebuilds
+the blob's engine and scores it with `snapshotOf` + `replayResults`, the same two calls the
+running session's Results panel makes, so the two cannot disagree (`sessions.test.ts` holds them
+equal on an engine with a closed and an open trade).
+
+**`savedAt`.** Every save stamps the blob with the wall-clock time of the write (`stampSaved`, in
+`index.ts`'s `save` -- not in `serialize`, which stays a function of the session). Not a version
+bump: a blob from before it sorts and reads by the session's `createdAt` ("started" rather than
+"played"). A blob this client cannot read (another version, never saved, an engine that will not
+rebuild) is listed, unscored, to delete but not to resume.
+
+Client only: `GET /sim/sessions` and `DELETE /sim/sessions/{id}` already existed, and the list
+needs nothing the blob does not carry. Each instrument's zone comes from `fetchSymbolInfo`, once
+per instrument (cached per page); UTC, named so, when it cannot be resolved.
 
 ## The clock
 
@@ -784,9 +829,14 @@ registered for that file only and removed after it) over a fake `ReplayControlle
 controller call every gesture makes, when each button is usable, Step becoming Stop, every stop
 reason's wording, the search's progress line, the Alerts toggle, the base
 refusal, Play (pace, self-stop on every reason, the settle wait, a hand-pressed Step ending it),
-the keys (kept from the chart, the repeat that must not cancel, a field's own keys), Exit's two
-presses, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
-Enter, its refusals and Random's range. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
+the keys (kept from the chart, the repeat that must not cancel, a field's own keys), Exit's one
+press, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
+Enter, its refusals and Random's range -- and its Sessions tab: the count, a row's facts scored
+from the blob and not the server's account, Stats, Delete's two presses and a refused delete,
+Resume, an unreadable blob, the remembered tab, Enter kept from Start. `sessions.test.ts` pins
+the list's order and its score against the running session's; `mount.test.ts` resumes from a wall
+showing the instrument and from one on another instrument (the mount must not follow it away),
+and checks every save is stamped. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
 drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
 hub on a coinbase pane's own grid, the refusal for a pane with no market hours, and a forex day
 pane's reload window reaching the day forming since 17:00.
