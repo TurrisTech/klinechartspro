@@ -35,6 +35,10 @@ export interface ReplayState {
    * session rather than started it with no watches. */
   watches: LocalWatchState[]
   engine: EngineState
+  /** When the blob was last written, on the wall clock (`stampSaved`): what the Sessions list
+   * sorts by and says as "played". Optional, and NOT a version bump: every blob written before
+   * the list existed has none, and the list falls back to when the session was created. */
+  savedAt?: number
 }
 
 export interface ReplayStateInput {
@@ -88,8 +92,15 @@ export function restore(value: unknown): ReplayState | null {
     pauseOnFill: pauseOnFill === true,
     // A blob written before replay watches existed simply has none.
     watches: Array.isArray(watches) ? (watches.filter(isWatchState) as LocalWatchState[]) : [],
-    engine: engine as unknown as EngineState
+    engine: engine as unknown as EngineState,
+    ...(typeof value.savedAt === 'number' && Number.isFinite(value.savedAt) ? { savedAt: value.savedAt } : {})
   }
+}
+
+/** The blob as it is written: stamped with the wall-clock instant of the write. Kept out of
+ * `serialize`, which stays a pure function of the session. */
+export function stampSaved(state: ReplayState, now: number): ReplayState {
+  return { ...state, savedAt: now }
 }
 
 /** A stored watch row this client can read back. Shallow on purpose: the registry re-parses

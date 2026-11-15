@@ -29,7 +29,6 @@ import {
 import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
 import { symbolKey } from './trading/format'
-import { Arming } from './trading/kit'
 import { loadWatches, mountPriceWatches, type PriceWatchesController } from './watch'
 import { createRemoteNotifications } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
@@ -713,26 +712,16 @@ function mountChartExtras(
     const replayButton = document.createElement('button')
     replayButton.type = 'button'
     replayButton.className = `wd-rail-button${replay.inReplay ? ' is-on' : ''}`
-    const idleTitle = replay.inReplay ? 'Exit bar replay' : 'Bar replay: step through history from a date you choose'
+    const idleTitle = replay.inReplay ? 'Exit bar replay (it is kept: Replay → Sessions resumes it)' : 'Bar replay: step through history from a date you choose, or resume a past replay'
     const showIdle = (): void => {
       replayButton.textContent = 'Replay'
       replayButton.title = idleTitle
-      replayButton.classList.remove('is-armed')
     }
     showIdle()
-    // Leaving discards the replay -- nothing lists one to reopen -- so, like the controls' own
-    // Exit, it takes a second press within the trading kit's confirm window.
-    const exitArming = new Arming(() => {
-      if (exitArming.key === null) showIdle()
-      else {
-        replayButton.textContent = 'Exit?'
-        replayButton.title = 'Press again to leave replay. It cannot be reopened.'
-        replayButton.classList.add('is-armed')
-      }
-    })
+    // Leaving keeps the replay -- the start dialog's Sessions tab resumes it -- so, like the
+    // controls' own Exit, it is one press.
     replayButton.addEventListener('click', () => {
       if (replay.inReplay) {
-        if (!exitArming.press('exit', false)) return
         clearReplay()
         replay.rebuild()
         return

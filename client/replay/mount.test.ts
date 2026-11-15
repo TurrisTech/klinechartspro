@@ -14,7 +14,8 @@ import type { ReplayState } from './persist'
 
 GlobalRegistrator.register({ url: 'http://test/' })
 
-const { mountBarReplay, bootReplay, REPLAY_WALL_CLASS } = await import('./index')
+const { mountBarReplay, bootReplay, resumeReplay, REPLAY_WALL_CLASS } = await import('./index')
+const { summarizeSessions } = await import('./sessions')
 const { writeIntent } = await import('./persist')
 const { FX_SCHEDULE, fromWall } = await import('./timeframes')
 const { resolutionToPeriod } = await import('../periods')
@@ -291,5 +292,93 @@ describe('mountBarReplay following the active pane', () => {
     expect(m.rebuilds.length).toBe(1)
     expect(server.blob.symbol).toBe(WALKED)
     expect(server.blob.cursor).toBe(CURSOR)
+  })
+})
+
+describe('resuming a past replay', () => {
+  /** A live wall whose one pane can be moved, as ChartPro's `assignSymbol` moves it. */
+  function liveWall(initial: string) {
+    let symbol = info(initial)
+    const moved: string[] = []
+    const pane = {
+      id: 'p1',
+      getSymbol: () => symbol,
+      getPeriod: () => resolutionToPeriod('1h'),
+      getChart: () => null,
+      setSymbol: (next: SymbolInfo) => {
+        symbol = next
+        moved.push(next.ticker)
+      }
+    }
+    const chartPro = {
+      getPanes: () => [pane],
+      getPane: (id: string) => (id === 'p1' ? pane : null),
+      getActivePaneId: () => 'p1',
+      getSymbol: () => symbol,
+      getPaneSnapshots: () => [{ id: 'p1', symbol } as unknown as PaneSnapshot],
+      getSlot: () => null
+    }
+    return { chartPro: chartPro as unknown as KLineChartPro, moved, ticker: () => symbol.ticker }
+  }
+
+  function listedSession(server: FakeServer) {
+    const [summary] = summarizeSessions([
+      { id: 's1', mode: 'replay', name: 'Replay', createdAt: 0, rev: server.rev, account: { currency: 'GBP', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 }, quotes: {}, orders: [], trades: [], symbols: [WALKED], state: server.blob }
+    ])
+    return summary
+  }
+
+  test('on a wall showing its instrument: the intent names it at its cursor, and the wall is rebuilt once', async () => {
+    const server = new FakeServer(blob())
+    globalThis.fetch = server.fetch
+    const w = liveWall('EURGBP')
+    const rebuilds: number[] = []
+    await resumeReplay(w.chartPro, listedSession(server), () => rebuilds.push(1))
+    expect(rebuilds).toEqual([1])
+    expect(w.moved).toEqual([])
+    expect(JSON.parse(window.sessionStorage.getItem('wd.replay.intent') ?? 'null')).toEqual({ sessionId: 's1', cursor: CURSOR })
+    // Nothing is written: resuming is reading the session back, not changing it.
+    expect(server.puts).toEqual([])
+  })
+
+  test('from a wall on another instrument: the active pane is put on the replay, so the mount does not follow it away', async () => {
+    const server = new FakeServer(blob())
+    globalThis.fetch = server.fetch
+    resetInstrumentConfigCache()
+    const w = liveWall('EURUSD')
+    const rebuilds: number[] = []
+    await resumeReplay(w.chartPro, listedSession(server), () => rebuilds.push(1))
+    expect(w.moved).toEqual(['EURGBP'])
+    expect(rebuilds).toEqual([1])
+
+    // The rebuild: the wall the mount sees now shows EURGBP, so the session keeps walking it --
+    // left on EURUSD, `followOnMount` would have rewritten the past session onto EURUSD.
+    const m = await mount(server, w.ticker())
+    mounted.push(m)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(m.rebuilds).toEqual([])
+    expect(server.blob.symbol).toBe(WALKED)
+    expect(server.blob.cursor).toBe(CURSOR)
+  })
+
+  test('a blob this client cannot read is not resumed', async () => {
+    const server = new FakeServer(blob())
+    const w = liveWall('EURGBP')
+    const rebuilds: number[] = []
+    const unreadable = { ...listedSession(server), state: null }
+    await resumeReplay(w.chartPro, unreadable, () => rebuilds.push(1))
+    expect(rebuilds).toEqual([])
+    expect(window.sessionStorage.getItem('wd.replay.intent')).toBeNull()
+  })
+
+  test('every save is stamped with when it was made: what the Sessions list sorts by', async () => {
+    const server = new FakeServer(blob())
+    const m = await mount(server)
+    mounted.push(m)
+    const before = Date.now()
+    m.controller.symbolChanged('p1', m.w.setSymbol('EURUSD'))
+    await until(() => m.rebuilds.length > 0)
+    expect(server.puts.length).toBeGreaterThan(0)
+    for (const put of server.puts) expect(put.savedAt).toBeGreaterThanOrEqual(before)
   })
 })
