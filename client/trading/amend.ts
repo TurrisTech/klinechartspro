@@ -1,4 +1,5 @@
-import type { SimSnapshot } from './api'
+import type { ManagementPatch, SimOrder, SimSnapshot, SimTrade } from './api'
+import { breakevenWords, distanceWords, trailWords } from './exits'
 import { formatMoney, formatPercent, formatPrice, formatUnitsShort, moveText } from './format'
 import type { InstrumentInfo } from './instrument'
 import type { Amendment } from './lines'
@@ -17,6 +18,14 @@ export type ProposedChange = Omit<Amendment, 'from'>
 export function amendmentRefusal(change: ProposedChange, snapshot: SimSnapshot, info: InstrumentInfo): string | null {
   const { owner, id, role, price } = change
   const precision = info.precision
+  if (role === 'manage') {
+    if (owner === 'trade') {
+      const trade = snapshot.trades.find((t) => t.id === id)
+      return trade?.closedAt === null ? null : 'This trade has closed'
+    }
+    const order = snapshot.orders.find((o) => o.id === id)
+    return order?.status === 'pending' ? null : 'This order is no longer working'
+  }
   if (owner === 'trade') {
     const trade = snapshot.trades.find((t) => t.id === id)
     if (!trade || trade.closedAt !== null) return 'This trade has closed'
@@ -65,6 +74,7 @@ export function describeAmendment(
   if (!position) return null
   const precision = info.precision
   const ticker = position.symbol.includes(':') ? position.symbol.split(':', 2)[1] : position.symbol
+  if (a.role === 'manage') return describeManagement(a.manage ?? {}, position, trade !== undefined, ticker, snapshot, info)
   const what = a.role === 'stop' ? 'stop loss' : a.role === 'target' ? 'take profit' : `${order?.type ?? 'order'} price`
   const whose = trade
     ? `${ticker} ${trade.side === 'buy' ? 'long' : 'short'} ${formatUnitsShort(trade.units)}`
@@ -92,4 +102,46 @@ export function describeAmendment(
     }
   }
   return { title, detail }
+}
+
+/** A change to a working position's exit management, asked in words: "Trail the EURUSD long 10K's
+ * stop 20.0p behind the bid?", and what it does now. */
+function describeManagement(
+  patch: ManagementPatch,
+  position: SimTrade | SimOrder,
+  isTrade: boolean,
+  ticker: string,
+  snapshot: SimSnapshot,
+  info: InstrumentInfo
+): { title: string; detail: string } {
+  const whose = isTrade
+    ? `${ticker} ${position.side === 'buy' ? 'long' : 'short'} ${formatUnitsShort(position.units)}`
+    : `${ticker} ${position.side} ${(position as SimOrder).type} ${formatUnitsShort(position.units)}`
+  const closing = position.side === 'buy' ? 'bid' : 'ask'
+  if (patch.trailingStop !== undefined) {
+    const t = patch.trailingStop
+    if (t === null) return { title: `Remove the trailing stop from the ${whose}?`, detail: 'The stop stays where it is now.' }
+    let detail = isTrade ? 'The stop moves with the next new best price.' : 'It starts when the order fills.'
+    const quote = snapshot.quotes[position.symbol]
+    if (isTrade && quote && (t.activation === null || t.activation === undefined)) {
+      const d = position.side === 'buy' ? 1 : -1
+      const mark = position.side === 'buy' ? quote.bid : quote.ask
+      const level = mark - d * t.distance
+      const stop = (position as SimTrade).stopLoss
+      detail =
+        stop === null || (level - stop) * d > 0
+          ? `The stop goes to ${formatPrice(level, info.precision)} now and follows the ${closing} from there.`
+          : `The stop (${formatPrice(stop, info.precision)}) is already tighter; it moves once the ${closing} makes new ground.`
+    }
+    return { title: `Trail the ${whose}'s stop ${trailWords(t, info)} behind the ${closing}?`, detail }
+  }
+  if (patch.breakeven !== undefined) {
+    const b = patch.breakeven
+    if (b === null) return { title: `Remove the breakeven from the ${whose}?`, detail: 'The stop will not move to the entry by itself.' }
+    return { title: `Move the ${whose}'s stop to breakeven ${breakevenWords(b, info)}?`, detail: `Once, the first time it is ${distanceWords(b.trigger, info)} in profit.` }
+  }
+  const milestones = patch.milestones ?? []
+  if (milestones.length === 0) return { title: `Stop the notifications on the ${whose}?`, detail: 'No milestone will be told.' }
+  const names = milestones.map((m) => m.label ?? `${m.distance > 0 ? '+' : '−'}${distanceWords(Math.abs(m.distance), info)}`).join(' · ')
+  return { title: `Notify at ${names} on the ${whose}?`, detail: 'Each the first time the price reaches it, from now; one already passed is told by the next price.' }
 }

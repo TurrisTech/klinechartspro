@@ -122,6 +122,21 @@ follows the active pane since 2026-10-29: "Following the chart to another instru
 Each alert is searched on its own instrument's bars and schedule; the stop's notification names
 that instrument.
 
+**Trailing stops, breakevens and "Notify at" stop Next alert too** (2026-11-15; user: "make sure that
+these will stop at Next alert on bar replay"). The replay's engine (`engine.ts`) carries the trade
+box's exit management (`client/trading/exits.ts`, `client/trading/README.md`):
+- a trade reaching a milestone ends the run where it happens, like a fill (`stopsARun` in
+  `session.ts`), and the controls say "Reached +2R"; the milestone is also raised in the bell,
+  tagged `replay`, with the replay instant in its body (`index.ts`). Step and Play stop on one only
+  with Pause on fill set, as for fills;
+- a stop the trail or the breakeven placed is a stop: its hit is a close, so it ends the run, and
+  the controls say "Trailing stop hit" or "Breakeven stop hit";
+- a trade whose only protection is a trail not yet started, a breakeven not yet done or a
+  milestone not yet reached still makes the run WALK rather than seek (`canFill`) and enables the
+  button (`workingStops`, `pendingMilestones`); and the skim descends wherever a candle could
+  reach a milestone or a breakeven trigger, or would move a trail (`intersectsWorking`), so the
+  trail follows finer closes and the milestone lands on its bar.
+
 **A stop loss or take profit hit is another Next alert** (2026-10-28; user: "when price hits a stop
 or take profit, that is also another next alert").
 - **It stops the run:** Next alert, and Run to a price, end at the first fill or close -- a stop

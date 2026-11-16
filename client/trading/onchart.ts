@@ -33,6 +33,7 @@ import {
   tradeFigures
 } from './metrics'
 import { amendmentRefusal, describeAmendment } from './amend'
+import { type AtrReading, atrReading, initialRisk, stopName, trailWords } from './exits'
 import { armKey } from './kit'
 import { closeFraction, reverseTrade } from './manage'
 import { type CardAction, h, moveText, OrderCard } from './ordercard'
@@ -432,6 +433,9 @@ export class OnChartLayer {
       armed: this.armed,
       riskPercent: tradePrefs().riskPercent,
       protectMode: tradePrefs().protectMode,
+      exitUnits: { trail: tradePrefs().trailUnit, breakeven: tradePrefs().breakevenUnit, notify: tradePrefs().notifyUnit },
+      atr: this.atr(),
+      risks: Object.fromEntries([...trades, ...orders].map((r) => [r.id, initialRisk(r, snapshot.orders)])),
       draft: this.draft,
       amendment: this.host.amendment(),
       confirm: this.describeAmendment(snapshot, ctx, key)
@@ -548,13 +552,19 @@ export class OnChartLayer {
       const side = line.side
       const from = trade ? trade.entryPrice : (order?.price as number)
       const o = outcome(side, units, from, price, ctx)
-      name = line.role === 'stop' ? 'SL' : 'TP'
+      const record = trade ?? order
+      name = line.role === 'stop' ? (record ? stopName(record) : 'SL') : 'TP'
       move = moveText(o)
       amount = o.amount
       share = o.ofBalance
       label.remove.textContent = '×'
       label.remove.setAttribute('aria-label', line.role === 'stop' ? 'Remove the stop loss' : 'Remove the take profit')
       title = `${formatPrice(price, precision)} — drag to move`
+      if (line.role === 'stop' && record?.trailingStop) {
+        title = `${formatPrice(price, precision)} — a trailing stop, ${trailWords(record.trailingStop, ctx.info)} behind the best price; drag to move it (the trail goes on)`
+      } else if (line.role === 'stop' && trade?.stopMovedBy === 'breakeven') {
+        title = `${formatPrice(price, precision)} — moved to breakeven; drag to move`
+      }
     }
     label.name.textContent = name
     label.move.textContent = move
@@ -759,6 +769,12 @@ export class OnChartLayer {
       case 'unit':
         setTradePrefs({ protectMode: action.mode })
         return
+      case 'setManagement':
+        this.proposeOrSay({ owner: action.owner, id: action.id, role: 'manage', price: null, manage: action.patch })
+        return
+      case 'exitUnit':
+        setTradePrefs(action.role === 'trail' ? { trailUnit: action.unit } : action.role === 'breakeven' ? { breakevenUnit: action.unit } : { notifyUnit: action.unit })
+        return
       case 'error':
         this.showError(action.message)
         return
@@ -810,10 +826,23 @@ export class OnChartLayer {
     }
   }
 
+  /** This pane's ATR(14) over its closed bars, for distances stated in "× ATR". */
+  private atr(): AtrReading | null {
+    try {
+      return atrReading(this.chart.getDataList(), this.pane.getPeriod().text)
+    } catch {
+      return null
+    }
+  }
+
   /** A button's change goes up for confirmation -- or, when it would change nothing, says so rather
    * than doing nothing visibly. */
   private proposeOrSay(change: Omit<Amendment, 'from'>): void {
     if (this.host.propose(change)) return
+    if (change.role === 'manage') {
+      this.card.flash('Nothing to change', 'info', FLASH_MS / 2)
+      return
+    }
     const what = change.role === 'stop' ? 'stop loss' : change.role === 'target' ? 'take profit' : 'price'
     this.card.flash(change.price === null ? `No ${what} to remove` : `The ${what} is already there`, 'info', FLASH_MS / 2)
   }

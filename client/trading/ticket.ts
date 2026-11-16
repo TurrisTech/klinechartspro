@@ -1,9 +1,31 @@
 import type { SymbolInfo } from '../../src'
 import { OhlcvApiError } from '../config'
-import type { SimOrderType, SimSide } from './api'
+import type { BreakevenRequest, MilestoneRequest, SimOrderType, SimSide, TrailRequest } from './api'
+import {
+  type AtrReading,
+  breakevenReadout,
+  defaultExit,
+  distanceWords,
+  EXIT_UNITS,
+  type ExitBasis,
+  type ExitUnit,
+  exitText,
+  exitUnitRefusal,
+  milestonesReadout,
+  milestoneValues,
+  parseBreakeven,
+  parseDistance,
+  parseMilestones,
+  parseTrail,
+  stepExitText,
+  toggleMilestone,
+  trailReadout,
+  unitSize,
+  usableExitUnit
+} from './exits'
 import { formatMoney, formatPrice, formatUnits, formatUnitsShort, symbolKey, toPips } from './format'
 import type { InstrumentInfo } from './instrument'
-import { Arming, allow, armKey, FigureList, h, kbtn, LevelField, NumberField } from './kit'
+import { Arming, allow, armKey, ExitField, FigureList, h, kbtn, LevelField, NumberField } from './kit'
 import {
   defaultRestingPrice,
   type LevelBasis,
@@ -71,6 +93,11 @@ import { sizeRows, type StatRow } from './stats'
 //   units, and switching carries the size across rather than reinterpreting the number;
 // - STOP LOSS and TAKE PROFIT in pips, price or % of balance (levels.ts), with Risk N% and
 //   1R/2R/3R presets; % of balance is not offered while the size itself comes from the stop;
+// - EXIT MANAGEMENT beside them (exits.ts; user, 2026-11-15): a TRAILING STOP (its distance, where
+//   it starts and its step), an AUTO-BREAKEVEN (the profit that moves the stop to the entry, and
+//   what it locks in), and NOTIFY AT -- distances from the entry, multiples of R by default, each a
+//   notification the first time the price reaches it. Each is stated in pips, a price difference,
+//   % of the price, × the active chart's ATR(14) or R, and is sent as a price distance;
 // - the figures of the order as it would be sent (the same rows the card and popup show), a note
 //   sent with it, the reason it cannot be sent yet, and the button.
 //
@@ -90,6 +117,9 @@ import { sizeRows, type StatRow } from './stats'
 export interface TicketContext {
   activeSymbol: () => SymbolInfo
   instrumentFor: (key: string) => InstrumentInfo
+  /** The active pane's ATR(14) on its own timeframe, for distances stated in ATR; null without
+   * enough bars. */
+  activeAtr?: () => AtrReading | null
 }
 
 const REWARD_RATIOS = [1, 2, 3]
@@ -112,7 +142,10 @@ function tidy(value: number, digits = 2): string {
   return String(Number(value.toFixed(digits)))
 }
 
-type Slot = 'general' | 'price' | 'size' | 'stop' | 'target'
+type Slot = 'general' | 'price' | 'size' | 'stop' | 'target' | 'trail' | 'breakeven' | 'notify'
+type ExitRole = 'trail' | 'breakeven' | 'notify'
+const EXIT_PREF: Record<ExitRole, 'trailUnit' | 'breakevenUnit' | 'notifyUnit'> = { trail: 'trailUnit', breakeven: 'breakevenUnit', notify: 'notifyUnit' }
+const NOTIFY_MULTIPLES = [1, 2, 3]
 
 interface Plan {
   units: number | null
@@ -120,6 +153,9 @@ interface Plan {
   price: number | undefined
   stop: number | undefined
   target: number | undefined
+  trail: TrailRequest | undefined
+  breakeven: BreakevenRequest | undefined
+  milestones: MilestoneRequest[]
   /** Why it cannot be sent, by the field that is wrong. */
   problems: Partial<Record<Slot, string>>
   /** The first of them; null when it can be sent. */
@@ -195,6 +231,11 @@ export class OrderTicket implements DraftController {
   private price = ''
   private stopLoss = ''
   private takeProfit = ''
+  /** Exit management, as typed: a trail's distance, start and step; a breakeven's trigger and
+   * lock; the milestones' list. Each in its own unit (prefs.ts). */
+  private trail = { distance: '', start: '', step: '' }
+  private breakeven = { trigger: '', lock: '' }
+  private notify = ''
   private note = ''
   private error = ''
   private symbol: SymbolInfo
@@ -212,6 +253,9 @@ export class OrderTicket implements DraftController {
   private readonly sizeProblem: HTMLElement
   private readonly stopField: LevelField
   private readonly targetField: LevelField
+  private readonly trailField: ExitField
+  private readonly breakevenField: ExitField
+  private readonly notifyField: ExitField
   private readonly figures: FigureList
   private readonly noteInput: HTMLInputElement
   private readonly problemNode: HTMLElement
@@ -277,6 +321,47 @@ export class OrderTicket implements DraftController {
 
     this.stopField = this.levelField('stop', 'Stop loss', press)
     this.targetField = this.levelField('target', 'Take profit', press)
+    this.trailField = new ExitField({
+      role: 'trail',
+      label: 'Trailing stop',
+      extras: [
+        { label: 'Start at +', title: 'How far in profit the best price must be before the stop trails; empty: from the fill' },
+        { label: 'Step', title: 'The least the stop moves by; empty: on every new best price' }
+      ],
+      onInput: (text) => this.change(() => (this.trail.distance = text)),
+      onStep: (direction, big) => this.stepExit('trail', direction, big),
+      onUnit: (unit) => this.setExitUnit('trail', unit),
+      onPreset: (i) => this.trailPreset(i),
+      onClear: () => this.clearExit('trail'),
+      onEnter: press,
+      onExtraInput: (i, text) =>
+        this.change(() => {
+          if (i === 0) this.trail.start = text
+          else this.trail.step = text
+        })
+    })
+    this.breakevenField = new ExitField({
+      role: 'breakeven',
+      label: 'Breakeven',
+      extras: [{ label: 'Lock +', title: 'Where the stop goes, beyond the entry in the trade\'s favour; empty: the entry itself' }],
+      onInput: (text) => this.change(() => (this.breakeven.trigger = text)),
+      onStep: (direction, big) => this.stepExit('breakeven', direction, big),
+      onUnit: (unit) => this.setExitUnit('breakeven', unit),
+      onPreset: () => this.breakevenPreset(),
+      onClear: () => this.clearExit('breakeven'),
+      onEnter: press,
+      onExtraInput: (_i, text) => this.change(() => (this.breakeven.lock = text))
+    })
+    this.notifyField = new ExitField({
+      role: 'notify',
+      label: 'Notify at',
+      list: true,
+      onInput: (text) => this.change(() => (this.notify = text)),
+      onUnit: (unit) => this.setExitUnit('notify', unit),
+      onPreset: (i) => this.notifyPreset(NOTIFY_MULTIPLES[i]),
+      onClear: () => this.clearExit('notify'),
+      onEnter: press
+    })
 
     this.figures = new FigureList()
 
@@ -307,7 +392,7 @@ export class OrderTicket implements DraftController {
     this.oneClick.addEventListener('change', () => setTradePrefs({ oneClick: this.oneClick.checked }))
     oneClickLabel.append(this.oneClick, 'One-click trading')
     oneClickLabel.title = 'Place, close and cancel on the first press, here, on the chart and in the position popup'
-    this.resetButton = kbtn('Reset', () => this.reset(), ['quiet'], 'Back to a market order with no price, stop, target or note')
+    this.resetButton = kbtn('Reset', () => this.reset(), ['quiet'], 'Back to a market order with no price, stop, target, trail, breakeven, notifications or note')
     foot.append(oneClickLabel, this.resetButton)
 
     this.element.append(
@@ -318,6 +403,9 @@ export class OrderTicket implements DraftController {
       this.sizeBlock,
       this.stopField.element,
       this.targetField.element,
+      this.trailField.element,
+      this.breakevenField.element,
+      this.notifyField.element,
       this.figures.element,
       noteRow,
       this.problemNode,
@@ -530,8 +618,211 @@ export class OrderTicket implements DraftController {
     this.priceField.write('')
     this.writeLevel('stop', '', false)
     this.writeLevel('target', '', false)
+    this.trail = { distance: '', start: '', step: '' }
+    this.breakeven = { trigger: '', lock: '' }
+    this.notify = ''
+    this.writeExits()
     this.error = ''
     this.refresh()
+  }
+
+  // -- exit management ------------------------------------------------------------------------------
+
+  /** What an exit's distances are measured against: the entry, R (the stop's distance) and the ATR. */
+  private exitBasis(plan: Pick<Plan, 'entry' | 'stop' | 'ctx'>): ExitBasis {
+    const risk = plan.entry !== null && plan.stop !== undefined ? Math.abs(plan.entry - plan.stop) : null
+    return { side: this.side, entry: plan.entry, risk: risk && risk > 0 ? risk : null, atr: this.ctx.activeAtr?.() ?? null, info: this.info() }
+  }
+
+  /** The stored unit for an exit, or the nearest one this position allows. */
+  private exitUnit(role: ExitRole, basis: ExitBasis): ExitUnit {
+    return usableExitUnit(tradePrefs()[EXIT_PREF[role]], basis)
+  }
+
+  /** Every exit field shows what the ticket holds (after a reset, a unit change or a preset). */
+  private writeExits(): void {
+    this.trailField.write(this.trail.distance)
+    this.trailField.writeExtra(0, this.trail.start)
+    this.trailField.writeExtra(1, this.trail.step)
+    this.breakevenField.write(this.breakeven.trigger)
+    this.breakevenField.writeExtra(0, this.breakeven.lock)
+    this.notifyField.write(this.notify)
+  }
+
+  private clearExit(role: ExitRole): void {
+    if (role === 'trail') this.trail = { distance: '', start: '', step: '' }
+    else if (role === 'breakeven') this.breakeven = { trigger: '', lock: '' }
+    else this.notify = ''
+    this.writeExits()
+    this.change(() => {})
+  }
+
+  private stepExit(role: 'trail' | 'breakeven', direction: 1 | -1, big: boolean): void {
+    const basis = this.exitBasis(this.plan())
+    const unit = this.exitUnit(role, basis)
+    const info = this.info()
+    const current = role === 'trail' ? this.trail.distance : this.breakeven.trigger
+    const next = stepExitText(current, unit, info, direction, big, defaultExit(unit, info), unit === 'pips' ? 0.1 : 0)
+    if (Number(next) <= 0) return
+    if (role === 'trail') this.trail.distance = next
+    else this.breakeven.trigger = next
+    this.writeExits()
+    this.change(() => {})
+  }
+
+  /** Switching an exit's unit restates what was typed -- the same distances, the new way. */
+  private setExitUnit(role: ExitRole, next: ExitUnit): void {
+    const basis = this.exitBasis(this.plan())
+    const from = this.exitUnit(role, basis)
+    if (exitUnitRefusal(next, basis) !== null) {
+      this.refresh()
+      return
+    }
+    setTradePrefs({ [EXIT_PREF[role]]: next })
+    if (from === next) return
+    const restate = (text: string, allow: { zero?: boolean; negative?: boolean } = {}): string => {
+      try {
+        const distance = parseDistance(text, from, basis, 'it', allow)
+        if (distance === null) return text
+        return distance < 0 ? `-${exitText(-distance, next, basis)}` : exitText(distance, next, basis)
+      } catch {
+        return text
+      }
+    }
+    if (role === 'trail') {
+      this.trail = { distance: restate(this.trail.distance), start: restate(this.trail.start, { zero: true }), step: restate(this.trail.step) }
+    } else if (role === 'breakeven') {
+      this.breakeven = { trigger: restate(this.breakeven.trigger), lock: restate(this.breakeven.lock, { zero: true, negative: true }) }
+    } else {
+      const values = milestoneValues(this.notify)
+      if (values.every((v) => Number.isFinite(v) && v !== 0)) this.notify = values.map((v) => restate(String(v), { negative: true })).join(', ')
+    }
+    this.writeExits()
+    this.change(() => {})
+  }
+
+  /** A breakeven whose lock is no tighter than the stop already set would never move it: said,
+   * not refused (the engine accepts it and does nothing). */
+  private breakevenWarning(plan: Plan): Array<{ text: string; tone: 'warn' }> {
+    if (!plan.breakeven || plan.entry === null || plan.stop === undefined) return []
+    const d = this.side === 'buy' ? 1 : -1
+    const level = plan.entry + d * (plan.breakeven.offset ?? 0)
+    return (level - plan.stop) * d <= 0 ? [{ text: 'the stop is already past it', tone: 'warn' }] : []
+  }
+
+  /** The trail presets: at 1R (the stop's distance), and at twice the ATR. */
+  private trailPresetDistance(i: number, basis: ExitBasis): number | null {
+    return i === 0 ? basis.risk : basis.atr !== null ? 2 * basis.atr.value : null
+  }
+
+  private trailPreset(i: number): void {
+    const basis = this.exitBasis(this.plan())
+    const distance = this.trailPresetDistance(i, basis)
+    if (distance === null) return
+    this.trail.distance = exitText(distance, this.exitUnit('trail', basis), basis)
+    this.writeExits()
+    this.change(() => {})
+  }
+
+  private breakevenPreset(): void {
+    const basis = this.exitBasis(this.plan())
+    if (basis.risk === null) return
+    this.breakeven.trigger = exitText(basis.risk, this.exitUnit('breakeven', basis), basis)
+    this.writeExits()
+    this.change(() => {})
+  }
+
+  /** A multiple of R, stated in the notify unit, put in the list or taken out of it. */
+  private notifyValue(multiple: number, basis: ExitBasis): number | null {
+    if (basis.risk === null) return null
+    const text = exitText(multiple * basis.risk, this.exitUnit('notify', basis), basis)
+    return text === '' ? null : Number(text)
+  }
+
+  private notifyPreset(multiple: number): void {
+    const value = this.notifyValue(multiple, this.exitBasis(this.plan()))
+    if (value === null) return
+    this.notify = toggleMilestone(this.notify, value)
+    this.writeExits()
+    this.change(() => {})
+  }
+
+  private renderExits(plan: Plan, quote: { bid: number; ask: number } | undefined): void {
+    const basis = this.exitBasis(plan)
+    const refusals = Object.fromEntries(EXIT_UNITS.map(([u]) => [u, exitUnitRefusal(u, basis)]))
+    const rRefusal = exitUnitRefusal('r', basis)
+    const atrRefusal = exitUnitRefusal('atr', basis)
+    const note = (unit: ExitUnit): Array<{ text: string; tone: '' }> => {
+      const size = unitSize(unit, basis)
+      if (size === null) return []
+      if (unit === 'atr' && basis.atr) return [{ text: `ATR(${basis.atr.period}, ${basis.atr.interval}) ${distanceWords(basis.atr.value, basis.info)}`, tone: '' }]
+      if (unit === 'r') return [{ text: `1R ${distanceWords(size, basis.info)}`, tone: '' }]
+      return []
+    }
+    const mark = this.type === 'market' && quote ? (this.side === 'buy' ? quote.bid : quote.ask) : null
+
+    const trailUnit = this.exitUnit('trail', basis)
+    this.trailField.update({
+      text: this.trail.distance,
+      placeholder: 'none',
+      unit: trailUnit,
+      unitRefusals: refusals,
+      readout: plan.trail ? [...trailReadout(plan.trail, trailUnit, basis, mark, plan.stop ?? null), ...note(trailUnit)] : [],
+      presets: [0, 1].map((i) => {
+        const distance = this.trailPresetDistance(i, basis)
+        return {
+          text: i === 0 ? '1R' : '2 ATR',
+          title: i === 0 ? "Trail at the stop loss's distance" : `Trail at twice the ATR${basis.atr ? `(${basis.atr.period}) of the ${basis.atr.interval} chart` : ''}`,
+          refusal: i === 0 ? rRefusal : atrRefusal,
+          active: distance !== null && plan.trail !== undefined && Math.abs(plan.trail.distance - distance) <= Math.max(distance * 1e-6, (this.info().pipSize ?? 0) * 0.05)
+        }
+      }),
+      removable: this.trail.distance !== '',
+      problem: plan.problems.trail ?? null,
+      pending: false,
+      stepRefusal: plan.entry === null ? 'No price yet' : null,
+      extras: [
+        { text: this.trail.start, placeholder: 'fill' },
+        { text: this.trail.step, placeholder: 'any' }
+      ]
+    })
+
+    const beUnit = this.exitUnit('breakeven', basis)
+    this.breakevenField.update({
+      text: this.breakeven.trigger,
+      placeholder: 'none',
+      unit: beUnit,
+      unitRefusals: refusals,
+      readout: plan.breakeven ? [...breakevenReadout(plan.breakeven, basis), ...this.breakevenWarning(plan), ...note(beUnit)] : [],
+      presets: [{ text: '1R', title: 'Move the stop to the entry once the trade is 1R in profit', refusal: rRefusal }],
+      removable: this.breakeven.trigger !== '',
+      problem: plan.problems.breakeven ?? null,
+      pending: false,
+      stepRefusal: plan.entry === null ? 'No price yet' : null,
+      extras: [{ text: this.breakeven.lock, placeholder: '0' }]
+    })
+
+    const notifyUnit = this.exitUnit('notify', basis)
+    const listed = milestoneValues(this.notify)
+    this.notifyField.update({
+      text: this.notify,
+      placeholder: notifyUnit === 'r' ? 'e.g. 1, 2, -0.5' : 'none',
+      unit: notifyUnit,
+      unitRefusals: refusals,
+      readout: plan.milestones.length > 0 ? [...milestonesReadout(plan.milestones, basis), ...note(notifyUnit)] : [],
+      presets: NOTIFY_MULTIPLES.map((multiple) => {
+        const value = this.notifyValue(multiple, basis)
+        return {
+          text: `${multiple}R`,
+          title: `Notify the first time the trade is ${multiple}R in profit (click again to remove)`,
+          refusal: rRefusal,
+          active: value !== null && listed.includes(value)
+        }
+      }),
+      removable: this.notify !== '',
+      problem: plan.problems.notify ?? null,
+      pending: false
+    })
   }
 
   // -- modes --------------------------------------------------------------------------------------
@@ -670,7 +961,19 @@ export class OrderTicket implements DraftController {
     const fail = (slot: Slot, problem: string): void => {
       problems[slot] ??= problem
     }
-    const plan: Plan = { units: null, entry: null, price: undefined, stop: undefined, target: undefined, problems, problem: null, ctx }
+    const plan: Plan = {
+      units: null,
+      entry: null,
+      price: undefined,
+      stop: undefined,
+      target: undefined,
+      trail: undefined,
+      breakeven: undefined,
+      milestones: [],
+      problems,
+      problem: null,
+      ctx
+    }
 
     if (!quote) fail('general', this.session.ready ? 'No quote yet' : 'Connecting…')
     if (this.type !== 'market') {
@@ -735,7 +1038,22 @@ export class OrderTicket implements DraftController {
         if (refusal) fail('target', refusal)
       }
     }
-    plan.problem = problems.general ?? problems.price ?? problems.size ?? problems.stop ?? problems.target ?? null
+    // Exit management, measured from the entry with R as the stop's distance.
+    const basis = this.exitBasis(plan)
+    const exit = <T>(slot: ExitRole, parse: () => T): T | undefined => {
+      try {
+        return parse()
+      } catch (err) {
+        fail(slot, err instanceof Error ? err.message : 'Invalid')
+        return undefined
+      }
+    }
+    plan.trail = exit('trail', () => parseTrail(this.trail, this.exitUnit('trail', basis), basis)) ?? undefined
+    plan.breakeven = exit('breakeven', () => parseBreakeven(this.breakeven, this.exitUnit('breakeven', basis), basis)) ?? undefined
+    plan.milestones = exit('notify', () => parseMilestones(this.notify, this.exitUnit('notify', basis), basis)) ?? []
+
+    plan.problem =
+      problems.general ?? problems.price ?? problems.size ?? problems.stop ?? problems.target ?? problems.trail ?? problems.breakeven ?? problems.notify ?? null
     return plan
   }
 
@@ -841,6 +1159,8 @@ export class OrderTicket implements DraftController {
       const rr = rewardToRisk(outcome(this.side, plan.units, plan.entry, plan.stop, ctx), outcome(this.side, plan.units, plan.entry, plan.target, ctx))
       if (rr !== null) rows.push({ label: 'R:R', value: rr.toFixed(2) })
     }
+    this.renderExits(plan, quote)
+
     this.figures.update(rows)
     if (document.activeElement !== this.noteInput) this.noteInput.value = this.note
 
@@ -858,7 +1178,14 @@ export class OrderTicket implements DraftController {
     this.submitButton.className = `wd-tk-btn wd-tk-submit is-${this.side}${armed ? ' is-armed' : ''}`
     allow(this.submitButton, !quote ? (this.session.ready ? 'No quote yet' : 'Connecting…') : plan.problem, armed ? 'Press again to send it' : 'Enter in any field does the same')
     this.oneClick.checked = prefs.oneClick
-    this.resetButton.hidden = this.type === 'market' && this.stopLoss === '' && this.takeProfit === '' && this.note === ''
+    this.resetButton.hidden =
+      this.type === 'market' &&
+      this.stopLoss === '' &&
+      this.takeProfit === '' &&
+      this.note === '' &&
+      this.trail.distance === '' &&
+      this.breakeven.trigger === '' &&
+      this.notify === ''
     this.draftListener?.()
   }
 
@@ -896,7 +1223,13 @@ export class OrderTicket implements DraftController {
               ? this.stopField.field.input
               : problems.target
                 ? this.targetField.field.input
-                : null
+                : problems.trail
+                  ? this.trailField.input
+                  : problems.breakeven
+                    ? this.breakevenField.input
+                    : problems.notify
+                      ? this.notifyField.input
+                      : null
       if (input) input.focus()
       else this.showError(plan.problem ?? 'Nothing to send')
       return
@@ -923,7 +1256,10 @@ export class OrderTicket implements DraftController {
         price: plan.price,
         stopLoss: plan.stop,
         takeProfit: plan.target,
-        label: this.note.trim() || undefined
+        label: this.note.trim() || undefined,
+        trailingStop: plan.trail,
+        breakeven: plan.breakeven,
+        milestones: plan.milestones.length > 0 ? plan.milestones : undefined
       })
       // Back to a clean market order: a type kept without its price is a draft with nothing to
       // show, which would sit on the chart and keep the order just placed dimmed behind it.

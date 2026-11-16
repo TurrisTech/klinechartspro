@@ -1,6 +1,6 @@
 import { registerOverlay, utils } from 'klinecharts'
 import type { OverlayFigure, OverlayTemplate } from 'klinecharts'
-import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './api'
+import type { ManagementPatch, SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './api'
 
 // The two chart figures a trade is drawn with, registered once per page.
 //
@@ -357,9 +357,54 @@ export function workingFor(snapshot: SimSnapshot, key: string): { trades: SimTra
 export interface Amendment {
   owner: 'trade' | 'order'
   id: string
-  role: 'stop' | 'target' | 'order'
+  /** `manage`: a change to the exit management (a trail, a breakeven, the milestones), carried in
+   * `manage`; `price` and `from` are then null. */
+  role: 'stop' | 'target' | 'order' | 'manage'
   price: number | null
   from: number | null
+  /** role `manage`: only the keys it changes; null removes one (null or [] the milestones). */
+  manage?: ManagementPatch
+}
+
+/** A record with `patch` applied, as the engine would leave it before any price: a new trail or
+ * breakeven not yet priced, new milestones not yet reached. Pure. */
+export function withManagement<T extends SimTrade | SimOrder>(record: T, patch: ManagementPatch): T {
+  const next = { ...record }
+  if (patch.trailingStop !== undefined) {
+    const t = patch.trailingStop
+    next.trailingStop = t ? { distance: t.distance, activation: t.activation ?? null, step: t.step ?? null, best: null } : null
+  }
+  if (patch.breakeven !== undefined) {
+    const b = patch.breakeven
+    next.breakeven = b ? { trigger: b.trigger, offset: b.offset ?? 0, done: false } : null
+  }
+  if (patch.milestones !== undefined) {
+    next.milestones = (patch.milestones ?? []).map((m) => ({ distance: m.distance, label: m.label ?? null, reachedAt: null, price: null }))
+  }
+  return next
+}
+
+/** Whether `patch` would leave `record`'s management as it is (so there is nothing to ask). */
+export function managementUnchanged(record: SimTrade | SimOrder, patch: ManagementPatch): boolean {
+  const same = (a: number | null | undefined, b: number | null | undefined): boolean => (a ?? null) === (b ?? null)
+  if (patch.trailingStop !== undefined) {
+    const now = record.trailingStop ?? null
+    const t = patch.trailingStop
+    if ((now === null) !== (t === null)) return false
+    if (now && t && !(same(now.distance, t.distance) && same(now.activation, t.activation) && same(now.step, t.step))) return false
+  }
+  if (patch.breakeven !== undefined) {
+    const now = record.breakeven ?? null
+    const b = patch.breakeven
+    if ((now === null) !== (b === null)) return false
+    if (now && b && !(same(now.trigger, b.trigger) && same(now.offset, b.offset ?? 0))) return false
+  }
+  if (patch.milestones !== undefined) {
+    const now = (record.milestones ?? []).map((m) => m.distance)
+    const next = (patch.milestones ?? []).map((m) => m.distance)
+    if (now.length !== next.length || now.some((d, i) => d !== next[i])) return false
+  }
+  return true
 }
 
 /** The level a working trade or order has now, null when it has none, or undefined when it is not
@@ -368,15 +413,17 @@ export function currentLevel(
   snapshot: SimSnapshot,
   owner: 'trade' | 'order',
   id: string,
-  role: 'stop' | 'target' | 'order'
+  role: 'stop' | 'target' | 'order' | 'manage'
 ): number | null | undefined {
   if (owner === 'trade') {
     const trade = snapshot.trades.find((t) => t.id === id && t.closedAt === null)
     if (!trade || role === 'order') return undefined
+    if (role === 'manage') return null
     return role === 'stop' ? trade.stopLoss : trade.takeProfit
   }
   const order = snapshot.orders.find((o) => o.id === id && o.status === 'pending')
   if (!order) return undefined
+  if (role === 'manage') return null
   return role === 'stop' ? order.stopLoss : role === 'target' ? order.takeProfit : order.price
 }
 
@@ -384,7 +431,12 @@ export function currentLevel(
  * waits, so the line, its bands, its label and the card all show the proposed level. A removal
  * is not applied: the line stays, marked, until it is confirmed. Pure. */
 export function applyAmendment(snapshot: SimSnapshot, amendment: Amendment | null): SimSnapshot {
-  if (!amendment || amendment.price === null) return snapshot
+  if (amendment?.role === 'manage' && amendment.manage) {
+    const patch = amendment.manage
+    if (amendment.owner === 'trade') return { ...snapshot, trades: snapshot.trades.map((t) => (t.id === amendment.id ? withManagement(t, patch) : t)) }
+    return { ...snapshot, orders: snapshot.orders.map((o) => (o.id === amendment.id ? withManagement(o, patch) : o)) }
+  }
+  if (!amendment || amendment.price === null || amendment.role === 'manage') return snapshot
   const { owner, id, role, price } = amendment
   if (owner === 'trade') {
     if (role === 'order') return snapshot

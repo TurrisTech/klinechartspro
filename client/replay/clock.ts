@@ -80,13 +80,28 @@ export function intersectsWorking(band: Band, orders: readonly SimOrder[], trade
     const [lo, hi] = t.side === 'buy' ? [band.bidLow, band.bidHigh] : [band.askLow, band.askHigh]
     if (t.stopLoss !== null && t.stopLoss >= lo && t.stopLoss <= hi) return true
     if (t.takeProfit !== null && t.takeProfit >= lo && t.takeProfit <= hi) return true
+    // Exit management (engine.ts): a milestone or a breakeven trigger inside the band, or a trail
+    // the band would move -- finer bars put the milestone at its bar and the trail on finer closes.
+    const d = t.side === 'buy' ? 1 : -1
+    for (const m of t.milestones ?? []) {
+      if (m.reachedAt !== null) continue
+      const level = t.entryPrice + d * m.distance
+      if (level >= lo && level <= hi) return true
+    }
+    if (t.breakeven && !t.breakeven.done) {
+      const level = t.entryPrice + d * t.breakeven.trigger
+      if (level >= lo && level <= hi) return true
+    }
+    const trail = t.trailingStop
+    if (trail && (trail.best === null || (d > 0 ? hi > trail.best : lo < trail.best))) return true
   }
   return false
 }
 
 /** Whether any sequence of bars could produce an event: a pending order (one that rests is
  * always a limit or a stop -- a market order fills on submission), or an open trade carrying
- * a stop loss or a take profit.
+ * a stop loss or a take profit -- or exit management: a trail, a breakeven not yet done, or a
+ * milestone not yet reached.
  *
  * False means the account cannot change however the price moves, which is what lets an
  * advance SEEK instead of walking (session.ts). The walk exists so that orders resting in
@@ -98,7 +113,10 @@ export function canFill(orders: readonly SimOrder[], trades: readonly SimTrade[]
     if (o.symbol === symbol && o.status === 'pending' && o.price !== null) return true
   }
   for (const t of trades) {
-    if (t.symbol === symbol && t.closedAt === null && (t.stopLoss !== null || t.takeProfit !== null)) return true
+    if (t.symbol !== symbol || t.closedAt !== null) continue
+    if (t.stopLoss !== null || t.takeProfit !== null) return true
+    // A trail or a breakeven moves the stop, and a milestone raises an event, with no level yet.
+    if (t.trailingStop || (t.breakeven && !t.breakeven.done) || (t.milestones ?? []).some((m) => m.reachedAt === null)) return true
   }
   return false
 }

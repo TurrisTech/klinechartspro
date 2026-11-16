@@ -10,6 +10,7 @@ import {
   formatUnitsShort,
   moveText
 } from './format'
+import { closeReasonWords, managementRows } from './exits'
 import type { InstrumentInfo } from './instrument'
 import { balancesBefore, closedShareOfBalance } from './ledger'
 import { amountText, type LevelBasis, levelReadout } from './levels'
@@ -105,6 +106,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
       { label: 'Take profit', value: level(order.takeProfit, orderBasis), tone: tone(f.target?.amount) }
     ]
     if (f.rewardToRisk !== null) rows.push({ label: 'R:R', value: f.rewardToRisk.toFixed(2) })
+    rows.push(...managementRows(order, info).map(({ label, value }) => ({ label, value })))
     rows.push(...sizeRows(order.units, ctx))
     rows.push({ label: 'Placed', value: `${formatInstant(order.createdAt)}${now !== null ? ` · ${formatDuration(now - order.createdAt)} ago` : ''}` })
     rows.push(...noteRows(order.label))
@@ -122,7 +124,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
   if (trade.closedAt !== null) {
     const exit = trade.closePrice !== null ? outcome(trade.side, trade.units, trade.entryPrice, trade.closePrice, ctx) : null
     const pnl = trade.realizedPnl ?? exit?.amount ?? null
-    const reason = { stop_loss: 'Stop loss', take_profit: 'Take profit', manual: 'Closed by hand', flatten: 'Flattened' }[trade.closeReason ?? 'manual']
+    const reason = closeReasonWords(trade)
     const rows: StatRow[] = [
       { label: 'Entry', value: formatPrice(trade.entryPrice, info.precision) },
       { label: 'Exit', value: `${formatPrice(trade.closePrice, info.precision)} · ${reason}` },
@@ -166,6 +168,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     { label: 'Take profit', value: level(trade.takeProfit, tradeBasis), tone: tone(f.target?.amount) }
   )
   if (f.rewardToRisk !== null) rows.push({ label: 'R:R', value: f.rewardToRisk.toFixed(2) })
+  rows.push(...managementRows(trade, info).map(({ label, value }) => ({ label, value })))
   rows.push(...sizeRows(trade.units, ctx))
   rows.push({ label: 'Opened', value: `${formatInstant(trade.openedAt)}${now !== null ? ` · ${formatDuration(now - trade.openedAt)}` : ''}` })
   rows.push(...noteRows(trade.label))

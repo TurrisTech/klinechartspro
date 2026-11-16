@@ -7,6 +7,7 @@ import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import { replayResults, resultHeadline, resultRows } from './results'
 import { lastPlayed, type ReplaySessionSummary, resumable, sessionFacts } from './sessions'
 import type { AdvanceResult, ReplayController } from './session'
+import type { SimTrade } from '../trading/api'
 import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
 import { dragByHandle } from '../chrome/drag'
 import { createDockableWindow } from '../chrome/window'
@@ -374,12 +375,18 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     // A price watch is a stop too, so a wall with watches and no alert can still run to the
     // next one.
     // Every enabled alert on the Alerts list, whatever instrument it watches -- and every price
-    // watch, resting order, stop loss and take profit, since each ends the run where it happens.
+    // watch, resting order, stop loss (trailing and breakeven too), take profit and milestone,
+    // since each ends the run where it happens.
     const alerts = controller.alertCount
     const working = controller.workingStops
-    const stops = alerts + controller.armedStops + working
+    const milestones = controller.pendingMilestones ?? 0
+    const stops = alerts + controller.armedStops + working + milestones
     next.disabled = busy || stops === 0
-    const also = [controller.armedStops > 0 ? 'a price watch fires' : null, working > 0 ? 'an order, stop loss or take profit fills' : null].filter((part) => part !== null)
+    const also = [
+      controller.armedStops > 0 ? 'a price watch fires' : null,
+      working > 0 ? 'an order, stop loss or take profit fills' : null,
+      milestones > 0 ? 'a trade reaches a "Notify at"' : null
+    ].filter((part) => part !== null)
     next.title =
       stops === 0
         ? 'Enable an alert (Alerts), place a price watch, or rest an order or a stop first'
@@ -404,7 +411,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     } else if (last) {
       // Absent until an advance has stopped.
       const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
-      reason.textContent = describeStop(last, controller.grid.schedule.timezone)
+      reason.textContent = describeStop(last, controller.grid.schedule.timezone, controller.snapshot.trades)
       reason.title = last.alert?.readings ? `${reason.textContent} — ${last.alert.readings}` : reason.textContent
       row.appendChild(reason)
     }
@@ -819,7 +826,7 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable || target.closest('.klinecharts-pro-pane-grip') !== null
 }
 
-function describeStop(result: AdvanceResult, zone: string): string {
+function describeStop(result: AdvanceResult, zone: string, trades?: readonly SimTrade[]): string {
   switch (result.reason) {
     case 'alert':
       return `Alert: ${result.alert?.name ?? ''}`
@@ -829,9 +836,14 @@ function describeStop(result: AdvanceResult, zone: string): string {
       return result.seeking === 'watches' ? 'The price is not reached before the end of the data' : 'No alert triggers before the end of the data'
     case 'fill': {
       // The event that ended it is the last the engine produced.
-      const last = [...result.events].reverse().find((e) => e.kind === 'fill' || e.kind === 'close')
+      const last = [...result.events].reverse().find((e) => e.kind === 'fill' || e.kind === 'close' || e.kind === 'milestone')
       if (last?.kind === 'fill') return 'Order filled'
-      return last?.reason === 'stop_loss' ? 'Stop loss hit' : last?.reason === 'take_profit' ? 'Take profit hit' : 'Trade closed'
+      if (last?.kind === 'milestone') return `Reached ${last.reason ?? 'a milestone'}`
+      if (last?.reason === 'stop_loss') {
+        const trade = trades?.find((t) => t.id === last.tradeId)
+        return trade?.stopMovedBy === 'trail' ? 'Trailing stop hit' : trade?.stopMovedBy === 'breakeven' ? 'Breakeven stop hit' : 'Stop loss hit'
+      }
+      return last?.reason === 'take_profit' ? 'Take profit hit' : 'Trade closed'
     }
     case 'watch': {
       const [first, ...rest] = result.observed

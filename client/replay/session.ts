@@ -128,6 +128,9 @@ export interface ReplayController {
   /** What can fill on the walked instrument -- resting orders, and open trades' stop loss or take
    * profit: Next alert stops where one does, too. */
   readonly workingStops: number
+  /** Milestones ("notify at") not yet reached on the instrument's open trades: each ends a run
+   * to the next event where a price reaches it. Optional for a controller without trading. */
+  readonly pendingMilestones?: number
   readonly storedIntervals: readonly string[]
   readonly intervalsInUse: readonly string[]
   readonly symbol: string
@@ -306,7 +309,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         price: order.price,
         stopLoss: order.stopLoss,
         takeProfit: order.takeProfit,
-        label: order.label
+        label: order.label,
+        trailingStop: order.trailingStop,
+        breakeven: order.breakeven,
+        milestones: order.milestones
       })
       return events
     })
@@ -318,14 +324,27 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   async modifyOrder(orderId: string, patch: OrderPatch): Promise<void> {
     this.act(() => {
-      this.engine.modifyOrder(orderId, { price: patch.price, stopLoss: patch.stopLoss, takeProfit: patch.takeProfit })
+      this.engine.modifyOrder(orderId, {
+        price: patch.price,
+        stopLoss: patch.stopLoss,
+        takeProfit: patch.takeProfit,
+        trailingStop: patch.trailingStop,
+        breakeven: patch.breakeven,
+        milestones: patch.milestones
+      })
       return []
     })
   }
 
   async modifyTrade(tradeId: string, patch: TradePatch): Promise<void> {
     this.act(() => {
-      this.engine.modifyTrade(tradeId, { stopLoss: patch.stopLoss, takeProfit: patch.takeProfit })
+      this.engine.modifyTrade(tradeId, {
+        stopLoss: patch.stopLoss,
+        takeProfit: patch.takeProfit,
+        trailingStop: patch.trailingStop,
+        breakeven: patch.breakeven,
+        milestones: patch.milestones
+      })
       return []
     })
   }
@@ -500,8 +519,19 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   get workingStops(): number {
     const orders = [...this.engine.orders.values()].filter((o) => o.symbol === this.symbol && o.status === 'pending' && o.price !== null).length
-    const trades = [...this.engine.trades.values()].filter((t) => t.symbol === this.symbol && t.closedAt === null && (t.stopLoss !== null || t.takeProfit !== null)).length
+    // A trail or a breakeven yet to move the stop counts as a stop: it is one, or will be.
+    const trades = [...this.engine.trades.values()].filter(
+      (t) => t.symbol === this.symbol && t.closedAt === null && (t.stopLoss !== null || t.takeProfit !== null || t.trailingStop || (t.breakeven && !t.breakeven.done))
+    ).length
     return orders + trades
+  }
+
+  get pendingMilestones(): number {
+    let n = 0
+    for (const t of this.engine.trades.values()) {
+      if (t.symbol === this.symbol && t.closedAt === null) n += (t.milestones ?? []).filter((m) => m.reachedAt === null).length
+    }
+    return n
   }
 
   get alertCount(): number {
@@ -611,8 +641,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const fillable = canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
       // A run to the next event stops at the first one -- an alert, a watch firing, or a fill or a
       // close: a stop loss or a take profit hit, a resting order filled (user, 2026-10-28: "when
-      // price hits a stop or take profit, that is also another next alert"). Step and Play pause
-      // on one only with Pause on fill set.
+      // price hits a stop or take profit, that is also another next alert") -- a trailing or
+      // breakeven stop among them -- or a trade reaching a milestone, its "notify at" (user,
+      // 2026-11-15: "make sure that these will stop at Next alert"). Step and Play pause on one
+      // only with Pause on fill set.
       const pauseOn = this.pauseOnFill || seeking !== null
       // Nothing that could stop the run at all: nowhere to go.
       const nowhere = watchRun && !cancelled && this.armedStops === 0 && !fillable
@@ -675,7 +707,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
             // left it -- and the BASE bar, not the refinement's parts.
             const raised = this.opts.observer?.onBar(bar) ?? []
             this.cursor = bar.end
-            if (pauseOn && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+            if (pauseOn && produced.some(stopsARun)) {
               paused = true
               break walk
             }
@@ -970,7 +1002,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         trail.consumed.push(bar)
         trail.last = bar
         this.cursor = bar.end
-        if (trail.pauseOn && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+        if (trail.pauseOn && produced.some(stopsARun)) {
           trail.paused = true
           return true
         }
@@ -996,7 +1028,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         trail.consumed.push(candle)
         trail.last = candle
         this.cursor = candle.end
-        if (trail.pauseOn && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+        if (trail.pauseOn && produced.some(stopsARun)) {
           trail.paused = true
           return true
         }
@@ -1166,3 +1198,9 @@ export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
 }
 
 export type { SimAnswer }
+
+/** What ends a run to the next event (and a Step or Play with Pause on fill): a fill, a close --
+ * a stop loss, take profit, trailing or breakeven stop hit -- or a milestone reached. */
+function stopsARun(event: SimEvent): boolean {
+  return event.kind === 'fill' || event.kind === 'close' || event.kind === 'milestone'
+}

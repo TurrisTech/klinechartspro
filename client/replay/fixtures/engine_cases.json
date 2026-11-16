@@ -92,7 +92,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o3",
@@ -108,7 +111,10 @@
       "filledAt": 1,
       "fillPrice": 1.1,
       "tradeId": "t4",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -126,7 +132,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t4",
@@ -142,7 +152,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -263,7 +277,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -281,7 +298,11 @@
       "closePrice": 1.1012,
       "closeReason": "manual",
       "realizedPnl": 9.999999999998899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -387,7 +408,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -405,7 +429,11 @@
       "closePrice": 1.1,
       "closeReason": "manual",
       "realizedPnl": -0.11999999999998678,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t3",
@@ -421,7 +449,11 @@
       "closePrice": 1.1,
       "closeReason": "manual",
       "realizedPnl": -0.07999999999999119,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -601,7 +633,10 @@
       "filledAt": 3,
       "fillPrice": 1.099,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -619,7 +654,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -704,7 +743,10 @@
       "filledAt": 3,
       "fillPrice": 1.101,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -722,7 +764,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -845,7 +891,10 @@
       "filledAt": 3,
       "fillPrice": 1.101,
       "tradeId": "t3",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o2",
@@ -861,7 +910,10 @@
       "filledAt": 4,
       "fillPrice": 1.099,
       "tradeId": "t4",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -879,7 +931,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t4",
@@ -895,7 +951,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -984,7 +1044,10 @@
       "filledAt": 2,
       "fillPrice": 1.0972,
       "tradeId": "t3",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o2",
@@ -1000,7 +1063,10 @@
       "filledAt": 2,
       "fillPrice": 1.097,
       "tradeId": "t4",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -1018,7 +1084,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t4",
@@ -1034,7 +1104,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -1180,7 +1254,10 @@
       "filledAt": null,
       "fillPrice": null,
       "tradeId": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": []
@@ -1363,7 +1440,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -1381,7 +1461,11 @@
       "closePrice": 1.099,
       "closeReason": "stop_loss",
       "realizedPnl": -1.2000000000000899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -1474,7 +1558,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -1492,7 +1579,11 @@
       "closePrice": 1.102,
       "closeReason": "take_profit",
       "realizedPnl": 1.8000000000000238,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -1583,7 +1674,10 @@
       "filledAt": 1,
       "fillPrice": 1.1,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -1601,7 +1695,11 @@
       "closePrice": 1.098,
       "closeReason": "take_profit",
       "realizedPnl": 2.0000000000000018,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -1694,7 +1792,10 @@
       "filledAt": 1,
       "fillPrice": 1.1,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -1712,7 +1813,11 @@
       "closePrice": 1.101,
       "closeReason": "stop_loss",
       "realizedPnl": -0.9999999999998899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -1843,7 +1948,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -1861,7 +1969,11 @@
       "closePrice": 1.1,
       "closeReason": "manual",
       "realizedPnl": -0.19999999999997797,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -1999,7 +2111,10 @@
       "filledAt": 120000,
       "fillPrice": 1.099,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2017,7 +2132,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2110,7 +2229,10 @@
       "filledAt": 60000,
       "fillPrice": 1.0972,
       "tradeId": "t3",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o2",
@@ -2126,7 +2248,10 @@
       "filledAt": 60000,
       "fillPrice": 1.097,
       "tradeId": "t4",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2144,7 +2269,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t4",
@@ -2160,7 +2289,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2251,7 +2384,10 @@
       "filledAt": 60000,
       "fillPrice": 1.103,
       "tradeId": "t3",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o2",
@@ -2267,7 +2403,10 @@
       "filledAt": 60000,
       "fillPrice": 1.1032,
       "tradeId": "t4",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2285,7 +2424,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t4",
@@ -2301,7 +2444,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2383,7 +2530,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2401,7 +2551,11 @@
       "closePrice": 1.099,
       "closeReason": "stop_loss",
       "realizedPnl": -1.2000000000000899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2483,7 +2637,10 @@
       "filledAt": 1,
       "fillPrice": 1.1,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2501,7 +2658,11 @@
       "closePrice": 1.101,
       "closeReason": "stop_loss",
       "realizedPnl": -0.9999999999998899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2604,7 +2765,10 @@
       "filledAt": 60000,
       "fillPrice": 1.101,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2622,7 +2786,11 @@
       "closePrice": 1.1,
       "closeReason": "stop_loss",
       "realizedPnl": -0.9999999999998899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2712,7 +2880,10 @@
       "filledAt": 60000,
       "fillPrice": 1.099,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2730,7 +2901,11 @@
       "closePrice": 1.1005,
       "closeReason": "take_profit",
       "realizedPnl": 1.5000000000000568,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2812,7 +2987,10 @@
       "filledAt": 1,
       "fillPrice": 1.1,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2830,7 +3008,11 @@
       "closePrice": 1.1022,
       "closeReason": "stop_loss",
       "realizedPnl": -2.1999999999999797,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -2913,7 +3095,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -2931,7 +3116,11 @@
       "closePrice": 1.103,
       "closeReason": "take_profit",
       "realizedPnl": 2.7999999999999137,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -3018,7 +3207,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -3036,7 +3228,11 @@
       "closePrice": 1.099,
       "closeReason": "stop_loss",
       "realizedPnl": -1.2000000000000899,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -3111,7 +3307,10 @@
       "filledAt": null,
       "fillPrice": null,
       "tradeId": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": []
@@ -3229,7 +3428,10 @@
       "filledAt": 120000,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o3",
@@ -3245,7 +3447,10 @@
       "filledAt": null,
       "fillPrice": null,
       "tradeId": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -3263,7 +3468,11 @@
       "closePrice": 1.1,
       "closeReason": "manual",
       "realizedPnl": -0.19999999999997797,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -3364,7 +3573,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o3",
@@ -3380,7 +3592,10 @@
       "filledAt": null,
       "fillPrice": null,
       "tradeId": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -3398,7 +3613,11 @@
       "closePrice": 1.1,
       "closeReason": "flatten",
       "realizedPnl": -0.19999999999997797,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -3529,7 +3748,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o3",
@@ -3545,7 +3767,10 @@
       "filledAt": 1,
       "fillPrice": 150.02,
       "tradeId": "t4",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      },
      {
       "id": "o5",
@@ -3561,7 +3786,10 @@
       "filledAt": null,
       "fillPrice": null,
       "tradeId": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -3579,7 +3807,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      },
      {
       "id": "t4",
@@ -3595,7 +3827,11 @@
       "closePrice": 150.0,
       "closeReason": "flatten",
       "realizedPnl": -20.000000000010232,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -3666,7 +3902,10 @@
       "filledAt": 1,
       "fillPrice": 1.1002,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -3684,7 +3923,11 @@
       "closePrice": null,
       "closeReason": null,
       "realizedPnl": null,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
      }
     ]
    }
@@ -3796,7 +4039,10 @@
       "filledAt": 50,
       "fillPrice": 1.099,
       "tradeId": "t2",
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
      }
     ],
     "trades": [
@@ -3814,7 +4060,2480 @@
       "closePrice": 1.09,
       "closeReason": "take_profit",
       "realizedPnl": 8.999999999999897,
-      "label": null
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "a trailing stop with no stop loss gets one at the fill and follows the best bid",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "trailingStop": {
+       "distance": 0.001
+      }
+     },
+     "expect": {
+      "order": {
+       "id": "o1",
+       "status": "filled"
+      },
+      "events": [
+       {
+        "kind": "fill",
+        "tradeId": "t2"
+       }
+      ]
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.099,
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.1005
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.0995
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1002
+     },
+     "expect": {
+      "events": []
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.0995
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.101
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 5,
+      "bid": 1.1
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "close",
+        "tradeId": "t2",
+        "price": 1.1,
+        "reason": "stop_loss"
+       }
+      ]
+     }
+    },
+    {
+     "assert": {
+      "balance": 99998.0,
+      "trades": {
+       "t2": {
+        "closeReason": "stop_loss",
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    },
+    {
+     "kind": "close",
+     "time": 5,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.1,
+     "reason": "stop_loss"
+    }
+   ],
+   "finalState": {
+    "balance": 99998.0,
+    "clock": 5,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.1,
+      "takeProfit": null,
+      "closedAt": 5,
+      "closePrice": 1.1,
+      "closeReason": "stop_loss",
+      "realizedPnl": -1.9999999999997797,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": 1.101
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a short's trailing stop follows the best ask from above",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.2
+     }
+    },
+    {
+     "submit": {
+      "side": "sell",
+      "type": "market",
+      "units": 10000,
+      "trailingStop": {
+       "distance": 0.0015
+      }
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.2017
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.199
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.2007
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1995
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.2007
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.2005
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "close",
+        "price": 1.2007,
+        "reason": "stop_loss"
+       }
+      ]
+     }
+    },
+    {
+     "assert": {
+      "balance": 99993.0
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.2,
+     "reason": null
+    },
+    {
+     "kind": "close",
+     "time": 4,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.2007,
+     "reason": "stop_loss"
+    }
+   ],
+   "finalState": {
+    "balance": 99993.0,
+    "clock": 4,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "sell",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.2,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.0015,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "sell",
+      "units": 10000,
+      "entryPrice": 1.2,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.2007,
+      "takeProfit": null,
+      "closedAt": 4,
+      "closePrice": 1.2007,
+      "closeReason": "stop_loss",
+      "realizedPnl": -7.0000000000014495,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.0015,
+       "activation": null,
+       "step": null,
+       "best": 1.1992
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a trail with an activation waits until the best bid is that far in profit",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "stopLoss": 1.095,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": 0.002
+      }
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.095,
+        "stopMovedBy": null
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.1015
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.095,
+        "stopMovedBy": null
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1022
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1012,
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.103
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.102
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 4,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": 1.095,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": 0.002,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.102,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": 0.002,
+       "step": null,
+       "best": 1.103
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a trail with a step moves the stop only when it gains at least the step",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "trailingStop": {
+       "distance": 0.001,
+       "step": 0.0005
+      }
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.099
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.1003
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.099
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1005
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.0995
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.1009
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.0995
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 5,
+      "bid": 1.101
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 5,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": 0.0005,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.1,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": 0.0005,
+       "best": 1.101
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a stop loosened by hand stays where it was put until the price makes new ground",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "trailingStop": {
+       "distance": 0.001
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.101
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1
+       }
+      }
+     }
+    },
+    {
+     "modifyTrade": {
+      "id": "t2",
+      "stopLoss": 1.098
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.098,
+        "stopMovedBy": null
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1008
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.098
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.1012
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1002,
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 4,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.1002,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": 1.1012
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a trailed stop an ulp below its decimal is still reached by a quote at that decimal",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "trailingStop": {
+       "distance": 0.0015
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.1015
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "close",
+        "tradeId": "t2",
+        "price": 1.1,
+        "reason": "stop_loss"
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    },
+    {
+     "kind": "close",
+     "time": 3,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.0999999999999999,
+     "reason": "stop_loss"
+    }
+   ],
+   "finalState": {
+    "balance": 99998.0,
+    "clock": 3,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.0015,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.0999999999999999,
+      "takeProfit": null,
+      "closedAt": 3,
+      "closePrice": 1.0999999999999999,
+      "closeReason": "stop_loss",
+      "realizedPnl": -2.000000000002,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.0015,
+       "activation": null,
+       "step": null,
+       "best": 1.1015
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "an auto-breakeven moves the stop to the entry plus its offset, once",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "stopLoss": 1.098,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": 0.0001
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.101
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.098,
+        "stopMovedBy": null
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1012
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1003,
+        "stopMovedBy": "breakeven",
+        "breakeven": {
+         "trigger": 0.001,
+         "offset": 0.0001,
+         "done": true
+        }
+       }
+      }
+     }
+    },
+    {
+     "modifyTrade": {
+      "id": "t2",
+      "stopLoss": 1.099
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.102
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.099,
+        "stopMovedBy": null
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 4,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": 1.098,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": null,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": 0.0001,
+       "done": false
+      },
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.099,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": null,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": 0.0001,
+       "done": true
+      },
+      "milestones": [],
+      "stopMovedBy": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "a breakeven never loosens a stop that is already tighter",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "stopLoss": 1.0995,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": -0.001
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.1012
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.0995,
+        "stopMovedBy": null,
+        "breakeven": {
+         "trigger": 0.001,
+         "offset": -0.001,
+         "done": true
+        }
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 2,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": 1.0995,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": null,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": -0.001,
+       "done": false
+      },
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.0995,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": null,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": -0.001,
+       "done": true
+      },
+      "milestones": [],
+      "stopMovedBy": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "milestones are reached once each, on the closing side, and close nothing",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "stopLoss": 1.099,
+      "milestones": [
+       {
+        "distance": 0.0012,
+        "label": "+1R"
+       },
+       {
+        "distance": 0.0024,
+        "label": "+2R"
+       },
+       {
+        "distance": -0.0006,
+        "label": "-0.5R"
+       }
+      ]
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "fill",
+        "tradeId": "t2"
+       }
+      ]
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.1014
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "milestone",
+        "tradeId": "t2",
+        "price": 1.1014,
+        "reason": "+1R",
+        "time": 2
+       }
+      ]
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1015
+     },
+     "expect": {
+      "events": []
+     }
+    },
+    {
+     "quote": {
+      "t": 4,
+      "bid": 1.0996
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "milestone",
+        "tradeId": "t2",
+        "price": 1.0996,
+        "reason": "-0.5R"
+       }
+      ]
+     }
+    },
+    {
+     "quote": {
+      "t": 5,
+      "bid": 1.103
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "milestone",
+        "tradeId": "t2",
+        "price": 1.1026,
+        "reason": "+2R"
+       }
+      ]
+     }
+    },
+    {
+     "assert": {
+      "openTrades": 1,
+      "balance": 100000
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    },
+    {
+     "kind": "milestone",
+     "time": 2,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.1014000000000002,
+     "reason": "+1R"
+    },
+    {
+     "kind": "milestone",
+     "time": 4,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.0996000000000001,
+     "reason": "-0.5R"
+    },
+    {
+     "kind": "milestone",
+     "time": 5,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.1026,
+     "reason": "+2R"
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 5,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": 1.099,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.0012,
+        "label": "+1R",
+        "reachedAt": null,
+        "price": null
+       },
+       {
+        "distance": 0.0024,
+        "label": "+2R",
+        "reachedAt": null,
+        "price": null
+       },
+       {
+        "distance": -0.0006,
+        "label": "-0.5R",
+        "reachedAt": null,
+        "price": null
+       }
+      ]
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.099,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.0012,
+        "label": "+1R",
+        "reachedAt": 2,
+        "price": 1.1014000000000002
+       },
+       {
+        "distance": 0.0024,
+        "label": "+2R",
+        "reachedAt": 5,
+        "price": 1.1026
+       },
+       {
+        "distance": -0.0006,
+        "label": "-0.5R",
+        "reachedAt": 4,
+        "price": 1.0996000000000001
+       }
+      ],
+      "stopMovedBy": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "a short's milestones are measured on the ask, below its entry",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.2
+     }
+    },
+    {
+     "submit": {
+      "side": "sell",
+      "type": "market",
+      "units": 10000,
+      "milestones": [
+       {
+        "distance": 0.001
+       }
+      ]
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.199
+     },
+     "expect": {
+      "events": []
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1988
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "milestone",
+        "tradeId": "t2",
+        "price": 1.199,
+        "reason": null
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.2,
+     "reason": null
+    },
+    {
+     "kind": "milestone",
+     "time": 3,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.199,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 3,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "sell",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.2,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.001,
+        "label": null,
+        "reachedAt": null,
+        "price": null
+       }
+      ]
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "sell",
+      "units": 10000,
+      "entryPrice": 1.2,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": null,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.001,
+        "label": null,
+        "reachedAt": 3,
+        "price": 1.199
+       }
+      ],
+      "stopMovedBy": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "on a bar a milestone is reached by the range while the trail follows the close",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "trailingStop": {
+       "distance": 0.001
+      },
+      "milestones": [
+       {
+        "distance": 0.002,
+        "label": "+2R"
+       }
+      ]
+     }
+    },
+    {
+     "bar": {
+      "t": 60000,
+      "o": 1.1,
+      "h": 1.103,
+      "l": 1.0995,
+      "c": 1.101
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "milestone",
+        "tradeId": "t2",
+        "price": 1.1022,
+        "reason": "+2R",
+        "time": 60000
+       }
+      ]
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1,
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    },
+    {
+     "bar": {
+      "t": 120000,
+      "o": 1.1005,
+      "h": 1.1008,
+      "l": 1.0999,
+      "c": 1.1004
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "close",
+        "tradeId": "t2",
+        "price": 1.1,
+        "reason": "stop_loss",
+        "time": 120000
+       }
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    },
+    {
+     "kind": "milestone",
+     "time": 60000,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.1022,
+     "reason": "+2R"
+    },
+    {
+     "kind": "close",
+     "time": 120000,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.1,
+     "reason": "stop_loss"
+    }
+   ],
+   "finalState": {
+    "balance": 99998.0,
+    "clock": 180000,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.002,
+        "label": "+2R",
+        "reachedAt": null,
+        "price": null
+       }
+      ]
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.1,
+      "takeProfit": null,
+      "closedAt": 120000,
+      "closePrice": 1.1,
+      "closeReason": "stop_loss",
+      "realizedPnl": -1.9999999999997797,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": 1.101
+      },
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.002,
+        "label": "+2R",
+        "reachedAt": 60000,
+        "price": 1.1022
+       }
+      ],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a trade a bar opens judges its milestones and its trail on the bar's close only",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "limit",
+      "units": 10000,
+      "price": 1.099,
+      "trailingStop": {
+       "distance": 0.001
+      },
+      "milestones": [
+       {
+        "distance": 0.001,
+        "label": "+1"
+       }
+      ]
+     }
+    },
+    {
+     "bar": {
+      "t": 60000,
+      "o": 1.1,
+      "h": 1.1015,
+      "l": 1.0985,
+      "c": 1.0995
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "fill",
+        "orderId": "o1",
+        "tradeId": "t2",
+        "price": 1.099
+       }
+      ]
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.0985,
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 60000,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.099,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 120000,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "limit",
+      "units": 10000,
+      "price": 1.099,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 60000,
+      "fillPrice": 1.099,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.001,
+        "label": "+1",
+        "reachedAt": null,
+        "price": null
+       }
+      ]
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.099,
+      "openedAt": 60000,
+      "orderId": "o1",
+      "stopLoss": 1.0985,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": null,
+       "step": null,
+       "best": 1.0995
+      },
+      "breakeven": null,
+      "milestones": [
+       {
+        "distance": 0.001,
+        "label": "+1",
+        "reachedAt": null,
+        "price": null
+       }
+      ],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "a trail set on an open trade moves the stop at once; unset removes it and leaves the stop",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "stopLoss": 1.095
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.102
+     }
+    },
+    {
+     "modifyTrade": {
+      "id": "t2",
+      "trailingStop": {
+       "distance": 0.001
+      }
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.101,
+        "stopMovedBy": "trail",
+        "trailingStop": {
+         "distance": 0.001,
+         "activation": null,
+         "step": null,
+         "best": 1.102
+        }
+       }
+      }
+     }
+    },
+    {
+     "modifyTrade": {
+      "id": "t2",
+      "trailingStop": "unset"
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.101,
+        "trailingStop": null
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.103
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.101
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 3,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": 1.095,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": 1.1010000000000002,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     }
+    ]
+   }
+  },
+  {
+   "name": "milestones set on an open trade start unreached and a price already past them reports them",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 10000
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.103
+     }
+    },
+    {
+     "modifyTrade": {
+      "id": "t2",
+      "milestones": [
+       {
+        "distance": 0.002,
+        "label": "+20"
+       }
+      ]
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.1029
+     },
+     "expect": {
+      "events": [
+       {
+        "kind": "milestone",
+        "tradeId": "t2",
+        "price": 1.1022,
+        "reason": "+20"
+       }
+      ]
+     }
+    },
+    {
+     "modifyTrade": {
+      "id": "t2",
+      "milestones": []
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "milestones": []
+       }
+      }
+     }
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 1,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1002,
+     "reason": null
+    },
+    {
+     "kind": "milestone",
+     "time": 3,
+     "orderId": null,
+     "tradeId": "t2",
+     "price": 1.1022,
+     "reason": "+20"
+    }
+   ],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 3,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "market",
+      "units": 10000,
+      "price": null,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 1,
+      "fillPrice": 1.1002,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 10000,
+      "entryPrice": 1.1002,
+      "openedAt": 1,
+      "orderId": "o1",
+      "stopLoss": null,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": null,
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": null
+     }
+    ]
+   }
+  },
+  {
+   "name": "exit management is refused when it cannot work",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 1000,
+      "trailingStop": {
+       "distance": 0
+      }
+     },
+     "error": "distance must be positive"
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 1000,
+      "trailingStop": {
+       "distance": 0.001,
+       "step": 0
+      }
+     },
+     "error": "step must be positive"
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 1000,
+      "trailingStop": {
+       "distance": 0.001,
+       "activation": -0.001
+      }
+     },
+     "error": "activation must be zero or more"
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 1000,
+      "breakeven": {
+       "trigger": 0.001,
+       "offset": 0.001
+      }
+     },
+     "error": "offset must be below its trigger"
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 1000,
+      "breakeven": {
+       "trigger": 0
+      }
+     },
+     "error": "trigger must be positive"
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "market",
+      "units": 1000,
+      "milestones": [
+       {
+        "distance": 0
+       }
+      ]
+     },
+     "error": "non-zero"
+    },
+    {
+     "assert": {
+      "openTrades": 0,
+      "pendingOrders": 0
+     }
+    }
+   ],
+   "expect": [],
+   "finalState": {
+    "balance": 100000.0,
+    "clock": 1,
+    "orders": [],
+    "trades": []
+   }
+  },
+  {
+   "name": "a pending order carries its trail to its trade, and a partial close keeps it on both parts",
+   "setup": {
+    "balance": 100000
+   },
+   "feed": [
+    {
+     "quote": {
+      "t": 1,
+      "bid": 1.1
+     }
+    },
+    {
+     "submit": {
+      "side": "buy",
+      "type": "stop",
+      "units": 10000,
+      "price": 1.101,
+      "trailingStop": {
+       "distance": 0.001
+      }
+     }
+    },
+    {
+     "modifyOrder": {
+      "id": "o1",
+      "trailingStop": {
+       "distance": 0.002
+      }
+     }
+    },
+    {
+     "assert": {
+      "orders": {
+       "o1": {
+        "trailingStop": {
+         "distance": 0.002,
+         "activation": null,
+         "step": null,
+         "best": null
+        }
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 2,
+      "bid": 1.101
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.099,
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    },
+    {
+     "closeTrade": {
+      "id": "t2",
+      "units": 4000
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "units": 6000,
+        "stopLoss": 1.099,
+        "trailingStop": {
+         "distance": 0.002,
+         "activation": null,
+         "step": null,
+         "best": 1.101
+        }
+       },
+       "t3": {
+        "units": 4000,
+        "closeReason": "manual",
+        "stopMovedBy": "trail"
+       }
+      }
+     }
+    },
+    {
+     "quote": {
+      "t": 3,
+      "bid": 1.102
+     }
+    },
+    {
+     "assert": {
+      "trades": {
+       "t2": {
+        "stopLoss": 1.1
+       }
+      }
+     }
+    },
+    {
+     "modifyOrder": {
+      "id": "o1",
+      "trailingStop": "unset"
+     },
+     "error": "is filled"
+    }
+   ],
+   "expect": [
+    {
+     "kind": "fill",
+     "time": 2,
+     "orderId": "o1",
+     "tradeId": "t2",
+     "price": 1.1012,
+     "reason": null
+    },
+    {
+     "kind": "close",
+     "time": 2,
+     "orderId": null,
+     "tradeId": "t3",
+     "price": 1.101,
+     "reason": "manual"
+    }
+   ],
+   "finalState": {
+    "balance": 99999.2,
+    "clock": 3,
+    "orders": [
+     {
+      "id": "o1",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "type": "stop",
+      "units": 10000,
+      "price": 1.101,
+      "stopLoss": null,
+      "takeProfit": null,
+      "status": "filled",
+      "createdAt": 1,
+      "filledAt": 2,
+      "fillPrice": 1.1012,
+      "tradeId": "t2",
+      "label": null,
+      "trailingStop": {
+       "distance": 0.002,
+       "activation": null,
+       "step": null,
+       "best": null
+      },
+      "breakeven": null,
+      "milestones": []
+     }
+    ],
+    "trades": [
+     {
+      "id": "t2",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 6000,
+      "entryPrice": 1.1012,
+      "openedAt": 2,
+      "orderId": "o1",
+      "stopLoss": 1.1,
+      "takeProfit": null,
+      "closedAt": null,
+      "closePrice": null,
+      "closeReason": null,
+      "realizedPnl": null,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.002,
+       "activation": null,
+       "step": null,
+       "best": 1.102
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
+     },
+     {
+      "id": "t3",
+      "symbol": "oanda:EUR_USD",
+      "side": "buy",
+      "units": 4000,
+      "entryPrice": 1.1012,
+      "openedAt": 2,
+      "orderId": "o1",
+      "stopLoss": 1.099,
+      "takeProfit": null,
+      "closedAt": 2,
+      "closePrice": 1.101,
+      "closeReason": "manual",
+      "realizedPnl": -0.7999999999999119,
+      "label": null,
+      "trailingStop": {
+       "distance": 0.002,
+       "activation": null,
+       "step": null,
+       "best": 1.101
+      },
+      "breakeven": null,
+      "milestones": [],
+      "stopMovedBy": "trail"
      }
     ]
    }

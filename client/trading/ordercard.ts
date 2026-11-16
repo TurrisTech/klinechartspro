@@ -1,10 +1,33 @@
-import type { SimOrder, SimTrade } from './api'
+import type { ManagementPatch, SimOrder, SimTrade } from './api'
+import {
+  type AtrReading,
+  breakevenReadout,
+  defaultExit,
+  distanceWords,
+  EXIT_UNITS,
+  type ExitBasis,
+  type ExitUnit,
+  exitText,
+  exitUnitRefusal,
+  labelValue,
+  milestonesReadout,
+  milestoneValues,
+  parseBreakeven,
+  parseMilestones,
+  parseTrail,
+  stepExitText,
+  toggleMilestone,
+  trailReadout,
+  unitSize,
+  usableExitUnit
+} from './exits'
 import { formatInstant, formatMoney, formatShare, formatPrice, formatUnitsShort, moveText } from './format'
 import {
   allow,
   armKey,
   ConfirmBar,
   type ConfirmView,
+  ExitField,
   FigureList,
   h,
   kbtn,
@@ -74,6 +97,10 @@ export type CardAction =
   | { kind: 'rewardTarget'; owner: Owner; id: string; ratio: number }
   /** How every stop and target is stated, here and in the trade box. */
   | { kind: 'unit'; mode: ProtectMode }
+  /** A change to a working position's trail, breakeven or milestones: proposed, like a level. */
+  | { kind: 'setManagement'; owner: Owner; id: string; patch: ManagementPatch }
+  /** How a trail, a breakeven or the milestones are stated, here and in the trade box. */
+  | { kind: 'exitUnit'; role: 'trail' | 'breakeven' | 'notify'; unit: ExitUnit }
   | { kind: 'flatten' }
   | { kind: 'cancelOrders' }
   /** The ticket's draft: add a level from its label, clear one, place it, or discard it. */
@@ -101,6 +128,11 @@ export interface CardModel {
   /** The shared numbers behind the presets, and how levels are stated (prefs.ts). */
   riskPercent: number
   protectMode: ProtectMode
+  /** How a trail, a breakeven and the milestones are stated (prefs.ts), the pane's ATR(14) for "×
+   * ATR", and each working position's R: its stop's distance when it was placed. */
+  exitUnits: Record<'trail' | 'breakeven' | 'notify', ExitUnit>
+  atr: AtrReading | null
+  risks: Record<string, number | null>
   /** The order being written in the ticket, when it is for this instrument. */
   draft: DraftOrder | null
   /** The change waiting for confirmation, and the same in words. */
@@ -420,6 +452,280 @@ class WorkingLevel {
   }
 }
 
+/** Whether the waiting change is to this position's `key` piece of exit management. */
+function managePending(model: CardModel, owner: Owner, id: string, key: keyof ManagementPatch): boolean {
+  const a = model.amendment
+  return a !== null && a.owner === owner && a.id === id && a.role === 'manage' && a.manage !== undefined && key in a.manage
+}
+
+/** A working position's exit management: the trade box's three fields (kit.ts `ExitField`), wired
+ * to PROPOSE -- Enter, leaving a field, a step, a preset or × puts the change up for Confirm, as a
+ * stop's change is. */
+class WorkingExits {
+  readonly element: HTMLElement
+  private readonly trail: ExitField
+  private readonly breakeven: ExitField
+  private readonly notify: ExitField
+  private record: SimTrade | SimOrder | null = null
+  private basis: ExitBasis | null = null
+  private units: Record<'trail' | 'breakeven' | 'notify', ExitUnit> = { trail: 'pips', breakeven: 'r', notify: 'r' }
+
+  constructor(
+    private readonly owner: Owner,
+    private readonly id: string,
+    private readonly dispatch: (action: CardAction) => void
+  ) {
+    this.element = h('div', 'wd-oc-exits')
+    this.trail = new ExitField({
+      role: 'trail',
+      label: 'Trailing stop',
+      extras: [
+        { label: 'Start at +', title: 'How far in profit the best price must be before the stop trails; empty: at once' },
+        { label: 'Step', title: 'The least the stop moves by; empty: on every new best price' }
+      ],
+      onCommit: (text) => void this.proposeTrail({ distance: text }),
+      onStep: (direction, big) => this.step('trail', direction, big),
+      onUnit: (unit) => dispatch({ kind: 'exitUnit', role: 'trail', unit }),
+      onPreset: (i) => this.trailPreset(i),
+      onClear: () => this.propose({ trailingStop: null }),
+      onExtraCommit: (i, text) => void this.proposeTrail(i === 0 ? { start: text } : { step: text })
+    })
+    this.breakeven = new ExitField({
+      role: 'breakeven',
+      label: 'Breakeven',
+      extras: [{ label: 'Lock +', title: "Where the stop goes, beyond the entry in the trade's favour; empty: the entry itself" }],
+      onCommit: (text) => void this.proposeBreakeven({ trigger: text }),
+      onStep: (direction, big) => this.step('breakeven', direction, big),
+      onUnit: (unit) => dispatch({ kind: 'exitUnit', role: 'breakeven', unit }),
+      onPreset: () => {
+        const b = this.basis
+        if (b?.risk) void this.proposeBreakeven({ trigger: exitText(b.risk, this.units.breakeven, b) })
+      },
+      onClear: () => this.propose({ breakeven: null }),
+      onExtraCommit: (_i, text) => void this.proposeBreakeven({ lock: text })
+    })
+    this.notify = new ExitField({
+      role: 'notify',
+      label: 'Notify at',
+      list: true,
+      onCommit: (text) => void this.proposeNotify(text),
+      onUnit: (unit) => dispatch({ kind: 'exitUnit', role: 'notify', unit }),
+      onPreset: (i) => {
+        const value = this.notifyValue(NOTIFY_MULTIPLES[i])
+        if (value !== null) void this.proposeNotify(toggleMilestone(this.notifyText(), value))
+      },
+      onClear: () => this.propose({ milestones: [] })
+    })
+    this.element.append(this.trail.element, this.breakeven.element, this.notify.element)
+  }
+
+  private propose(patch: ManagementPatch): boolean {
+    this.dispatch({ kind: 'setManagement', owner: this.owner, id: this.id, patch })
+    return true
+  }
+
+  private fail(err: unknown): false {
+    this.dispatch({ kind: 'error', message: err instanceof Error ? err.message : 'Not a distance' })
+    return false
+  }
+
+  /** The texts the record's management reads as, in each field's unit. */
+  private trailTexts(): { distance: string; start: string; step: string } {
+    const t = this.record?.trailingStop
+    const b = this.basis
+    if (!t || !b) return { distance: '', start: '', step: '' }
+    const u = this.units.trail
+    return {
+      distance: exitText(t.distance, u, b),
+      start: t.activation === null || t.activation === undefined ? '' : exitText(t.activation, u, b) || '0',
+      step: t.step ? exitText(t.step, u, b) : ''
+    }
+  }
+
+  private breakevenTexts(): { trigger: string; lock: string } {
+    const be = this.record?.breakeven
+    const b = this.basis
+    if (!be || !b) return { trigger: '', lock: '' }
+    const u = this.units.breakeven
+    const lock = be.offset === 0 ? '' : be.offset < 0 ? `-${exitText(-be.offset, u, b)}` : exitText(be.offset, u, b)
+    return { trigger: exitText(be.trigger, u, b), lock }
+  }
+
+  private notifyText(): string {
+    const b = this.basis
+    if (!b) return ''
+    const u = this.units.notify
+    return (this.record?.milestones ?? [])
+      .map((m) => {
+        const stated = labelValue(m.label, u)
+        if (stated !== null) return String(stated)
+        return m.distance < 0 ? `-${exitText(-m.distance, u, b)}` : exitText(m.distance, u, b)
+      })
+      .filter((t) => t !== '' && t !== '-')
+      .join(', ')
+  }
+
+  private proposeTrail(edit: Partial<{ distance: string; start: string; step: string }>): boolean {
+    const b = this.basis
+    if (!b) return false
+    const fields = { ...this.trailTexts(), ...edit }
+    if (fields.distance.trim() === '') return this.propose({ trailingStop: null })
+    try {
+      return this.propose({ trailingStop: parseTrail(fields, this.units.trail, b) })
+    } catch (err) {
+      return this.fail(err)
+    }
+  }
+
+  private proposeBreakeven(edit: Partial<{ trigger: string; lock: string }>): boolean {
+    const b = this.basis
+    if (!b) return false
+    const fields = { ...this.breakevenTexts(), ...edit }
+    if (fields.trigger.trim() === '') return this.propose({ breakeven: null })
+    try {
+      return this.propose({ breakeven: parseBreakeven(fields, this.units.breakeven, b) })
+    } catch (err) {
+      return this.fail(err)
+    }
+  }
+
+  private proposeNotify(text: string): boolean {
+    const b = this.basis
+    if (!b) return false
+    try {
+      return this.propose({ milestones: parseMilestones(text, this.units.notify, b) })
+    } catch (err) {
+      return this.fail(err)
+    }
+  }
+
+  private step(role: 'trail' | 'breakeven', direction: 1 | -1, big: boolean): void {
+    const b = this.basis
+    if (!b) return
+    const unit = this.units[role]
+    const field = role === 'trail' ? this.trail : this.breakeven
+    const next = stepExitText(field.field.value(), unit, b.info, direction, big, defaultExit(unit, b.info), unit === 'pips' ? 0.1 : 0)
+    if (!(Number(next) > 0)) return
+    const ok = role === 'trail' ? this.proposeTrail({ distance: next }) : this.proposeBreakeven({ trigger: next })
+    if (ok) field.write(next)
+  }
+
+  private trailPreset(i: number): void {
+    const b = this.basis
+    if (!b) return
+    const distance = i === 0 ? b.risk : b.atr !== null ? 2 * b.atr.value : null
+    if (distance !== null) void this.proposeTrail({ distance: exitText(distance, this.units.trail, b) })
+  }
+
+  private notifyValue(multiple: number): number | null {
+    const b = this.basis
+    if (!b?.risk) return null
+    const text = exitText(multiple * b.risk, this.units.notify, b)
+    return text === '' ? null : Number(text)
+  }
+
+  update(record: SimTrade | SimOrder, model: CardModel): void {
+    this.record = record
+    const { ctx } = model
+    const entry = 'entryPrice' in record ? record.entryPrice : record.price
+    const b: ExitBasis = { side: record.side, entry, risk: model.risks[record.id] ?? null, atr: model.atr, info: ctx.info }
+    this.basis = b
+    this.units = {
+      trail: usableExitUnit(model.exitUnits.trail, b),
+      breakeven: usableExitUnit(model.exitUnits.breakeven, b),
+      notify: usableExitUnit(model.exitUnits.notify, b)
+    }
+    const refusals = Object.fromEntries(EXIT_UNITS.map(([u]) => [u, exitUnitRefusal(u, b)]))
+    const rRefusal = exitUnitRefusal('r', b)
+    const note = (unit: ExitUnit): Array<{ text: string; tone: '' }> => {
+      const size = unitSize(unit, b)
+      if (size === null) return []
+      if (unit === 'atr' && b.atr) return [{ text: `ATR(${b.atr.period}, ${b.atr.interval}) ${distanceWords(b.atr.value, b.info)}`, tone: '' }]
+      if (unit === 'r') return [{ text: `1R ${distanceWords(size, b.info)}`, tone: '' }]
+      return []
+    }
+    const isTrade = 'entryPrice' in record
+    const mark = isTrade && ctx.quote ? (record.side === 'buy' ? ctx.quote.bid : ctx.quote.ask) : null
+    const trailed = 'stopMovedBy' in record && record.stopMovedBy === 'trail'
+
+    const trail = record.trailingStop ?? null
+    const trailTexts = this.trailTexts()
+    this.trail.update({
+      text: trailTexts.distance,
+      placeholder: 'none',
+      unit: this.units.trail,
+      unitRefusals: refusals,
+      readout: trail
+        ? [
+            // Once the trail has set the stop, what is left to say is the best price it follows.
+            ...trailReadout(trail, this.units.trail, b, isTrade && !trailed ? mark : null, trailed ? null : record.stopLoss).filter(
+              (p) => !p.text.startsWith('from the fill') || !isTrade
+            ),
+            ...(isTrade && trail.best !== null ? [{ text: `best ${formatPrice(trail.best, ctx.info.precision)}`, tone: '' as const }] : []),
+            ...note(this.units.trail)
+          ]
+        : [],
+      presets: [
+        { text: '1R', title: "Trail at the stop loss's distance when it was placed", refusal: rRefusal },
+        { text: '2 ATR', title: `Trail at twice the ATR${b.atr ? `(${b.atr.period}) of this ${b.atr.interval} chart` : ''}`, refusal: exitUnitRefusal('atr', b) }
+      ],
+      removable: trail !== null,
+      problem: null,
+      pending: managePending(model, this.owner, record.id, 'trailingStop'),
+      stepRefusal: entry === null ? 'No price yet' : null,
+      extras: [
+        { text: trailTexts.start, placeholder: isTrade ? 'now' : 'fill' },
+        { text: trailTexts.step, placeholder: 'any' }
+      ]
+    })
+
+    const be = record.breakeven ?? null
+    const beTexts = this.breakevenTexts()
+    this.breakeven.update({
+      text: beTexts.trigger,
+      placeholder: 'none',
+      unit: this.units.breakeven,
+      unitRefusals: refusals,
+      readout: be ? [...breakevenReadout(be, b), ...(be.done ? [{ text: 'done', tone: 'up' as const }] : []), ...note(this.units.breakeven)] : [],
+      presets: [{ text: '1R', title: 'Move the stop to the entry once the trade is 1R in profit', refusal: rRefusal }],
+      removable: be !== null,
+      problem: null,
+      pending: managePending(model, this.owner, record.id, 'breakeven'),
+      stepRefusal: entry === null ? 'No price yet' : null,
+      extras: [{ text: beTexts.lock, placeholder: '0' }]
+    })
+
+    const milestones = record.milestones ?? []
+    const listed = milestoneValues(this.notifyText())
+    this.notify.update({
+      text: this.notifyText(),
+      placeholder: 'none',
+      unit: this.units.notify,
+      unitRefusals: refusals,
+      readout: milestones.length
+        ? [
+            ...milestonesReadout(milestones, b).map((part, i) => (milestones[i].reachedAt !== null ? { ...part, text: `${part.text} ✓` } : part)),
+            ...note(this.units.notify)
+          ]
+        : [],
+      presets: NOTIFY_MULTIPLES.map((multiple) => {
+        const value = this.notifyValue(multiple)
+        return {
+          text: `${multiple}R`,
+          title: `Notify the first time it is ${multiple}R in profit (again to remove)`,
+          refusal: rRefusal,
+          active: value !== null && listed.includes(value)
+        }
+      }),
+      removable: milestones.length > 0,
+      problem: null,
+      pending: managePending(model, this.owner, record.id, 'milestones')
+    })
+  }
+}
+
+const NOTIFY_MULTIPLES = [1, 2, 3]
+
 // -- rows ------------------------------------------------------------------------------------------
 
 /** The order still being written in the trade box, for this instrument: what it would do, and
@@ -510,6 +816,7 @@ class TradeRow {
   private readonly detail: HTMLElement
   private readonly stop: WorkingLevel
   private readonly target: WorkingLevel
+  private readonly exits: WorkingExits
   private readonly figures: FigureList
   private readonly actions: TradeActions
   private trade: SimTrade | null = null
@@ -533,6 +840,7 @@ class TradeRow {
     this.detail = h('div', 'wd-oc-row-detail')
     this.stop = new WorkingLevel('stop', 'trade', id, dispatch)
     this.target = new WorkingLevel('target', 'trade', id, dispatch)
+    this.exits = new WorkingExits('trade', id, dispatch)
     this.figures = new FigureList()
     this.actions = new TradeActions((action: TradeAction) => {
       const trade = this.trade
@@ -540,7 +848,7 @@ class TradeRow {
       if (action.kind === 'close') dispatch({ kind: 'close', trade, fraction: action.fraction })
       else dispatch({ kind: action.kind, trade })
     })
-    this.detail.append(this.stop.field.element, this.target.field.element, this.figures.element, this.actions.element)
+    this.detail.append(this.stop.field.element, this.target.field.element, this.exits.element, this.figures.element, this.actions.element)
     this.element.append(this.main, this.detail)
   }
 
@@ -580,6 +888,7 @@ class TradeRow {
     }
     this.stop.update(working, model)
     this.target.update(working, model)
+    this.exits.update(trade, model)
     this.figures.update(workingRows(trade.units, ctx, f.rewardToRisk, { label: 'Opened', value: formatInstant(trade.openedAt) }, trade.label))
     this.actions.update(tradeActionsView(trade, ctx, model.armed))
   }
@@ -596,6 +905,7 @@ class OrderRow {
   private readonly price: LevelField
   private readonly stop: WorkingLevel
   private readonly target: WorkingLevel
+  private readonly exits: WorkingExits
   private readonly figures: FigureList
   private readonly cancel: HTMLButtonElement
   private order: SimOrder | null = null
@@ -639,13 +949,14 @@ class OrderRow {
     })
     this.stop = new WorkingLevel('stop', 'order', id, dispatch)
     this.target = new WorkingLevel('target', 'order', id, dispatch)
+    this.exits = new WorkingExits('order', id, dispatch)
     this.figures = new FigureList()
     const actions = h('div', 'wd-tk-row is-end')
     this.cancel = kbtn('Cancel order', () => {
       if (this.order) dispatch({ kind: 'cancel', order: this.order })
     }, ['danger'])
     actions.append(this.cancel)
-    this.detail.append(this.price.element, this.stop.field.element, this.target.field.element, this.figures.element, actions)
+    this.detail.append(this.price.element, this.stop.field.element, this.target.field.element, this.exits.element, this.figures.element, actions)
     this.element.append(this.main, this.detail)
   }
 
@@ -691,6 +1002,7 @@ class OrderRow {
     }
     this.stop.update(working, model)
     this.target.update(working, model)
+    this.exits.update(order, model)
     this.figures.update(workingRows(order.units, ctx, f.rewardToRisk, { label: 'Placed', value: formatInstant(order.createdAt) }, order.label))
     const armed = model.armed === armKey.cancel(order.id)
     this.cancel.textContent = armed ? 'Confirm cancel' : 'Cancel order'
