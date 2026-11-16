@@ -1,6 +1,6 @@
 import { getToken } from '../auth'
 import { apiSend } from '../config'
-import type { NotificationBackend, RemoteNotification } from '../notifications'
+import type { NotificationBackend, NotificationSpec, RemoteNotification } from '../notifications'
 import type { NotificationWire } from '../ohlcv'
 import { ownerHeaders, ownerToken } from '../owner'
 import { stream } from '../stream'
@@ -36,6 +36,22 @@ function toRemote(row: NotificationWire): RemoteNotification {
 async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const { data } = await apiSend<T>(method, path, { body, headers: ownerHeaders() })
   return data
+}
+
+/** Raise a row on the server (`POST /notifications`): stored, pushed to every open tab and
+ * delivered to the owner's channels, like a watch's. Resolves with the row the server holds --
+ * for a `key` it already has, the row it already had. What client/notifications/durable.ts is
+ * handed; page-level, because it needs no socket. */
+export async function raiseNotification(spec: NotificationSpec): Promise<RemoteNotification> {
+  const body = await call<{ notification: NotificationWire }>('POST', '/notifications', {
+    title: spec.title,
+    body: spec.body ?? '',
+    level: spec.level ?? 'info',
+    source: spec.source ?? '',
+    data: spec.data && typeof spec.data === 'object' ? spec.data : {},
+    ...(spec.key ? { key: spec.key } : {})
+  })
+  return toRemote(body.notification)
 }
 
 export interface RemoteNotifications extends NotificationBackend {

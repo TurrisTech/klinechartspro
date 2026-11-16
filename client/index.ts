@@ -10,7 +10,8 @@ import { setFocusSource } from './chrome/focus'
 import { WdashboardDatafeed } from './datafeed'
 import { defaultLayout, hydrateLayout, toPaneOptions, toPersistedLayout, type PersistedLayout } from './layout'
 import { createLevelsIndicators } from './levels/indicator'
-import { mountNotificationCenter, notifications } from './notifications'
+import { durableSink, mountNotificationCenter, notifications } from './notifications'
+import { createChannelSettings, HttpChannelsApi } from './notifications/channels'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
 import { availablePeriods, periodToResolution } from './periods'
@@ -30,7 +31,7 @@ import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
 import { symbolKey } from './trading/format'
 import { loadWatches, mountPriceWatches, type PriceWatchesController } from './watch'
-import { createRemoteNotifications } from './watch/notifications'
+import { createRemoteNotifications, raiseNotification } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { createWorkspaceSaveControls, type WorkspaceSaveControls } from './workspaces/save'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
@@ -498,7 +499,14 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // the first wall on (`startAlerts` is once per page), and the Alerts button + window for
   // this one. Mounted before the bell, so the two sit side by side in that order. A new alert
   // starts on the active pane's instrument and timeframe.
-  const alertsRuntime = await startAlerts(notifications)
+  //
+  // A live alert that fires is raised through the server where it can take one (`durableSink`,
+  // feature `notification_raise`): stored, shown on every tab, and delivered to the account's
+  // channels (Pushover, Telegram) like a watch's. A bar replay's notifications never go this way
+  // -- the replay raises its own into the centre directly.
+  const alertsRuntime = await startAlerts(
+    hasFeature('notification_raise') ? durableSink(notifications, raiseNotification) : notifications
+  )
   const alertManager = mountAlertManager(chartPro, alertsRuntime, {
     bounds: container,
     context: () => {
@@ -598,7 +606,19 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       })
     : null
   if (remoteNotifications) void notifications.attach(remoteNotifications)
-  const notificationCenter = mountNotificationCenter(chartPro)
+  // Where live notifications are delivered beyond the dashboard: the Delivery window
+  // (client/notifications/channels), opened from the bell's dropdown. The bell knows only a
+  // label and a click.
+  const deliverySettings = hasFeature('notification_channels')
+    ? createChannelSettings({ api: new HttpChannelsApi(), bounds: container })
+    : null
+  const notificationCenter = mountNotificationCenter(
+    chartPro,
+    notifications,
+    deliverySettings
+      ? [{ label: 'Delivery…', title: 'Send live notifications to Pushover or Telegram', onClick: () => deliverySettings.open() }]
+      : []
+  )
 
   // The pane the user last touched, which is where a body-level card opens on a page wide
   // enough to span displays (client/chrome/focus.ts).
@@ -635,6 +655,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       watches = null
       levels.dispose()
       notificationCenter.teardown()
+      deliverySettings?.dispose()
       setFocusSource(null)
       if (remoteNotifications) {
         notifications.detach(remoteNotifications)

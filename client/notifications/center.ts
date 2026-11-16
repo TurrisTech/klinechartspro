@@ -70,6 +70,23 @@ export class NotificationCenter implements NotificationSink {
     return this.insert(spec, spec.seen)
   }
 
+  /** A row this page raised that the server now holds too (./durable.ts): it takes the server's
+   * id, so acknowledging or clearing it reaches the server, and the live push of the same row
+   * finds it rather than adding a second. If that push arrived first, the page's copy goes. An
+   * acknowledgement made before the server answered is passed on now. */
+  bind(id: string, remoteId: string): void {
+    const row = this.rows.find((candidate) => candidate.id === id)
+    if (!row || row.remoteId === remoteId) return
+    if (this.rows.some((candidate) => candidate.remoteId === remoteId)) {
+      this.rows = this.rows.filter((candidate) => candidate.id !== id)
+      this.emit()
+      return
+    }
+    this.rows = this.rows.map((candidate) => (candidate.id === id ? { ...candidate, remoteId } : candidate))
+    if (row.seen) this.backend?.markSeen([remoteId])
+    this.emit()
+  }
+
   private insert(spec: NotificationSpec, seen = false): Notification {
     this.sequence += 1
     const row: Notification = {

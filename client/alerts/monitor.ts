@@ -430,7 +430,10 @@ class Runner {
         .join(' · '),
       level: 'alert',
       source: 'alert',
-      data: { alertId: alert.id, eventAt: instant.at }
+      data: { alertId: alert.id, eventAt: instant.at },
+      // One alert at one bar close is one event, however many tabs evaluate it: the server keeps
+      // one row for the key, and sends one push (client/notifications/durable.ts).
+      key: `alert:${alert.id}:${instant.at}`
     })
   }
 }
