@@ -103,3 +103,36 @@ test('a replay row is never posted, whoever hands it to the sink', async () => {
   expect(raised).toEqual([])
   expect(center.list()).toHaveLength(1)
 })
+
+test('an acknowledgement on the page copy survives a push that landed first', async () => {
+  const center = new NotificationCenter()
+  const durable = backend()
+  await center.attach(durable)
+  let answer: (row: RemoteNotification) => void = () => {}
+  const sink = durableSink(center, () => new Promise((resolve) => (answer = resolve)))
+  sink.notify(ALERT)
+  center.markAllSeen()
+  center.accept({ ...ALERT, remoteId: 'k123', seen: false, at: Date.now() })
+  answer({ ...ALERT, remoteId: 'k123', seen: false })
+  await flush()
+  expect(center.list().map((r) => [r.remoteId, r.seen])).toEqual([['k123', true]])
+  expect(center.unseen()).toBe(0)
+  expect(durable.seen).toEqual([['k123']])
+})
+
+test('a row dismissed before the server answers is dismissed there too, and stays gone', async () => {
+  const center = new NotificationCenter()
+  const cleared: string[][] = []
+  await center.attach({ hydrate: async () => [], markSeen: () => {}, clear: (ids) => cleared.push(ids) })
+  let answer: (row: RemoteNotification) => void = () => {}
+  const sink = durableSink(center, () => new Promise((resolve) => (answer = resolve)))
+  sink.notify(ALERT)
+  center.clear()
+  expect(cleared).toEqual([])
+  answer({ ...ALERT, remoteId: 'k123', seen: false })
+  await flush()
+  expect(cleared).toEqual([['k123']])
+  // The live push of it, late, and a later hydrate, do not bring it back.
+  expect(center.accept({ ...ALERT, remoteId: 'k123', seen: false, at: Date.now() })).toBeNull()
+  expect(center.list()).toEqual([])
+})

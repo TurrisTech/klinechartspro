@@ -65,6 +65,11 @@ monitor gets it from `client/index.ts` when the server advertises `notification_
   and adds nothing. If the push landed first, the page's copy is dropped instead.
 - The spec's **`key`** (a client alert's is `alert:<id>:<bar close>`) makes the raise idempotent
   on the server. Two tabs evaluating one alert make one row and one push.
+- An acknowledgement or a dismissal made before the server answered is passed on when it does:
+  the centre remembers page rows dismissed unbound, and server ids dismissed here, so a late push
+  or a hydrate cannot bring a dismissed row back.
+- The title and body are cut to the server's limits (200 and 2,000 characters) rather than
+  refused, so an alert named after a long compound rule still reaches the phone.
 - If the server cannot take it, the row stays in this tab, as every client alert did before.
 - `LOCAL_ONLY_SOURCES` (`replay`) are never posted, whoever hands them to the sink.
 

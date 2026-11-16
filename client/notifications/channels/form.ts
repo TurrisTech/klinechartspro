@@ -41,6 +41,15 @@ export function configOf(entry: ChannelEntry, draft: Draft): Record<string, stri
   return config
 }
 
+/** Does the form hold anything the saved setting does not -- a typed secret, a changed value, or
+ * no saved setting at all? Check and Send test use what the form holds, so their answer is about
+ * those values, not about what live notifications will use until Save. */
+export function hasUnsaved(entry: ChannelEntry, draft: Draft): boolean {
+  if (!entry.setting) return true
+  const saved = draftOf(entry)
+  return entry.fields.some((field) => (draft.values[field.name] ?? '').trim() !== (saved.values[field.name] ?? ''))
+}
+
 /** What the password box shows when the form has nothing typed. */
 export function secretPlaceholder(entry: ChannelEntry, field: ChannelField): string {
   return secretIsSet(entry, field) ? 'Saved. Leave empty to keep it.' : field.placeholder

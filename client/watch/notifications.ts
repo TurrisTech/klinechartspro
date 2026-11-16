@@ -44,14 +44,24 @@ async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pr
  * handed; page-level, because it needs no socket. */
 export async function raiseNotification(spec: NotificationSpec): Promise<RemoteNotification> {
   const body = await call<{ notification: NotificationWire }>('POST', '/notifications', {
-    title: spec.title,
-    body: spec.body ?? '',
+    // Cut to the server's limits rather than refused by them: an alert named after a long
+    // compound rule would otherwise never be stored or reach a phone, with nothing to say so.
+    title: cut(spec.title, RAISE_TITLE_LIMIT),
+    body: cut(spec.body ?? '', RAISE_BODY_LIMIT),
     level: spec.level ?? 'info',
     source: spec.source ?? '',
     data: spec.data && typeof spec.data === 'object' ? spec.data : {},
     ...(spec.key ? { key: spec.key } : {})
   })
   return toRemote(body.notification)
+}
+
+/** `POST /notifications`' limits (wdashboard-server `notify/api.py` RaiseRequest). */
+export const RAISE_TITLE_LIMIT = 200
+export const RAISE_BODY_LIMIT = 2000
+
+export function cut(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`
 }
 
 export interface RemoteNotifications extends NotificationBackend {

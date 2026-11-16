@@ -37,7 +37,11 @@ the centre directly, `durableSink` refuses to post a `replay` row, and the serve
 - **Save stores, then checks.** After a save the card asks the vendor whether the settings work
   (`check`, which sends nothing) and says what it answered.
 - **Check, Send test and Find use what the form holds**, saved or not. The server lays it over
-  the stored setting, so Find can list Telegram chats before anything is saved.
+  the stored setting, so Find can list Telegram chats before anything is saved. When the form
+  holds anything unsaved, the answer says so ("press Save to use them"), and the server does not
+  record such a test as the channel's last delivery.
+- **Each open starts from the server**: no status line or half-typed value survives closing the
+  window.
 - **The switch acts at once on a saved channel** (an empty edit: only `enabled` changes). On a
   channel not yet saved it is part of the form.
 - **Remove takes a second press.**

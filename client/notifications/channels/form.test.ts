@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { configOf, describeDelivery, draftOf, missing, secretPlaceholder } from './form'
+import { configOf, describeDelivery, draftOf, hasUnsaved, missing, secretPlaceholder } from './form'
 import type { ChannelEntry } from './types'
 
 // The Delivery form's model: what the inputs start as, what blocks a save, what is sent. The
@@ -76,4 +76,15 @@ test('a delivery reads as what happened and how long ago', () => {
     'Last delivery failed 3 min ago: Pushover refused (400): user key is invalid'
   )
   expect(describeDelivery({ at: now - 5 * 3_600_000, ok: true, detail: '', title: 't' }, now)).toBe('Last sent 5 h ago: t')
+})
+
+test('unsaved: anything typed that the saved setting does not hold', () => {
+  expect(hasUnsaved(PUSHOVER, draftOf(PUSHOVER))).toBe(true)
+  const draft = draftOf(SAVED)
+  expect(hasUnsaved(SAVED, draft)).toBe(false)
+  draft.values.token = 'new'
+  expect(hasUnsaved(SAVED, draft)).toBe(true)
+  const changed = draftOf(SAVED)
+  changed.values.device = 'desk'
+  expect(hasUnsaved(SAVED, changed)).toBe(true)
 })

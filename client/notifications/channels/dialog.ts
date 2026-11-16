@@ -12,7 +12,7 @@
 // Plain DOM in the house style (`kc-*` tokens, `wd-*` classes), like the bell beside it.
 
 import { createDockableWindow, type DockableWindow } from '../../chrome/window'
-import { configOf, describeDelivery, type Draft, draftOf, missing, secretIsSet, secretPlaceholder } from './form'
+import { configOf, describeDelivery, type Draft, draftOf, hasUnsaved, missing, secretIsSet, secretPlaceholder } from './form'
 import type { ChannelAnswer, ChannelChoice, ChannelEntry, ChannelField, ChannelsApi } from './types'
 
 const WINDOW_KEY = 'notification-delivery'
@@ -297,15 +297,20 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
     })
   }
 
+  /** Check and Send test try what the form holds; say so when that is not what is saved. */
+  function unsavedNote(entry: ChannelEntry, state: CardState, status: Status): Status {
+    return hasUnsaved(entry, state.draft) ? { ...status, text: `${status.text} (These are the values typed here: press Save to use them.)` } : status
+  }
+
   function onCheck(entry: ChannelEntry): Promise<void> {
-    return run(entry, async (state) => said(await api.check(entry.kind, configOf(entry, state.draft))))
+    return run(entry, async (state) => unsavedNote(entry, state, said(await api.check(entry.kind, configOf(entry, state.draft)))))
   }
 
   function onTest(entry: ChannelEntry): Promise<void> {
     return run(entry, async (state) => {
       const answer = await api.test(entry.kind, configOf(entry, state.draft))
       adopt(await api.list())
-      return answer.ok ? { ok: true, text: `Test sent: ${answer.detail}` } : said(answer)
+      return unsavedNote(entry, state, answer.ok ? { ok: true, text: `Test sent: ${answer.detail}` } : said(answer))
     })
   }
 

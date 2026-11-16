@@ -24,6 +24,10 @@ import type {
 /** Ceiling on the list. Old rows are dropped from the tail as new ones arrive. */
 export const MAX_NOTIFICATIONS = 100
 
+/** How many ids `bind` and `accept` remember having been dismissed here (a bound on memory, far
+ * beyond what a round trip could leave outstanding). */
+const REMEMBERED = 500
+
 export type NotificationListener = (list: Notification[]) => void
 
 export class NotificationCenter implements NotificationSink {
@@ -31,6 +35,12 @@ export class NotificationCenter implements NotificationSink {
   private readonly listeners = new Set<NotificationListener>()
   private backend: NotificationBackend | null = null
   private sequence = 0
+  /** Page rows dismissed before the server named them (./durable.ts): when it does, the dismissal
+   * is passed on to it. */
+  private readonly dismissedUnbound = new Set<string>()
+  /** Server ids dismissed here: a live push or a hydrate that brings one back again (it was in
+   * flight, or the server had not deleted it yet) is not shown again. */
+  private readonly dismissedRemote = new Set<string>()
 
   /** Newest first. A copy: nothing outside may mutate the list in place. */
   list(): Notification[] {
@@ -64,7 +74,8 @@ export class NotificationCenter implements NotificationSink {
 
   /** A row that came from the server. Deduplicated by `remoteId`, so a push that races the
    * hydrate -- or a re-hydrate on reconnect -- cannot show the same alert twice. */
-  accept(spec: RemoteNotification): Notification {
+  accept(spec: RemoteNotification): Notification | null {
+    if (this.dismissedRemote.has(spec.remoteId)) return null
     const existing = this.rows.find((row) => row.remoteId === spec.remoteId)
     if (existing) return existing
     return this.insert(spec, spec.seen)
@@ -75,10 +86,27 @@ export class NotificationCenter implements NotificationSink {
    * finds it rather than adding a second. If that push arrived first, the page's copy goes. An
    * acknowledgement made before the server answered is passed on now. */
   bind(id: string, remoteId: string): void {
+    if (this.dismissedUnbound.delete(id)) {
+      // Dismissed while the server was answering: dismiss it there too, and any copy of it a
+      // live push has added since.
+      remember(this.dismissedRemote, remoteId)
+      const before = this.rows.length
+      this.rows = this.rows.filter((candidate) => candidate.remoteId !== remoteId)
+      this.backend?.clear([remoteId])
+      if (this.rows.length !== before) this.emit()
+      return
+    }
     const row = this.rows.find((candidate) => candidate.id === id)
     if (!row || row.remoteId === remoteId) return
-    if (this.rows.some((candidate) => candidate.remoteId === remoteId)) {
+    const pushed = this.rows.find((candidate) => candidate.remoteId === remoteId)
+    if (pushed) {
+      // The live push landed first: keep the server's row, and the acknowledgement the page's
+      // copy carried.
       this.rows = this.rows.filter((candidate) => candidate.id !== id)
+      if (row.seen && !pushed.seen) {
+        this.rows = this.rows.map((candidate) => (candidate === pushed ? { ...candidate, seen: true } : candidate))
+        this.backend?.markSeen([remoteId])
+      }
       this.emit()
       return
     }
@@ -148,13 +176,30 @@ export class NotificationCenter implements NotificationSink {
   }
 
   private pushClear(rows: Notification[]): void {
-    const remote = rows.map((row) => row.remoteId).filter((id): id is string => !!id)
+    const remote: string[] = []
+    for (const row of rows) {
+      if (row.remoteId) {
+        remote.push(row.remoteId)
+        remember(this.dismissedRemote, row.remoteId)
+      } else {
+        remember(this.dismissedUnbound, row.id)
+      }
+    }
     if (remote.length > 0) this.backend?.clear(remote)
   }
 
   private emit(): void {
     const snapshot = [...this.rows]
     for (const listener of this.listeners) listener(snapshot)
+  }
+}
+
+function remember(set: Set<string>, id: string): void {
+  set.add(id)
+  // Oldest first: a Set iterates in insertion order.
+  for (const old of set) {
+    if (set.size <= REMEMBERED) break
+    set.delete(old)
   }
 }
 
