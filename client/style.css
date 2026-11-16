@@ -1315,6 +1315,74 @@ body.wd-has-dock > #app {
   color: var(--kc-danger);
 }
 
+/* Exit management (kit.ts ExitField): a trailing stop is the stop's line with a step in it, a
+   breakeven a stop's dash meeting a dot, a milestone a dotted line -- the marks say "this moves the
+   stop" and "this only tells you". */
+.wd-tk-level[data-role='trail'] .wd-tk-mark {
+  --tk-mark: var(--tk-sell);
+  background:
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 0 100% / 45% 2px no-repeat,
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 100% 0 / 45% 2px no-repeat,
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 50% 50% / 2px 100% no-repeat;
+  height: 6px;
+}
+
+.wd-tk-level[data-role='breakeven'] .wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 6px, transparent 6px 9px);
+}
+
+.wd-tk-level[data-role='notify'] .wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 2px, transparent 2px 4px);
+}
+
+.wd-tk-num-input.is-list {
+  text-align: left;
+}
+
+.wd-tk-exit-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding-left: 1.375rem;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.wd-tk-exit-extras[hidden] {
+  display: none;
+}
+
+.wd-tk-exit-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.wd-tk .wd-tk-exit-extra-input {
+  width: 3.75rem;
+  height: calc(var(--tk-button) - 4px);
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--tk-radius);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.wd-tk .wd-tk-exit-extra-input:focus {
+  border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+}
+
+.wd-tk-exit-extra-input::placeholder {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
 /* Figures: label/value rows in two columns, the same rows on every surface. */
 .wd-tk .wd-tk-figs {
   display: grid;

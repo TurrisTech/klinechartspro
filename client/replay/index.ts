@@ -7,6 +7,8 @@ import { periodToResolution } from '../periods'
 import { fetchSymbolInfo, symbolVendor } from '../symbols'
 import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
+import { milestoneNotice } from '../trading/exits'
+import { instrumentInfo } from '../trading/instrument'
 import { formatInstant, symbolKey } from '../trading/format'
 import type { ServerCatalogue } from '../alerts/catalogue'
 import type { AlertSearch } from '../alerts/search'
@@ -442,6 +444,25 @@ export async function mountBarReplay(
   // before the controller existed), so the dock's overlays are synced here explicitly.
   dock.sync(chartPro.getPanes())
 
+  // A milestone a replay trade reaches is told the way the server tells a paper one -- but here, in
+  // the bell, tagged `replay` and dated when raised with the replay instant in the body: the engine
+  // that reached it is this page's (trading/exits.ts `milestoneNotice`).
+  const unsubscribeMilestones = session.subscribe((snapshot, events) => {
+    for (const event of events) {
+      if (event.kind !== 'milestone' || event.tradeId === null) continue
+      const trade = snapshot.trades.find((t) => t.id === event.tradeId)
+      if (!trade) continue
+      const { title, body } = milestoneNotice(trade, event, instrumentInfo(trade.symbol))
+      ctx.notify.notify({
+        title,
+        body: `${body} · replay ${formatInstant(event.time)}`,
+        level: 'info',
+        source: 'replay',
+        data: { tradeId: trade.id, symbol: trade.symbol, label: event.reason, eventAt: event.time, replay: true }
+      })
+    }
+  })
+
   const controls = createReplayControls({
     controller: session,
     intervalsInUse,
@@ -531,6 +552,7 @@ export async function mountBarReplay(
     },
     teardown(): void {
       unsubscribeAlerts()
+      unsubscribeMilestones()
       landings.dispose()
       container.classList.remove(REPLAY_WALL_CLASS)
       controls.dispose()

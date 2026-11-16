@@ -340,6 +340,63 @@ describe('ReplayTradingSession', () => {
     expect(skimmed.r?.bars.length).toBeLessThan(walked.r?.bars.length ?? 0)
   })
 
+  // Exit management (user, 2026-11-15: "make sure that these will stop at Next alert"): a milestone
+  // ends the run where a price reaches it, a trailing stop's hit is a close like any stop's, and a
+  // trade whose only protection is a trail still makes the run walk. A Step here is an hour: the
+  // trades fill at bar 59's close (bid 1.10590, ask 1.10610).
+  test('a milestone reached is where Next alert stops -- by the hour, then the minute -- and the alert is still next', async () => {
+    // A long at 1.10610 with a milestone 100 pips out (1.11610): bar 161's bid high reaches it.
+    const run = async (stored: string[]) => {
+      const { session } = make({ base: '1m', stored, alerts: new FakeAlerts([minute(300)]) })
+      await session.step()
+      await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000, milestones: [{ distance: 0.01, label: '+5R' }] })
+      expect(session.pendingMilestones).toBe(1)
+      return { session, r: await session.nextAlert() }
+    }
+    const skimmed = await run(['1m', '1h'])
+    const walked = await run(['1m'])
+    expect(skimmed.r?.reason).toBe('fill')
+    expect(skimmed.r?.events.at(-1)).toMatchObject({ kind: 'milestone', reason: '+5R' })
+    expect(skimmed.r?.events.at(-1)?.price).toBeCloseTo(1.1161, 9)
+    expect(skimmed.session.cursor).toBe(minute(162))
+    expect(walked.session.cursor).toBe(skimmed.session.cursor)
+    expect(walked.r?.events).toEqual(skimmed.r?.events)
+    expect(skimmed.session.snapshot.trades[0].closedAt).toBeNull()
+    expect(skimmed.session.pendingMilestones).toBe(0)
+    const again = await skimmed.session.nextAlert()
+    expect(again?.reason).toBe('alert')
+    expect(skimmed.session.cursor).toBe(minute(300))
+  })
+
+  test("a trailing stop's hit is where Next alert stops, and says it was the trail", async () => {
+    // A short at 1.10590 trails 5 pips above the ask (1.10660); the ask only rises, so the trail
+    // never moves and bar 64's ask high (1.10665) reaches it.
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]) })
+    await session.step()
+    await session.placeOrder({ symbol: SYM, side: 'sell', type: 'market', units: 1000, trailingStop: { distance: 0.0005 } })
+    expect(session.snapshot.trades[0].stopLoss).toBeCloseTo(1.1066, 9)
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'close', reason: 'stop_loss' })
+    expect(session.cursor).toBe(minute(65))
+    expect(session.snapshot.trades[0].stopMovedBy).toBe('trail')
+  })
+
+  test('a trail that has not started yet still makes the run walk, and the stop follows the closes', async () => {
+    // Trailing 10 pips once 20 in profit: no stop at the fill, yet the run walks rather than seeks.
+    const { session } = make({ base: '1m', stored: ['1m'], alerts: new FakeAlerts([minute(120)]) })
+    await session.step()
+    await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000, trailingStop: { distance: 0.001, activation: 0.002 } })
+    expect(session.snapshot.trades[0].stopLoss).toBeNull()
+    expect(session.workingStops).toBe(1)
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(r?.walked).toBe(true)
+    // Started once the bid was 1.10810 (bar 81); the last bar consumed, 119, closes on 1.11190.
+    expect(session.snapshot.trades[0].stopLoss).toBeCloseTo(1.1109, 9)
+    expect(session.snapshot.trades[0].stopMovedBy).toBe('trail')
+  })
+
   test('a resting limit order filling is where Next alert stops', async () => {
     // A sell limit at minute 150's bid high: the rising bid reaches it on the 11:30 bar.
     const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]) })

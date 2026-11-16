@@ -5,10 +5,12 @@ import { gridFor } from '../replay/timeframes'
 import type { SimSide, SimSnapshot, SimTrade } from './api'
 import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText, symbolKey } from './format'
 import type { InstrumentInfo } from './instrument'
+import { distanceWords } from './exits'
 import { balancesBefore, closedMove, closedShareOfBalance } from './ledger'
 import {
   type Amendment,
   applyAmendment,
+  managementUnchanged,
   currentLevel,
   DEFAULT_COLORS,
   DRAFT_ID,
@@ -538,7 +540,11 @@ export class TradingOverlays {
   propose(change: Omit<Amendment, 'from'>): boolean {
     if (!this.snapshot || this.sending) return false
     const from = currentLevel(this.snapshot, change.owner, change.id, change.role)
-    if (from === undefined || from === change.price) return false
+    if (from === undefined) return false
+    if (change.role === 'manage') {
+      const record = change.owner === 'trade' ? this.snapshot.trades.find((t) => t.id === change.id) : this.snapshot.orders.find((o) => o.id === change.id)
+      if (!record || !change.manage || managementUnchanged(record, change.manage)) return false
+    } else if (from === change.price) return false
     this.amendment = { ...change, from }
     this.selected = change.id
     this.refreshAll(true)
@@ -562,7 +568,10 @@ export class TradingOverlays {
     this.amendmentChanged()
     try {
       const session = this.ctx.session
-      if (a.owner === 'trade') {
+      if (a.role === 'manage') {
+        if (a.owner === 'trade') await session.modifyTrade(a.id, a.manage ?? {})
+        else await session.modifyOrder(a.id, a.manage ?? {})
+      } else if (a.owner === 'trade') {
         await session.modifyTrade(a.id, a.role === 'stop' ? { stopLoss: a.price } : { takeProfit: a.price })
       } else if (a.role === 'order') {
         if (a.price !== null) await session.modifyOrder(a.id, { price: a.price })
@@ -609,7 +618,11 @@ export class TradingOverlays {
         const pnl = trade.realizedPnl ?? 0
         const reason =
           trade.closeReason === 'stop_loss'
-            ? 'Stop hit'
+            ? trade.stopMovedBy === 'trail'
+              ? 'Trailing stop hit'
+              : trade.stopMovedBy === 'breakeven'
+                ? 'Breakeven stop hit'
+                : 'Stop hit'
             : trade.closeReason === 'take_profit'
               ? 'Target hit'
               : 'Closed'
@@ -619,6 +632,16 @@ export class TradingOverlays {
           text: `${reason} ${pips}${pnl >= 0 ? '+' : '−'}${Math.abs(pnl).toFixed(2)}${share === null ? '' : ` ${formatShare(share)}`}`,
           tone: pnl > 0 ? 'up' : pnl < 0 ? 'down' : 'info'
         })
+      }
+      // A milestone reached since the last snapshot (the server has also raised a notification).
+      const earlier = wasOpen.get(trade.id)
+      if (earlier && trade.closedAt === null) {
+        for (const [i, m] of (trade.milestones ?? []).entries()) {
+          if (m.reachedAt === null || earlier.milestones?.[i]?.reachedAt !== null) continue
+          const info = this.ctx.instrumentFor(trade.symbol)
+          const name = m.label ?? `${m.distance > 0 ? '+' : '−'}${distanceWords(Math.abs(m.distance), info)}`
+          messages.push({ key: trade.symbol, text: `Reached ${name} @ ${formatPrice(m.price, info.precision)}`, tone: m.distance > 0 ? 'up' : 'down' })
+        }
       }
       if (trade.closedAt === null && !wasOpen.has(trade.id) && (!newest || trade.openedAt >= newest.at)) {
         newest = { id: trade.id, at: trade.openedAt }

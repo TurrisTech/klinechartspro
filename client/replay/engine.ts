@@ -1,4 +1,17 @@
-import type { SimEvent, SimOrder, SimOrderType, SimSide, SimTrade } from '../trading/api'
+import type {
+  BreakevenRequest,
+  ManagementPatch,
+  MilestoneRequest,
+  SimBreakeven,
+  SimEvent,
+  SimMilestone,
+  SimOrder,
+  SimOrderType,
+  SimSide,
+  SimTrade,
+  SimTrailingStop,
+  TrailRequest
+} from '../trading/api'
 
 // PURE. The TypeScript port of wdashboard-server's fill engine (wdashboard_server/sim/
 // engine.py), which is the specification: same types, same events, same ids, no I/O.
@@ -15,8 +28,26 @@ import type { SimEvent, SimOrder, SimOrderType, SimSide, SimTrade } from '../tra
 //   fill at their price, except across a gap (SL at the worse open, TP at the better open);
 // - one bar reaching both SL and TP takes the stop (conservative);
 // - P&L in the quote currency; balance = sum of realized P&L.
+//
+// EXIT MANAGEMENT (engine.py's docstring, 2026-11-15) rides on an order and is carried to its
+// trade: a TRAILING STOP moves the trade's one stop loss behind the best closing-side price, from
+// the fill or once `activation` in profit, by at least `step`, only ever tighter and only on new
+// ground; an AUTO-BREAKEVEN moves it to the entry plus `offset` the first time the closing side is
+// `trigger` in profit; a MILESTONE (a signed distance from the entry) emits a `milestone` event
+// the first time a price reaches it. All three are judged on a price the trade survived: a quote,
+// a bar's CLOSE for the trail and breakeven, and a bar's range for a milestone on a trade open
+// before the bar. Thresholds and stop/target hits compare within one part in 1e9 of the price.
 
 export type CloseReason = 'manual' | 'stop_loss' | 'take_profit' | 'flatten'
+
+/** At most this many milestones on an order or trade, and a label at most this long. */
+export const MAX_MILESTONES = 12
+export const MAX_MILESTONE_LABEL = 24
+const REL_TOL = 1e-9
+
+function tolerance(price: number): number {
+  return REL_TOL * Math.max(1, Math.abs(price))
+}
 
 export class SimError extends Error {
   constructor(message: string) {
@@ -56,6 +87,8 @@ export type Event = SimEvent
 /** The tri-state an amendment uses: `undefined` leaves a field alone, `null` clears it. */
 export type Amend = number | null | undefined
 
+export type { BreakevenRequest, ManagementPatch, MilestoneRequest, TrailRequest }
+
 export interface SubmitRequest {
   symbol: string
   side: SimSide
@@ -65,6 +98,9 @@ export interface SubmitRequest {
   stopLoss?: number | null
   takeProfit?: number | null
   label?: string | null
+  trailingStop?: TrailRequest | null
+  breakeven?: BreakevenRequest | null
+  milestones?: MilestoneRequest[] | null
 }
 
 export interface EngineState {
@@ -94,6 +130,9 @@ export class Engine {
   readonly trades = new Map<string, Trade>()
   /** Newest quote per symbol: what a market order fills against, what P&L marks to. */
   readonly quotes = new Map<string, Quote>()
+  /** How many times exit management has moved a stop: a trail emits no event, but the account
+   * changed. Not state. */
+  adjustments = 0
   private nextId = 1
 
   constructor(
@@ -113,8 +152,8 @@ export class Engine {
       clock: this.clock,
       nextId: this.nextId,
       quotes: Object.fromEntries(this.quotes),
-      orders: [...this.orders.values()].map((o) => ({ ...o })),
-      trades: [...this.trades.values()].map((t) => ({ ...t }))
+      orders: [...this.orders.values()].map(copyRecord),
+      trades: [...this.trades.values()].map(copyRecord)
     }
   }
 
@@ -124,8 +163,9 @@ export class Engine {
     engine.clock = state.clock
     engine.nextId = state.nextId
     for (const [k, q] of Object.entries(state.quotes)) engine.quotes.set(k, { ...q })
-    for (const o of state.orders) engine.orders.set(o.id, { ...o })
-    for (const t of state.trades) engine.trades.set(t.id, { ...t })
+    // A replay saved before exit management has none: it reads as none.
+    for (const o of state.orders) engine.orders.set(o.id, withManagement(copyRecord(o)))
+    for (const t of state.trades) engine.trades.set(t.id, { ...withManagement(copyRecord(t)), stopMovedBy: t.stopMovedBy ?? null })
     return engine
   }
 
@@ -199,6 +239,7 @@ export class Engine {
     const stopLoss = request.stopLoss ?? null
     const takeProfit = request.takeProfit ?? null
     checkProtection(side, stopLoss, takeProfit, price ?? (side === 'buy' ? quote.ask : quote.bid))
+    checkManagement(request.trailingStop ?? null, request.breakeven ?? null, request.milestones ?? null)
     const order: Order = {
       id: this.id('o'),
       symbol,
@@ -213,11 +254,20 @@ export class Engine {
       filledAt: null,
       fillPrice: null,
       tradeId: null,
-      label: request.label ?? null
+      label: request.label ?? null,
+      trailingStop: orderTrail(request.trailingStop ?? null),
+      breakeven: orderBreakeven(request.breakeven ?? null),
+      milestones: orderMilestones(request.milestones ?? null)
     }
     this.orders.set(order.id, order)
     const events: Event[] = []
-    if (type === 'market') events.push(this.fill(order, side === 'buy' ? quote.ask : quote.bid, order.createdAt))
+    if (type === 'market') {
+      events.push(this.fill(order, side === 'buy' ? quote.ask : quote.bid, order.createdAt))
+      // The fill is a price the new trade has seen: a trail with no stop has one now.
+      const trade = this.trades.get(order.tradeId as string) as Trade
+      const mark = closing(trade.side, quote.bid, quote.ask)
+      events.push(...this.manage(trade, mark, mark, mark, order.createdAt))
+    }
     return { order, events }
   }
 
@@ -229,7 +279,7 @@ export class Engine {
     return event('cancel', this.clock, { orderId })
   }
 
-  modifyOrder(orderId: string, patch: { price?: number; stopLoss?: Amend; takeProfit?: Amend }): Order {
+  modifyOrder(orderId: string, patch: { price?: number; stopLoss?: Amend; takeProfit?: Amend } & ManagementPatch): Order {
     const order = this.orders.get(orderId)
     if (!order) throw new SimError(`unknown order ${orderId}`)
     if (order.status !== 'pending') throw new SimError(`order ${orderId} is ${order.status}`)
@@ -246,13 +296,21 @@ export class Engine {
     const newTp = patch.takeProfit === undefined ? order.takeProfit : patch.takeProfit
     if (newPrice === null) throw new SimError(`order ${orderId} has no price`)
     checkProtection(order.side, newSl, newTp, newPrice)
+    checkManagement(patch.trailingStop ?? null, patch.breakeven ?? null, patch.milestones === undefined ? null : (patch.milestones ?? []))
     order.price = newPrice
     order.stopLoss = newSl
     order.takeProfit = newTp
+    if (patch.trailingStop !== undefined) order.trailingStop = orderTrail(patch.trailingStop)
+    else order.trailingStop = orderTrail(order.trailingStop ?? null)
+    if (patch.breakeven !== undefined) order.breakeven = orderBreakeven(patch.breakeven)
+    else order.breakeven = orderBreakeven(order.breakeven ?? null)
+    order.milestones = orderMilestones(patch.milestones === undefined ? (order.milestones ?? []) : patch.milestones)
     return order
   }
 
-  modifyTrade(tradeId: string, patch: { stopLoss?: Amend; takeProfit?: Amend }): Trade {
+  /** Amend an open trade (tri-state, as `modifyOrder`). A new trail or breakeven is applied at
+   * once against the newest quote; new milestones start unreached. */
+  modifyTrade(tradeId: string, patch: { stopLoss?: Amend; takeProfit?: Amend } & ManagementPatch): Trade {
     const trade = this.trades.get(tradeId)
     if (!trade) throw new SimError(`unknown trade ${tradeId}`)
     if (trade.closedAt !== null) throw new SimError(`trade ${tradeId} is closed`)
@@ -260,9 +318,17 @@ export class Engine {
     const newTp = patch.takeProfit === undefined ? trade.takeProfit : patch.takeProfit
     const quote = this.quotes.get(trade.symbol)
     if (!quote) throw new SimError(`no price yet for ${trade.symbol}`)
-    checkProtection(trade.side, newSl, newTp, trade.side === 'buy' ? quote.bid : quote.ask)
+    const mark = closing(trade.side, quote.bid, quote.ask)
+    checkProtection(trade.side, newSl, newTp, mark)
+    checkManagement(patch.trailingStop ?? null, patch.breakeven ?? null, patch.milestones === undefined ? null : (patch.milestones ?? []))
+    if (newSl !== trade.stopLoss) trade.stopMovedBy = null
     trade.stopLoss = newSl
     trade.takeProfit = newTp
+    // A trail set now starts from now: its best is the price it is set at.
+    if (patch.trailingStop !== undefined) trade.trailingStop = orderTrail(patch.trailingStop)
+    if (patch.breakeven !== undefined) trade.breakeven = orderBreakeven(patch.breakeven)
+    if (patch.milestones !== undefined) trade.milestones = orderMilestones(patch.milestones)
+    if (patch.trailingStop || patch.breakeven) this.ratchet(trade, mark)
     return trade
   }
 
@@ -302,7 +368,12 @@ export class Engine {
     }
     for (const trade of this.openTrades(quote.symbol)) {
       const hit = protectionHit(trade, quote.bid, quote.ask, quote.bid, quote.ask, quote.bid, quote.ask)
-      if (hit) events.push(this.close(trade, hit.price, quote.time, hit.reason))
+      if (hit) {
+        events.push(this.close(trade, hit.price, quote.time, hit.reason))
+        continue
+      }
+      const mark = closing(trade.side, quote.bid, quote.ask)
+      events.push(...this.manage(trade, mark, mark, mark, quote.time))
     }
     return events
   }
@@ -325,7 +396,15 @@ export class Engine {
       if (hit) {
         const at = trade.openedAt < bar.time && protectionGapped(trade, bar) ? bar.time : midBar(bar)
         events.push(this.close(trade, hit.price, Math.max(at, trade.openedAt), hit.reason))
+        continue
       }
+      // Survived the bar: management on its close, milestones on its range when the trade was
+      // open before the bar began.
+      const mark = closing(trade.side, bar.bidClose, bar.askClose)
+      const before = trade.openedAt < bar.time
+      const best = before ? (trade.side === 'buy' ? bar.bidHigh : bar.askLow) : mark
+      const worst = before ? (trade.side === 'buy' ? bar.bidLow : bar.askHigh) : mark
+      events.push(...this.manage(trade, mark, best, worst, Math.max(midBar(bar), trade.openedAt)))
     }
     this.quotes.set(bar.symbol, { symbol: bar.symbol, time: bar.end, bid: bar.bidClose, ask: bar.askClose })
     this.clock = Math.max(this.clock, bar.end)
@@ -352,7 +431,11 @@ export class Engine {
       closePrice: null,
       closeReason: null,
       realizedPnl: null,
-      label: order.label
+      label: order.label,
+      trailingStop: orderTrail(order.trailingStop ?? null),
+      breakeven: orderBreakeven(order.breakeven ?? null),
+      milestones: orderMilestones(order.milestones ?? []),
+      stopMovedBy: null
     }
     this.trades.set(trade.id, trade)
     order.tradeId = trade.id
@@ -370,9 +453,119 @@ export class Engine {
 
   private split(trade: Trade, units: number): Trade {
     trade.units -= units
-    const part: Trade = { ...trade, id: this.id('t'), units }
+    const part: Trade = { ...copyRecord(trade), id: this.id('t'), units }
     this.trades.set(part.id, part)
     return part
+  }
+
+  /** A price the trade survived: the milestones its range reached, then the breakeven and the
+   * trail on `mark` (the closing side). `best`/`worst` are the closing side's extremes. */
+  private manage(trade: Trade, mark: number, best: number, worst: number, at: number): Event[] {
+    const events: Event[] = []
+    const d = trade.side === 'buy' ? 1 : -1
+    const tol = tolerance(trade.entryPrice)
+    for (const m of trade.milestones ?? []) {
+      if (m.reachedAt !== null) continue
+      const level = trade.entryPrice + d * m.distance
+      const gone = ((m.distance > 0 ? best : worst) - trade.entryPrice) * d
+      if (m.distance > 0 ? gone >= m.distance - tol : gone <= m.distance + tol) {
+        m.reachedAt = at
+        m.price = level
+        events.push(event('milestone', at, { tradeId: trade.id, price: level, reason: m.label }))
+      }
+    }
+    this.ratchet(trade, mark)
+    return events
+  }
+
+  /** Move the stop by the breakeven and the trail, if either is due at `mark`. */
+  private ratchet(trade: Trade, mark: number): void {
+    const d = trade.side === 'buy' ? 1 : -1
+    const tol = tolerance(trade.entryPrice)
+    const be = trade.breakeven
+    if (be && !be.done && (mark - trade.entryPrice) * d >= be.trigger - tol) {
+      be.done = true
+      const level = trade.entryPrice + d * be.offset
+      if (trade.stopLoss === null || (level - trade.stopLoss) * d > tol) this.moveStop(trade, level, 'breakeven')
+    }
+    const ts = trade.trailingStop
+    if (!ts || (ts.best !== null && (mark - ts.best) * d <= 0)) return
+    ts.best = mark
+    if (ts.activation !== null && (ts.best - trade.entryPrice) * d < ts.activation - tol) return
+    const candidate = ts.best - d * ts.distance
+    if (trade.stopLoss !== null) {
+      const gain = (candidate - trade.stopLoss) * d
+      if (ts.step !== null ? gain < ts.step - tol : gain <= tol) return
+    }
+    this.moveStop(trade, candidate, 'trail')
+  }
+
+  private moveStop(trade: Trade, level: number, by: 'trail' | 'breakeven'): void {
+    trade.stopLoss = level
+    trade.stopMovedBy = by
+    this.adjustments++
+  }
+}
+
+/** A trail as an order carries it, or as a trade starts it: not yet priced. */
+function orderTrail(t: TrailRequest | null): SimTrailingStop | null {
+  return t ? { distance: t.distance, activation: t.activation ?? null, step: t.step ?? null, best: null } : null
+}
+
+function orderBreakeven(b: BreakevenRequest | null): SimBreakeven | null {
+  return b ? { trigger: b.trigger, offset: b.offset ?? 0, done: false } : null
+}
+
+function orderMilestones(ms: MilestoneRequest[] | null): SimMilestone[] {
+  return (ms ?? []).map((m) => ({ distance: m.distance, label: m.label ?? null, reachedAt: null, price: null }))
+}
+
+/** A record's copy with its own trail, breakeven and milestones: the wire shape is the state, so
+ * a shallow copy would share them with the original. */
+function copyRecord<T extends Order | Trade>(r: T): T {
+  return {
+    ...r,
+    ...(r.trailingStop !== undefined ? { trailingStop: r.trailingStop ? { ...r.trailingStop } : null } : {}),
+    ...(r.breakeven !== undefined ? { breakeven: r.breakeven ? { ...r.breakeven } : null } : {}),
+    ...(r.milestones !== undefined ? { milestones: r.milestones.map((m) => ({ ...m })) } : {})
+  }
+}
+
+function withManagement<T extends Order | Trade>(r: T): T {
+  return { ...r, trailingStop: r.trailingStop ?? null, breakeven: r.breakeven ?? null, milestones: r.milestones ?? [] }
+}
+
+/** The price a trade closes at: a long on the bid, a short on the ask. */
+function closing(side: SimSide, bid: number, ask: number): number {
+  return side === 'buy' ? bid : ask
+}
+
+function finite(x: unknown): x is number {
+  return typeof x === 'number' && Number.isFinite(x)
+}
+
+/** The exit management an order or trade may carry (engine.py `_check_management`). */
+function checkManagement(trail: TrailRequest | null, breakeven: BreakevenRequest | null, milestones: MilestoneRequest[] | null): void {
+  if (trail) {
+    if (!finite(trail.distance) || trail.distance <= 0) throw new SimError("a trailing stop's distance must be positive")
+    const a = trail.activation ?? null
+    if (a !== null && (!finite(a) || a < 0)) throw new SimError("a trailing stop's activation must be zero or more")
+    const st = trail.step ?? null
+    if (st !== null && (!finite(st) || st <= 0)) throw new SimError("a trailing stop's step must be positive")
+  }
+  if (breakeven) {
+    if (!finite(breakeven.trigger) || breakeven.trigger <= 0) throw new SimError("a breakeven's trigger must be positive")
+    const offset = breakeven.offset ?? 0
+    if (!finite(offset) || offset >= breakeven.trigger) throw new SimError("a breakeven's offset must be below its trigger")
+  }
+  if (milestones) {
+    if (milestones.length > MAX_MILESTONES) throw new SimError(`at most ${MAX_MILESTONES} milestones`)
+    for (const m of milestones) {
+      if (!finite(m.distance) || m.distance === 0) throw new SimError("a milestone's distance must be a non-zero number")
+      if (m.label !== undefined && m.label !== null && m.label.length > MAX_MILESTONE_LABEL) {
+        throw new SimError(`a milestone's label is at most ${MAX_MILESTONE_LABEL} characters`)
+      }
+    }
   }
 }
 
@@ -435,20 +628,21 @@ function protectionHit(
   askLow: number
 ): { reason: CloseReason; price: number } | null {
   const { stopLoss: sl, takeProfit: tp } = trade
+  // Within a part in 1e9: a trailed stop can sit an ulp off the decimal it means.
   if (trade.side === 'buy') {
-    if (sl !== null && bidLow <= sl) return { reason: 'stop_loss', price: Math.min(sl, bidOpen) }
-    if (tp !== null && bidHigh >= tp) return { reason: 'take_profit', price: Math.max(tp, bidOpen) }
+    if (sl !== null && bidLow <= sl + tolerance(sl)) return { reason: 'stop_loss', price: Math.min(sl, bidOpen) }
+    if (tp !== null && bidHigh >= tp - tolerance(tp)) return { reason: 'take_profit', price: Math.max(tp, bidOpen) }
   } else {
-    if (sl !== null && askHigh >= sl) return { reason: 'stop_loss', price: Math.max(sl, askOpen) }
-    if (tp !== null && askLow <= tp) return { reason: 'take_profit', price: Math.min(tp, askOpen) }
+    if (sl !== null && askHigh >= sl - tolerance(sl)) return { reason: 'stop_loss', price: Math.max(sl, askOpen) }
+    if (tp !== null && askLow <= tp + tolerance(tp)) return { reason: 'take_profit', price: Math.min(tp, askOpen) }
   }
   return null
 }
 
 function protectionGapped(trade: Trade, bar: BidAskBar): boolean {
   const { stopLoss: sl, takeProfit: tp } = trade
-  if (trade.side === 'buy') return (sl !== null && bar.bidOpen <= sl) || (tp !== null && bar.bidOpen >= tp)
-  return (sl !== null && bar.askOpen >= sl) || (tp !== null && bar.askOpen <= tp)
+  if (trade.side === 'buy') return (sl !== null && bar.bidOpen <= sl + tolerance(sl)) || (tp !== null && bar.bidOpen >= tp - tolerance(tp))
+  return (sl !== null && bar.askOpen >= sl - tolerance(sl)) || (tp !== null && bar.askOpen <= tp + tolerance(tp))
 }
 
 /** The instant an intra-bar event is stamped with: the bar's open (the true instant is

@@ -3,6 +3,7 @@ import { createDockableWindow } from '../chrome/window'
 import { fetchClosedBars } from '../plugins/bars'
 import { gridFor } from '../replay/timeframes'
 import { formatShare, formatPnl, symbolKey } from './format'
+import { type AtrReading, atrReading } from './exits'
 import { PositionInspector } from './inspector'
 import { instrumentInfo, seedInstrument, type InstrumentInfo } from './instrument'
 import type { DraftController } from './lines'
@@ -108,7 +109,18 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
       overlays.update(session.snapshot)
     })
 
-  const ticket = new OrderTicket(session, { activeSymbol, instrumentFor })
+  // Distances stated in ATR are multiples of the active pane's ATR(14) on its own timeframe, over
+  // its closed bars (the last bar is still forming, live or in a replay).
+  const activeAtr = (): AtrReading | null => {
+    const pane = activePane()
+    if (!pane) return null
+    try {
+      return atrReading(pane.getChart().getDataList(), pane.getPeriod().text)
+    } catch {
+      return null
+    }
+  }
+  const ticket = new OrderTicket(session, { activeSymbol, instrumentFor, activeAtr })
   ticket.onDraftChange(() => {
     if (ticketOpen) overlays.draftChanged()
   })

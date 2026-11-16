@@ -1,6 +1,7 @@
 import type { SimTrade } from './api'
 import { formatPrice, formatUnits, formatUnitsShort } from './format'
 import type { TradeActionsView } from './kit'
+import { managementOf } from './exits'
 import { CLOSE_FRACTIONS, fractionUnits, reverseOrder } from './levels'
 import { closingPrice, type PricingContext, protectionValid } from './metrics'
 import type { TradingSession } from './session'
@@ -51,6 +52,9 @@ export function closeFraction(session: TradingSession, trade: SimTrade, fraction
 export async function reverseTrade(session: TradingSession, trade: SimTrade, ctx: PricingContext): Promise<string> {
   const plan = reverseOrder(trade, ctx.quote, ctx.info.precision)
   if (!plan) throw new Error('No price yet to reverse at')
+  // The trail, the breakeven and the milestones are distances from the entry: they carry across
+  // as they are (the milestones start unreached).
+  const exits = managementOf(trade)
   await session.placeOrder({
     symbol: trade.symbol,
     side: plan.side,
@@ -58,7 +62,10 @@ export async function reverseTrade(session: TradingSession, trade: SimTrade, ctx
     units: plan.units,
     stopLoss: plan.stopLoss,
     takeProfit: plan.takeProfit,
-    label: trade.label ?? undefined
+    label: trade.label ?? undefined,
+    trailingStop: exits.trailingStop ?? undefined,
+    breakeven: exits.breakeven ?? undefined,
+    milestones: exits.milestones.length > 0 ? exits.milestones : undefined
   })
   const now = plan.side === 'buy' ? 'long' : 'short'
   try {

@@ -13,6 +13,7 @@ import {
   tradePnl
 } from './format'
 import { amendmentRefusal, describeAmendment, type ProposedChange } from './amend'
+import { closeReasonWords } from './exits'
 import type { InstrumentInfo } from './instrument'
 import { Arming, armKey, ConfirmBar, kbtn } from './kit'
 import { balancesBefore, closedMove, closedShareOfBalance, closedTrades } from './ledger'
@@ -382,7 +383,7 @@ export class TradingPanel {
         cell(formatUnits(trade.units)),
         cell(formatPrice(trade.entryPrice, prec)),
         cell(formatPrice(trade.closePrice, prec)),
-        cell((trade.closeReason ?? '').replace('_', ' ')),
+        cell(trade.closeReason ? closeReasonWords(trade).toLowerCase() : ''),
         cell(formatPips(pips), dir),
         cell(formatPnl(pnl), dir),
         cell(formatShare(share), dir),

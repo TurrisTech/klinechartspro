@@ -49,6 +49,9 @@ mode only for its title.
 - `kit.ts` — **the trading kit**: the controls every surface is built from (below) — `LevelField`
   (a stop, target or price: label, presets, `[− | 20.0 | pips ▾ | +]`, readout), `NumberField`,
   `FigureList`, `ConfirmBar`, `TradeActions`, `Arming` (two presses) and `armKey`.
+- `exits.ts` — PURE (tested): exit management as the surfaces state it — a trailing stop, an
+  auto-breakeven and the "Notify at" milestones, each in pips / price / % of price / × ATR / R,
+  parsed to the engine's price distances, read out, worded; Wilder's ATR; a position's R.
 - `levels.ts` — PURE (tested): how a level is stated in pips / price / % of balance and read back,
   stepped, and read out; the resting-price rules and default; fractional close; the reverse order.
 - `manage.ts` — what each `TradeActions` button may do now, partial close and the two-step reverse,
@@ -164,6 +167,54 @@ percentage beside pips and P&L — "and other changes that are consistent with t
   trade.
 - **Seconds**: `formatInstant` (every trading timestamp) and the replay's `formatClock` print
   `hh:mm:ss`, with `hourCycle: 'h23'` so midnight is never `24:00`. History gained an Opened column.
+
+## Trailing stop, breakeven and Notify at (2026-11-15)
+
+The user asked (2026-11-15): "in the Trade box for wdashboard, alongside Take profit, allow several
+options for a trailing stop. also have options to notify when price goes a certain multiple (or
+multiples) from entry", then "make sure that these will stop at Next alert on bar replay".
+
+**In the engine, not the browser.** A paper account fills on the server, on ticks, with no tab
+open, so a trail the browser moved would stop trailing when the tab closed. The three pieces live
+in the fill engine (`wdashboard-server` 0.58.0 `sim/engine.py`, its Rust twin, and the replay's
+port `client/replay/engine.ts`, held together by the shared parity cases): an order carries them
+to its trade. Read `wdashboard-server/docs/replay.md` "Exit management" for the rules; in short:
+
+- **Trailing stop** — the trade's one stop loss follows the best closing-side price at a
+  distance. Options: where it **starts** (at once, or once that far in profit) and its **step**
+  (it moves only by at least that much). It only tightens, and only when the price makes new
+  ground, so a stop dragged looser stays put until the market goes further. Its label on the
+  chart reads **TSL**, and its tooltip says what it follows.
+- **Breakeven** — the stop goes to the entry, plus a **lock**, the first time the trade is that
+  far in profit; once. The label then reads **BE** (until a trail moves it).
+- **Notify at** — distances from the entry, a list (`1, 2, -0.5`). The first price to reach each
+  is a notification: from the SERVER for a paper trade (source `trade`, so it arrives with no tab
+  open, in the bell, and the card flashes "Reached +2R"), from this page for a replay (source
+  `replay`). Negative numbers are against the trade.
+
+**The "several options" are how a distance is stated** — one unit select per field, the same five
+for all three: **pips**, a **price** difference, **% of the price**, **× ATR** (the active pane's
+Wilder ATR(14) over its closed bars, on that pane's timeframe), or **R** (the stop loss's
+distance). Each field's unit is its own preference (`trailUnit` / `breakevenUnit` / `notifyUnit`,
+defaults pips / R / R), shared by the trade box and the cards. A trail's start and step are in the
+trail's unit, a breakeven's lock in its own. Whatever the unit, the order carries a PRICE distance:
+a trail of 2 × ATR is twice the ATR when it was placed, not a figure that follows the ATR (the
+engine runs on ticks and has no bars). The readout says what each comes to — where the stop goes
+now or where the trail takes over (beside a tighter stop loss it does nothing until it passes it),
+where the breakeven fires, the price of each milestone. Presets: **1R** and **2 ATR** on the trail,
+**1R** on the breakeven, **1R 2R 3R** toggles on Notify at. R needs a stop loss; × ATR needs a pane
+with fifteen closed bars; each unit says why it is unavailable.
+
+**On a working position** the order card has the same three fields (kit.ts `ExitField`), wired to
+PROPOSE: Enter, leaving a field, a step, a preset or × puts the change up for Confirm like a stop's
+change (`Amendment` role `manage`, worded in `amend.ts`: "Trail the EURUSD long 10K's stop 5.0p
+behind the bid? — The stop goes to 1.10187 now"). The popup shows them as rows (Trailing,
+Breakeven, Notify at, ✓ once reached). A working trade's R is its stop's distance when it was
+placed (its order's stop: `initialRisk`), so a trailed stop does not shrink it; a milestone list
+reads as the user wrote it ("1, 2" from its "+1R"/"+2R" labels), not as distance over an R measured
+from a fill half a pip from where the ticket priced it. **Reverse** carries all three across.
+History says "trailing stop" or "breakeven stop" where the stop that closed a trade was placed by
+one (`stopMovedBy`; the close reason stays `stop_loss`).
 
 ## The trade box (2026-09-19)
 
