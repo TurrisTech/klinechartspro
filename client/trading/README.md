@@ -48,6 +48,7 @@ mode only for its title.
   in the **trade box**, a window of its own.
 - `kit.ts` — **the trading kit**: the controls every surface is built from (below) — `LevelField`
   (a stop, target or price: label, presets, `[− | 20.0 | pips ▾ | +]`, readout), `NumberField`,
+  `ExitField` (a trailing stop, a breakeven or Notify at, with its unit and secondary numbers),
   `FigureList`, `ConfirmBar`, `TradeActions`, `Arming` (two presses) and `armKey`.
 - `exits.ts` — PURE (tested): exit management as the surfaces state it — a trailing stop, an
   auto-breakeven and the "Notify at" milestones, each in pips / price / % of price / × ATR / R,
