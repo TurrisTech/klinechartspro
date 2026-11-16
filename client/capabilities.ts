@@ -90,6 +90,12 @@ export type Feature =
   // WS /stream — what the server has raised for this owner (wdashboard_server/notify).
   // Stored server-side, so a notification raised while every tab was closed is still there.
   | 'notifications'
+  // POST /notifications — this page raises a row through the server (a live client alert), with
+  // an idempotency key so two tabs raise one row. Without it a client alert stays in its tab.
+  | 'notification_raise'
+  // /notifications/channels — where live notifications are delivered beyond the dashboard
+  // (Pushover, Telegram). Without it the bell offers no Delivery window.
+  | 'notification_channels'
   // GET /watch/sources and the /watch CRUD — server-side conditions on live events
   // (wdashboard_server/watch). The client only mounts price watches when advertised: on an
   // older server there is nothing to hold them, and a browser-side monitor is not a

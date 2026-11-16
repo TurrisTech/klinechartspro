@@ -21,7 +21,17 @@ export interface NotificationSpec {
    * are acknowledged and cleared THERE as well as here (see `NotificationBackend`), so
    * reading a notification on one device is not undone by opening another. */
   remoteId?: string
+  /** Idempotency key: what this row is ABOUT, so two raises of one event are one row. A client
+   * alert's is its id and the bar close it fired at -- two tabs evaluating it both raise it, and
+   * a durable sink (./durable.ts) hands the key to the server, which keeps one row and sends one
+   * push. The centre itself does not read it. */
+  key?: string
 }
+
+/** Producers whose rows never leave the page: a bar replay's notification is about a past
+ * market the replay is walking, and must never be stored or pushed to a phone as if the live
+ * market had done it. The server refuses these too. */
+export const LOCAL_ONLY_SOURCES: ReadonlySet<string> = new Set(['replay'])
 
 export interface Notification extends NotificationSpec {
   id: string

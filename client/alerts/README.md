@@ -159,14 +159,18 @@ has not written yet. It is re-read every 30 s and evaluated anyway after 10 minu
 value missing — late and never cannot be told apart from one
 observation, so the wait is bounded (`notes/architecture/freshness-horizons.md`). A firing is
 raised into the Notification Center tagged **`alert`**, and recorded on the alert (count, last
-firing, `once` → fired).
+firing, `once` → fired). Where the server advertises `notification_raise`, the monitor's sink is
+`durableSink` (`client/notifications/durable.ts`): the row is also posted to the server with the
+key `alert:<id>:<bar close>`, so it is stored, shown on every tab and sent to the account's
+Delivery channels (Pushover, Telegram). A bar replay's Next alert raises nothing through it.
 
 A change that arrives during an evaluation re-runs it when it ends; an alert switched off,
 edited or deleted while the server is being read says nothing; a runner needing more lead-in
 than a shared feed has loaded waits for the deeper read before it seeds its baseline.
 
 Known limits: **only while a tab is open** (that is what server alerts are for); **every open
-tab evaluates and notifies on its own**; a firing while no tab was open is never caught up.
+tab evaluates on its own** (the key makes their firings one notification and one push where the
+server takes them); a firing while no tab was open is never caught up.
 
 ## A bar replay's Next alert: `search.ts`
 

@@ -3302,19 +3302,135 @@ body.wd-has-dock > #app {
 .wd-notify-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 0.375rem;
   border-top: 1px solid var(--border);
   padding: 0.375rem 0.5rem;
 }
 
-.wd-notify-clear {
+.wd-notify-clear,
+.wd-notify-action {
   height: 1.75rem;
   padding: 0 0.625rem;
   font-size: 0.75rem;
 }
 
+/* A footer action (Delivery…) sits at the left, Clear all keeps the right. */
+.wd-notify-action:first-child {
+  margin-right: auto;
+}
+
 .wd-notify-clear:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* --- Delivery (client/notifications/channels) ---------------------------------------------
+   Where live notifications go beyond the dashboard: a card per channel the server lists. */
+
+.wd-delivery-window > .wd-window-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.25rem 0.75rem 0.75rem;
+}
+
+.wd-delivery {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wd-delivery-intro {
+  margin: 0;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+
+.wd-delivery-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.wd-delivery-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-delivery-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.wd-delivery-badge {
+  flex: 1 1 auto;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-delivery-help,
+.wd-delivery-field-help,
+.wd-delivery-last {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.wd-delivery-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wd-delivery-field > label {
+  font-size: 0.8125rem;
+}
+
+.wd-delivery-input {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wd-delivery-input > .kc-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 2rem;
+}
+
+.wd-delivery-options,
+.wd-delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.wd-delivery-actions .kc-button,
+.wd-delivery-find,
+.wd-delivery-option {
+  height: 2rem;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.wd-delivery-remove {
+  margin-left: auto;
+}
+
+.wd-delivery-status {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.wd-delivery-status.is-error,
+.wd-delivery-last.is-error {
+  color: var(--kc-danger);
 }
 
 /* --- Price watches (client/watch) ------------------------------------------------------ */

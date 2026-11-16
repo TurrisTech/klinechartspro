@@ -19,7 +19,9 @@ where the two meet.
 | `types.ts` | `Notification`, `NotificationSpec`, **`NotificationSink`** (the one-method interface a producer depends on) and **`NotificationBackend`** (the durable half, when there is one). |
 | `center.ts` | `NotificationCenter`: the newest-first capped list, seen/unseen, `subscribe`, and the backend seam. Plus the page singleton `notifications`. |
 | `bell.ts` | The view: the bell (blink + badge), the caret (the dropdown), the rows, Clear all. Plain DOM. |
-| `index.ts` | `mountNotificationCenter(chartPro)` — puts the bell in the slot for one wall. |
+| `index.ts` | `mountNotificationCenter(chartPro, center, actions)` — puts the bell in the slot for one wall; `actions` are footer buttons (`BellAction`). |
+| `durable.ts` | `durableSink(center, raise)`: a `NotificationSink` whose rows the server holds too (see below). |
+| `channels/` | the **Delivery** window: where live notifications go beyond the dashboard (Pushover, Telegram). See [`channels/README.md`](channels/README.md). |
 
 ## The two clicks are different acts
 
@@ -48,6 +50,28 @@ may land in the middle of it, and a catch-up read must not bury the alert that j
 The centre holds **no persistence of its own**. It used to mirror the list into
 `localStorage`; a server-side store is precisely what replaces that, and keeping both would
 be two records of one list.
+
+## Rows the server holds too: `durableSink`
+
+A live client alert is evaluated in the browser, but it should reach the phone and every other
+open tab like a watch does. `durableSink(center, raise)` is the sink that does it. The live alert
+monitor gets it from `client/index.ts` when the server advertises `notification_raise`.
+
+- The row is raised **here at once**, so the bell does not wait on the network. It is also
+  **posted** to the server (`raiseNotification`, `POST /notifications`), which stores it, pushes it
+  to every tab and delivers it to the account's channels.
+- When the server answers, the page's row takes the server's id (`NotificationCenter.bind`), so
+  acknowledging or clearing it reaches the server. The live push of the same row then finds it
+  and adds nothing. If the push landed first, the page's copy is dropped instead.
+- The spec's **`key`** (a client alert's is `alert:<id>:<bar close>`) makes the raise idempotent
+  on the server. Two tabs evaluating one alert make one row and one push.
+- An acknowledgement or a dismissal made before the server answered is passed on when it does:
+  the centre remembers page rows dismissed unbound, and server ids dismissed here, so a late push
+  or a hydrate cannot bring a dismissed row back.
+- The title and body are cut to the server's limits (200 and 2,000 characters) rather than
+  refused, so an alert named after a long compound rule still reaches the phone.
+- If the server cannot take it, the row stays in this tab, as every client alert did before.
+- `LOCAL_ONLY_SOURCES` (`replay`) are never posted, whoever hands them to the sink.
 
 ## Lifetimes
 
