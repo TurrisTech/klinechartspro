@@ -156,17 +156,19 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
     }
 
     const save = button('kc-button wd-delivery-save', 'Save', () => void onSave(entry))
-    const refresh = (): void => {
-      save.disabled = state.busy || missing(entry, state.draft).length > 0
-    }
-    for (const field of entry.fields) card.appendChild(renderField(entry, field, state, refresh))
-
-    const actions = el('div', 'wd-delivery-actions')
     const check = button('kc-button kc-button-outline', 'Check', () => void onCheck(entry))
     check.title = `Ask ${entry.title} whether these settings work, without sending anything`
     const test = button('kc-button kc-button-outline', 'Send test', () => void onTest(entry))
     test.title = 'Send a test message now'
-    for (const b of [check, test]) b.disabled = state.busy || missing(entry, state.draft).length > 0
+    // Typing does not re-render the card (it would take the focus away), so the three buttons that
+    // need every required value are switched here, on each keystroke.
+    const refresh = (): void => {
+      const blocked = state.busy || missing(entry, state.draft).length > 0
+      for (const b of [save, check, test]) b.disabled = blocked
+    }
+    for (const field of entry.fields) card.appendChild(renderField(entry, field, state, refresh))
+
+    const actions = el('div', 'wd-delivery-actions')
     actions.append(save, check, test)
     if (entry.setting) {
       const remove = button(
@@ -363,6 +365,11 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
 
   function open(): void {
     if (disposed) return
+    // Every open starts from what the server holds now: a status line or a half-typed value from
+    // an earlier visit would describe a moment that has passed.
+    cards.clear()
+    entries = null
+    loadError = null
     const win = windowFor()
     win.setVisible(true)
     render()

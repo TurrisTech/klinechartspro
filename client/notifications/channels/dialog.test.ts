@@ -122,8 +122,17 @@ test('every channel the server lists is a card built from its fields', async () 
   expect((root.querySelector('#wd-delivery-pushover-priority') as HTMLSelectElement).value).toBe('0')
   expect(card('telegram').querySelector('.wd-delivery-badge')?.textContent).toBe('Not set up')
   expect(root.textContent).toContain('A bar replay never sends.')
-  const save = [...card('telegram').querySelectorAll('button')].find((b) => b.textContent === 'Save') as HTMLButtonElement
-  expect(save.disabled).toBe(true)
+  const buttons = () => [...card('telegram').querySelectorAll('button')].filter((b) => ['Save', 'Check', 'Send test'].includes(b.textContent ?? ''))
+  expect(buttons().map((b) => b.disabled)).toEqual([true, true, true])
+  // Typing re-enables all three, without a re-render (which would take the focus away).
+  const token = root.querySelector('#wd-delivery-telegram-bot_token') as HTMLInputElement
+  token.value = '123:SECRET'
+  token.dispatchEvent(new Event('input'))
+  const chat = root.querySelector('#wd-delivery-telegram-chat_id') as HTMLInputElement
+  chat.value = '1'
+  chat.dispatchEvent(new Event('input'))
+  expect(buttons().map((b) => b.disabled)).toEqual([false, false, false])
+  expect(document.activeElement === chat || root.contains(chat)).toBe(true)
 })
 
 test('Telegram: Find picks the chat, Save stores and checks, and the token is never shown', async () => {
@@ -203,4 +212,17 @@ test('a server error is shown on the card', async () => {
   const status = card('telegram').querySelector('.wd-delivery-status') as HTMLElement
   expect(status.textContent).toBe('Chat id is required')
   expect(status.className).toContain('is-error')
+})
+
+test('reopening the window starts from the server, not from the last visit', async () => {
+  const { dialog, card, press, type } = await mount()
+  type('telegram', 'bot_token', '123:SECRET')
+  type('telegram', 'chat_id', '424242')
+  await press('telegram', 'Check')
+  expect(card('telegram').querySelector('.wd-delivery-status')).not.toBeNull()
+  dialog.close()
+  dialog.open()
+  await settle()
+  expect(card('telegram').querySelector('.wd-delivery-status')).toBeNull()
+  expect((card('telegram').querySelector('#wd-delivery-telegram-chat_id') as HTMLInputElement).value).toBe('')
 })
