@@ -20,6 +20,7 @@
   import FibonacciIcon from '@lucide/svelte/icons/binary'
   import WavesIcon from '@lucide/svelte/icons/waves'
   import MagnetIcon from '@lucide/svelte/icons/magnet'
+  import RulerIcon from '@lucide/svelte/icons/ruler'
   import LockIcon from '@lucide/svelte/icons/lock-keyhole'
   import UnlockIcon from '@lucide/svelte/icons/unlock-keyhole'
   import EyeIcon from '@lucide/svelte/icons/eye'
@@ -335,6 +336,10 @@
 
   let overlayMode = $state<OverlayMode>('normal')
   let overlaysLocked = $state(false)
+  // The rail's ruler: armed, the next press-and-drag on any price pane measures, as Shift +
+  // drag does -- the only way to measure on a touch screen. One measurement, then it disarms,
+  // like a drawing tool placing one drawing.
+  let rulerArmed = $state(false)
   let overlaysVisible = $state(true)
 
   // The settings dialog's heading: a template's registered name unless the locale gives it a
@@ -948,7 +953,10 @@
   data-size={size}
   style={dialogAnchorX === null ? undefined : `--kc-dialog-anchor-x: ${dialogAnchorX}px;`}
 >
-  <Tooltip.Provider delayDuration={250}>
+  <!-- ignoreNonKeyboardFocus: a tooltip opens on hover and on KEYBOARD focus only. A tap focuses
+       the button it lands on, and on a touch screen -- where nothing ever hovers away -- the
+       tooltip that focus opened stayed over the chart until something else took focus. -->
+  <Tooltip.Provider delayDuration={250} ignoreNonKeyboardFocus>
     <header class="kc-toolbar" bind:this={toolbarElement} data-tier={toolbarTier}>
       <Tooltip.Root>
         <Tooltip.Trigger class={iconButtonClass()} onclick={() => {
@@ -1236,6 +1244,13 @@
             </Popover.Root>
           {/each}
 
+          <Tooltip.Root>
+            <Tooltip.Trigger class={iconButtonClass(rulerArmed)} onclick={() => {
+              rulerArmed = !rulerArmed
+            }} aria-label={i18n('ruler', locale)} aria-pressed={rulerArmed}><RulerIcon /></Tooltip.Trigger>
+            <Tooltip.Portal {...portalProps}><Tooltip.Content class="kc-tooltip" side="right">{i18n(rulerArmed ? 'ruler_armed' : 'ruler', locale)}</Tooltip.Content></Tooltip.Portal>
+          </Tooltip.Root>
+
           <Separator.Root class="kc-separator kc-separator-horizontal" />
           <Tooltip.Root>
             <Tooltip.Trigger class={iconButtonClass(overlayMode !== 'normal')} onclick={() => {
@@ -1307,6 +1322,8 @@
             dragRole={paneDrag?.sourceId === pane.id ? 'source' : paneDrag?.targetId === pane.id ? 'target' : undefined}
             onGripPointerDown={startPaneDrag}
             onGripStep={stepPane}
+            {rulerArmed}
+            onRulerDone={() => { rulerArmed = false }}
             {theme}
             {styles}
             {locale}

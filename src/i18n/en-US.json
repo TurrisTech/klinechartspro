@@ -396,5 +396,12 @@
   "indicator_param_above": "{name} must be at most {bound}",
   "indicator_param_fraction": "{name} must be a whole number",
   "indicator_param_empty": "At least one line has to stay",
-  "indicator_param_refused": "Not available on this pane"
+  "indicator_param_refused": "Not available on this pane",
+  "drawing_actions": "Selected drawing",
+  "drawing_delete": "Delete drawing",
+  "drawing_lock": "Lock drawing",
+  "drawing_unlock": "Unlock drawing",
+  "drawing_deselect": "Done",
+  "ruler": "Ruler: drag on a chart to measure (Shift + drag with a mouse)",
+  "ruler_armed": "Drag on a chart to measure"
 }
