@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import {
     dispose,
     init,
@@ -14,6 +14,7 @@
     type KLineData,
     type Nullable,
     type OverlayCreate,
+    type OverlayEvent,
     type OverlayMode,
     type Period as ChartPeriod,
     type Point,
@@ -24,6 +25,10 @@
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle'
   import ChevronsRightIcon from '@lucide/svelte/icons/chevrons-right'
   import GripIcon from '@lucide/svelte/icons/grip'
+  import LockIcon from '@lucide/svelte/icons/lock-keyhole'
+  import UnlockIcon from '@lucide/svelte/icons/unlock-keyhole'
+  import TrashIcon from '@lucide/svelte/icons/trash-2'
+  import XIcon from '@lucide/svelte/icons/x'
 
   import i18n from './i18n'
 
@@ -38,6 +43,7 @@
   import type { Measurement, MeasurePoint, SyncBus } from './sync/bus'
   import { paneClock, translateTimestamp } from './sync/clock'
   import { sameSymbol } from './sync/follow'
+  import { createGestureTail, createTapRecognizer } from './sync/touch'
   import {
     applyCrosshairAt,
     clearCrosshair,
@@ -86,7 +92,9 @@
     reorderable = false,
     dragRole = undefined,
     onGripPointerDown = () => {},
-    onGripStep = () => {}
+    onGripStep = () => {},
+    rulerArmed = false,
+    onRulerDone = () => {}
   }: {
     pane: PaneState
     active: boolean
@@ -106,6 +114,11 @@
     onGripPointerDown?: (event: PointerEvent, paneId: string) => void
     /** An arrow key on the focused grip: move one place earlier (-1) or later (+1). */
     onGripStep?: (paneId: string, step: -1 | 1) => void
+    /** The rail's ruler is armed: the next press on a price pane measures, as Shift + press
+     *  does with a mouse -- the one way to measure on a touch screen, which has no Shift. */
+    rulerArmed?: boolean
+    /** The armed ruler's measurement is made (or abandoned): the rail disarms it. */
+    onRulerDone?: () => void
     theme: string
     styles: DeepPartial<Styles>
     locale: string
@@ -157,6 +170,23 @@
   // never go stale across a gesture that produces no click (a drag, a pointer released
   // elsewhere, a click swallowed by one of the other guards).
   let selectingPointerDown = false
+
+  // The kind of pointer the gesture in flight began with -- 'mouse', 'touch' or 'pen' -- from
+  // the same pointerdown capture handler. A finger has no hover and no right button, so what a
+  // gesture offers afterwards (the drawing bar below) depends on what made it.
+  let gesturePointer = 'mouse'
+
+  // This pane's crosshair is the one the wall shows: it broadcast last, and no other pane has
+  // since. Only the source clears the wall's copies -- on a touch screen it does so when its
+  // own crosshair goes (see "Touch" in onMount), and a pane that clears while another one is
+  // the source would wipe that pane's crosshair from the wall.
+  let crosshairSource = false
+
+  // A drawing a FINGER selected, and the bar of what a right-click does to it there -- delete
+  // it, (un)lock it. klinecharts deletes a drawing on a right-click, which a touch screen has
+  // no way to make, so on a tablet a drawing once placed could only be removed with all the
+  // others (the rail's bin). Null while none is selected, or a mouse selected it.
+  let touchDrawing = $state<{ id: string; locked: boolean } | null>(null)
 
   // Transient name -> klinecharts chartPaneId map for this pane's sub-indicators. Meaningless
   // once this chart is disposed, unlike `pane.subIndicatorNames` (the durable name list),
@@ -308,17 +338,20 @@
   function applyIndicatorIcons() {
     if (!widget) return
     const color = theme === 'dark' ? '#a3a3a3' : '#737373'
+    // A fingertip needs more than the 14px glyph to land on: under a coarse pointer every icon
+    // carries 4px of padding all round, a 22px target around the same glyph.
+    const pad = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 4 : 0
     const icon = (id: string, glyph: string, marginLeft = 6) => ({
       id,
       position: 'middle' as const,
-      marginLeft,
-      marginTop: 3,
+      marginLeft: marginLeft - pad,
+      marginTop: 3 - pad,
       marginRight: 0,
       marginBottom: 0,
-      paddingLeft: 0,
-      paddingTop: 0,
-      paddingRight: 0,
-      paddingBottom: 0,
+      paddingLeft: pad,
+      paddingTop: pad,
+      paddingRight: pad,
+      paddingBottom: pad,
       type: 'icon_font' as const,
       content: { code: glyph, family: 'icomoon' },
       borderRadius: 0,
@@ -528,7 +561,10 @@
   const WHEEL_TAIL_MS = 250
   let pointerDriving = false
   let wheelDrivingUntil = 0
-  const isDriving = () => pointerDriving || Date.now() < wheelDrivingUntil
+  // A finger lifted off a moving chart flings it on for up to seconds; those frames are the
+  // gesture's too (src/sync/touch.ts, createGestureTail).
+  const flingTail = createGestureTail()
+  const isDriving = () => pointerDriving || Date.now() < wheelDrivingUntil || flingTail.touch(performance.now())
 
   function broadcastPan(): void {
     if (!widget) return
@@ -595,6 +631,9 @@
 
   function showCrosshair(point: CrosshairPoint | null): void {
     syncedPoint = point
+    // Only ever handed here by the bus on behalf of ANOTHER pane (it skips the source), so
+    // whatever this pane's own crosshair was, the wall's is now someone else's.
+    crosshairSource = false
     if (!widget) return
     if (point === null) {
       if (syncedCrosshair !== CLEARED) clearCrosshair(widget)
@@ -1157,16 +1196,49 @@
       // this flag covers interacting with one that's already finished -- see
       // `overlayInteracted`'s own comment for the ordering this relies on.
       onClick: () => { overlayInteracted = true },
-      onPressedMoveStart: () => { overlayInteracted = true }
+      onPressedMoveStart: () => { overlayInteracted = true },
+      // klinecharts selects a drawing on a click or a tap, and deselects it on the next one
+      // elsewhere. Only a finger's selection offers the bar (touchDrawing).
+      onSelected: (event: OverlayEvent<unknown>) => {
+        touchDrawing = gesturePointer === 'mouse' ? null : { id: event.overlay.id, locked: event.overlay.lock }
+      },
+      onDeselected: (event: OverlayEvent<unknown>) => {
+        if (touchDrawing?.id === event.overlay.id) touchDrawing = null
+      },
+      onRemoved: (event: OverlayEvent<unknown>) => {
+        if (touchDrawing?.id === event.overlay.id) touchDrawing = null
+      }
     } as OverlayCreate)
   }
 
   function overrideOverlay(patch: Partial<OverlayCreate>) {
     widget?.overrideOverlay(patch)
+    // The rail's lock reaches every drawing at once, the selected one included. Untracked: the
+    // rail calls this from an effect, which must not come to depend on the selection.
+    untrack(() => {
+      const drawing = touchDrawing
+      if (!drawing || typeof patch.lock !== 'boolean' || drawing.locked === patch.lock) return
+      if (patch.id === undefined || patch.id === drawing.id) touchDrawing = { ...drawing, locked: patch.lock }
+    })
   }
 
   function removeDrawings() {
     widget?.removeOverlay({ groupId: 'drawing_tools' })
+    touchDrawing = null
+  }
+
+  // The touch drawing bar's actions -- the right-click a finger cannot make.
+  function removeTouchDrawing(): void {
+    const drawing = touchDrawing
+    touchDrawing = null
+    if (drawing) widget?.removeOverlay({ id: drawing.id })
+  }
+
+  function toggleTouchDrawingLock(): void {
+    const drawing = touchDrawing
+    if (!drawing || !widget) return
+    widget.overrideOverlay({ id: drawing.id, lock: !drawing.locked })
+    touchDrawing = { ...drawing, locked: !drawing.locked }
   }
 
   // --- Ruler (Shift + drag on the price pane) -------------------------------------------------
@@ -1365,6 +1437,7 @@
       crosshairAway = null
       const point = crosshairPoint(chart, cr)
       if (!point) return
+      crosshairSource = true
       bus.broadcastCrosshair(pane.id, point)
     }
     widget.subscribeAction('onCrosshairChange', onCrosshairChange)
@@ -1424,33 +1497,46 @@
         console.debug('[sync] click ignored: exceeded drag threshold', { pane: pane.id })
         return
       }
+      seekAt(event.clientX, event.clientY, target, hitOverlay, 'click')
+    }
+    // What a click -- or on a touch screen a double tap -- on a pane's main area does once it is
+    // known to be pointing at an instant rather than selecting the pane, measuring or dragging:
+    // scroll every other pane to it, unless it was really aimed at a drawing, an indicator's
+    // tooltip icon, or the next point of a drawing being placed.
+    const seekAt = (
+      clientX: number,
+      clientY: number,
+      target: { paneId: string; main: HTMLElement },
+      hitOverlay: boolean,
+      how: 'click' | 'double tap'
+    ): void => {
       if (hitOverlay) {
-        console.debug('[sync] click ignored: hit an existing drawing', { pane: pane.id })
+        console.debug(`[sync] ${how} ignored: hit an existing drawing`, { pane: pane.id })
         return
       }
       if (tooltipFeatureInteracted) {
-        console.debug('[sync] click ignored: hit an indicator tooltip icon', { pane: pane.id })
+        console.debug(`[sync] ${how} ignored: hit an indicator tooltip icon`, { pane: pane.id })
         return
       }
       if (chart.getOverlays().some((overlay) => overlay.currentStep !== -1)) {
-        console.debug('[sync] click ignored: a drawing is in progress', { pane: pane.id })
+        console.debug(`[sync] ${how} ignored: a drawing is in progress`, { pane: pane.id })
         return
       }
       const main = chart.getSize(target.paneId, 'main')
       if (!main || main.width === 0) {
-        console.debug('[sync] click ignored: pane has no measured width yet', { pane: pane.id, chartPane: target.paneId })
+        console.debug(`[sync] ${how} ignored: pane has no measured width yet`, { pane: pane.id, chartPane: target.paneId })
         return
       }
       const rect = target.main.getBoundingClientRect()
-      const x = event.clientX - rect.left
-      const y = event.clientY - rect.top
+      const x = clientX - rect.left
+      const y = clientY - rect.top
       // Same resolver the hover-driven crosshair sync uses (onCrosshairChange above), so a
       // click on candle_pane carries a price too -- reused to re-show a crosshair on any pane
       // this seek reloads, since reloading wipes klinecharts' own crosshair state (see
       // bus.seekPane). A sub-pane click re-shows the time line alone, as its hover does.
       const point = crosshairPoint(chart, { x, y, paneId: target.paneId })
       if (!point) {
-        console.debug('[sync] click ignored: could not resolve a date for this position', { pane: pane.id, x })
+        console.debug(`[sync] ${how} ignored: could not resolve a date for this position`, { pane: pane.id, x })
         return
       }
       console.debug('[sync] broadcasting seek', { pane: pane.id, chartPane: target.paneId, point, fraction: x / main.width })
@@ -1458,6 +1544,60 @@
     }
     chartDom.addEventListener('pointerdown', onClickPointerDown)
     chartDom.addEventListener('click', onChartClick)
+
+    // --- Touch ---------------------------------------------------------------------------------
+    //
+    // On a touch screen klinecharts' crosshair is not a hover's. A tap puts it down and it stays
+    // when the finger lifts; a drag that starts on it moves it; a tap elsewhere moves it there
+    // (patches/klinecharts@10.0.3.patch, "touch"); a drag anywhere else pans and takes it away.
+    // Two things follow for the wall's copies of it:
+    //  - a lifted finger is not a pointer leaving. `pointerleave` fires for every touch as the
+    //    finger lifts, and clearing the wall there (onPointerLeave below) wiped every other pane
+    //    the instant the tap that drew the crosshair ended -- crosshair sync looked broken.
+    //  - they go when this pane's own crosshair goes. klinecharts reports a crosshair moving but
+    //    never one going (setCrosshair() with nothing dispatches no action), so it is read back
+    //    after klinecharts has handled each touch.
+    // And klinecharts cancels the click a tap would have made, so the click-to-scroll a mouse
+    // makes is a DOUBLE tap here: a single tap is already the crosshair's.
+    //
+    // On the window, bubbling: every listener on the chart -- klinecharts' touchstart on its
+    // container, its touchend on the document -- has run by the time a touch event gets there.
+    const chartStore = (chart as unknown as { getChartStore?: () => { getCrosshair(): { paneId?: unknown } } }).getChartStore?.()
+    const ownCrosshairShown = (): boolean => typeof chartStore?.getCrosshair().paneId === 'string'
+    const dropLostCrosshair = (): void => {
+      if (!crosshairSource || ownCrosshairShown()) return
+      crosshairSource = false
+      bus.clearCrosshair(pane.id)
+    }
+    const taps = createTapRecognizer()
+    const onChartTouch = (event: TouchEvent): boolean => event.target instanceof Node && chartDom.contains(event.target)
+    const onTouchStartHandled = (event: TouchEvent) => {
+      if (!onChartTouch(event)) return
+      dropLostCrosshair()
+      const touch = event.changedTouches[0]
+      if (touch) taps.start({ x: touch.clientX, y: touch.clientY, t: event.timeStamp }, event.touches.length)
+    }
+    const onTouchEndHandled = (event: TouchEvent) => {
+      if (!onChartTouch(event)) return
+      dropLostCrosshair()
+      // No click follows a tap, so nothing else reads the flag a tap on a drawing just set.
+      const hitOverlay = overlayInteracted
+      overlayInteracted = false
+      const touch = event.changedTouches[0]
+      // A cancelled touch (the browser took it) was never a tap.
+      if (!touch || event.type === 'touchcancel') {
+        taps.reset()
+        return
+      }
+      const kind = taps.end({ x: touch.clientX, y: touch.clientY, t: event.timeStamp }, event.touches.length)
+      if (kind !== 'double-tap') return
+      // A touch event's target is where that finger landed, which for a tap is where it lifted.
+      const target = paneMainAt(chart, event.target as Node)
+      if (target) seekAt(touch.clientX, touch.clientY, target, hitOverlay, 'double tap')
+    }
+    window.addEventListener('touchstart', onTouchStartHandled, { passive: true })
+    window.addEventListener('touchend', onTouchEndHandled, { passive: true })
+    window.addEventListener('touchcancel', onTouchEndHandled, { passive: true })
 
     // The ruler's gesture. Taken in the CAPTURE phase on the element klinecharts' own container
     // sits in, so a Shift-press on the price pane is claimed before klinecharts sees the
@@ -1479,6 +1619,7 @@
       measureFrom = null
       // A Shift-click that never moved measured nothing, and leaves nothing behind.
       if (Math.abs(event.clientX - measureDownX) + Math.abs(event.clientY - measureDownY) < 3) bus.setMeasurement(null)
+      if (rulerArmed) onRulerDone()
     }
     const onMeasureMouseDown = (event: MouseEvent) => {
       if (event.button !== 0) return
@@ -1486,7 +1627,7 @@
       // price pane -- the trading layer's order labels and cards (client/trading/onchart.ts),
       // whose +/- buttons take Shift for ten steps -- and a press on one of those is theirs.
       if (!(event.target instanceof HTMLCanvasElement)) return
-      if (!event.shiftKey) {
+      if (!event.shiftKey && !rulerArmed) {
         // Any other press on a chart showing the measurement puts it away, on every pane. It
         // still starts a pan if it is dragged, but as a click it does nothing more: it does not
         // seek the wall.
@@ -1513,6 +1654,49 @@
     const onMeasureKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') bus.setMeasurement(null)
     }
+    // The same gesture by finger, while the rail's ruler is armed. Claimed in the capture phase
+    // and stopped there, as the Shift-press is, so klinecharts -- whose touch listener is on its
+    // container, inside this element -- never starts the pan the drag would otherwise be.
+    let measureTouchId: number | null = null
+    const onMeasureTouchMove = (event: TouchEvent) => {
+      if (measureFrom === null) return
+      const touch = [...event.changedTouches].find((t) => t.identifier === measureTouchId)
+      if (!touch) return
+      event.preventDefault()
+      const to = measurePointAt(touch.clientX, touch.clientY, false)
+      if (to) bus.setMeasurement(measurementOf(measureFrom, to))
+    }
+    const onMeasureTouchEnd = (event: TouchEvent) => {
+      const touch = [...event.changedTouches].find((t) => t.identifier === measureTouchId)
+      if (!touch) return
+      window.removeEventListener('touchmove', onMeasureTouchMove)
+      window.removeEventListener('touchend', onMeasureTouchEnd)
+      window.removeEventListener('touchcancel', onMeasureTouchEnd)
+      measureFrom = null
+      measureTouchId = null
+      if (event.type === 'touchcancel' || Math.hypot(touch.clientX - measureDownX, touch.clientY - measureDownY) < 3) {
+        bus.setMeasurement(null)
+      }
+      onRulerDone()
+    }
+    const onMeasureTouchStart = (event: TouchEvent) => {
+      if (!rulerArmed || event.touches.length !== 1 || !(event.target instanceof HTMLCanvasElement)) return
+      const touch = event.changedTouches[0]
+      const from = touch ? measurePointAt(touch.clientX, touch.clientY, true) : null
+      if (!touch || !from) return
+      event.preventDefault()
+      event.stopPropagation()
+      measureInteracted = true
+      bus.setMeasurement(measurementOf(from, from))
+      measureFrom = from
+      measureTouchId = touch.identifier
+      measureDownX = touch.clientX
+      measureDownY = touch.clientY
+      window.addEventListener('touchmove', onMeasureTouchMove, { passive: false })
+      window.addEventListener('touchend', onMeasureTouchEnd)
+      window.addEventListener('touchcancel', onMeasureTouchEnd)
+    }
+    widgetElement.addEventListener('touchstart', onMeasureTouchStart, { capture: true, passive: false })
     widgetElement.addEventListener('mousedown', onMeasureMouseDown, true)
     window.addEventListener('keydown', onMeasureKey)
 
@@ -1539,11 +1723,16 @@
     // candles) but released on the window: a drag that ends with the pointer outside the pane
     // -- off the edge of a small pane in a dense layout, which is most of them -- never
     // delivers pointerup to the element it started on, and would leave this stuck driving.
-    const onPanPointerDown = () => { pointerDriving = true }
+    const onPanPointerDown = () => {
+      pointerDriving = true
+      flingTail.clear()
+    }
     // Dragging the PRICE axis scales it without moving the visible range, so it dispatches
     // nothing this pane subscribes to -- the end of any pointer gesture is the one signal
     // that covers it as well as the pans that do dispatch.
-    const onPanPointerUp = () => {
+    const onPanPointerUp = (event: PointerEvent) => {
+      // Only the pane the gesture was on: pointerup is listened for on the window.
+      if (pointerDriving && event.pointerType === 'touch') flingTail.begin(performance.now())
       pointerDriving = false
       scheduleViewCapture()
     }
@@ -1553,7 +1742,12 @@
     // its own internal state directly, with no observable dispatch. `chart.getDom()` with no
     // args returns the chart's own root container, which is what actually receives pointer
     // events.
-    const onPointerLeave = () => { bus.clearCrosshair(pane.id) }
+    // A finger or a pen "leaves" as it lifts: see "Touch" above for when its crosshair goes.
+    const onPointerLeave = (event: PointerEvent) => {
+      if (event.pointerType === 'touch' || event.pointerType === 'pen') return
+      crosshairSource = false
+      bus.clearCrosshair(pane.id)
+    }
     chartDom.addEventListener('pointerleave', onPointerLeave)
     chartDom.addEventListener('pointerdown', onPanPointerDown)
     chartDom.addEventListener('wheel', onPanWheel, { passive: true })
@@ -1618,7 +1812,14 @@
       window.removeEventListener('pointercancel', onPanPointerUp)
       chartDom.removeEventListener('pointerdown', onClickPointerDown)
       chartDom.removeEventListener('click', onChartClick)
+      window.removeEventListener('touchstart', onTouchStartHandled)
+      window.removeEventListener('touchend', onTouchEndHandled)
+      window.removeEventListener('touchcancel', onTouchEndHandled)
       widgetElement.removeEventListener('mousedown', onMeasureMouseDown, true)
+      widgetElement.removeEventListener('touchstart', onMeasureTouchStart, true)
+      window.removeEventListener('touchmove', onMeasureTouchMove)
+      window.removeEventListener('touchend', onMeasureTouchEnd)
+      window.removeEventListener('touchcancel', onMeasureTouchEnd)
       window.removeEventListener('mousemove', onMeasureMove)
       window.removeEventListener('mouseup', onMeasureUp)
       window.removeEventListener('keydown', onMeasureKey)
@@ -1649,11 +1850,12 @@
   data-drag-role={dragRole}
   style={placement}
   tabindex="-1"
-  onpointerdowncapture={() => {
+  onpointerdowncapture={(event) => {
     // Captured BEFORE onActivate, which is what makes the answer meaningful -- see
     // selectingPointerDown. Any pointerdown anywhere in the pane refreshes it, so the flag
     // always describes the gesture actually in flight.
     selectingPointerDown = !active
+    gesturePointer = event.pointerType || 'mouse'
     tooltipFeatureInteracted = false
     measureInteracted = false
     onActivate(pane.id)
@@ -1724,6 +1926,46 @@
       <span class="klinecharts-pro-crosshair-away-reason">
         {i18n(`crosshair_${crosshairAway.reason.replace('-', '_')}`, locale)}
       </span>
+    </div>
+  {/if}
+  {#if touchDrawing}
+    <!-- What a right-click does to a drawing, for the finger that selected it (touchDrawing).
+         At the foot of the price area, centred: the top is the legends', which a pane with a
+         few indicators fills edge to edge. -->
+    <div
+      class="klinecharts-pro-drawing-bar"
+      role="toolbar"
+      aria-label={i18n('drawing_actions', locale)}
+      style={`bottom: ${priceAreaBottom}px;`}
+    >
+      <button
+        type="button"
+        class="kc-button kc-icon-button"
+        aria-label={i18n(touchDrawing.locked ? 'drawing_unlock' : 'drawing_lock', locale)}
+        title={i18n(touchDrawing.locked ? 'drawing_unlock' : 'drawing_lock', locale)}
+        aria-pressed={touchDrawing.locked}
+        onclick={toggleTouchDrawingLock}
+      >
+        {#if touchDrawing.locked}<LockIcon />{:else}<UnlockIcon />{/if}
+      </button>
+      <button
+        type="button"
+        class="kc-button kc-icon-button klinecharts-pro-drawing-delete"
+        aria-label={i18n('drawing_delete', locale)}
+        title={i18n('drawing_delete', locale)}
+        onclick={removeTouchDrawing}
+      >
+        <TrashIcon />
+      </button>
+      <button
+        type="button"
+        class="kc-button kc-icon-button"
+        aria-label={i18n('drawing_deselect', locale)}
+        title={i18n('drawing_deselect', locale)}
+        onclick={() => { touchDrawing = null }}
+      >
+        <XIcon />
+      </button>
     </div>
   {/if}
   {#if pane.loading}

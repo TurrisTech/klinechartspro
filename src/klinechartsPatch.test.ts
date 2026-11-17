@@ -10,12 +10,30 @@ import { dirname, join } from 'node:path'
 // Read as text rather than imported: klinecharts touches `window` at import.
 // It also carries "contained drawing" (klinechartsContain.test.ts): without it one throw while a
 // chart draws blanks that whole canvas, silently, on every frame it throws.
-test('the klinecharts the chart loads carries the stable-legend and contained-drawing patch', async () => {
+//
+// And "touch": a finger can drag a separator (24px band), a tap away from the crosshair moves it
+// rather than only dismissing it, a second tap or click too far from the first to be a double is
+// a tap of its own instead of being dropped, and lines/arcs/handles/thin rects are hit within
+// 10px of a finger (2px of a mouse, unchanged). Without it a tablet could not resize an indicator
+// pane, every other tap on a chart did nothing, and drawings could barely be selected.
+test('the klinecharts the chart loads carries the stable-legend, contained-drawing and touch patch', async () => {
   const entry = Bun.resolveSync('klinecharts', import.meta.dir)
   const pkg = await Bun.file(join(dirname(entry), '..', 'package.json')).json()
   expect(pkg.version).toBe('10.0.3')
   const source = await Bun.file(entry).text()
-  for (const marker of ['_legendSlotWidth', '_figureLegendReserves', '_candleLegendReserves', '_fitTooltipName', 'drawContained', 'trackSaveDepth']) {
+  for (const marker of [
+    '_legendSlotWidth',
+    '_figureLegendReserves',
+    '_candleLegendReserves',
+    '_fitTooltipName',
+    'drawContained',
+    'trackSaveDepth',
+    'TOUCH_SEPARATOR_HEIGHT',
+    '_touchSeparatorWidget',
+    'TOUCH_DEVIATION',
+    'isDoubleTap',
+    'isDoubleClick'
+  ]) {
     expect(source).toContain(marker)
   }
 })
