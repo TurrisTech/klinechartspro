@@ -47,7 +47,7 @@ thing being replayed. On screen there is only what every step uses:
 | [▶] [ Step ]  [1h v] × [1]  every [1 s v]                    |   transport
 | [Next alert]  Stepped 1h                                     |   the status, once there is one
 |--------------------------------------------------------------|
-| [Alerts 2] [Go to] [Base 1h] [Results] [Account] [Trade]  Exit replay |   the alert manager; one panel
+| [Alerts 2] [Go to] [Base 1h] [Results] [Sessions] [Account] [Trade]  Exit replay |   the alert manager; one panel
 |--------------------------------------------------------------|
 | TIME  [06:00] [next trading day v] [Go]  Fri, Oct 23, 06:00  |   the Go to panel, when open:
 | PRICE [1.12650    ] [Stop here] [Run]  stops at 1.1265 ×     |   a time, and a stop price
@@ -100,8 +100,8 @@ one replay clock, and a per-pane edge would collide with the active pane's ring.
 
 **Exit is one press** (since 2026-11-15). It took two -- the trading kit's `Arming`, its rule for
 buttons that cannot be taken back -- while nothing listed a replay to reopen. The start dialog's
-**Sessions** tab now does ("Past sessions", below), so leaving is no longer losing, and its
-title says where to find the replay again. The rail's Replay button is one press too while in
+**Sessions** tab now does ("Past sessions", below), and so does the window's own **Sessions**
+panel, so leaving is no longer losing, and its title says where to find the replay again. The rail's Replay button is one press too while in
 replay, and the rail's stream status reads **replay** (orange) instead of a green "live" under a
 chart frozen in the past.
 
@@ -259,6 +259,32 @@ rebuild) is listed, unscored, to delete but not to resume.
 Client only: `GET /sim/sessions` and `DELETE /sim/sessions/{id}` already existed, and the list
 needs nothing the blob does not carry. Each instrument's zone comes from `fetchSymbolInfo`, once
 per instrument (cached per page); UTC, named so, when it cannot be resolved.
+
+### From inside a replay: the Sessions panel
+
+The user, 2026-11-17, asked for this once the dialog's tab existed. The dialog opens only on a live
+wall, so switching meant Exit, then Replay, then Sessions, then Resume. The replay window's footer
+now has **Sessions**, one of its panels beside Go to, Base and Results, showing the same list
+(`controls.ts` `createSessionList`, which the dialog's tab uses too) of the owner's **other**
+replays: the one in progress is filtered out (`index.ts`), so it cannot be deleted from under
+itself. The list loads each time the panel opens and is kept while it is open. Play re-renders the
+window twice a second, and the list is neither re-read nor rebuilt for that. Its scroll position is
+put back after each re-render.
+
+**Resume leaves this replay the way Exit does and opens that one** (`index.ts` `switchTo`). The
+last save is allowed to land (bounded at 5 s), then `resumeReplay` runs, as from the dialog. A
+play is paused. A step already landing but too quick to show its Stop is waited for. A run showing
+its Stop is refused ("Stop the advance first"), as is a follow in progress. The row reads
+"Opening…" until the wall rebuilds, and a failure says so and frees the list.
+
+**While it switches, this replay stops following the chart.** `resumeReplay` puts the active pane
+on the other replay's instrument when no pane shows it. On a replay wall that pane change reaches
+`symbolChanged` like any symbol pick, and with nothing open the replay would follow it: it would
+rewrite the replay being LEFT to walk the other's instrument, then race the switch's rebuild with
+its own. `mount.test.ts` fails without the guard.
+
+The list's rows scroll inside a box that is kept across the list's own renders. Before this, the
+dialog rebuilt that box on every Stats or Delete, which sent a long list back to the top.
 
 ## The clock
 
@@ -848,10 +874,15 @@ the keys (kept from the chart, the repeat that must not cancel, a field's own ke
 press, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
 Enter, its refusals and Random's range -- and its Sessions tab: the count, a row's facts scored
 from the blob and not the server's account, Stats, Delete's two presses and a refused delete,
-Resume, an unreadable blob, the remembered tab, Enter kept from Start. `sessions.test.ts` pins
+Resume, an unreadable blob, the remembered tab, Enter kept from Start, and a Stats that keeps
+the scroll box -- and the window's Sessions panel: one panel among the others, loaded each time it
+opens and kept across re-renders, Resume ending a play and saying "Opening…", a failed switch, a
+refusal under a visible advance, a quick step waited for, Delete. `sessions.test.ts` pins
 the list's order and its score against the running session's; `mount.test.ts` resumes from a wall
 showing the instrument and from one on another instrument (the mount must not follow it away),
-and checks every save is stamped. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
+and checks every save is stamped; it also switches from inside a replay: the panel lists only the
+other replays, and Resume on another instrument moves the pane and names that replay in the intent
+without following the replay left onto it. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
 drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
 hub on a coinbase pane's own grid, the refusal for a pane with no market hours, and a forex day
 pane's reload window reaching the day forming since 17:00.

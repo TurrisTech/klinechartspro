@@ -134,6 +134,9 @@ export function clearReplay(): void {
 /** The longest Play waits for the wall to load between two steps. */
 const PLAY_SETTLE_MS = 5_000
 
+/** The longest a switch to another replay waits for this one's last save. */
+const SWITCH_SAVE_WAIT_MS = 5_000
+
 /** Which of the stored ladder the store holds for the instrument around `at` -- of the intervals
  * its vendor stores, never one the server would only fold (`probeStoredIntervals`). */
 function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promise<string[]> {
@@ -424,6 +427,25 @@ export async function mountBarReplay(
   watches.attach(session)
   await watches.load()
 
+  // SWITCHING TO ANOTHER REPLAY (the controls' Sessions panel). Leaving is Exit's: nothing of this
+  // replay is undone, its last save is let land, and the wall is rebuilt -- into the other one, the
+  // way the start dialog's Resume rebuilds a live wall into it. While it runs this replay no longer
+  // follows the chart: `resumeReplay` moves the active pane onto the other replay's instrument, and
+  // a follow would rewrite THIS session to walk it.
+  let leaving = false
+  const switchTo = async (target: ReplaySessionSummary): Promise<void> => {
+    // Unreadable: `resumeReplay` would do nothing, and this replay would stop following for good.
+    if (leaving || !target.state) return
+    leaving = true
+    try {
+      await Promise.race([session.flushSaves(), new Promise((resolve) => setTimeout(resolve, SWITCH_SAVE_WAIT_MS))])
+      await resumeReplay(chartPro, target, ctx.rebuild)
+    } catch (err) {
+      leaving = false
+      throw err
+    }
+  }
+
   const dock: TradingDock = mountTradingDock(session, {
     chartPro,
     container,
@@ -494,6 +516,11 @@ export async function mountBarReplay(
     account: { isOpen: () => dock.isOpen(), toggle: () => dock.toggle() },
     trade: { isOpen: () => dock.isTicketOpen(), toggle: () => dock.toggleTicket() },
     alerts: ctx.alerts?.manager,
+    sessions: {
+      load: async () => (await listSessions()).filter((listed) => listed.summary.id !== answer.session.id),
+      resume: (target) => switchTo(target),
+      remove: (id) => simApi.remove(id)
+    },
     priceStop: {
       get: () => watches.stopPrice(),
       set: (price) => watches.setStopPrice(price),
@@ -546,6 +573,8 @@ export async function mountBarReplay(
     },
     quote: async (key: string) => session.snapshot.quotes[key],
     symbolChanged(paneId: string, info: SymbolInfo): void {
+      // Moved there by a switch to another replay (`switchTo`), not by the user: not followed.
+      if (leaving) return
       const request = followRequest(paneId, chartPro.getActivePaneId(), symbolKey(info), session.symbol)
       if (request === 'back') session.dismissFollow()
       else if (request === 'follow') followPane(info)
