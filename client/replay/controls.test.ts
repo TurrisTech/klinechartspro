@@ -213,7 +213,14 @@ let mounted: Mounted[] = []
 
 function mount(
   f: Fake = fake(),
-  opts: { account?: boolean; alerts?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void>; busyRevealMs?: number } = {}
+  opts: {
+    account?: boolean
+    alerts?: boolean
+    sleep?: (ms: number) => Promise<void>
+    settled?: () => Promise<void>
+    busyRevealMs?: number
+    sessions?: import('./controls').SessionsSource
+  } = {}
 ): Mounted {
   const bounds = document.createElement('div')
   document.body.appendChild(bounds)
@@ -244,6 +251,7 @@ function mount(
     onStop: (r) => stops.push(r),
     sleep: opts.sleep,
     settled: opts.settled,
+    sessions: opts.sessions,
     // Shown at once unless a test is about the delay itself.
     busyRevealMs: opts.busyRevealMs ?? 0,
     account:
@@ -1424,46 +1432,50 @@ describe('the start dialog', () => {
   })
 })
 
+// Past replays as `GET /sim/sessions` lists them and the Sessions list shows them: the start
+// dialog's Sessions tab and the replay window's Sessions panel.
+
+type Listed = import('./controls').ListedSession
+type Summary = import('./sessions').ReplaySessionSummary
+
+// Tue 3 Jan 2023 17:00 New York, and 20 Jan 09:00.
+const STARTED = Date.UTC(2023, 0, 3, 22, 0)
+const CURSOR = Date.UTC(2023, 0, 20, 14, 0)
+
+/** A replay session as `GET /sim/sessions` lists it: its blob holds an engine that traded. */
+function stored(id: string, opts: { savedAt?: number; win?: boolean; trade?: boolean; ticker?: string } = {}): SimSnapshot {
+  const symbol = `oanda:${opts.ticker ?? 'EURUSD'}`
+  const engine = new Engine(10_000)
+  if (opts.trade !== false) {
+    engine.onQuote({ symbol, time: STARTED, bid: 1.1, ask: 1.1 })
+    const { order } = engine.submit({ symbol, side: 'buy', type: 'market', units: 10_000 })
+    const exit = opts.win === false ? 1.09 : 1.12
+    engine.onQuote({ symbol, time: CURSOR, bid: exit, ask: exit })
+    engine.closeTrade(order.tradeId as string)
+  }
+  const blob = serialize({ vendor: 'oanda', symbol, cursor: CURSOR, startedAt: STARTED, base: '1m', advance: { interval: '1h', multiple: 1 }, pauseOnFill: false, watches: [], engine: engine.toState() })
+  return {
+    id,
+    mode: 'replay',
+    name: 'Replay',
+    createdAt: Date.UTC(2026, 10, 1),
+    rev: 3,
+    // The server's own copy of a replay's account never moves: its engine runs in the client.
+    account: { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 },
+    quotes: {},
+    orders: [],
+    trades: [],
+    symbols: [symbol],
+    state: opts.savedAt === undefined ? blob : stampSaved(blob, opts.savedAt)
+  }
+}
+
+function listed(snapshots: SimSnapshot[]): Listed[] {
+  return summarizeSessions(snapshots).map((summary) => ({ summary, zone: 'America/New_York' }))
+}
+
 describe('the start dialog: past sessions', () => {
-  type Listed = import('./controls').ListedSession
-  type Summary = import('./sessions').ReplaySessionSummary
-
   const JULY = Date.UTC(2024, 6, 15, 20, 0)
-  // Tue 3 Jan 2023 17:00 New York, and 20 Jan 09:00.
-  const STARTED = Date.UTC(2023, 0, 3, 22, 0)
-  const CURSOR = Date.UTC(2023, 0, 20, 14, 0)
-
-  /** A replay session as `GET /sim/sessions` lists it: its blob holds an engine that traded. */
-  function stored(id: string, opts: { savedAt?: number; win?: boolean; trade?: boolean; ticker?: string } = {}): SimSnapshot {
-    const symbol = `oanda:${opts.ticker ?? 'EURUSD'}`
-    const engine = new Engine(10_000)
-    if (opts.trade !== false) {
-      engine.onQuote({ symbol, time: STARTED, bid: 1.1, ask: 1.1 })
-      const { order } = engine.submit({ symbol, side: 'buy', type: 'market', units: 10_000 })
-      const exit = opts.win === false ? 1.09 : 1.12
-      engine.onQuote({ symbol, time: CURSOR, bid: exit, ask: exit })
-      engine.closeTrade(order.tradeId as string)
-    }
-    const blob = serialize({ vendor: 'oanda', symbol, cursor: CURSOR, startedAt: STARTED, base: '1m', advance: { interval: '1h', multiple: 1 }, pauseOnFill: false, watches: [], engine: engine.toState() })
-    return {
-      id,
-      mode: 'replay',
-      name: 'Replay',
-      createdAt: Date.UTC(2026, 10, 1),
-      rev: 3,
-      // The server's own copy of a replay's account never moves: its engine runs in the client.
-      account: { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 },
-      quotes: {},
-      orders: [],
-      trades: [],
-      symbols: [symbol],
-      state: opts.savedAt === undefined ? blob : stampSaved(blob, opts.savedAt)
-    }
-  }
-
-  function listed(snapshots: SimSnapshot[]): Listed[] {
-    return summarizeSessions(snapshots).map((summary) => ({ summary, zone: 'America/New_York' }))
-  }
 
   function open(rows: Listed[] | Promise<Listed[]>) {
     const resumed: Summary[] = []
@@ -1482,7 +1494,9 @@ describe('the start dialog: past sessions', () => {
       onStart: (choice) => starts.push(choice),
       sessions: {
         load: () => Promise.resolve(rows),
-        resume: (s) => resumed.push(s),
+        resume: (s) => {
+          resumed.push(s)
+        },
         remove: async (id) => {
           if (failRemove) throw new Error('nope')
           removed.push(id)
@@ -1665,5 +1679,180 @@ describe('the start dialog: past sessions', () => {
     expect(d.sessionsPane().textContent).toBe('Could not load your replays.')
     d.tab('New replay').click()
     expect(d.newPane().hidden).toBe(false)
+  })
+})
+
+describe('the Sessions panel: switching replays from the replay window', () => {
+  type Source = import('./controls').SessionsSource
+
+  function source(rows: Listed[]) {
+    const resumed: Summary[] = []
+    const removed: string[] = []
+    const state = { loads: 0, failResume: false }
+    const src: Source = {
+      load: () => {
+        state.loads++
+        return Promise.resolve(rows)
+      },
+      // Resolves without the wall rebuilding: in the app the rebuild disposes the window first.
+      resume: async (s) => {
+        if (state.failResume) throw new Error('nope')
+        resumed.push(s)
+      },
+      remove: async (id) => {
+        removed.push(id)
+      }
+    }
+    return { src, resumed, removed, state }
+  }
+
+  const cards = (m: Mounted): HTMLElement[] => [...m.root.querySelectorAll('.wd-replay-session')] as HTMLElement[]
+  const inCard = (card: HTMLElement, text: string): HTMLButtonElement =>
+    [...card.querySelectorAll('button')].find((b) => b.textContent === text) as HTMLButtonElement
+  const panel = (m: Mounted): HTMLElement | null => m.q('.wd-replay-sessions-panel')
+
+  test('without a list to show there is no Sessions toggle', () => {
+    expect(mount().maybeButton('Sessions')).toBeNull()
+  })
+
+  test('Sessions opens the list as one of the panels, and loads it afresh each time it opens', async () => {
+    const s = source(listed([stored('a'), stored('b', { ticker: 'GBPUSD' })]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    expect(m.button('Sessions').getAttribute('aria-pressed')).toBe('true')
+    expect(panel(m)?.textContent).toBe('Loading your replays…')
+    await flush()
+    expect(cards(m).map((c) => c.dataset.session)).toEqual(['a', 'b'])
+    expect(cards(m)[1].textContent).toContain('GBPUSD')
+    // One panel at a time: Results takes its place.
+    m.button('Results').click()
+    expect(panel(m)).toBeNull()
+    expect(m.q('.wd-replay-results')).not.toBeNull()
+    m.button('Sessions').click()
+    await flush()
+    expect(s.state.loads).toBe(2)
+    expect(cards(m).length).toBe(2)
+    // A second press closes it.
+    m.button('Sessions').click()
+    expect(panel(m)).toBeNull()
+  })
+
+  test('a re-render keeps the list it has: not loaded again, not rebuilt', async () => {
+    const s = source(listed([stored('a'), stored('b')]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    const list = m.q('.wd-replay-session-list')
+    inCard(cards(m)[0], 'Stats').click()
+    // Every step re-renders the window, twice a second while playing.
+    m.emit()
+    m.emit()
+    expect(s.state.loads).toBe(1)
+    expect(m.q('.wd-replay-session-list')).toBe(list)
+    expect(inCard(cards(m)[0], 'Hide stats')).toBeDefined()
+  })
+
+  test('nothing else to switch to: it says so', async () => {
+    const m = mount(fake(), { sessions: source([]).src })
+    m.button('Sessions').click()
+    await flush()
+    expect(panel(m)?.textContent).toBe('No other replays. A replay you start from the live wall is kept here to switch to.')
+  })
+
+  test('Resume ends a play and hands the session over; the row says Opening… until the wall is rebuilt', async () => {
+    const s = source(listed([stored('a'), stored('b')]))
+    // A play whose pause between steps never ends: it is playing until something stops it.
+    const m = mount(fake(), { sessions: s.src, sleep: () => new Promise(() => {}) })
+    m.button('Sessions').click()
+    await flush()
+    ;(m.q('.wd-replay-play') as HTMLButtonElement).click()
+    await flush()
+    expect(m.q('.wd-replay-play')?.getAttribute('aria-pressed')).toBe('true')
+
+    inCard(cards(m)[1], 'Resume').click()
+    expect(s.resumed.map((r) => r.id)).toEqual(['b'])
+    expect(m.q('.wd-replay-play')?.getAttribute('aria-pressed')).toBe('false')
+    await flush()
+    expect(inCard(cards(m)[1], 'Opening…').disabled).toBe(true)
+    // One switch at a time.
+    expect(inCard(cards(m)[0], 'Resume').disabled).toBe(true)
+    expect(inCard(cards(m)[0], 'Delete').disabled).toBe(true)
+  })
+
+  test('a switch that fails says so, and the list can be used again', async () => {
+    const s = source(listed([stored('a')]))
+    s.state.failResume = true
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    inCard(cards(m)[0], 'Resume').click()
+    await flush()
+    expect(m.q('.wd-replay-flash')?.textContent).toBe('Could not open that replay')
+    expect(inCard(cards(m)[0], 'Resume').disabled).toBe(false)
+  })
+
+  test('while an advance shows its Stop, Resume is refused and says why', async () => {
+    const s = source(listed([stored('a')]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    m.controller.busy = true
+    m.emit()
+    inCard(cards(m)[0], 'Resume').click()
+    await flush()
+    expect(s.resumed).toEqual([])
+    expect(m.q('.wd-replay-flash')?.textContent).toBe('Stop the advance first')
+  })
+
+  test('a step already landing (too quick to show) is waited for, then the switch goes ahead', async () => {
+    const s = source(listed([stored('a')]))
+    const m = mount(fake(), { sessions: s.src, busyRevealMs: 60_000 })
+    m.button('Sessions').click()
+    await flush()
+    m.controller.busy = true
+    inCard(cards(m)[0], 'Resume').click()
+    await flush()
+    expect(s.resumed).toEqual([])
+    m.controller.busy = false
+    m.emit()
+    await flush()
+    expect(s.resumed.map((r) => r.id)).toEqual(['a'])
+  })
+
+  test('Delete takes two presses here too, and the row goes', async () => {
+    const s = source(listed([stored('a'), stored('b')]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    inCard(cards(m)[0], 'Delete').click()
+    expect(s.removed).toEqual([])
+    inCard(cards(m)[0], 'Confirm delete').click()
+    await flush()
+    expect(s.removed).toEqual(['a'])
+    expect(cards(m).map((c) => c.dataset.session)).toEqual(['b'])
+  })
+})
+
+describe('the session list keeps its place', () => {
+  test('in the start dialog, Stats far down the list does not rebuild the box the rows scroll in', async () => {
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    openStartDialog({
+      anchor,
+      symbol: SYM,
+      intervalsInUse: ['5m', '1h'],
+      stored: ['1m', '1h', '1D'],
+      latest: Date.UTC(2024, 6, 15, 20, 0),
+      grid: FX_GRID,
+      onStart: () => {},
+      sessions: { load: () => Promise.resolve(listed([stored('a'), stored('b'), stored('c')])), resume: () => {}, remove: async () => {} }
+    })
+    await flush()
+    const root = document.querySelector('.wd-replay-dialog') as HTMLElement
+    const list = root.querySelector('.wd-replay-session-list')
+    const last = [...root.querySelectorAll('.wd-replay-session')][2] as HTMLElement
+    ;([...last.querySelectorAll('button')].find((b) => b.textContent === 'Stats') as HTMLButtonElement).click()
+    expect(root.querySelector('.wd-replay-session-list')).toBe(list)
+    expect(root.querySelectorAll('.wd-tk-figs').length).toBe(1)
   })
 })

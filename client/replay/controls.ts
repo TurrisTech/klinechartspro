@@ -26,8 +26,13 @@ import { createDockableWindow } from '../chrome/window'
 //               advance stopped
 //   notice      only when the chart's active pane moved to an instrument the replay has not
 //               followed: which one it walks, why it stayed, what to do, and Follow (follow.ts)
-//   footer      Alerts (the alert manager), and Go to / Base / Results, one panel open at a
-//               time; Account and Trade, the two windows; Exit replay, set apart at the far end
+//   footer      Alerts (the alert manager), and Go to / Base / Results / Sessions, one panel open
+//               at a time; Account and Trade, the two windows; Exit replay, set apart at the far end
+//
+// SESSIONS (the panel): your other replays, as the start dialog's Sessions tab lists them, so one
+// replay can be swapped for another without going back to the live wall. Resume leaves this one
+// (it is saved, as Exit leaves it) and opens that one where it was left; the replay you are in is
+// not on the list, so it cannot be deleted from under itself.
 //
 // GO TO (the panel): a time of day on the instrument's clock -- on its next trading day, at its
 // next occurrence, or on a date -- and a stop price, which is a price watch like any other (the
@@ -62,7 +67,7 @@ const GO_TO_KEY = 'wd.replay.goTo'
  * its progress, or a Stop already pressed, shows at once. */
 const BUSY_REVEAL_MS = 300
 
-type PanelId = 'goto' | 'settings' | 'results' | null
+type PanelId = 'goto' | 'settings' | 'results' | 'sessions' | null
 
 export interface ReplayControlsOptions {
   controller: ReplayController
@@ -87,6 +92,9 @@ export interface ReplayControlsOptions {
   /** The stop price the Go to panel sets: a price watch on the replay's instrument (watches.ts).
    * Absent, the panel has no price row. */
   priceStop?: PriceStop
+  /** The owner's OTHER replays, for the Sessions panel: `resume` leaves this one for it. Absent,
+   * there is no Sessions toggle. */
+  sessions?: SessionsSource
   /** Injected by the tests: the wait between two played steps. */
   sleep?: (ms: number) => Promise<void>
   /** How long an advance runs before the controls show it (BUSY_REVEAL_MS). The tests pass 0. */
@@ -178,6 +186,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // The Results panel's figures: one list for the controls' life, so a re-render updates its
   // values in place rather than rebuilding what is being read.
   const figures = new FigureList('wd-replay-results-figures')
+  // The Sessions panel's list while it is open: loaded when the panel opens (another tab may have
+  // added or deleted one since), kept across re-renders -- Play re-renders twice a second -- and
+  // dropped when the panel closes.
+  let sessionList: SessionList | null = null
   // A trade placed or closed between advances changes the score with no control change.
   const unsubscribeSnapshot = controller.subscribe(() => {
     if (panel === 'results') renderBody()
@@ -266,10 +278,12 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   //
   //   [▶] [Step]  [1h v] × [1]  every [1 s v]      transport: each button beside what it uses
   //   [Next alert]  Stepped 1h                      the other way to move, and why it stopped
-  //   Alerts 2  Base 1h  Results  Account  Trade   Exit replay   the manager, panels, windows
+  //   Alerts 2  Go to  Base 1h  Results  Sessions  Account  Trade   Exit replay
 
   function renderBody(): void {
     const body = win.body
+    // Taking the list out of the page loses where it was scrolled to: put back below.
+    const scrolled = sessionList?.scroller.scrollTop ?? 0
     body.innerHTML = ''
     walkLine = null
     body.append(renderTransport(), renderNext())
@@ -279,6 +293,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     if (panel === 'goto') body.appendChild(renderGoTo())
     if (panel === 'settings') body.appendChild(renderSettings())
     if (panel === 'results') body.appendChild(renderResults())
+    if (panel === 'sessions' && sessionList) {
+      body.appendChild(renderSessions(sessionList))
+      sessionList.scroller.scrollTop = scrolled
+    }
     win.reflow()
   }
 
@@ -483,6 +501,11 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const results = toggleButton('Results', '', panel === 'results', () => showPanel('results'))
     results.title = 'How the session is going: P&L, win rate, drawdown'
     row.append(settings, results)
+    if (options.sessions) {
+      const sessions = toggleButton('Sessions', '', panel === 'sessions', () => showPanel('sessions'))
+      sessions.title = 'Your other replays: switch to one where you left it, see its score, or delete it'
+      row.appendChild(sessions)
+    }
 
     if (options.account) {
       const account = options.account
@@ -521,7 +544,55 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
 
   function showPanel(next: PanelId): void {
     panel = panel === next ? null : next
+    if (panel !== 'sessions') {
+      sessionList?.dispose()
+      sessionList = null
+    } else if (options.sessions) sessionList = openSessions(options.sessions)
     renderBody()
+  }
+
+  // -- Sessions ----------------------------------------------------------------------------
+
+  function openSessions(source: SessionsSource): SessionList {
+    return createSessionList({
+      source,
+      empty: 'No other replays. A replay you start from the live wall is kept here to switch to.',
+      beforeResume: () => {
+        // A run the user can see -- the red Stop -- is theirs to stop: leaving under it would drop
+        // the walk where it had got to.
+        if (busyShown()) {
+          flash(win.element, 'Stop the advance first')
+          return false
+        }
+        if (controller.followNotice?.moving) {
+          flash(win.element, 'Wait for the replay to finish following the chart')
+          return false
+        }
+        // Playing, the next step is cancelled here; one already landing is waited for, so the
+        // replay is left where that step put it and saved there.
+        player.pause()
+        return controller.busy ? whenIdle().then(() => true) : true
+      },
+      onRender: () => win.reflow()
+    })
+  }
+
+  /** Once no advance runs: a step already under way when Resume was pressed. */
+  function whenIdle(): Promise<void> {
+    return new Promise((resolve) => {
+      if (!controller.busy) return resolve()
+      const off = controller.onControlChange(() => {
+        if (controller.busy) return
+        off()
+        resolve()
+      })
+    })
+  }
+
+  function renderSessions(list: SessionList): HTMLElement {
+    const box = el('div', 'wd-replay-panel wd-replay-sessions-panel')
+    box.appendChild(list.element)
+    return box
   }
 
   // -- Go to -------------------------------------------------------------------------------
@@ -731,6 +802,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     refresh: render,
     dispose(): void {
       if (revealTimer) clearTimeout(revealTimer)
+      sessionList?.dispose()
       window.removeEventListener('keydown', onKey, true)
       player.dispose()
       unsubscribe()
@@ -902,8 +974,9 @@ export interface ListedSession {
 export interface SessionsSource {
   /** The list, most recently played first. */
   load(): Promise<ListedSession[]>
-  /** Reopen it where it was left. The dialog has closed by then. */
-  resume(session: ReplaySessionSummary): void
+  /** Reopen it where it was left: the dialog has closed by then; the replay window's list says
+   * "Opening…" until the wall rebuilds, and that a rejection could not open it. */
+  resume(session: ReplaySessionSummary): void | Promise<void>
   /** Delete it on the server; resolves once that is done. */
   remove(id: string): Promise<void>
 }
@@ -1144,170 +1217,246 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
     const tabs = el('div', 'wd-replay-dialog-tabs')
     tabs.setAttribute('role', 'tablist')
     root.insertBefore(tabs, newPane)
-    const pane = el('div', 'wd-replay-dialog-pane wd-tk wd-replay-sessions')
+    const pane = el('div', 'wd-replay-dialog-pane')
     root.appendChild(pane)
 
     let tab: DialogTab = readTab()
-    let listed: ListedSession[] | null = null
-    let failed = false
-    let disposed = false
-    /** The rows whose figures are showing. */
-    const expanded = new Set<string>()
-    /** The rows whose delete is on its way to the server. */
-    const deleting = new Set<string>()
-    const arming = new Arming(() => render())
+    let loaded = false
+    const list = createSessionList({
+      source,
+      empty: 'No past replays. Start one from New replay; it is kept here to resume.',
+      // The dialog goes first: a resume rebuilds the wall under it.
+      beforeResume: () => {
+        closeDialog()
+        return true
+      },
+      onRender: () => {
+        // Remembered on a list that has since emptied: open on what there is to do.
+        const switched = !loaded && list.count === 0 && tab === 'sessions'
+        if (list.count !== null) loaded = true
+        if (switched) tab = 'new'
+        renderTabs()
+        if (switched && document.activeElement === document.body) startInput.focus()
+      }
+    })
+    pane.appendChild(list.element)
 
     function show(next: DialogTab): void {
       tab = next
       writeTab(next)
-      render()
+      renderTabs()
       if (next === 'new') startInput.focus()
     }
 
-    function render(): void {
-      if (disposed) return
+    function renderTabs(): void {
       newPane.hidden = tab !== 'new'
       pane.hidden = tab !== 'sessions'
       tabs.innerHTML = ''
       const newTab = toggleButton('New replay', '', tab === 'new', () => show('new'))
-      const count = listed === null || listed.length === 0 ? '' : String(listed.length)
+      const count = list.count === null || list.count === 0 ? '' : String(list.count)
       const listTab = toggleButton('Sessions', count, tab === 'sessions', () => show('sessions'))
       for (const b of [newTab, listTab]) b.setAttribute('role', 'tab')
       listTab.title = 'Your past replays: resume one, see its score, or delete it'
       tabs.append(newTab, listTab)
-      renderList()
     }
 
-    function renderList(): void {
-      pane.innerHTML = ''
-      if (failed) {
-        pane.appendChild(muted('Could not load your replays.'))
-        return
-      }
-      if (listed === null) {
-        pane.appendChild(muted('Loading your replays…'))
-        return
-      }
-      if (listed.length === 0) {
-        pane.appendChild(muted('No past replays. Start one from New replay; it is kept here to resume.'))
-        return
-      }
-      const list = el('div', 'wd-replay-session-list')
-      for (const item of listed) list.appendChild(row(item))
-      pane.appendChild(list)
+    renderTabs()
+    return { dispose: () => list.dispose() }
+  }
+}
+
+// -- past replays: the list the start dialog's Sessions tab and the replay window's Sessions
+// panel both show --------------------------------------------------------------------------------
+
+interface SessionListOptions {
+  source: SessionsSource
+  /** What it says when there is nothing to list. */
+  empty: string
+  /** Resume was pressed: true goes ahead at once, false refuses (the caller says why), and a
+   * promise goes ahead when it resolves true -- the replay window waiting out a step in flight. */
+  beforeResume?: () => boolean | Promise<boolean>
+  /** After every render but the first (which is inside the call that builds it): it loaded, a
+   * row went or opened its figures. */
+  onRender?: () => void
+}
+
+interface SessionList {
+  /** Mounted by the caller and kept for the list's life: it re-renders inside it. */
+  readonly element: HTMLElement
+  /** The rows listed; null while loading, or when the list would not load. */
+  readonly count: number | null
+  /** Where the rows scroll. Kept across the list's own renders, so a Stats or a Delete far down
+   * thirty replays does not jump back to the top; a caller that detaches `element` to re-render
+   * around it puts `scrollTop` back. */
+  readonly scroller: HTMLElement
+  dispose(): void
+}
+
+/** Past replays, loaded once, each with what it replayed, how far, its score, and Stats, Delete
+ * (two presses) and Resume. */
+function createSessionList(options: SessionListOptions): SessionList {
+  const { source } = options
+  const element = el('div', 'wd-tk wd-replay-sessions')
+  const scroller = el('div', 'wd-replay-session-list')
+  let listed: ListedSession[] | null = null
+  let failed = false
+  let disposed = false
+  /** The row whose Resume is on its way: the rest wait for it. */
+  let resuming: string | null = null
+  /** The rows whose figures are showing. */
+  const expanded = new Set<string>()
+  /** The rows whose delete is on its way to the server. */
+  const deleting = new Set<string>()
+  const arming = new Arming(() => render())
+
+  function render(notify = true): void {
+    if (disposed) return
+    if (failed) element.replaceChildren(muted('Could not load your replays.'))
+    else if (listed === null) element.replaceChildren(muted('Loading your replays…'))
+    else if (listed.length === 0) element.replaceChildren(muted(options.empty))
+    else {
+      // The rows change, never the box they scroll in.
+      scroller.replaceChildren(...listed.map(row))
+      if (scroller.parentElement !== element) element.replaceChildren(scroller)
     }
+    if (notify) options.onRender?.()
+  }
 
-    function row({ summary: s, zone }: ListedSession): HTMLElement {
-      const box = el('div', 'wd-replay-session')
-      box.dataset.session = s.id
-
-      const head = el('div', 'wd-replay-session-head')
-      const name = el('span', 'wd-replay-session-ticker')
-      name.textContent = s.ticker || 'Unknown instrument'
-      head.appendChild(name)
-      if (s.state) {
-        const base = el('span', 'wd-replay-session-base')
-        base.textContent = `${s.state.base} base`
-        head.appendChild(base)
+  function pressResume(s: ReplaySessionSummary): void {
+    if (resuming !== null) return
+    // Not refused once disposed: the dialog's own `beforeResume` is what closed it.
+    const go = (): void => {
+      if (resuming !== null) return
+      resuming = s.id
+      render()
+      const fail = (err: unknown): void => {
+        console.error('[replay] could not resume session', s.id, err)
+        resuming = null
+        render()
+        if (!disposed) flash(element, 'Could not open that replay')
       }
-      // Net P&L only once something was traded: "0.00 USD · 0.00%" on every idle replay is noise.
-      if (s.results && s.results.closed + s.results.open > 0) {
-        const headline = resultHeadline(s.results)
-        const net = el('span', `wd-replay-session-net${headline.tone ? ` is-${headline.tone}` : ''}`)
-        net.textContent = headline.text
-        net.title = 'Net P&L: realised plus what is still open, against the starting balance'
-        head.appendChild(net)
+      try {
+        void Promise.resolve(source.resume(s)).catch(fail)
+      } catch (err) {
+        fail(err)
       }
-      box.appendChild(head)
+    }
+    const ready = options.beforeResume ? options.beforeResume() : true
+    if (ready === true) go()
+    // Waited for: the window may have gone in the meantime (the wall rebuilt by something else).
+    else if (ready !== false) void ready.then((ok) => ok && !disposed && go())
+  }
 
-      if (s.state) {
-        const span = el('div', 'wd-replay-session-span')
-        span.textContent = formatSpan(s.state.startedAt, s.state.cursor, zone)
-        span.title = `Where the replay started and how far it got (${zoneName(zone)})`
-        box.appendChild(span)
-      }
-      const facts = el('div', 'wd-replay-session-facts')
-      facts.textContent = `${sessionFacts(s)} · ${s.savedAt === null ? 'started' : 'played'} ${formatLocal(lastPlayed(s))}`
-      box.appendChild(facts)
+  function row({ summary: s, zone }: ListedSession): HTMLElement {
+    const box = el('div', 'wd-replay-session')
+    box.dataset.session = s.id
 
-      const actions = el('div', 'wd-replay-session-actions')
-      const open = expanded.has(s.id)
-      if (s.results && s.results.closed + s.results.open > 0) {
-        const stats = button(`kc-button kc-button-outline wd-replay-session-stats${open ? ' is-on' : ''}`, open ? 'Hide stats' : 'Stats', () => {
-          if (expanded.has(s.id)) expanded.delete(s.id)
-          else expanded.add(s.id)
+    const head = el('div', 'wd-replay-session-head')
+    const name = el('span', 'wd-replay-session-ticker')
+    name.textContent = s.ticker || 'Unknown instrument'
+    head.appendChild(name)
+    if (s.state) {
+      const base = el('span', 'wd-replay-session-base')
+      base.textContent = `${s.state.base} base`
+      head.appendChild(base)
+    }
+    // Net P&L only once something was traded: "0.00 USD · 0.00%" on every idle replay is noise.
+    if (s.results && s.results.closed + s.results.open > 0) {
+      const headline = resultHeadline(s.results)
+      const net = el('span', `wd-replay-session-net${headline.tone ? ` is-${headline.tone}` : ''}`)
+      net.textContent = headline.text
+      net.title = 'Net P&L: realised plus what is still open, against the starting balance'
+      head.appendChild(net)
+    }
+    box.appendChild(head)
+
+    if (s.state) {
+      const span = el('div', 'wd-replay-session-span')
+      span.textContent = formatSpan(s.state.startedAt, s.state.cursor, zone)
+      span.title = `Where the replay started and how far it got (${zoneName(zone)})`
+      box.appendChild(span)
+    }
+    const facts = el('div', 'wd-replay-session-facts')
+    facts.textContent = `${sessionFacts(s)} · ${s.savedAt === null ? 'started' : 'played'} ${formatLocal(lastPlayed(s))}`
+    box.appendChild(facts)
+
+    const actions = el('div', 'wd-replay-session-actions')
+    const open = expanded.has(s.id)
+    if (s.results && s.results.closed + s.results.open > 0) {
+      const stats = button(`kc-button kc-button-outline wd-replay-session-stats${open ? ' is-on' : ''}`, open ? 'Hide stats' : 'Stats', () => {
+        if (expanded.has(s.id)) expanded.delete(s.id)
+        else expanded.add(s.id)
+        render()
+      })
+      stats.setAttribute('aria-expanded', String(open))
+      actions.appendChild(stats)
+    }
+    const busy = deleting.has(s.id)
+    const armed = arming.key === `delete:${s.id}`
+    const remove = button(`kc-button kc-button-outline wd-replay-session-delete${armed ? ' is-armed' : ''}`, busy ? 'Deleting…' : armed ? 'Confirm delete' : 'Delete', () => {
+      if (deleting.has(s.id) || !arming.press(`delete:${s.id}`, false)) return
+      deleting.add(s.id)
+      render()
+      source
+        .remove(s.id)
+        .then(() => {
+          deleting.delete(s.id)
+          expanded.delete(s.id)
+          listed = (listed ?? []).filter((l) => l.summary.id !== s.id)
           render()
         })
-        stats.setAttribute('aria-expanded', String(open))
-        actions.appendChild(stats)
-      }
-      const busy = deleting.has(s.id)
-      const armed = arming.key === `delete:${s.id}`
-      const remove = button(`kc-button kc-button-outline wd-replay-session-delete${armed ? ' is-armed' : ''}`, busy ? 'Deleting…' : armed ? 'Confirm delete' : 'Delete', () => {
-        if (deleting.has(s.id) || !arming.press(`delete:${s.id}`, false)) return
-        deleting.add(s.id)
-        render()
-        source
-          .remove(s.id)
-          .then(() => {
-            deleting.delete(s.id)
-            expanded.delete(s.id)
-            listed = (listed ?? []).filter((l) => l.summary.id !== s.id)
-            render()
-          })
-          .catch((err) => {
-            console.error('[replay] could not delete session', s.id, err)
-            deleting.delete(s.id)
-            render()
-            flash(pane, 'Could not delete that replay')
-          })
-      })
-      remove.disabled = busy
-      remove.title = armed ? 'Press again to delete. This replay, its account and its trades are gone for good.' : 'Delete this replay'
-      actions.appendChild(remove)
-      const resume = button('kc-button kc-button-primary wd-replay-session-resume', 'Resume', () => {
-        closeDialog()
-        source.resume(s)
-      })
-      resume.disabled = busy || !resumable(s)
-      resume.title = resumable(s) ? 'Reopen this replay where you left it: its clock, account, orders and watches' : 'This replay was saved by another version and cannot be reopened'
-      actions.appendChild(resume)
-      box.appendChild(actions)
+        .catch((err) => {
+          console.error('[replay] could not delete session', s.id, err)
+          deleting.delete(s.id)
+          render()
+          if (!disposed) flash(element, 'Could not delete that replay')
+        })
+    })
+    remove.disabled = busy || resuming !== null
+    remove.title = armed ? 'Press again to delete. This replay, its account and its trades are gone for good.' : 'Delete this replay'
+    actions.appendChild(remove)
+    const opening = resuming === s.id
+    const resume = button('kc-button kc-button-primary wd-replay-session-resume', opening ? 'Opening…' : 'Resume', () => pressResume(s))
+    resume.disabled = busy || resuming !== null || !resumable(s)
+    resume.title = resumable(s) ? 'Reopen this replay where you left it: its clock, account, orders and watches' : 'This replay was saved by another version and cannot be reopened'
+    actions.appendChild(resume)
+    box.appendChild(actions)
 
-      if (open && s.results) {
-        const figures = new FigureList('wd-replay-results-figures')
-        figures.update(resultRows(s.results))
-        box.appendChild(figures.element)
-      }
-      return box
+    if (open && s.results) {
+      const figures = new FigureList('wd-replay-results-figures')
+      figures.update(resultRows(s.results))
+      box.appendChild(figures.element)
     }
+    return box
+  }
 
-    function muted(text: string): HTMLElement {
-      const note = el('div', 'wd-replay-muted')
-      note.textContent = text
-      return note
-    }
+  function muted(text: string): HTMLElement {
+    const note = el('div', 'wd-replay-muted')
+    note.textContent = text
+    return note
+  }
 
-    source
-      .load()
-      .then((rows) => {
-        listed = rows
-        // Remembered on a list that has since emptied: open on what there is to do.
-        if (rows.length === 0 && tab === 'sessions') tab = 'new'
-        render()
-        if (tab === 'new' && document.activeElement === document.body) startInput.focus()
-      })
-      .catch((err) => {
-        console.error('[replay] could not list sessions', err)
-        failed = true
-        render()
-      })
-    render()
-    return {
-      dispose(): void {
-        disposed = true
-        arming.disarm()
-      }
+  source
+    .load()
+    .then((rows) => {
+      listed = rows
+      render()
+    })
+    .catch((err) => {
+      console.error('[replay] could not list sessions', err)
+      failed = true
+      render()
+    })
+  render(false)
+  return {
+    element,
+    scroller,
+    get count() {
+      return failed ? null : (listed?.length ?? null)
+    },
+    dispose(): void {
+      disposed = true
+      arming.disarm()
     }
   }
 }

@@ -3100,6 +3100,16 @@ body.wd-has-dock > #app {
   margin-top: 0.125rem;
 }
 
+/* The same list in the replay window's Sessions panel: shorter, since the window floats over the
+   bars -- and docked, every row it is tall is a row the wall loses. */
+.wd-replay-window .wd-replay-session-list {
+  max-height: min(45vh, 20rem);
+}
+
+.wd-replay-window[data-mode='dock'] .wd-replay-session-list {
+  max-height: min(30vh, 12rem);
+}
+
 /* A replay's dock holds the account, ticket and tables alone -- the controls float over the
    chart -- so it is the same height as the paper one and starts closed. */
 

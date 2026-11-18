@@ -44,6 +44,8 @@ class FakeServer {
   probes: string[] = []
   /** The next PUT is answered 409, as when another tab saved first. */
   conflict = false
+  /** The owner's other replays, listed by `GET /sim/sessions` after this one: id -> blob. */
+  others: Record<string, ReplayState> = {}
   constructor(public blob: ReplayState) {}
 
   readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -51,6 +53,10 @@ class FakeServer {
     const method = init?.method ?? 'GET'
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
     if (url.pathname.endsWith('/sim/sessions/s1') && method === 'GET') return json({ session: this.session(), events: [] })
+    if (url.pathname.endsWith('/sim/sessions') && method === 'GET') {
+      const others = Object.entries(this.others).map(([id, state]) => ({ ...this.session(), id, rev: 1, symbols: [state.symbol], state }))
+      return json({ sessions: [this.session(), ...others] })
+    }
     if (url.pathname.endsWith('/sim/sessions/s1/state') && method === 'PUT') {
       const body = JSON.parse(String(init?.body)) as { rev: number; state: ReplayState }
       if (this.conflict || body.rev !== this.rev) {
@@ -123,11 +129,25 @@ function blob(engine: Partial<EngineState> = {}): ReplayState {
   }
 }
 
-/** A one-pane wall the replay can ask what it shows. `pick` is the symbol search's: the pane's
- * symbol changes, then the wall reports it, as ChartPro's `assignSymbol` does. */
+/** A one-pane wall the replay can ask what it shows. `setSymbol` is a symbol picked in the
+ * search: the pane's symbol changes and nothing is told. The pane's own `setSymbol` is the
+ * library's, which the replay calls: it moves the pane and reports it (`onPaneSymbol`) the way
+ * ChartPro's `assignSymbol` -> `onSymbolChange` reaches `symbolChanged` in the app. */
 function wall(initial = 'EURGBP') {
   let symbol = info(initial)
-  const pane = { id: 'p1', getSymbol: () => symbol, getPeriod: () => resolutionToPeriod('1h'), getChart: () => null }
+  const moved: string[] = []
+  const hooks: { onPaneSymbol: ((next: SymbolInfo) => void) | null } = { onPaneSymbol: null }
+  const pane = {
+    id: 'p1',
+    getSymbol: () => symbol,
+    getPeriod: () => resolutionToPeriod('1h'),
+    getChart: () => null,
+    setSymbol: (next: SymbolInfo) => {
+      symbol = next
+      moved.push(next.ticker)
+      hooks.onPaneSymbol?.(next)
+    }
+  }
   const chartPro = {
     getPanes: () => [pane],
     getPane: (id: string) => (id === 'p1' ? pane : null),
@@ -138,6 +158,8 @@ function wall(initial = 'EURGBP') {
   }
   return {
     chartPro: chartPro as unknown as KLineChartPro,
+    moved,
+    hooks,
     setSymbol(ticker: string) {
       symbol = info(ticker)
       return symbol
@@ -163,6 +185,7 @@ async function mount(server: FakeServer, initial = 'EURGBP') {
     rebuild: () => rebuilds.push(Date.now())
   })
   if (!controller) throw new Error('the replay did not mount')
+  w.hooks.onPaneSymbol = (next) => controller.symbolChanged('p1', next)
   return { controller, container, rebuilds, w }
 }
 
@@ -380,5 +403,60 @@ describe('resuming a past replay', () => {
     await until(() => m.rebuilds.length > 0)
     expect(server.puts.length).toBeGreaterThan(0)
     for (const put of server.puts) expect(put.savedAt).toBeGreaterThanOrEqual(before)
+  })
+})
+
+describe('switching to another replay from inside one (the controls\' Sessions panel)', () => {
+  const OTHER_CURSOR = CURSOR + 48 * H
+
+  async function openPanel(): Promise<HTMLElement[]> {
+    const toggle = [...document.querySelectorAll('.wd-replay-toggle')].find((b) => b.textContent === 'Sessions') as HTMLButtonElement
+    toggle.click()
+    await until(() => document.querySelector('.wd-replay-session') !== null)
+    return [...document.querySelectorAll('.wd-replay-session')] as HTMLElement[]
+  }
+  const resumeIn = (card: HTMLElement): HTMLButtonElement => [...card.querySelectorAll('button')].find((b) => b.textContent === 'Resume') as HTMLButtonElement
+
+  test('lists the other replays, never the one in progress', async () => {
+    const server = new FakeServer(blob())
+    server.others = { s2: { ...blob(), cursor: OTHER_CURSOR } }
+    const m = await mount(server)
+    mounted.push(m)
+    const cards = await openPanel()
+    expect(cards.map((c) => c.dataset.session)).toEqual(['s2'])
+  })
+
+  test('another instrument: the pane moves to it, the intent names that replay, and THIS one is not followed onto it', async () => {
+    const server = new FakeServer(blob())
+    server.others = { s2: { ...blob(), symbol: 'oanda:EURUSD', cursor: OTHER_CURSOR, engine: { ...blob().engine, quotes: {} } } }
+    const m = await mount(server)
+    mounted.push(m)
+    const writes = server.puts.length
+    const [card] = await openPanel()
+    resumeIn(card).click()
+    await until(() => m.rebuilds.length > 0)
+    // Give a follow every chance to have gone ahead anyway.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(m.w.moved).toEqual(['EURUSD'])
+    expect(JSON.parse(window.sessionStorage.getItem('wd.replay.intent') ?? 'null')).toEqual({ sessionId: 's2', cursor: OTHER_CURSOR })
+    expect(m.rebuilds.length).toBe(1)
+    // The replay left still walks EURGBP: the pane moving under it was not a symbol pick to follow.
+    expect(server.puts.slice(writes).every((s) => s.symbol === WALKED)).toBe(true)
+    expect(server.blob.symbol).toBe(WALKED)
+    expect(server.blob.cursor).toBe(CURSOR)
+  })
+
+  test('the same instrument: no pane moves, the wall is rebuilt into the other replay', async () => {
+    const server = new FakeServer(blob())
+    server.others = { s2: { ...blob(), cursor: OTHER_CURSOR } }
+    const m = await mount(server)
+    mounted.push(m)
+    const [card] = await openPanel()
+    resumeIn(card).click()
+    await until(() => m.rebuilds.length > 0)
+    expect(m.w.moved).toEqual([])
+    expect(m.rebuilds.length).toBe(1)
+    expect(JSON.parse(window.sessionStorage.getItem('wd.replay.intent') ?? 'null')).toEqual({ sessionId: 's2', cursor: OTHER_CURSOR })
   })
 })
