@@ -361,7 +361,9 @@
 
 .kc-layout-grid {
 	display: grid;
-	grid-template-columns: repeat(4, 1fr);
+	/* minmax(0, ...): a bare 1fr track never shrinks below its preview, and the fingertip
+	   padding (pointer: coarse) pushed the fourth column out of the 17rem More menu. */
+	grid-template-columns: repeat(4, minmax(0, 1fr));
 	gap: 0.375rem;
 }
 
@@ -388,7 +390,7 @@
 
 .kc-layout-preview {
 	display: grid;
-	width: 2.75rem;
+	width: min(2.75rem, 100%);
 	height: 2rem;
 	gap: 2px;
 }
@@ -1102,6 +1104,32 @@
 	pointer-events: none;
 	transform: translateY(-50%);
 	opacity: 0.92;
+}
+
+/* The touch drawing bar (ChartPane's touchDrawing): foot of the price area, centred, over the canvas,
+   at a fingertip's size -- it only ever appears for a finger. */
+.klinecharts-pro-drawing-bar {
+	position: absolute;
+	left: 50%;
+	margin-bottom: 0.75rem;
+	z-index: 5;
+	display: flex;
+	gap: 0.25rem;
+	padding: 0.25rem;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-md, 0.5rem);
+	background: var(--background);
+	box-shadow: 0 2px 8px rgb(0 0 0 / 0.24);
+	transform: translateX(-50%);
+}
+
+.klinecharts-pro-drawing-bar .kc-icon-button {
+	width: 2.5rem;
+	height: 2.5rem;
+}
+
+.klinecharts-pro-drawing-bar .klinecharts-pro-drawing-delete {
+	color: var(--destructive, #ef5350);
 }
 
 .klinecharts-pro-crosshair-away[data-side='right'] {
