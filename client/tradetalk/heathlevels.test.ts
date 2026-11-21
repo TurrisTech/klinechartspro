@@ -111,8 +111,10 @@ describe('the life of a level', () => {
     expect(heathLevels(bars, { ...SETTINGS, freshOnly: true, sides: 1 })).toHaveLength(0)
   })
 
-  test('one candle passing entirely through the area erases it', () => {
-    // The area is the body, 12.3 (open) to 12.9 (close). This candle's RANGE covers all of it.
+  test('a candle whose range covers the whole area but closes under the line leaves it standing', () => {
+    // The area is the body, 12.3 (open) to 12.9 (close). This candle's RANGE covers all of it,
+    // wick above the supply included, and it closes back under the line: a wick, not a break
+    // (user, 2026-10-27). Until 2026-11-21 this erased the level.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
@@ -120,12 +122,32 @@ describe('the life of a level', () => {
       bar(12, 12.3, 11.9, 12.1)
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level.brokenIndex).toBe(8)
-    expect(level.brokenBy).toBe('through')
-    expect(isLive(level, 7)).toBe(true)
-    expect(isLive(level, 8)).toBe(false)
-    // The candle that erased it also reached into it, which is the last thing recorded.
+    expect(level.brokenIndex).toBeNull()
+    expect(level.brokenBy).toBeNull()
+    expect(isLive(level, 8)).toBe(true)
+    expect(isLive(level, 9)).toBe(true)
+    // It did reach back into the area, so the level is tested.
     expect(level.testedIndex).toBe(8)
+  })
+
+  test('a demand survives a candle whose range covers it, and falls to the next close below its line', () => {
+    // Mirror of the supply case: the demand's area is the down-close candle's body, 10.2-11.1.
+    const bars = dated([
+      bar(13, 13.2, 12.5, 12.6),
+      bar(12.6, 12.8, 11.8, 11.9),
+      bar(11.9, 12, 11, 11.1),
+      bar(11.1, 11.2, 10, 10.2), // demand: body 10.2-11.1, stop 10
+      bar(10.2, 11.3, 10.1, 11.2),
+      bar(11.2, 12, 11.1, 11.9),
+      bar(11.9, 12.5, 11.8, 12.4),
+      bar(11.4, 11.5, 10.1, 11.3), // range covers 10.2-11.1, closes back above the 11.1 line
+      bar(11.3, 11.4, 10.8, 11) // closes at 11.0, under the line
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.side).toBe('demand')
+    expect(level.testedIndex).toBe(7)
+    expect(level.brokenIndex).toBe(8)
+    expect(level.brokenBy).toBe('closed')
   })
 
   test('a wick covering only part of the area leaves it live', () => {
@@ -269,17 +291,16 @@ describe('the life of a level', () => {
     expect(level.brokenBy).toBe('closed')
   })
 
-  test('a candle covering the body but not the wick still erases it', () => {
-    // High 12.95 clears the 12.9 body top but not the 13 wick: the area is the body, so
-    // this candle passed entirely through the level.
+  test('a candle covering the body but not the wick leaves it standing too', () => {
+    // High 12.95 clears the 12.9 body top but not the 13 wick, and the close is under the line.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
       bar(11.9, 12.95, 11.8, 12)
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level.brokenIndex).toBe(8)
-    expect(level.brokenBy).toBe('through')
+    expect(level.brokenIndex).toBeNull()
+    expect(level.testedIndex).toBe(8)
   })
 
   test('a level is not on the chart until price has traded away from it', () => {

@@ -107,8 +107,10 @@ candles before it**. The ATR is measured before the candle so that a big candle 
 yardstick. A candle over the limit has one of two effects:
 
 - **before the last candle**, it stops the run walking back, so the zone is the candles after it.
-  At 2× the 08-19 supply becomes 08-20 alone: line 1.16770, stop 1.17105 (34 pips). That thin zone
-  is covered by the 08-25 candle and erased that day.
+  At 2× the 08-19 supply becomes 08-20 alone: line 1.16770, stop 1.17105 (34 pips). The 08-25
+  candle's range covers that thin zone, but it closes back under the line, so the zone stands; it
+  was still live at 2026-10-23, the end of the bars this was measured on. (Until 2026-11-21 a
+  candle covering the area erased it, and this zone ended on 08-25.)
 - **as the last opposite-colour candle itself**, that turn has **no level**. The candle before it is
   not "the last up-close candle before the sell-off", so drawing from it would invent a level.
 
@@ -163,21 +165,28 @@ drawn, and `TT:entries` cannot trade it. The one thing that ends a level before 
 **close beyond the stop** (`failed`): price went the other way instead of leaving.
 
 A level's life after that, all of it forward-looking: **tested** the first time a later bar's
-range reaches back *into* it, and **erased** two ways —
+range reaches back *into* it, and **erased** only by a **close through the line** he draws: above
+a supply's open, below a demand's. A **wick** through it is not a break, however far it reaches —
+the same rule as his support and resistance (§4.1, "only a body close counts"), and the user's:
+"wicks above supply or below demand do not invalidate a zone" (2026-10-27). A wick into the area
+marks it tested.
 
-| | |
-|---|---|
-| **closed** | a **close through the line** he draws: above a supply's open, below a demand's. A **wick** through it is not a break — the same rule as his support and resistance (§4.1, "only a body close counts"). |
-| **through** | one candle's *whole range*, wicks included, covers the area (user, 2026-09-21). A wick that reaches only **part way** in leaves it live, and marks it tested. |
+Until 2026-11-21 a candle whose *whole range* covered the area also erased it (user,
+2026-09-21). That is a wick through the zone whenever the candle closes back on the zone's side,
+so it went with the 10-27 restatement. On prod bars of the seven majors (2002 → 2026-10-23,
+shipped defaults) it had ended 8.0% of established 1D zones, 10.4% of 4h and 12.1% of 1h; almost
+all of them are now ended by a later close through the line, a median 4 (1D) to 5 (4h, 1h) bars
+later. Those zones re-test as well as any other (`notes/research/heath-retest`, 2026-10-27: 1D
+−4.0 points z −1.0, 4h +0.1, 1h −0.4 against the random-line control).
 
-Both are judged only once the level is established, which is what stops the move that *creates*
-a level from destroying it — the area is the origin run's own bodies, so the bars around the
-turn are still standing in it.
+The close is judged only once the level is established, which is what stops the move that
+*creates* a level from destroying it — the area is the origin run's own bodies, so the bars
+around the turn are still standing in it.
 
 Measured on 30 days of dev EURUSD 1h (2026-09-28), against the looser readings this replaced:
 63 levels found either way, of which **17 never become zones at all** (price closed through the
 stop before it ever left) and 46 are established; 35 of those are erased by a close through the
-line and 3 by a candle covering the area, and the median life is **13 bars against the old
+line and 3 by a candle covering the area (the rule retired 2026-11-21), and the median life is **13 bars against the old
 rule's 10** — the strict reading starts the clock later and then ends it sooner. On 400 days of
 1D: 30 of 36 established, 3 still live at the right edge where the loose rule left 7.
 
