@@ -29,18 +29,20 @@ import type { Candle } from './calendar'
 // close clear of the BODY, which counted zones he would not have drawn yet (user: implement
 // his reading).
 //
-// A level is then ERASED two ways:
+// A level is then ERASED one way: a CLOSE THROUGH THE LINE he draws -- above a supply's open,
+// below a demand's. A WICK through it is not a break; that is the distinction the whole method
+// turns on, and it is the same rule as his support and resistance (§4.1, "only a body close
+// counts"). This too was loose until 2026-09-28: the chart erased on a body crossing the FAR
+// edge, his zone reading (#145), where on hourly charts drawn from the single line he scraps the
+// level on a close through the line itself (#93, #94).
 //
-//   * a CLOSE THROUGH THE LINE he draws -- above a supply's open, below a demand's. A WICK
-//     through it is not a break; that is the distinction the whole method turns on, and it is
-//     the same rule as his support and resistance (§4.1, "only a body close counts"). This too
-//     was loose until 2026-09-28: the chart erased on a body crossing the FAR edge, his zone
-//     reading (#145), where on hourly charts drawn from the single line he scraps the level on
-//     a close through the line itself (#93, #94).
-//   * a candle passes entirely THROUGH the area -- its whole range, wicks included, covering
-//     the band (user, 2026-09-21). A wick that reaches only part way in leaves the level live.
+// Until 2026-11-21 a candle whose RANGE covered the whole area also erased it (user,
+// 2026-09-21). On 2026-10-27 the user restated the rule -- "wicks above supply or below demand do
+// not invalidate a zone" -- and a candle that covers the area without closing through the line
+// is exactly that, so it no longer ends one. Measured the same day, the zones it used to erase
+// re-test as well as any other (heath-retest README).
 //
-// Both are judged only once the level is established, which is what stops the move that CREATES
+// That is judged only once the level is established, which is what stops the move that CREATES
 // a level from destroying it -- the area is the origin run's own bodies, so the bars around the
 // turn are still standing in it. Before that only one thing ends it: a close beyond the STOP,
 // price having gone the other way instead of leaving, so there is no zone to wait for.
@@ -122,10 +124,9 @@ export interface HeathLevel {
   testedIndex: number | null
   /** First bar to erase the level. Null while it stands. */
   brokenIndex: number | null
-  /** How it was erased: a `closed` through the line he draws, a candle passing entirely
-   * `through` the area, or `failed` -- price closed beyond the stop before ever leaving, so
-   * the candles never became a zone. Null while it stands. */
-  brokenBy: 'through' | 'closed' | 'failed' | null
+  /** How it was erased: `closed` through the line he draws, or `failed` -- price closed beyond
+   * the stop before ever leaving, so the candles never became a zone. Null while it stands. */
+  brokenBy: 'closed' | 'failed' | null
 }
 
 /** The shaded area: the bodies of the run, open to close. Always has height -- every candle in
@@ -227,7 +228,7 @@ export function runStart(
  * A level's life, after the origin run: it is **established** the first time a candle closes
  * beyond `departure` -- the run's furthest wick on the side price has to leave towards -- and
  * is not a zone at all before then; **tested** the first time a later bar's range reaches back
- * INTO it; and **erased** by a close through the line or by a candle covering the whole area.
+ * INTO it; and **erased** by a close through the line -- never by a wick, however far it reaches.
  * The one thing that can end it before it is established is a close beyond the stop: price
  * went the other way instead of leaving, so the candles never became a zone.
  *
@@ -295,17 +296,12 @@ export function heathLevels(bars: readonly Candle[], settings: HeathLevelSetting
       }
       // Reached back into the area at all.
       if (level.testedIndex === null && bar.high >= zone.low && bar.low <= zone.high) level.testedIndex = i
-      // A CLOSE through the line he draws. A wick through it is not a break.
+      // A CLOSE through the line he draws. A wick through it is not a break, however far it
+      // reaches -- a candle whose range covers the whole area but closes back on the zone's side
+      // leaves it standing (user, 2026-10-27).
       if (level.side === 'supply' ? bar.close > level.price : bar.close < level.price) {
         level.brokenIndex = i
         level.brokenBy = 'closed'
-        break
-      }
-      // Passed entirely through it: the whole area is inside this candle's range, wicks and
-      // all. A wick that covers only part of the area leaves the level live.
-      if (bar.low <= zone.low && bar.high >= zone.high) {
-        level.brokenIndex = i
-        level.brokenBy = 'through'
         break
       }
     }
