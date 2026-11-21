@@ -286,6 +286,25 @@ its own. `mount.test.ts` fails without the guard.
 The list's rows scroll inside a box that is kept across the list's own renders. Before this, the
 dialog rebuilt that box on every Stats or Delete, which sent a long list back to the top.
 
+### When a replay cannot open, or cannot start
+
+Seen 2026-11-17 on dev with a GBPUSD replay (dev has no GBPUSD). Two dead ends, fixed 2026-11-21:
+
+- **A replay that will not mount says why on the live wall it falls back to.** `mountBarReplay`
+  gives up in three cases: the server has no such session (or will not answer), its blob is
+  unreadable, or there are no market hours for its instrument. Each clears the intent and rebuilds
+  the wall live, and before this said so only in the console. A Resume then looked like the replay
+  closing itself. Now `abandonReplay` leaves a notice the live wall takes once (`takeReplayNotice`)
+  and shows for 10 s beside the Replay button, e.g. "Couldn't open the replay: no market hours for
+  GBPUSD". The notice is a module variable rather than stored like the intent: it only has to
+  outlive the one rebuild, and a reload must not say it again.
+- **An instrument that cannot start a replay still opens the dialog.** With no market hours or no
+  stored bars for the active pane's instrument, the Replay button used to show the reason for 4 s
+  and open nothing, so every other replay was out of reach until the pane was moved. Now
+  `startReplayFlow` opens the dialog (`RefusedDialogOptions`) on **Sessions**, and its New replay tab
+  shows the reason and Close in place of the form. That opening tab is not remembered. With no past
+  replays it opens on New replay, which explains.
+
 ## The clock
 
 A replay has a **cursor**. `config.ts`'s `setReadClock(cursor)` makes `apiUrl` add
@@ -875,14 +894,15 @@ press, and the dialog's New York clock on both sides of DST, its weekend default
 Enter, its refusals and Random's range -- and its Sessions tab: the count, a row's facts scored
 from the blob and not the server's account, Stats, Delete's two presses and a refused delete,
 Resume, an unreadable blob, the remembered tab, Enter kept from Start, and a Stats that keeps
-the scroll box -- and the window's Sessions panel: one panel among the others, loaded each time it
+the scroll box; a refused dialog (opens on Sessions, says why, nothing to start, not remembered) -- and the window's Sessions panel: one panel among the others, loaded each time it
 opens and kept across re-renders, Resume ending a play and saying "Opening…", a failed switch, a
 refusal under a visible advance, a quick step waited for, Delete. `sessions.test.ts` pins
 the list's order and its score against the running session's; `mount.test.ts` resumes from a wall
 showing the instrument and from one on another instrument (the mount must not follow it away),
 and checks every save is stamped; it also switches from inside a replay: the panel lists only the
 other replays, and Resume on another instrument moves the pane and names that replay in the intent
-without following the replay left onto it. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
+without following the replay left onto it; and a replay that cannot open (no session, a server
+error, an unreadable blob, no market hours) leaves a notice for the live wall, said once. `results.test.ts` pins the score (the split, the averages, an infinite profit factor, the
 drawdown read in close order, open trades kept out of the closed figures). `feed.test.ts` pins the
 hub on a coinbase pane's own grid, the refusal for a pane with no market hours, and a forex day
 pane's reload window reaching the day forming since 17:00.

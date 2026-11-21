@@ -25,7 +25,8 @@ import {
   mountBarReplay,
   type ReplayBoot,
   replayAvailable,
-  startReplayFlow
+  startReplayFlow,
+  takeReplayNotice
 } from './replay'
 import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
@@ -678,7 +679,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 // Returns a disposer, because a workspace switch replaces the chart these are attached to.
 /** A few words beside a rail button for a few seconds: the rail is 3rem wide, too narrow to
  * say why a press did nothing, and a press that silently does nothing reads as a broken one. */
-function railNote(anchor: HTMLElement, text: string): void {
+function railNote(anchor: HTMLElement, text: string, ms = 4000): void {
   const note = document.createElement('div')
   note.className = 'wd-rail-note'
   note.setAttribute('role', 'status')
@@ -687,7 +688,7 @@ function railNote(anchor: HTMLElement, text: string): void {
   note.style.left = `${box.right + 8}px`
   note.style.top = `${box.top + box.height / 2}px`
   document.body.appendChild(note)
-  setTimeout(() => note.remove(), 4000)
+  setTimeout(() => note.remove(), ms)
 }
 
 function mountChartExtras(
@@ -747,14 +748,11 @@ function mountChartExtras(
         replay.rebuild()
         return
       }
-      // The start dialog needs the store probed first; say so while it is, and say why when
-      // the instrument has nothing to replay rather than doing nothing at all.
+      // The start dialog needs the store probed first; say so while it is. An instrument with
+      // nothing to replay still opens it, on Sessions, saying why (startReplayFlow).
       replayButton.disabled = true
       replayButton.textContent = 'Replay…'
       void startReplayFlow(chartPro, replayButton, replay.rebuild)
-        .then((refusal) => {
-          if (refusal) railNote(replayButton, refusal)
-        })
         .catch((err) => {
           console.error('[replay] could not open the start dialog', err)
           railNote(replayButton, "Couldn't open replay")
@@ -765,6 +763,11 @@ function mountChartExtras(
         })
     })
     footer.appendChild(replayButton)
+    // A replay that could not open drops the page on this live wall (client/replay/index.ts
+    // `takeReplayNotice`): say why beside the button that reopens it, once the rail is laid out.
+    // Longer than a press's note: nobody pressed anything here, so nobody is looking yet.
+    const notice = replay.inReplay ? null : takeReplayNotice()
+    if (notice) requestAnimationFrame(() => railNote(replayButton, notice, 10_000))
   }
 
   // The Strategy Lab, in a tab of its own so the wall stays where it is.

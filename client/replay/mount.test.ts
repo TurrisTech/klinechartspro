@@ -14,7 +14,7 @@ import type { ReplayState } from './persist'
 
 GlobalRegistrator.register({ url: 'http://test/' })
 
-const { mountBarReplay, bootReplay, resumeReplay, REPLAY_WALL_CLASS } = await import('./index')
+const { mountBarReplay, bootReplay, resumeReplay, takeReplayNotice, REPLAY_WALL_CLASS } = await import('./index')
 const { summarizeSessions } = await import('./sessions')
 const { writeIntent } = await import('./persist')
 const { FX_SCHEDULE, fromWall } = await import('./timeframes')
@@ -46,13 +46,20 @@ class FakeServer {
   conflict = false
   /** The owner's other replays, listed by `GET /sim/sessions` after this one: id -> blob. */
   others: Record<string, ReplayState> = {}
+  /** What `GET /sim/sessions/s1` answers when it is not the session (a server in trouble). */
+  sessionFails: number | null = null
+  /** `/instrument` knows no instrument: none has market hours unless a pane already shows it. */
+  noInstruments = false
   constructor(public blob: ReplayState) {}
 
   readonly fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.toString())
     const method = init?.method ?? 'GET'
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
-    if (url.pathname.endsWith('/sim/sessions/s1') && method === 'GET') return json({ session: this.session(), events: [] })
+    if (url.pathname.endsWith('/sim/sessions/s1') && method === 'GET') {
+      if (this.sessionFails !== null) return json({ code: 'internal', detail: 'boom' }, this.sessionFails)
+      return json({ session: this.session(), events: [] })
+    }
     if (url.pathname.endsWith('/sim/sessions') && method === 'GET') {
       const others = Object.entries(this.others).map(([id, state]) => ({ ...this.session(), id, rev: 1, symbols: [state.symbol], state }))
       return json({ sessions: [this.session(), ...others] })
@@ -69,7 +76,7 @@ class FakeServer {
       this.rev++
       return json({ session: this.session(), events: [] })
     }
-    if (url.pathname.endsWith('/instrument')) {
+    if (url.pathname.endsWith('/instrument') && !this.noInstruments) {
       // What a mount asks for an instrument no pane shows: its configuration, market hours and all.
       const symbol = url.searchParams.get('symbol') ?? ''
       const marketHours = { timezone: 'America/New_York', sessions: [{ openDay: 'sun', openTime: '17:00', closeDay: 'fri', closeTime: '17:00' }] }
@@ -458,5 +465,71 @@ describe('switching to another replay from inside one (the controls\' Sessions p
     expect(m.w.moved).toEqual([])
     expect(m.rebuilds.length).toBe(1)
     expect(JSON.parse(window.sessionStorage.getItem('wd.replay.intent') ?? 'null')).toEqual({ sessionId: 's2', cursor: OTHER_CURSOR })
+  })
+})
+
+// A replay that cannot be mounted clears itself and the wall is rebuilt live. Without a word that
+// read as the replay closing itself, so the live wall it lands on is told why (`takeReplayNotice`).
+describe('a replay that cannot open', () => {
+  async function attempt(server: FakeServer, opts: { sessionId?: string; showing?: string } = {}) {
+    const sessionId = opts.sessionId ?? 's1'
+    globalThis.fetch = server.fetch
+    resetInstrumentConfigCache()
+    writeIntent(window.sessionStorage, { sessionId, cursor: CURSOR })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const rebuilds: number[] = []
+    const controller = await mountBarReplay(wall(opts.showing ?? 'EURGBP').chartPro, container, bootReplay({ sessionId, cursor: CURSOR }, '1m'), {
+      pluginHost: { invalidateFrom: () => {}, settled: async () => {} } as never,
+      levelsController: { invalidate: () => {} },
+      notify: { notify: (spec) => ({ ...spec, id: 'n', at: 0, level: 'info', seen: false }) },
+      alerts: null,
+      rebuild: () => rebuilds.push(Date.now())
+    })
+    if (controller) mounted.push({ controller })
+    return { controller, container, rebuilds }
+  }
+
+  /** It gave up the way the app expects: nothing mounted, no intent left, one rebuild. */
+  function expectLeft(r: Awaited<ReturnType<typeof attempt>>): void {
+    expect(r.controller).toBeNull()
+    expect(r.rebuilds.length).toBe(1)
+    expect(window.sessionStorage.getItem('wd.replay.intent')).toBeNull()
+    expect(r.container.classList.contains(REPLAY_WALL_CLASS)).toBe(false)
+  }
+
+  test('a session the server no longer has: the live wall is told so, once', async () => {
+    const r = await attempt(new FakeServer(blob()), { sessionId: 'gone' })
+    expectLeft(r)
+    expect(takeReplayNotice()).toBe("Couldn't open the replay: it no longer exists")
+    // Said once: the next live wall built (a workspace switch, the next exit) says nothing.
+    expect(takeReplayNotice()).toBeNull()
+  })
+
+  test('a server that will not answer is not mistaken for a deleted replay', async () => {
+    const server = new FakeServer(blob())
+    server.sessionFails = 500
+    expectLeft(await attempt(server))
+    expect(takeReplayNotice()).toBe("Couldn't open the replay: the server did not return it")
+  })
+
+  test('a blob this client cannot read', async () => {
+    expectLeft(await attempt(new FakeServer({ version: 0 } as unknown as ReplayState)))
+    expect(takeReplayNotice()).toBe("Couldn't open the replay: its saved state cannot be read")
+  })
+
+  test('an instrument with no market hours', async () => {
+    // No pane shows EURGBP, and the server has no configuration for it.
+    const server = new FakeServer(blob())
+    server.noInstruments = true
+    expectLeft(await attempt(server, { showing: 'EURUSD' }))
+    expect(takeReplayNotice()).toBe("Couldn't open the replay: no market hours for EURGBP")
+  })
+
+  test('a replay that opens leaves nothing to say', async () => {
+    const r = await attempt(new FakeServer(blob()))
+    expect(r.controller).not.toBeNull()
+    expect(r.rebuilds).toEqual([])
+    expect(takeReplayNotice()).toBeNull()
   })
 })
