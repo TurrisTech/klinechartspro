@@ -942,11 +942,15 @@ const PAUSE_ICON =
 
 // -- the start dialog ------------------------------------------------------------------------
 
-export interface StartDialogOptions {
+/** What every start dialog opens with: the wall it was asked from. */
+interface StartDialogBase {
   anchor: HTMLElement
   /** The active pane's instrument, `vendor:TICKER`. */
   symbol: string
   intervalsInUse: string[]
+}
+
+export interface StartDialogOptions extends StartDialogBase {
   /** The intervals the store holds for this instrument (probed by the caller). */
   stored: string[]
   /** Newest instant the store has for the instrument (the latest a replay can start). */
@@ -961,6 +965,15 @@ export interface StartDialogOptions {
   onStart: (choice: { startAt: number; balance: number; base: string }) => void
   /** This owner's past replays, for the Sessions tab. Absent, the dialog has no tabs. */
   sessions?: SessionsSource
+}
+
+/** The active pane's instrument cannot start a replay -- no market hours, nothing stored. The
+ * dialog opens anyway, on Sessions, so every other replay stays one press away instead of out of
+ * reach until the pane is moved; its New replay tab says why in place of the form. */
+export interface RefusedDialogOptions extends StartDialogBase {
+  /** Why, in a few words: "No market hours for GBPUSD". */
+  refusal: string
+  sessions: SessionsSource
 }
 
 /** A past replay as the Sessions tab lists it: its summary, and the zone its dates read in. */
@@ -1005,7 +1018,7 @@ function writeTab(tab: DialogTab): void {
   }
 }
 
-export function openStartDialog(options: StartDialogOptions): StartDialog {
+export function openStartDialog(options: StartDialogOptions | RefusedDialogOptions): StartDialog {
   // The kc tokens are scoped under the chart's themed root (`.klinecharts-pro.dark`); a
   // body-level card has to carry the theme class itself or it renders in the light defaults.
   const overlay = el('div', `wd-replay-dialog-backdrop ${chartTheme()}`)
@@ -1023,8 +1036,8 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   // not necessarily where it should sit over the bars you are choosing between.
   const undrag = dragByHandle(dialog, title)
 
-  // Two panes behind two tabs when there is a session list: New (the start form, everything
-  // below until the Sessions pane) and Sessions (past replays: resume, score, delete).
+  // Two panes behind two tabs when there is a session list: New (the start form, or why this
+  // instrument cannot start one) and Sessions (past replays: resume, score, delete).
   const newPane = el('div', 'wd-replay-dialog-pane')
   dialog.appendChild(newPane)
 
@@ -1032,6 +1045,110 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
   newPane.appendChild(info)
 
+  // New replay: the start form, or -- when this instrument cannot start one -- why not.
+  const form = 'refusal' in options ? mountRefusal(newPane, options.refusal, close) : mountStartForm(newPane, options, { overlay, close })
+  // A refused dialog opens on Sessions (and does not remember it): that tab is the one with
+  // something to do.
+  const sessionsTab = options.sessions ? mountSessionsTab(dialog, options.sessions, () => close(), 'refusal' in options ? 'sessions' : null) : null
+
+  const onKey = (e: KeyboardEvent): void => {
+    // Stepped aside for a pick on the chart: the keys are the pick's (Escape cancels IT).
+    if (overlay.hidden) return
+    if (e.key === 'Escape') close()
+    // Enter starts, from any field of the form. Never from the Sessions tab, which has no Start
+    // to press.
+    else if (e.key === 'Enter' && !newPane.hidden) form.enter(e)
+  }
+  document.addEventListener('keydown', onKey)
+  // Only a click that both STARTED and ended on the backdrop closes it. A click is dispatched to
+  // the nearest common ancestor of the press and the release, so a drag of the title -- or a
+  // text selection in a field -- released over the backdrop arrives as a click on it.
+  let pressedBackdrop = false
+  overlay.addEventListener('pointerdown', (e) => {
+    pressedBackdrop = e.target === overlay
+  })
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay && pressedBackdrop) close()
+    pressedBackdrop = false
+  })
+  // Centred on the APP, not over the active pane (chrome/focus.ts's rule for a very wide page):
+  // a replay is the whole wall's mode -- it rebuilds every pane on one clock -- so the dialog
+  // that starts one belongs to no single pane (user, 2026-10-04).
+  document.body.appendChild(overlay)
+  if (!newPane.hidden) form.focus()
+
+  function close(): void {
+    document.removeEventListener('keydown', onKey)
+    sessionsTab?.dispose()
+    undrag()
+    overlay.remove()
+  }
+  return { close }
+
+  /** The Sessions tab and the tab bar: the bar goes in above the New pane, the list after it. */
+  function mountSessionsTab(root: HTMLElement, source: SessionsSource, closeDialog: () => void, opening: DialogTab | null): { dispose(): void } {
+    const tabs = el('div', 'wd-replay-dialog-tabs')
+    tabs.setAttribute('role', 'tablist')
+    root.insertBefore(tabs, newPane)
+    const pane = el('div', 'wd-replay-dialog-pane')
+    root.appendChild(pane)
+
+    let tab: DialogTab = opening ?? readTab()
+    let loaded = false
+    const list = createSessionList({
+      source,
+      empty: 'No past replays. Start one from New replay; it is kept here to resume.',
+      // The dialog goes first: a resume rebuilds the wall under it.
+      beforeResume: () => {
+        closeDialog()
+        return true
+      },
+      onRender: () => {
+        // Remembered on a list that has since emptied: open on what there is to do.
+        const switched = !loaded && list.count === 0 && tab === 'sessions'
+        if (list.count !== null) loaded = true
+        if (switched) tab = 'new'
+        renderTabs()
+        if (switched && document.activeElement === document.body) form.focus()
+      }
+    })
+    pane.appendChild(list.element)
+
+    function show(next: DialogTab): void {
+      tab = next
+      writeTab(next)
+      renderTabs()
+      if (next === 'new') form.focus()
+    }
+
+    function renderTabs(): void {
+      newPane.hidden = tab !== 'new'
+      pane.hidden = tab !== 'sessions'
+      tabs.innerHTML = ''
+      const newTab = toggleButton('New replay', '', tab === 'new', () => show('new'))
+      const count = list.count === null || list.count === 0 ? '' : String(list.count)
+      const listTab = toggleButton('Sessions', count, tab === 'sessions', () => show('sessions'))
+      for (const b of [newTab, listTab]) b.setAttribute('role', 'tab')
+      listTab.title = 'Your past replays: resume one, see its score, or delete it'
+      tabs.append(newTab, listTab)
+    }
+
+    renderTabs()
+    return { dispose: () => list.dispose() }
+  }
+}
+
+/** The New replay tab's content: the start form, or why there is none (`mountRefusal`). */
+interface NewReplayPane {
+  /** Its first field, or its one button. */
+  focus(): void
+  /** Enter, pressed while the tab shows. */
+  enter(e: KeyboardEvent): void
+}
+
+/** The start form, into the New replay pane. `dialog.overlay` is hidden while a pick on the chart
+ * runs; `dialog.close` is Cancel, and what Start does after handing the choice over. */
+function mountStartForm(newPane: HTMLElement, options: StartDialogOptions, dialog: { overlay: HTMLElement; close: () => void }): NewReplayPane {
   const suggested = defaultBase(options.intervalsInUse, options.stored)
   const initialBase = suggested ?? options.stored[0] ?? '1m'
 
@@ -1052,9 +1169,9 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   if (options.pickOnChart) {
     const pickOnChart = options.pickOnChart
     const pick = button('kc-button kc-button-outline wd-replay-pick-button', 'On chart', () => {
-      overlay.hidden = true
+      dialog.overlay.hidden = true
       pickOnChart((startAt) => {
-        overlay.hidden = false
+        dialog.overlay.hidden = false
         if (startAt !== null) {
           startInput.value = toLocalInputValue(Math.min(startAt, options.latest))
           baseError.textContent = ''
@@ -1145,7 +1262,7 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   newPane.appendChild(baseField)
 
   const actions = el('div', 'wd-replay-dialog-actions')
-  const cancel = button('kc-button kc-button-outline', 'Cancel', () => close())
+  const cancel = button('kc-button kc-button-outline', 'Cancel', () => dialog.close())
   const start = button('kc-button kc-button-primary', 'Start', () => {
     const check = validate()
     if (!check.ok) return
@@ -1160,12 +1277,10 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
       return
     }
     options.onStart({ startAt: Math.min(startAt, options.latest), balance, base: basePicker.value })
-    close()
+    dialog.close()
   })
   actions.append(cancel, start)
   newPane.appendChild(actions)
-
-  const sessionsTab = options.sessions ? mountSessionsTab(dialog, options.sessions, () => close()) : null
 
   function validate(): BaseCheck {
     const check = validateBase(basePicker.value, options.intervalsInUse, options.stored)
@@ -1175,94 +1290,30 @@ export function openStartDialog(options: StartDialogOptions): StartDialog {
   }
   validate()
 
-  const onKey = (e: KeyboardEvent): void => {
-    // Stepped aside for a pick on the chart: the keys are the pick's (Escape cancels IT).
-    if (overlay.hidden) return
-    if (e.key === 'Escape') close()
-    // Enter starts, from any field -- but a focused button answers Enter itself, and a select
-    // uses it to commit its list. Never from the Sessions tab, which has no Start to press.
-    else if (e.key === 'Enter' && !newPane.hidden && !(e.target instanceof HTMLButtonElement) && !(e.target instanceof HTMLSelectElement) && !start.disabled) {
+  return {
+    focus: () => startInput.focus(),
+    enter: (e) => {
+      // A focused button answers Enter itself, and a select uses it to commit its list.
+      if (e.target instanceof HTMLButtonElement || e.target instanceof HTMLSelectElement || start.disabled) return
       e.preventDefault()
       start.click()
     }
   }
-  document.addEventListener('keydown', onKey)
-  // Only a click that both STARTED and ended on the backdrop closes it. A click is dispatched to
-  // the nearest common ancestor of the press and the release, so a drag of the title -- or a
-  // text selection in a field -- released over the backdrop arrives as a click on it.
-  let pressedBackdrop = false
-  overlay.addEventListener('pointerdown', (e) => {
-    pressedBackdrop = e.target === overlay
-  })
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay && pressedBackdrop) close()
-    pressedBackdrop = false
-  })
-  // Centred on the APP, not over the active pane (chrome/focus.ts's rule for a very wide page):
-  // a replay is the whole wall's mode -- it rebuilds every pane on one clock -- so the dialog
-  // that starts one belongs to no single pane (user, 2026-10-04).
-  document.body.appendChild(overlay)
-  if (!newPane.hidden) startInput.focus()
+}
 
-  function close(): void {
-    document.removeEventListener('keydown', onKey)
-    sessionsTab?.dispose()
-    undrag()
-    overlay.remove()
-  }
-  return { close }
-
-  /** The Sessions tab and the tab bar: the bar goes in above the New pane, the list after it. */
-  function mountSessionsTab(root: HTMLElement, source: SessionsSource, closeDialog: () => void): { dispose(): void } {
-    const tabs = el('div', 'wd-replay-dialog-tabs')
-    tabs.setAttribute('role', 'tablist')
-    root.insertBefore(tabs, newPane)
-    const pane = el('div', 'wd-replay-dialog-pane')
-    root.appendChild(pane)
-
-    let tab: DialogTab = readTab()
-    let loaded = false
-    const list = createSessionList({
-      source,
-      empty: 'No past replays. Start one from New replay; it is kept here to resume.',
-      // The dialog goes first: a resume rebuilds the wall under it.
-      beforeResume: () => {
-        closeDialog()
-        return true
-      },
-      onRender: () => {
-        // Remembered on a list that has since emptied: open on what there is to do.
-        const switched = !loaded && list.count === 0 && tab === 'sessions'
-        if (list.count !== null) loaded = true
-        if (switched) tab = 'new'
-        renderTabs()
-        if (switched && document.activeElement === document.body) startInput.focus()
-      }
-    })
-    pane.appendChild(list.element)
-
-    function show(next: DialogTab): void {
-      tab = next
-      writeTab(next)
-      renderTabs()
-      if (next === 'new') startInput.focus()
-    }
-
-    function renderTabs(): void {
-      newPane.hidden = tab !== 'new'
-      pane.hidden = tab !== 'sessions'
-      tabs.innerHTML = ''
-      const newTab = toggleButton('New replay', '', tab === 'new', () => show('new'))
-      const count = list.count === null || list.count === 0 ? '' : String(list.count)
-      const listTab = toggleButton('Sessions', count, tab === 'sessions', () => show('sessions'))
-      for (const b of [newTab, listTab]) b.setAttribute('role', 'tab')
-      listTab.title = 'Your past replays: resume one, see its score, or delete it'
-      tabs.append(newTab, listTab)
-    }
-
-    renderTabs()
-    return { dispose: () => list.dispose() }
-  }
+/** The New replay pane when this instrument cannot start a replay: the reason, what to do, and
+ * Close -- no form to fill for a Start that could only fail. */
+function mountRefusal(pane: HTMLElement, refusal: string, close: () => void): NewReplayPane {
+  const reason = el('div', 'kc-field-error wd-replay-dialog-error')
+  reason.setAttribute('role', 'status')
+  reason.textContent = refusal
+  const note = el('div', 'wd-replay-dialog-note')
+  note.textContent = 'A new replay cannot start here. Move the active pane to another instrument to start one, or resume a past replay from Sessions.'
+  const actions = el('div', 'wd-replay-dialog-actions')
+  const done = button('kc-button kc-button-outline', 'Close', () => close())
+  actions.appendChild(done)
+  pane.append(reason, note, actions)
+  return { focus: () => done.focus(), enter: () => {} }
 }
 
 // -- past replays: the list the start dialog's Sessions tab and the replay window's Sessions

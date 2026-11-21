@@ -1682,6 +1682,99 @@ describe('the start dialog: past sessions', () => {
   })
 })
 
+// The active pane's instrument cannot start a replay (no market hours, nothing stored): the dialog
+// opens anyway, so every other replay stays one press away rather than out of reach until the
+// pane is moved, and its New replay tab says why in place of a form that could only fail.
+describe('the start dialog: a new replay refused', () => {
+  function openRefused(rows: Listed[]) {
+    const resumed: Summary[] = []
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    const dialog = openStartDialog({
+      anchor,
+      symbol: 'oanda:GBPUSD',
+      intervalsInUse: ['1h'],
+      refusal: 'No market hours for GBPUSD',
+      sessions: {
+        load: () => Promise.resolve(rows),
+        resume: (s) => {
+          resumed.push(s)
+        },
+        remove: async () => {}
+      }
+    })
+    const root = document.querySelector('.wd-replay-dialog') as HTMLElement
+    const panes = (): HTMLElement[] => [...root.querySelectorAll('.wd-replay-dialog-pane')] as HTMLElement[]
+    const tab = (name: string): HTMLButtonElement =>
+      [...root.querySelectorAll('button')].find((b) => b.getAttribute('role') === 'tab' && (b.textContent ?? '').startsWith(name)) as HTMLButtonElement
+    return {
+      dialog,
+      resumed,
+      tab,
+      newPane: () => panes()[0],
+      sessionsPane: () => panes()[1],
+      cards: (): HTMLElement[] => [...root.querySelectorAll('.wd-replay-session')] as HTMLElement[],
+      isOpen: (): boolean => document.querySelector('.wd-replay-dialog') !== null
+    }
+  }
+
+  test('it opens on Sessions; New replay says why, with no form and nothing to start', async () => {
+    const d = openRefused(listed([stored('a')]))
+    expect(d.sessionsPane().hidden).toBe(false)
+    expect(d.newPane().hidden).toBe(true)
+    await flush()
+    expect(d.cards().length).toBe(1)
+    d.tab('New replay').click()
+    expect(d.newPane().hidden).toBe(false)
+    expect((d.newPane().querySelector('.wd-replay-dialog-error') as HTMLElement).textContent).toBe('No market hours for GBPUSD')
+    expect(d.newPane().textContent).toContain('resume a past replay from Sessions')
+    expect(d.newPane().querySelector('input, select')).toBeNull()
+    expect([...d.newPane().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Close'])
+    // Enter has no Start to press.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(d.isOpen()).toBe(true)
+    ;(d.newPane().querySelector('button') as HTMLButtonElement).click()
+    expect(d.isOpen()).toBe(false)
+  })
+
+  test('another replay resumes from it', async () => {
+    const d = openRefused(listed([stored('a'), stored('b', { ticker: 'EURUSD' })]))
+    await flush()
+    ;([...d.cards()[1].querySelectorAll('button')].find((b) => b.textContent === 'Resume') as HTMLButtonElement).click()
+    expect(d.isOpen()).toBe(false)
+    expect(d.resumed.map((s) => s.id)).toEqual(['b'])
+  })
+
+  test('with no past replays it shows New replay, which says why', async () => {
+    const d = openRefused(listed([]))
+    await flush()
+    expect(d.newPane().hidden).toBe(false)
+    expect(d.newPane().textContent).toContain('No market hours for GBPUSD')
+  })
+
+  test('opening on Sessions is not remembered: the next dialog opens on the tab last chosen', async () => {
+    const d = openRefused(listed([stored('a')]))
+    await flush()
+    d.dialog.close()
+    expect(window.localStorage.getItem('wd.replay.dialogTab')).toBeNull()
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    openStartDialog({
+      anchor,
+      symbol: SYM,
+      intervalsInUse: ['5m', '1h'],
+      stored: ['1m', '1h', '1D'],
+      latest: Date.UTC(2024, 6, 15, 20, 0),
+      grid: FX_GRID,
+      onStart: () => {},
+      sessions: { load: () => Promise.resolve(listed([stored('a')])), resume: () => {}, remove: async () => {} }
+    })
+    const panes = [...document.querySelectorAll('.wd-replay-dialog-pane')] as HTMLElement[]
+    expect(panes[0].hidden).toBe(false)
+    expect(panes[1].hidden).toBe(true)
+  })
+})
+
 describe('the Sessions panel: switching replays from the replay window', () => {
   type Source = import('./controls').SessionsSource
 

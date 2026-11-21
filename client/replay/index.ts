@@ -129,6 +129,27 @@ export function clearReplay(): void {
   writeIntent(safeStorage(), null)
 }
 
+/** Why the replay the page last tried to open could not be, for the live wall it fell back to
+ * to say (`takeReplayNotice`). A replay that will not open clears itself and rebuilds the wall,
+ * which without this read as the replay closing itself. Page-lifetime, not stored like the
+ * intent: it only has to outlive that one rebuild, and a reload must not say it again. */
+let replayNotice: string | null = null
+
+/** The reason the last replay could not open, once: the live wall shows it and it is gone. */
+export function takeReplayNotice(): string | null {
+  const notice = replayNotice
+  replayNotice = null
+  return notice
+}
+
+/** A replay that cannot be mounted: say why to the live wall the app rebuilds into. */
+function abandonReplay(reason: string, ctx: ReplayWallContext): null {
+  replayNotice = `Couldn't open the replay: ${reason}`
+  clearReplay()
+  ctx.rebuild()
+  return null
+}
+
 // -- entering ------------------------------------------------------------------------------------
 
 /** The longest Play waits for the wall to load between two steps. */
@@ -149,31 +170,37 @@ function storedIntervalsFor(symbol: string, at: number, grid: CandleGrid): Promi
 let followProbe: { symbol: string; at: number; held: string[] } | null = null
 
 /** Open the start dialog on a live wall and, on confirm, create the replay session and
- * rebuild the wall in replay mode. Resolves once the dialog is open (or refused); a refusal
- * comes back as the reason, for the caller to show. */
-export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLElement, rebuild: () => void): Promise<string | null> {
+ * rebuild the wall in replay mode. Resolves once the dialog is open. When the active pane's
+ * instrument cannot start a replay, the dialog opens anyway, on Sessions, with the reason in its
+ * New replay tab: every other replay stays reachable without moving the pane first. */
+export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLElement, rebuild: () => void): Promise<void> {
   // Asked for at once, beside the store probe below: the Sessions tab fills as soon as it lands.
   const sessions = listSessions()
   sessions.catch(() => {})
+  const pastReplays = {
+    load: () => sessions,
+    resume: (session: ReplaySessionSummary) => {
+      void resumeReplay(chartPro, session, rebuild).catch((err) => console.error(`${REPLAY_LOG} could not resume ${session.id}`, err))
+    },
+    remove: (id: string) => simApi.remove(id)
+  }
   const active = chartPro.getPane(chartPro.getActivePaneId()) ?? chartPro.getPanes()[0]
   const symbolInfo = active?.getSymbol() ?? chartPro.getSymbol()
   const symbol = symbolKey(symbolInfo)
   const intervalsInUse = sortByLength([...new Set(chartPro.getPanes().map((p) => periodToResolution(p.getPeriod())))])
+  const refuse = (refusal: string): void => {
+    console.warn(`${REPLAY_LOG} ${refusal}`)
+    openStartDialog({ anchor, symbol, intervalsInUse, refusal, sessions: pastReplays })
+  }
   // The instrument's own candle schedule, from the market hours the server resolved for it.
   // Without one there is nowhere honest to put a candle boundary -- and a guess (the FX week)
   // would close a crypto day at 17:00 New York and skip its weekends -- so the replay says so.
   const schedule = scheduleOf(symbolInfo)
-  if (!schedule) {
-    console.warn(`${REPLAY_LOG} no market hours for ${symbol}`)
-    return `No market hours for ${symbolInfo.ticker}`
-  }
+  if (!schedule) return refuse(`No market hours for ${symbolInfo.ticker}`)
   const grid = gridOf(schedule)
   const latest = capabilities().serverTime || Date.now()
   const stored = await storedIntervalsFor(symbol, latest, grid)
-  if (stored.length === 0) {
-    console.warn(`${REPLAY_LOG} no stored bars for ${symbol}`)
-    return `No stored bars for ${symbolInfo.ticker}`
-  }
+  if (stored.length === 0) return refuse(`No stored bars for ${symbolInfo.ticker}`)
   openStartDialog({
     anchor,
     symbol,
@@ -184,13 +211,7 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
     pickOnChart: (done) => {
       pickBarOnChart(chartPro.getPanes(), (pick) => done(pick?.startAt ?? null))
     },
-    sessions: {
-      load: () => sessions,
-      resume: (session) => {
-        void resumeReplay(chartPro, session, rebuild).catch((err) => console.error(`${REPLAY_LOG} could not resume ${session.id}`, err))
-      },
-      remove: (id) => simApi.remove(id)
-    },
+    sessions: pastReplays,
     onStart: ({ startAt, balance, base }) => {
       void (async () => {
         const cursor = grid.start(base, startAt)
@@ -224,7 +245,6 @@ export async function startReplayFlow(chartPro: KLineChartPro, anchor: HTMLEleme
       })().catch((err) => console.error(`${REPLAY_LOG} could not start`, err))
     }
   })
-  return null
 }
 
 // -- past sessions -------------------------------------------------------------------------------
@@ -289,7 +309,8 @@ async function replayScheduleFor(chartPro: KLineChartPro, symbol: string) {
 }
 
 /** Mount the replay on a wall built with `bootReplay`'s datafeed. Resolves null (and clears
- * the intent) when the session cannot be loaded, so the app falls back to a live wall. */
+ * the intent) when the session cannot be loaded, so the app falls back to a live wall, which
+ * says why (`takeReplayNotice`). */
 export async function mountBarReplay(
   chartPro: KLineChartPro,
   container: HTMLElement,
@@ -301,16 +322,12 @@ export async function mountBarReplay(
     answer = await simApi.get(boot.intent.sessionId)
   } catch (err) {
     console.error(`${REPLAY_LOG} session ${boot.intent.sessionId} unavailable; leaving replay`, err)
-    clearReplay()
-    ctx.rebuild()
-    return null
+    return abandonReplay(err instanceof OhlcvApiError && err.status === 404 ? 'it no longer exists' : 'the server did not return it', ctx)
   }
   const stored = restore(answer.session.state)
   if (!stored) {
     console.error(`${REPLAY_LOG} session ${boot.intent.sessionId} has no readable state; leaving replay`)
-    clearReplay()
-    ctx.rebuild()
-    return null
+    return abandonReplay('its saved state cannot be read', ctx)
   }
   let rev = answer.session.rev
   // The walked instrument's schedule, resolved again rather than stored in the blob: market
@@ -318,9 +335,7 @@ export async function mountBarReplay(
   const schedule = await replayScheduleFor(chartPro, stored.symbol)
   if (!schedule) {
     console.error(`${REPLAY_LOG} no market hours for ${stored.symbol}; leaving replay`)
-    clearReplay()
-    ctx.rebuild()
-    return null
+    return abandonReplay(`no market hours for ${stored.symbol.split(':').pop() ?? stored.symbol}`, ctx)
   }
   const grid = gridOf(schedule)
   const probed = followProbe?.symbol === stored.symbol && followProbe.at === stored.cursor ? followProbe.held : null
