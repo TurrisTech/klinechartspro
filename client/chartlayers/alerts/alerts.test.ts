@@ -18,6 +18,8 @@ const { WatchStore } = await import('../../watch/store')
 const { priceLevel } = await import('../../watch/types')
 const { PriceAlerts, PRICE_ALERT_COOLDOWN_MS } = await import('./hub')
 const zones = await import('./zone')
+const figures = await import('./figures')
+const { overlaySignature } = await import('../paint')
 const { createLayerController } = await import('../controller')
 const { fakePane, flush } = await import('../../plugins/testing')
 import type { Observation } from '../../alerts/conditions'
@@ -293,6 +295,8 @@ function paneChart(): PaneChart {
 const click = (overlay: OverlayCreate | undefined) => overlay?.onClick?.({} as never)
 const lines = (pane: PaneChart) => pane.overlays.filter((overlay) => overlay.name === 'horizontalRayLine')
 const bells = (pane: PaneChart) => pane.overlays.filter((overlay) => overlay.name === 'wdPriceAlert')
+/** What the line's bell says beside it: 'once', 'always' or 'off' (figures.ts `bellStyles`). */
+const markOf = (bell: OverlayCreate) => (bell.styles as { bellMark?: string } | undefined)?.bellMark
 const zoneBand = (pane: PaneChart) => pane.overlays.find((overlay) => overlay.name === 'wdPriceAlertZone')
 const editor = () => document.querySelector<HTMLElement>('.wd-price-alert')
 
@@ -353,6 +357,7 @@ describe('on a pane', () => {
     expect(alert()[0].watch.repeat).toBe('always')
     expect(bells(pane)).toHaveLength(1)
     expect(bells(pane)[0].points?.[0]?.value).toBeCloseTo(1.085, 9)
+    expect(markOf(bells(pane)[0])).toBe('always')
     expect(editor()).toBeNull()
     expect(flashed()).toBe('Alert every time · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
 
@@ -360,6 +365,7 @@ describe('on a pane', () => {
     expect(alert()).toHaveLength(1)
     expect(alert()[0].watch.repeat).toBe('once')
     expect(alert()[0].watch.status).toBe('armed')
+    expect(markOf(bells(pane)[0])).toBe('once')
     expect(flashed()).toBe('Alert once · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
 
     await clickAndSettle(lines(pane)[0])
@@ -409,6 +415,9 @@ describe('on a pane', () => {
     await flush()
     await flush()
     expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.status).toBe('fired')
+    // Its bell still says 1, in the fired grey.
+    expect(markOf(bells(pane)[0])).toBe('once')
+    expect(bells(pane)[0].styles?.rect?.color).toBe('#787b86')
     // Spent, it is still once: the cycle goes on to off, then every time, armed afresh.
     await clickAndSettle(lines(pane)[0])
     expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
@@ -423,6 +432,7 @@ describe('on a pane', () => {
     const [{ watch }] = alerts.forInstrument('oanda', 'EURUSD')
     await store.update(watch.id, { enabled: false })
     await flush()
+    expect(markOf(bells(pane)[0])).toBe('off')
     await clickAndSettle(lines(pane)[0])
     expect(alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(1)
     expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch).toMatchObject({ id: watch.id, repeat: 'always', enabled: true, status: 'armed' })
@@ -477,7 +487,19 @@ describe('on a pane', () => {
     })
     lines(pane)[0].onMouseLeave?.({} as never)
     bells(pane)[0].onMouseEnter?.({} as never)
-    expect(zoneBand(pane)?.extendData).toMatchObject({ label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · click for options' })
+    expect(zoneBand(pane)?.extendData).toMatchObject({
+      label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · alert every time · click for options'
+    })
+  })
+
+  test('the bell says once or every time, and going from one to the other repaints it', async () => {
+    const { pane } = await mountPane([{ price: 1.085, live: true }])
+    await clickAndSettle(lines(pane)[0])
+    const always = overlaySignature(bells(pane))
+    await clickAndSettle(lines(pane)[0])
+    // Both orange: only the mark tells them apart, so the mark must be in what the paint gate sees.
+    expect(bells(pane)[0].styles?.rect?.color).toBe('#ff9800')
+    expect(overlaySignature(bells(pane))).not.toBe(always)
   })
 
   test('the dialog sets the buffer -- previewed while typed, applied on Enter -- and removes the alert', async () => {
@@ -561,6 +583,38 @@ describe('on a pane', () => {
     releases.pop()?.()
     expect(editor()).toBeNull()
     expect(pane.overlays).toEqual([])
+  })
+})
+
+describe('the bell', () => {
+  const draw = (mark: 'once' | 'always' | 'off') => figures.bellFigures(figures.bellStyles('#ff9800', mark), 800, 100)
+  const paths = (mark: 'once' | 'always' | 'off') =>
+    draw(mark)
+      .filter((figure) => figure.type === 'path')
+      .map((figure) => (figure.attrs as { path: string }).path)
+
+  test('is a pill hard against the right edge, the only part that takes the pointer', () => {
+    for (const mark of ['once', 'always', 'off'] as const) {
+      const [pill, ...marks] = draw(mark)
+      expect(pill).toMatchObject({ type: 'rect', attrs: { x: 800 - 4 - 30, y: 92, width: 30, height: 16 } })
+      expect(pill.ignoreEvent).toBeUndefined()
+      expect(marks.every((figure) => figure.ignoreEvent === true)).toBe(true)
+    }
+  })
+
+  test('says beside its bell how the alert is armed: 1, a repeat arrow, or struck through', () => {
+    const [bell] = paths('once')
+    expect(paths('once')).toHaveLength(2)
+    expect(paths('always')).toHaveLength(3)
+    // Once and every time share the bell and differ in the mark; off is the bell alone, struck.
+    expect(paths('always')[0]).toBe(bell)
+    expect(paths('once')[1]).not.toBe(paths('always')[1])
+    expect(paths('off')).toEqual([bell, expect.any(String)])
+    expect(draw('off')[2]).toMatchObject({ styles: { style: 'stroke' } })
+  })
+
+  test('without a mark it says every time, the default of a level alert', () => {
+    expect(figures.bellFigures({ rect: { color: '#ff9800' } }, 800, 100)).toHaveLength(draw('always').length)
   })
 })
 
