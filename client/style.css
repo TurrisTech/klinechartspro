@@ -3786,6 +3786,50 @@ body.wd-has-dock > #app {
   color: var(--destructive, #ef5350);
 }
 
+/* The foot: every alert of the layer on the instrument, Remove stale and Remove all -- set off
+   from the alert's own controls above it, since it acts on others too. */
+.wd-price-alert-bulk {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.wd-price-alert-bulk-summary,
+.wd-price-alert-bulk-question {
+  color: var(--muted-foreground);
+}
+
+.wd-price-alert-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-price-alert-bulk-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.wd-price-alert-bulk button {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-price-alert-bulk button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wd-price-alert-remove-stale:not(:disabled),
+.wd-price-alert-remove-all,
+.wd-price-alert-remove-all-confirm {
+  color: var(--destructive, #ef5350);
+}
+
 /* --- Touch ------------------------------------------------------------------------------ */
 
 /* The app's own controls at a fingertip's size, alongside src/app.css's `(pointer: coarse)`

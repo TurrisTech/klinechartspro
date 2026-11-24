@@ -25,7 +25,7 @@ const { fakePane, flush } = await import('../../plugins/testing')
 import type { Observation } from '../../alerts/conditions'
 import type { LocalWatchSource } from '../../watch/local'
 import type { SourceField, Watch } from '../../watch/types'
-import type { ChartLayer } from '../types'
+import type { ChartLayer, LayerAlerts } from '../types'
 
 const EURUSD = { ticker: 'EURUSD', exchange: 'oanda', pricePrecision: 5, pipSize: 0.0001 } as unknown as SymbolInfo
 const FX = zones.zoneUnit(EURUSD)
@@ -233,7 +233,7 @@ interface Datum {
 
 const TEMPLATE = 'LAYER:alerts'
 
-function alertLayer(data: Datum[]): ChartLayer<Datum, { zonePips: number }> {
+function alertLayer(data: Datum[], offer: Partial<LayerAlerts<Datum>> = {}): ChartLayer<Datum, { zonePips: number }> {
   return {
     id: 'test',
     label: 'Test',
@@ -252,7 +252,8 @@ function alertLayer(data: Datum[]): ChartLayer<Datum, { zonePips: number }> {
       })),
     alerts: {
       target: (datum) => (datum.live ? { price: datum.price, label: 'test line' } : null),
-      zonePipsSetting: 'zonePips'
+      zonePipsSetting: 'zonePips',
+      ...offer
     }
   }
 }
@@ -311,10 +312,15 @@ afterEach(() => {
 
 async function mountPane(
   data: Datum[],
-  options: { alerts?: InstanceType<typeof PriceAlerts>; zonePips?: number; editable?: boolean } = {}
+  options: {
+    alerts?: InstanceType<typeof PriceAlerts>
+    zonePips?: number
+    editable?: boolean
+    offer?: Partial<LayerAlerts<Datum>>
+  } = {}
 ) {
   const hub = options.alerts ?? backend().alerts
-  const controller = createLayerController(alertLayer(data), TEMPLATE, hub)
+  const controller = createLayerController(alertLayer(data, options.offer), TEMPLATE, hub)
   const pane = paneChart()
   const fake = fakePane('p1', pane.chart, 'EURUSD')
   ;(fake.getSymbol() as { pipSize?: number }).pipSize = 0.0001
@@ -583,6 +589,114 @@ describe('on a pane', () => {
     releases.pop()?.()
     expect(editor()).toBeNull()
     expect(pane.overlays).toEqual([])
+  })
+})
+
+describe('removing many at once, from the dialog\'s foot', () => {
+  const THREE = [
+    { price: 1.08, live: true },
+    { price: 1.085, live: true },
+    { price: 1.09, live: true }
+  ]
+  const button = (selector: string) => editor()?.querySelector<HTMLButtonElement>(selector) ?? null
+  const text = (selector: string) => editor()?.querySelector(selector)?.textContent ?? null
+
+  /** A pane with an every-time alert on each line, and the dialog open on the middle one. */
+  async function withThree(offer: Partial<LayerAlerts<Datum>> = {}) {
+    const mounted = await mountPane(THREE, { offer })
+    for (const line of lines(mounted.pane)) await clickAndSettle(line)
+    expect(mounted.alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(3)
+    click(bells(mounted.pane).find((bell) => bell.points?.[0]?.value === 1.085))
+    await flush()
+    return mounted
+  }
+
+  test('says how many there are on the instrument; Remove all asks first, and Cancel keeps them', async () => {
+    const { alerts } = await withThree()
+    expect(text('.wd-price-alert-bulk-summary')).toBe('Test alerts on EURUSD: 3')
+    // This layer cannot tell stale from live, so it offers Remove all alone.
+    expect(button('.wd-price-alert-remove-stale')).toBeNull()
+    button('.wd-price-alert-remove-all')?.click()
+    expect(text('.wd-price-alert-bulk-question')).toBe('Remove all 3 alerts?')
+    expect(alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(3)
+    ;[...(editor()?.querySelectorAll<HTMLButtonElement>('.wd-price-alert-bulk-confirm button') ?? [])].find((b) => b.textContent === 'Cancel')?.click()
+    expect(button('.wd-price-alert-remove-all')?.textContent).toBe('Remove all (3)')
+    expect(alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(3)
+  })
+
+  test('Remove all, confirmed, removes every one, closes the dialog and says so', async () => {
+    const { pane, alerts } = await withThree()
+    button('.wd-price-alert-remove-all')?.click()
+    button('.wd-price-alert-remove-all-confirm')?.click()
+    expect(editor()).toBeNull()
+    await flush()
+    await flush()
+    expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
+    expect(bells(pane)).toHaveLength(0)
+    expect(flashed()).toBe('Removed 3 Test alerts on EURUSD')
+  })
+
+  test('Remove stale takes only the ones the layer says are stale', async () => {
+    let asked: string[] = []
+    const { pane, alerts } = await withThree({
+      stale: async (held) => {
+        asked = held.map((alert) => alert.watch.name)
+        return held.filter((alert) => alert.zone.center !== 1.085).map((alert) => alert.watch.id)
+      }
+    })
+    // It is asked about every alert of the layer on the instrument.
+    expect(asked.sort()).toEqual(['EURUSD test line 1.08000', 'EURUSD test line 1.08500', 'EURUSD test line 1.09000'])
+    expect(button('.wd-price-alert-remove-stale')?.textContent).toBe('Remove stale (2)')
+    button('.wd-price-alert-remove-stale')?.click()
+    expect(editor()).toBeNull()
+    await flush()
+    await flush()
+    expect(alerts.forInstrument('oanda', 'EURUSD').map((alert) => alert.zone.center)).toEqual([1.085])
+    expect(bells(pane)).toHaveLength(1)
+    expect(flashed()).toBe('Removed 2 stale Test alerts on EURUSD')
+  })
+
+  test('waits for the answer, and says when none are stale or it could not tell', async () => {
+    let answer: (ids: string[]) => void = () => {}
+    await withThree({ stale: () => new Promise((resolve) => (answer = resolve)) })
+    expect(button('.wd-price-alert-remove-stale')).toMatchObject({ textContent: 'Checking for stale…', disabled: true })
+    answer([])
+    await flush()
+    expect(button('.wd-price-alert-remove-stale')).toMatchObject({ textContent: 'None stale', disabled: true })
+    editor()?.remove()
+
+    await withThree({ stale: () => Promise.reject(new Error('levels unreachable')) })
+    await flush()
+    expect(button('.wd-price-alert-remove-stale')).toMatchObject({ textContent: 'Stale: could not check', disabled: true })
+  })
+
+  test('counts and removes only the layer\'s own alerts', async () => {
+    const { alerts } = await withThree({ owns: (alert) => alert.zone.center !== 1.09 })
+    expect(text('.wd-price-alert-bulk-summary')).toBe('Test alerts on EURUSD: 2')
+    button('.wd-price-alert-remove-all')?.click()
+    button('.wd-price-alert-remove-all-confirm')?.click()
+    await flush()
+    await flush()
+    expect(alerts.forInstrument('oanda', 'EURUSD').map((alert) => alert.zone.center)).toEqual([1.09])
+    expect(flashed()).toBe('Removed 2 Test alerts on EURUSD')
+  })
+
+  test('one alone is "1 alert"', async () => {
+    const { pane } = await mountPane([{ price: 1.085, live: true }], {
+      offer: { stale: async (held) => held.map((alert) => alert.watch.id) }
+    })
+    await clickAndSettle(lines(pane)[0])
+    click(bells(pane)[0])
+    await flush()
+    expect(button('.wd-price-alert-remove-stale')?.title).toBe('Remove the 1 stale alert: its line is no longer live')
+    button('.wd-price-alert-remove-all')?.click()
+    expect(text('.wd-price-alert-bulk-question')).toBe('Remove the 1 alert?')
+    ;[...(editor()?.querySelectorAll<HTMLButtonElement>('.wd-price-alert-bulk-confirm button') ?? [])].find((b) => b.textContent === 'Cancel')?.click()
+    button('.wd-price-alert-remove-stale')?.click()
+    await flush()
+    await flush()
+    expect(bells(pane)).toHaveLength(0)
+    expect(flashed()).toBe('Removed 1 stale Test alert on EURUSD')
   })
 })
 

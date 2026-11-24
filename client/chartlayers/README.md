@@ -54,7 +54,15 @@ alert icon between single and recurring"): the bell and a **1** for once, the be
 arrow** for every time, orange while armed, grey once fired; a switched-off alert is a dark pill
 with the bell struck through. The bell opens the alert's dialog: its buffer, the zone it makes,
 **Make default** (that buffer becomes the pane's default for new alerts), whether it has fired,
-Remove. **Hovering** a line or a bell draws the zone across the pane with its width, how the alert
+Remove -- and in its foot, removal of many at once (user, 2026-11-24: "an option to remove all
+levels alerts and all stale levels alerts"): "Levels alerts on EURUSD: 5", **Remove stale (n)** and
+**Remove all (n)**, the second asking first. Both act on the instrument in view and say what went at
+the foot of the pane. Which alerts are the layer's is its `owns`, and which are stale its `stale`
+(types.ts): for Levels, an alert is known by its name (`EURUSD 1W level 1.08500`) and is stale
+when no LIVE level of its timeframe sits at its price any more -- spent since, or gone from the
+book -- found with one `/levels` read of the live levels at every timeframe (not only the ones
+the pane shows) across the alerts' prices, under the wall's read clock, as the dialog opens.
+**Hovering** a line or a bell draws the zone across the pane with its width, how the alert
 is armed and what a click on that thing does; on a line not yet alerted, the zone a click would
 give it, fainter. Levels is the one layer that offers it so far: a live level, by its price and
 timeframe, with the pane's default buffer under the gear's "Alerts" (3 pips each side).

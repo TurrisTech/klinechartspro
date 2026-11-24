@@ -1,5 +1,6 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
+import type { PriceAlert } from './alerts/hub'
 import type { SettingsField } from './settings'
 
 // One rectangle of the price/time plane. A pane fetches these, not "whatever is on screen":
@@ -95,4 +96,12 @@ export interface LayerAlerts<TDatum> {
    * buffer a click gives a new alert, in the instrument's pips each side. Read for every new
    * alert, and written by the alert dialog's "Make default". Each alert keeps its own. */
   zonePipsSetting: string
+  /** Whether a price alert on the instrument is this layer's: what "all" means to the alert
+   * dialog's Remove all. Absent: every price alert on the instrument is. */
+  owns?(alert: PriceAlert): boolean
+  /** The ids of those of `alerts` -- this layer's, on the instrument `ctx` is on -- that are
+   * STALE: no longer on a datum that could have one (a level spent, or gone from the book,
+   * since the alert was made). The alert dialog's Remove stale. Rejects when it cannot tell;
+   * absent, the dialog offers Remove all alone. */
+  stale?(alerts: PriceAlert[], ctx: LayerContext): Promise<string[]>
 }

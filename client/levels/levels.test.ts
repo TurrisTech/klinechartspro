@@ -3,6 +3,7 @@ import type { Chart, OverlayCreate } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
 import { fakePane, installWindow } from '../plugins/testing'
 import type { LayerContext } from '../chartlayers/types'
+import type { Watch } from '../watch/types'
 
 // The Levels layer: when its data goes out of date, what identifies a request, and what it
 // draws. `client/config.ts` reads `window` at import, so everything below is loaded after
@@ -112,7 +113,8 @@ const CAPABILITIES = {
 const { loadCapabilities } = await import('../capabilities')
 await loadCapabilities()
 
-const { levelsLayer } = await import('./layer')
+const { levelsLayer, levelAlertInterval, staleLevelAlerts } = await import('./layer')
+const { zoneAround } = await import('../chartlayers/alerts/zone')
 const { fetchLevels, GATHER_MS, levelsComputedThrough, levelsIn, levelsRequestsInFlight } = await import('./api')
 const { DEFAULT_LEVELS_CONFIG } = await import('./config')
 const { overlaySignature } = await import('../chartlayers/paint')
@@ -253,6 +255,78 @@ describe('alerts', () => {
   test('a new alert takes the pane\'s default zone, 3 pips each side by default, which Make default writes', () => {
     expect(levelsLayer.alerts?.zonePipsSetting).toBe('alerts.zonePips')
     expect(DEFAULT_LEVELS_CONFIG.alerts.zonePips).toBe(3)
+  })
+
+  test('a level\'s alert is known by its name, which says its timeframe', () => {
+    expect(levelAlertInterval('EURUSD 1W level 1.08500')).toBe('1W')
+    expect(levelAlertInterval('USDJPY 1M level 151.250')).toBe('1M')
+    expect(levelAlertInterval('EURUSD 1.08500')).toBeNull()
+    expect(levelAlertInterval('Price above 1.1')).toBeNull()
+    expect(levelsLayer.alerts?.owns?.(priceAlert('a', 'EURUSD 1D level 1.10000', 1.1))).toBe(true)
+    expect(levelsLayer.alerts?.owns?.(priceAlert('b', 'EURUSD 1.10000', 1.1))).toBe(false)
+  })
+
+  test('an alert is stale when no live level of its timeframe sits at its price any more', async () => {
+    servedBook = [
+      level({ interval: '1W', price: 1.085 }),
+      // Spent since the alert was made: closed through.
+      level({ interval: '1M', price: 1.09, active: false, invalidations: [1_300_000] }),
+      // Live -- but a 1M, and the alert on its price is a 1D's.
+      level({ interval: '1M', price: 1.1 })
+    ]
+    requests.length = 0
+    try {
+      const stale = await staleLevelAlerts(
+        [
+          priceAlert('live', 'EURUSD 1W level 1.08500', 1.085),
+          priceAlert('spent', 'EURUSD 1M level 1.09000', 1.09),
+          priceAlert('other-timeframe', 'EURUSD 1D level 1.10000', 1.1),
+          // Gone from the book altogether.
+          priceAlert('gone', 'EURUSD 1W level 1.12000', 1.12)
+        ],
+        context(VIEW)
+      )
+      expect(stale).toEqual(['spent', 'other-timeframe', 'gone'])
+      // One read, of live levels only, at every timeframe -- not just the ones a pane shows --
+      // across the alerts' prices.
+      const levelReads = requests.filter((url) => url.pathname.endsWith('/levels'))
+      expect(levelReads).toHaveLength(1)
+      const q = levelReads[0].searchParams
+      expect(q.get('intervals')).toBeNull()
+      expect(q.get('include_invalidated')).not.toBe('true')
+      expect(Number(q.get('price_min'))).toBeLessThanOrEqual(1.085)
+      expect(Number(q.get('price_max'))).toBeGreaterThanOrEqual(1.12)
+    } finally {
+      servedBook = null
+    }
+  })
+
+  test('a level born after the pane\'s last bar still counts as live', async () => {
+    servedBook = [level({ interval: '1W', price: 1.085, bornAt: Date.now() - 1000, effectiveAt: Date.now() })]
+    try {
+      expect(await staleLevelAlerts([priceAlert('new', 'EURUSD 1W level 1.08500', 1.085)], context(VIEW))).toEqual([])
+    } finally {
+      servedBook = null
+    }
+  })
+
+  test('in a replay it reads as of the replay\'s clock', async () => {
+    servedBook = [level({ interval: '1W', price: 1.085 })]
+    requests.length = 0
+    setReadClock(1_500_000)
+    try {
+      await staleLevelAlerts([priceAlert('a', 'EURUSD 1W level 1.08500', 1.085)], context(VIEW))
+      expect(requests.find((url) => url.pathname.endsWith('/levels'))?.searchParams.get('asof')).toBe('1500000')
+    } finally {
+      setReadClock(null)
+      servedBook = null
+    }
+  })
+
+  test('with no alerts it asks nothing', async () => {
+    requests.length = 0
+    expect(await staleLevelAlerts([], context(VIEW))).toEqual([])
+    expect(requests).toHaveLength(0)
   })
 
   test('every stretch of a level carries the level, which is how a click finds it', () => {
@@ -773,6 +847,15 @@ function levelsUrl(window: { priceMin: number; priceMax: number; dateFrom: numbe
   url.searchParams.set('date_to', String(window.dateTo))
   if (includeInvalidated) url.searchParams.set('include_invalidated', 'true')
   return url
+}
+
+/** A price alert on EURUSD as the alert hub holds it: its watch's id and name, and its zone,
+ * 3 pips each side of `price`. */
+function priceAlert(id: string, name: string, price: number) {
+  return {
+    watch: { id, name, target: 'oanda:EURUSD' } as Watch,
+    zone: zoneAround(price, 3, { size: 0.0001, label: 'pips' }, 5)
+  }
 }
 
 function level(over: Partial<Level> = {}): Level {
