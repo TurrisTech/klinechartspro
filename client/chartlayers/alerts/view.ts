@@ -7,6 +7,7 @@ import { instrumentTarget, type Watch, type WatchRepeat } from '../../watch/type
 import type { AlertTarget, LayerAlerts, LayerContext } from '../types'
 import { openPriceAlertEditor, type PriceAlertEditor } from './editor'
 import {
+  bellStyles,
   ICON_INSET,
   PRICE_ALERT_ICON,
   PRICE_ALERT_ZONE,
@@ -29,7 +30,9 @@ import { describeZone, type Zone, zoneAround, zonePips, zoneUnit } from './zone'
 //                         always"): off -> every time -> once -> off. Each step is said at the
 //                         foot of the pane, and the hover says what the next click does. Every
 //                         time re-fires on each entry into the zone, after a cooldown; once fires
-//                         the first time and stays fired (a grey bell) until the cycle comes round
+//                         the first time and stays fired (a grey bell) until the cycle comes round.
+//                         The bell is a pill saying which: a 1 for once, a repeat arrow for every
+//                         time, struck through when switched off (figures.ts `bellFigures`)
 //   click a bell          the alert's dialog: its buffer, the zone, Make default, Remove. A
 //                         bell is drawn for EVERY alert on the instrument in view, so one whose
 //                         line is no longer drawn (a level spent since, a timeframe switched
@@ -223,7 +226,8 @@ export class LayerAlertView<TDatum, TConfig> {
         zLevel: BELL_Z_LEVEL,
         // Only `y` is read (figures.ts); the newest visible bar is one the chart holds.
         points: [{ timestamp: ctx.to, value: zone.center }],
-        styles: { rect: { color: colorFor(watch) } },
+        // The pill says how it is armed: 1 for once, a repeat arrow for every time, struck when off.
+        styles: bellStyles(colorFor(watch), stageOf(watch)),
         onClick: () => this.openEditor(chart, zone.center),
         onMouseEnter: () => this.hover(chart, { price: zone.center, on: 'bell' }),
         onMouseLeave: () => this.hover(chart, null)
@@ -388,7 +392,7 @@ export class LayerAlertView<TDatum, TConfig> {
       // How it is armed, and what a click on the thing under the pointer does: the line moves it
       // one step round the cycle, the bell opens it.
       const now = stageOf(alert.watch) === 'off' ? 'switched off' : `alert ${repeatLabel(alert.watch.repeat)}`
-      const does = hovered.on === 'line' ? `${now} · ${nextClick(alert.watch)}` : 'click for options'
+      const does = `${now} · ${hovered.on === 'line' ? nextClick(alert.watch) : 'click for options'}`
       return { low: alert.zone.low, high: alert.zone.high, label: `${caption(alert.zone)} · ${does}`, color, preview: false }
     }
     if (!this.alerts.available || this.alerts.refusal(instrumentTarget(ctx.vendor, ctx.symbol.ticker))) return null

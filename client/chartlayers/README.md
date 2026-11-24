@@ -43,16 +43,21 @@ samples only its own pane, and only while its binding lives.
 
 ## Price alerts on a layer's lines (`alerts/`)
 
-A layer that declares `alerts` (types.ts `LayerAlerts`) makes its lines alertable. **Click** a
-line to turn its alert on or off -- an alert when price enters a zone around it, the line's price
-plus or minus a buffer in the instrument's pips (ticks where it has none) -- and the foot of the
-pane says which ("Alert on · 1W level 1.11776 · ±3 pips (6 wide) · …"); no dialog opens. An
-enabled line carries a **bell** at the pane's right edge, and the bell opens the alert's dialog:
-its buffer, the zone it makes, **Make default** (that buffer becomes the pane's default for new
-alerts), whether it has fired, Remove. **Hovering** a line or a bell draws the zone across the
-pane with its width and what a click on that thing does; on a line not yet enabled, the zone a
-click would give it, fainter. Levels is the one layer that offers it so far: a live level, by its
-price and timeframe, with the pane's default buffer under the gear's "Alerts" (3 pips each side).
+A layer that declares `alerts` (types.ts `LayerAlerts`) makes its lines alertable: an alert when
+price enters a zone around a line, its price plus or minus a buffer in the instrument's pips (ticks
+where it has none). Each **click** on a line steps its alert round **off -> every time -> once ->
+off** (user, 2026-11-24), and the foot of the pane says which ("Alert once · 1W level 1.11776 · ±3
+pips (6 wide) · …"); no dialog opens. Every time fires on each entry into the zone, after a
+cooldown; once fires the first time and is then spent. An alerted line carries a **bell** at the
+pane's right edge -- a pill that says how it is armed (user, 2026-11-24: "a better indicator on the
+alert icon between single and recurring"): the bell and a **1** for once, the bell and a **repeat
+arrow** for every time, orange while armed, grey once fired; a switched-off alert is a dark pill
+with the bell struck through. The bell opens the alert's dialog: its buffer, the zone it makes,
+**Make default** (that buffer becomes the pane's default for new alerts), whether it has fired,
+Remove. **Hovering** a line or a bell draws the zone across the pane with its width, how the alert
+is armed and what a click on that thing does; on a line not yet alerted, the zone a click would
+give it, fainter. Levels is the one layer that offers it so far: a live level, by its price and
+timeframe, with the pane's default buffer under the gear's "Alerts" (3 pips each side).
 
 The layer only says what is alertable (`target(datum)` -> price + label, or null) and which of its
 settings holds the default buffer (`zonePipsSetting`, a dotted key); everything else is here, and
