@@ -1,13 +1,14 @@
 import type { SymbolInfo } from '../../../src'
 import { symbolVendor } from '../../symbols'
 import type { WatchStore } from '../../watch/store'
-import { instrumentTarget, PRICE_SOURCE, type Watch } from '../../watch/types'
+import { instrumentTarget, PRICE_SOURCE, type Watch, type WatchRepeat } from '../../watch/types'
 import type { AlertTarget } from '../types'
 import { alertName, alertNote, centredOn, type Zone, zoneAround, zoneCondition, zoneOf, zoneUnit } from './zone'
 
 // The PRICE ALERTS the chart's layers can see: a view of one watch backend, narrowed to the
-// watches that are price alerts (zone.ts), plus the three things a line can have done to it --
-// enable, a new buffer, remove. One per wall, shared by every layer that offers alerts.
+// watches that are price alerts (zone.ts), plus the things a line can have done to it -- enable
+// (once, or every time), a new buffer, once or every time again, remove. One per wall, shared by
+// every layer that offers alerts.
 //
 // The backend is the one the chart's price-watch lines use, handed in once the wall knows which
 // it is (client/index.ts): this browser's view of the SERVER's watches on a live wall, which is
@@ -91,8 +92,10 @@ export class PriceAlerts {
     return this.alerts.find((alert) => alert.watch.id === id) ?? null
   }
 
-  /** Enable a line: an alert when price enters its price plus or minus `pips`. */
-  async enable(symbol: SymbolInfo, line: AlertTarget, pips: number): Promise<Watch | null> {
+  /** Enable a line: an alert when price enters its price plus or minus `pips` -- every time it
+   * does (`always`, after a cooldown), or the first time only (`once`), after which it stays
+   * fired until armed again. */
+  async enable(symbol: SymbolInfo, line: AlertTarget, pips: number, repeat: WatchRepeat = 'always'): Promise<Watch | null> {
     const backend = this.backend
     if (!backend) return null
     const vendor = symbolVendor(symbol)
@@ -113,7 +116,7 @@ export class PriceAlerts {
         name: alertName(symbol.ticker, line, precision),
         note: alertNote(zone, unit, precision),
         trigger: 'edge',
-        repeat: 'always',
+        repeat,
         cooldownMs: PRICE_ALERT_COOLDOWN_MS
       })
     } finally {
@@ -130,6 +133,21 @@ export class PriceAlerts {
     const unit = zoneUnit(symbol)
     const zone = zoneAround(alert.zone.center, pips, unit, precision)
     return this.backend.store.update(id, { condition: zoneCondition(zone), note: alertNote(zone, unit, precision) })
+  }
+
+  /** Arm an enabled line's alert once or every time from here: switched on, and armed afresh
+   * when it had fired (a one-shot spent) or was switched off -- the crossing baseline seeded from
+   * the market as it is now, as on any arm. */
+  async setRepeat(id: string, repeat: WatchRepeat): Promise<Watch | null> {
+    const alert = this.get(id)
+    if (!alert || !this.backend) return null
+    const { watch } = alert
+    const store = this.backend.store
+    let next: Watch | null = watch
+    if (watch.repeat !== repeat || !watch.enabled) next = await store.update(id, { repeat, enabled: true })
+    // A changed repeat re-arms on its own; a spent one-shot asked for again does not.
+    if (next && next.status !== 'armed') next = await store.arm(id)
+    return next
   }
 
   async remove(id: string): Promise<void> {

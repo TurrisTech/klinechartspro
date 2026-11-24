@@ -19,6 +19,8 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `alerts.ts` | `ReplayAlerts`: every one of the user's enabled client alerts, on whatever instrument it watches (`client/alerts`) and the search that finds where the next one triggers -- what Next alert runs to -- run AHEAD in the background after every advance (the look-ahead), so a press usually finds its answer waiting. |
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `results.ts` | PURE. `replayResults`: the session's score from its snapshot -- net and realised P&L, win rate, averages, profit factor, expectancy, best/worst, the max drawdown of the realised curve -- and the rows the Results panel draws. |
+| `steps.ts` | PURE (plus a localStorage pair). A step typed in words (`15h`, `90m`, `2D`, `3 × 4h`) as the session's `{ interval, multiple }` on a given base, and back (`parseStep`, `describeStep`); the typed steps this browser remembers. |
+| `quiet.ts` | PURE (plus a localStorage pair). Quiet hours: `inWindow`, `QuietWindow` (is an instant inside `[from, to)` on a zone, cached per stretch), `ReplayQuiet` (the viewer's setting, read by the alert look-ahead and the watches). |
 | `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
@@ -44,8 +46,8 @@ thing being replayed. On screen there is only what every step uses:
 +--------------------------------------------------------------+
 | ::  REPLAY  EURUSD  Thu, Aug 20, 19:00                 ^ ⇲   |   the title bar: the drag handle
 +--------------------------------------------------------------+
-| [▶] [ Step ]  [1h v] × [1]  every [1 s v]                    |   transport
-| [Next alert]  Stepped 1h                                     |   the status, once there is one
+| [⏭ NEXT ALERT ⇧↑] [☾ 22:00–06:00]  Alert: …                 |   Next alert, quiet hours, the status
+| [▶] [ Step ]  [15h v]  every [1 s v]                         |   transport
 |--------------------------------------------------------------|
 | [Alerts 2] [Go to] [Base 1h] [Results] [Sessions] [Account] [Trade]  Exit replay |   the alert manager; one panel
 |--------------------------------------------------------------|
@@ -53,6 +55,39 @@ thing being replayed. On screen there is only what every step uses:
 | PRICE [1.12650    ] [Stop here] [Run]  stops at 1.1265 ×     |   a time, and a stop price
 +--------------------------------------------------------------+
 ```
+
+**Next alert leads the window** (user, 2026-11-24: "the Next alert button should be more prominent.
+i use it the most"): the first row, the window's one filled (primary) button, a size up from the
+rest, with a skip-forward mark and its key, **Shift+↑**. While its own run shows, the same button
+reads **Stop** (red) and stops it, so the hand that pressed it need not travel to Step; Step reads
+Stop then too. A Step's or Play's run only disables it. Step is an outline button below it.
+
+**A step is any amount** (user, 2026-11-24: "we should be able to configure any amount of step, for
+example, 15h and 30h"). The step picker lists the timeframes and ends with **Custom step…**, which
+turns it into a field: `15h`, `30h`, `90m`, `2D`, `3 × 4h`, Enter to use it, Esc to cancel
+(`steps.ts`). It is still the session's `{ interval, multiple }`: `15h` is fifteen 1h candles on the
+instrument's grid, so the weekend is skipped (Fri 10:00 + 15h is Mon 01:00), and an amount is
+counted in one-unit candles as finely as the base lets it end on a base bar (`45m` on a 5m base is
+9 × 5m; `15h` on a 2h base is refused, with the reason). A listed timeframe typed (`15m`) is that
+timeframe. Typed steps are remembered per browser (`wd.replay.steps`, eight, most recent first) and
+offered in the picker; the × beside a remembered step takes it off the list. The separate × multiple
+box is gone: a step of several candles is typed.
+
+**Quiet hours** (user, 2026-11-24: "silence alerts in bar replay between certain times, for example
+10pm - 6am"): the moon beside Next alert opens a panel -- Silence alerts, from, to, and the clock
+(the replay's, as the title bar shows it, or the browser's own where it differs). Lit, the moon
+reads the hours. Per browser (`wd.replay.quiet`), like the pace. `quiet.ts` says what is silenced:
+- an alert on the Alerts list triggering then is passed over -- found, kept in the look-ahead chain
+  (`alerts.ts`), never stopped at -- so Next alert runs on to the first one outside them;
+- a price watch (a level alert, a line from the chart) is HELD then (`LocalWatchRegistry.onEvent`
+  `held`): it reads each bar, so its crossing baseline and edge memory move on and a 3am crossing
+  never fires at 6:00 as if new, but it cannot fire, ring, spend a one-shot or start a cooldown;
+- NOT the account: fills, stop losses, take profits, trail and breakeven stops and "Notify at"
+  still stop a run at night, as they would on a real account; nor the Go to stop price, which is a
+  destination, not an alert.
+The window is `[from, to)` on the wall clock, over midnight when from > to. `QuietWindow` answers
+per base bar from a cached stretch up to the next edge, worked out again at a clock change (a
+fall-back hour can re-enter the window); `quiet.test.ts` sweeps both 2024 DST weeks minute by minute.
 
 **The title bar acts on nothing** (user, 2026-10-04: "move the Step and play button out of the
 title area"): it names the instrument and the replay's clock and carries the window's own roll-up
@@ -72,7 +107,8 @@ which gives way to why the play stopped.
 
 **Keys** (TradingView's, so the hands already know them): **Shift+→** is Step — Stop while an
 advance runs, but a held key's *repeat* never cancels the step it is waiting on — and
-**Shift+↓** is Play/Pause. Shift+→ is also klinecharts' own "scroll right"; on a replay wall
+**Shift+↓** is Play/Pause. **Shift+↑** is Next alert (2026-11-24; klinecharts binds nothing to it),
+Stop while its own run shows. Shift+→ is also klinecharts' own "scroll right"; on a replay wall
 the replay takes it (a `window` listener in the capture phase, which stops the event before
 klinecharts' `document` listener hears it). A key typed into a field is the field's.
 
@@ -105,7 +141,7 @@ panel, so leaving is no longer losing, and its title says where to find the repl
 replay, and the rail's stream status reads **replay** (orange) instead of a green "live" under a
 chart frozen in the past.
 
-The status line says what was asked — **"Stepped 1h"**, **"Stepped 3 × 15m"** — not how the
+The status line says what was asked — **"Stepped 1h"**, **"Stepped 15h"**, **"Stepped 3 × 4h"** — not how the
 session did it: whether the span was walked or seeked (nothing working could fill) is the
 engine's business, and "Jumped — nothing working" on an ordinary one-candle step read as an
 error.

@@ -213,3 +213,34 @@ describe('ReplayAlerts look-ahead', () => {
     expect(search.maxRunning).toBe(1)
   })
 })
+
+describe('ReplayAlerts in quiet hours', () => {
+  test('a trigger in quiet hours is passed over: Next alert lands on the first one outside them', async () => {
+    const search = new FakeSearch([5 * H, 9 * H, 14 * H])
+    // Quiet from 4h to 10h of this test's clock.
+    const quiet = { hours: [4 * H, 10 * H] as [number, number] }
+    const silenced = (at: number) => at >= quiet.hours[0] && at < quiet.hours[1]
+    const replay = new ReplayAlerts(() => [alert('a')], search as unknown as AlertSearch, async () => null, silenced)
+    expect((await replay.next(0, 100 * H, progress()))?.effective).toBe(14 * H)
+    // The silenced triggers are still links of the chain: the next search started from each.
+    expect(starts(search)).toEqual([0, 5, 9])
+    expect(await replay.prefetch(0, 100 * H)).toBe(14 * H)
+    await settle()
+    const searched = starts(search)
+    // Hours changed: the same chain answers, with no search.
+    quiet.hours = [0, 0]
+    expect((await replay.next(0, 100 * H, progress()))?.effective).toBe(5 * H)
+    expect(starts(search)).toEqual(searched)
+  })
+
+  test('the look-ahead keeps its triggers ahead OUTSIDE quiet hours', async () => {
+    const at = Array.from({ length: 12 }, (_, i) => (i + 1) * H)
+    const search = new FakeSearch(at)
+    // Every odd hour is quiet.
+    const replay = new ReplayAlerts(() => [alert('a')], search as unknown as AlertSearch, async () => null, (t) => (t / H) % 2 === 1)
+    replay.prefetch(0, 100 * H)
+    await settle(40)
+    // Five even hours ahead: 2, 4, 6, 8, 10 -- found by searching through 10.
+    expect(starts(search).at(-1)).toBe(9)
+  })
+})

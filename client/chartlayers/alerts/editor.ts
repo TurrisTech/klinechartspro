@@ -1,6 +1,6 @@
 // The small card a price alert opens beside its bell: the buffer in pips, the zone it makes,
 // "Make default" for that buffer, whether it has fired, and Remove. Opened by a click on the
-// bell; a click on the line itself only turns the alert on or off.
+// bell; a click on the line itself opens a menu: once, every time, off (view.ts).
 //
 // A popover rather than a modal: it belongs to one line on one pane and should not hide the
 // chart it describes. Appended into the themed chart root and `position: fixed`, for the reason

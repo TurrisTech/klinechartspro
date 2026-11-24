@@ -19,6 +19,9 @@ import type { AlertOccurrence } from './clock'
 //
 // The search reads past the replay's clock (client/alerts/data.ts): it is the replay's own
 // look-ahead, hidden from the chart until the cursor gets there, exactly like its bar caches.
+//
+// QUIET HOURS (quiet.ts): a trigger inside them is passed over -- found, kept in the chain, never
+// stopped at -- so Next alert runs on to the first one outside them.
 
 export interface SearchProgress {
   /** Asked between chunks of the search: true stops it (a Stop press). */
@@ -96,7 +99,9 @@ export class ReplayAlerts implements ReplayAlertBook {
     private readonly alerts: () => Alert[],
     private readonly search: AlertSearch,
     /** For the readings' labels only. */
-    private readonly catalogue: () => Promise<ServerCatalogue | null> = async () => null
+    private readonly catalogue: () => Promise<ServerCatalogue | null> = async () => null,
+    /** Whether a trigger at an instant falls in quiet hours (quiet.ts), and is passed over. */
+    private readonly silenced: (at: number) => boolean = () => false
   ) {}
 
   count(): number {
@@ -128,7 +133,10 @@ export class ReplayAlerts implements ReplayAlertBook {
   private async first(start: Chain, after: number, waiter: SearchProgress | null): Promise<AlertHit | null> {
     let chain = start
     for (;;) {
-      const held = chain.hits.find((h) => h.at > after)
+      // A trigger in quiet hours is still a link of the chain -- the next search starts from it --
+      // but not an answer: the press runs on to the first one outside them. Read here rather than
+      // when the chain is built, so changing the hours costs no search.
+      const held = chain.hits.find((h) => h.at > after && !this.silenced(h.at))
       if (held) return held
       if (chain.dropped || chain.exhausted) return null
       // Past everything the chain has searched, with nothing running: a chain from the cursor
@@ -140,7 +148,7 @@ export class ReplayAlerts implements ReplayAlertBook {
 
   /** Search on from the chain's end until ALERTS_AHEAD triggers lie after `after`, in the background. */
   private async topUp(chain: Chain, after: number): Promise<void> {
-    while (!chain.dropped && !chain.exhausted && chain.hits.filter((h) => h.at > after).length < ALERTS_AHEAD) {
+    while (!chain.dropped && !chain.exhausted && chain.hits.filter((h) => h.at > after && !this.silenced(h.at)).length < ALERTS_AHEAD) {
       await this.extend(chain, null)
     }
   }

@@ -44,6 +44,10 @@ export interface ReplayWatchesOptions {
   /** The replay's instrument, `vendor:TICKER` — the only one it walks. */
   symbol: string
   notify: NotificationSink
+  /** Whether an instant is in the viewer's quiet hours (quiet.ts): a watch is held then -- it
+   * neither fires nor rings -- except the Go to panel's stop price, which is where the user asked
+   * the run to go rather than an alert. */
+  silenced?: (at: number) => boolean
 }
 
 /** `vendor:SYMBOL`, or a bare symbol taken as the replay's own vendor. Mirrors the server
@@ -278,7 +282,9 @@ export class ReplayWatches implements ReplayObserver {
     // The bar's CLOSE is the event instant: a watch answered by a bar is answered when that
     // bar is complete, and it is the clock the cooldown measures on. Never the wall clock —
     // a session replaying 2024 must have a 2024 cooldown.
-    const fired = this.registry.onEvent(this.source.id, this.opts.symbol, bar.end, observation)
+    // In quiet hours every watch but the stop price only listens (LocalWatchRegistry `onEvent`).
+    const held = this.opts.silenced?.(bar.end) ? (watch: { note: string }) => watch.note !== STOP_PRICE_NOTE : undefined
+    const fired = this.registry.onEvent(this.source.id, this.opts.symbol, bar.end, observation, held)
     return fired.map((firing) => ({ label: firing.title }))
   }
 
