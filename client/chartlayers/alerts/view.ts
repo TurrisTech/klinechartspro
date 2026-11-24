@@ -5,7 +5,7 @@ import { getByPath } from '../settings'
 import { DEFAULT_WATCH_COLORS } from '../../watch/overlays'
 import { instrumentTarget, type Watch, type WatchRepeat } from '../../watch/types'
 import type { AlertTarget, LayerAlerts, LayerContext } from '../types'
-import { openPriceAlertEditor, type PriceAlertEditor } from './editor'
+import { openPriceAlertEditor, type PriceAlertBulk, type PriceAlertEditor } from './editor'
 import {
   bellStyles,
   ICON_INSET,
@@ -121,6 +121,8 @@ export class LayerAlertView<TDatum, TConfig> {
 
   constructor(
     layerId: string,
+    /** The layer's name on screen, which names its alerts in the dialog's foot. */
+    private readonly label: string,
     private readonly alerts: PriceAlerts,
     private readonly offer: LayerAlerts<TDatum>
   ) {
@@ -349,6 +351,7 @@ export class LayerAlertView<TDatum, TConfig> {
       },
       onCommit: (typed) => void this.alerts.setPips(id, state.ctx.symbol, typed),
       onRemove: () => void this.alerts.remove(id),
+      bulk: this.bulkFor(state),
       onClose: () => {
         if (this.editor?.handle === handle) this.editor = null
         state.editing = null
@@ -357,6 +360,39 @@ export class LayerAlertView<TDatum, TConfig> {
     })
     this.editor = { chart, handle }
     this.render(chart)
+  }
+
+  /** The dialog's foot: every alert of this layer on the pane's instrument, and those of them
+   * that are stale when the layer can tell (`LayerAlerts.stale`, asked as the dialog opens).
+   * Whatever is removed is said at the foot of the pane. */
+  private bulkFor(state: PaneState<TConfig>): PriceAlertBulk | undefined {
+    const { ctx } = state
+    const host = ctx.chart.getDom()
+    const mine = this.alerts
+      .forInstrument(ctx.vendor, ctx.symbol.ticker)
+      .filter((alert) => this.offer.owns?.(alert) ?? true)
+    if (mine.length === 0) return undefined
+    const what = `${this.label} alerts on ${ctx.symbol.ticker}`
+    const said = (removed: number, kind: string): void => {
+      if (host) flash(host, `Removed ${removed} ${kind}${this.label} ${removed === 1 ? 'alert' : 'alerts'} on ${ctx.symbol.ticker}`)
+    }
+    const stale = this.offer.stale?.(mine, ctx)
+    // Settled here as well, so a dialog closed before the answer leaves no unhandled rejection.
+    stale?.catch(() => undefined)
+    return {
+      title: what,
+      count: mine.length,
+      stale: stale?.then(
+        (ids) => ids.length,
+        () => null
+      ),
+      onRemoveStale: () => {
+        void stale?.then(async (ids) => said(await this.alerts.removeMany(ids), 'stale '))
+      },
+      onRemoveAll: () => {
+        void this.alerts.removeMany(mine.map((alert) => alert.watch.id)).then((removed) => said(removed, ''))
+      }
+    }
   }
 
   /** Where the bell of the line at `price` is, in viewport coordinates. */

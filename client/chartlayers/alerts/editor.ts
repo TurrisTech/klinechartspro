@@ -2,6 +2,11 @@
 // "Make default" for that buffer, whether it has fired, and Remove. Opened by a click on the
 // bell; a click on the line itself steps its alert round off, every time, once (view.ts).
 //
+// Its foot removes many at once (user, 2026-11-24: "an option to remove all levels alerts and
+// all stale levels alerts"): every alert of the layer on the instrument, or the stale ones --
+// those whose line could no longer have one, a level spent since. Remove all asks first, in the
+// card; Remove stale says how many it will take and does not.
+//
 // A popover rather than a modal: it belongs to one line on one pane and should not hide the
 // chart it describes. Appended into the themed chart root and `position: fixed`, for the reason
 // client/watch/menu.ts gives (`.klinecharts-pro` clips its overflow and defines the `kc-*`
@@ -31,8 +36,22 @@ export interface PriceAlertEditorOptions {
   /** Apply a buffer -- on Enter, on leaving the box, on Done, and on closing with one typed. */
   onCommit(pips: number): void
   onRemove(): void
+  /** The foot's removal of many at once. Absent: no foot. */
+  bulk?: PriceAlertBulk
   /** However it closed. */
   onClose(): void
+}
+
+export interface PriceAlertBulk {
+  /** What they are and where: `Levels alerts on EURUSD`. */
+  title: string
+  /** How many there are, this one among them. */
+  count: number
+  /** How many of them are stale, once known; null when it could not be told. Absent: no
+   * Remove stale. */
+  stale?: Promise<number | null>
+  onRemoveStale(): void
+  onRemoveAll(): void
 }
 
 export interface PriceAlertEditor {
@@ -54,6 +73,62 @@ function parsePips(raw: string): number | null {
   if (raw.trim() === '') return null
   const value = Number(raw)
   return Number.isFinite(value) && value >= 0 ? value : null
+}
+
+/** The card's foot: how many alerts of the kind there are on the instrument, Remove stale and
+ * Remove all. Either closes the card once pressed -- the foot of the pane says what went. */
+function bulkFoot(bulk: PriceAlertBulk, close: () => void): HTMLElement {
+  const foot = el('div', 'wd-price-alert-bulk')
+  const summary = el('div', 'wd-price-alert-bulk-summary', `${bulk.title}: ${bulk.count}`)
+  const row = el('div', 'wd-price-alert-bulk-actions')
+  const stale = el('button', 'kc-button wd-price-alert-remove-stale')
+  stale.type = 'button'
+  const all = el('button', 'kc-button wd-price-alert-remove-all', `Remove all (${bulk.count})`)
+  all.type = 'button'
+  if (bulk.stale) row.appendChild(stale)
+  row.appendChild(all)
+  foot.append(summary, row)
+
+  // Stale is asked of the server as the card opens; until it answers the button waits.
+  let staleCount: number | null = null
+  const showStale = (text: string, title: string, enabled: boolean): void => {
+    stale.textContent = text
+    stale.title = title
+    stale.disabled = !enabled
+  }
+  showStale('Checking for stale…', 'Asking which of them are stale', false)
+  void bulk.stale?.then((count) => {
+    staleCount = count
+    if (count === null) showStale('Stale: could not check', 'Which are stale could not be read; try again later', false)
+    else if (count === 0) showStale('None stale', 'Every one of them is on a line still live', false)
+    else showStale(`Remove stale (${count})`, `Remove the ${count} stale ${count === 1 ? 'alert: its line is' : 'alerts: their lines are'} no longer live`, true)
+  })
+  stale.addEventListener('click', () => {
+    if (!staleCount) return
+    bulk.onRemoveStale()
+    close()
+  })
+
+  // Remove all asks first, in place: the row becomes the question, its two answers under it.
+  all.addEventListener('click', () => {
+    const ask = el('div', 'wd-price-alert-bulk-confirm')
+    const answers = el('div', 'wd-price-alert-bulk-actions')
+    const no = el('button', 'kc-button', 'Cancel')
+    no.type = 'button'
+    const yes = el('button', 'kc-button wd-price-alert-remove-all-confirm', `Remove ${bulk.count}`)
+    yes.type = 'button'
+    answers.append(el('span', 'wd-price-alert-spacer'), no, yes)
+    const question = bulk.count === 1 ? 'Remove the 1 alert?' : `Remove all ${bulk.count} alerts?`
+    ask.append(el('div', 'wd-price-alert-bulk-question', question), answers)
+    row.replaceWith(ask)
+    no.addEventListener('click', () => ask.replaceWith(row))
+    yes.addEventListener('click', () => {
+      bulk.onRemoveAll()
+      close()
+    })
+    yes.focus()
+  })
+  return foot
 }
 
 export function openPriceAlertEditor(options: PriceAlertEditorOptions): PriceAlertEditor {
@@ -105,6 +180,7 @@ export function openPriceAlertEditor(options: PriceAlertEditorOptions): PriceAle
   done.type = 'button'
   actions.append(remove, el('span', 'wd-price-alert-spacer'), done)
   card.appendChild(actions)
+  if (options.bulk) card.appendChild(bulkFoot(options.bulk, () => close()))
 
   let committed = options.pips
   let closed = false

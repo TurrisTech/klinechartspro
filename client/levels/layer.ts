@@ -1,5 +1,7 @@
 import type { OverlayCreate } from 'klinecharts'
 import { levelsCoverageFor, hasFeature } from '../capabilities'
+import type { PriceAlert } from '../chartlayers/alerts/hub'
+import { centredOn } from '../chartlayers/alerts/zone'
 import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
 import { applyEncodings, toLineStyle, type LineAppearance } from '../chartlayers/encoding'
@@ -201,6 +203,46 @@ function requestedIntervals(config: LevelsConfig): string[] | undefined {
 // But a close is when the book can change, NOT when it has been written — see
 // `freshness.ts`, which is where that distinction and the bound on waiting for it live. The
 // watermark and the schedule are both per instrument, which is why this reads `ctx`.
+/** The timeframe of a level alert, read from the name its line gave it (`EURUSD 1W level
+ * 1.08500`: the alerts' `target` below, through chartlayers/alerts/zone.ts `alertName`), or
+ * null for an alert that is not a level's. */
+export function levelAlertInterval(name: string): string | null {
+  return /^\S+ (\S+) level \S+$/.exec(name)?.[1] ?? null
+}
+
+/** How far past now the stale check's read reaches. Only LIVE levels are asked for, and for
+ * those the window's one test is that they were in force by its end (`levelsIn`); a level born
+ * since the pane's last bar must still count, so the end is well past any clock. */
+const STALE_READ_AHEAD_MS = 366 * ONE_DAY_MS
+
+/** Which level alerts are on a level no longer live -- spent since, or gone from the book. One
+ * read of the instrument's live levels across the alerts' prices, at EVERY timeframe rather
+ * than the ones the pane shows (an alert outlives its timeframe being switched off, and is not
+ * stale for it), under whatever clock the wall reads at -- so in a replay, live as of the
+ * replay. An alert is stale when no live level of its timeframe sits at its price. */
+export async function staleLevelAlerts(alerts: PriceAlert[], ctx: LayerContext): Promise<string[]> {
+  if (alerts.length === 0) return []
+  const precision = ctx.symbol.pricePrecision ?? 5
+  const tick = 10 ** -precision
+  const centres = alerts.map((alert) => alert.zone.center)
+  const end = Date.now() + STALE_READ_AHEAD_MS
+  const live = await fetchLevels({
+    vendor: ctx.vendor,
+    symbol: ctx.symbol.ticker,
+    priceMin: Math.min(...centres) - tick,
+    priceMax: Math.max(...centres) + tick,
+    dateFrom: end,
+    dateTo: end,
+    includeInvalidated: false
+  })
+  return alerts
+    .filter((alert) => {
+      const interval = levelAlertInterval(alert.watch.name)
+      return !live.some((level) => level.active && level.interval === interval && centredOn(alert.zone, level.price, precision))
+    })
+    .map((alert) => alert.watch.id)
+}
+
 function staleAt(fetchedAt: number, ctx: LayerContext): number {
   return levelsStaleAt(fetchedAt, levelsComputedThrough(ctx.vendor, ctx.symbol.ticker), gridFor(ctx.symbol))
 }
@@ -239,7 +281,11 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
   // overlays carry their level as `extendData`, which is how a click finds it.
   alerts: {
     target: (level) => (level.active ? { price: level.price, label: `${level.interval} level` } : null),
-    zonePipsSetting: 'alerts.zonePips'
+    zonePipsSetting: 'alerts.zonePips',
+    // The dialog's Remove all and Remove stale: a level's alert is known by its name, and is
+    // stale once its level is no longer live.
+    owns: (alert) => levelAlertInterval(alert.watch.name) !== null,
+    stale: staleLevelAlerts
   },
 
   fetch(ctx, config, window) {

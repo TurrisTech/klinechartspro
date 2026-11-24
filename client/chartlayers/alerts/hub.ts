@@ -155,6 +155,14 @@ export class PriceAlerts {
     await this.backend.store.remove(id)
   }
 
+  /** Remove every one of `ids` that is still here, at once; resolves to how many went. One the
+   * backend refused is kept (the store logs it), and not counted. */
+  async removeMany(ids: readonly string[]): Promise<number> {
+    const here = [...new Set(ids)].filter((id) => this.get(id))
+    await Promise.all(here.map((id) => this.remove(id)))
+    return here.filter((id) => !this.get(id)).length
+  }
+
   subscribe(listener: PriceAlertsListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)

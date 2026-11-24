@@ -191,7 +191,7 @@ export function createLayerController<TDatum, TConfig extends object>(
   // The clicks, hovers and bells of the layer's price alerts (alerts/view.ts), added to what
   // the layer builds before it is compared with what is drawn. An alert made, edited, removed
   // or fired changes which bells a pane draws, so each view repaints from what it holds.
-  const alertView = layer.alerts && alerts ? new LayerAlertView(layer.id, alerts, layer.alerts) : null
+  const alertView = layer.alerts && alerts ? new LayerAlertView(layer.id, layer.label, alerts, layer.alerts) : null
   if (alertView) {
     alerts?.subscribe(() => {
       for (const view of views) view.repaint()
