@@ -5,8 +5,10 @@ import { formatClock, formatSpan, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import { replayResults, resultHeadline, resultRows } from './results'
+import { describeQuiet, localZone, type QuietSetting } from './quiet'
 import { lastPlayed, type ReplaySessionSummary, resumable, sessionFacts } from './sessions'
 import type { AdvanceResult, ReplayController } from './session'
+import { describeStep, forgetStep, parseStep, readSavedSteps, rememberStep, sameStep, type StepSetting, stepKey } from './steps'
 import type { SimTrade } from '../trading/api'
 import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
 import { dragByHandle } from '../chrome/drag'
@@ -67,7 +69,10 @@ const GO_TO_KEY = 'wd.replay.goTo'
  * its progress, or a Stop already pressed, shows at once. */
 const BUSY_REVEAL_MS = 300
 
-type PanelId = 'goto' | 'settings' | 'results' | 'sessions' | null
+type PanelId = 'goto' | 'settings' | 'results' | 'sessions' | 'quiet' | null
+
+/** The step picker's last option: type a step of your own. */
+const CUSTOM_STEP = 'custom'
 
 export interface ReplayControlsOptions {
   controller: ReplayController
@@ -95,6 +100,9 @@ export interface ReplayControlsOptions {
   /** The owner's OTHER replays, for the Sessions panel: `resume` leaves this one for it. Absent,
    * there is no Sessions toggle. */
   sessions?: SessionsSource
+  /** The viewer's quiet hours (quiet.ts), set from the moon beside Next alert. Absent, there is
+   * no moon. */
+  quiet?: QuietHoursControl
   /** Injected by the tests: the wait between two played steps. */
   sleep?: (ms: number) => Promise<void>
   /** How long an advance runs before the controls show it (BUSY_REVEAL_MS). The tests pass 0. */
@@ -107,6 +115,12 @@ export interface PriceStop {
   get(): number | null
   set(price: number): Promise<void>
   clear(): Promise<void>
+}
+
+/** The quiet hours as the controls see them: `ReplayQuiet`, or a stub. */
+export interface QuietHoursControl {
+  readonly value: QuietSetting
+  set(next: QuietSetting): void
 }
 
 export interface ReplayControls {
@@ -136,6 +150,12 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
   // half-typed price must survive it.
   let goTo: GoToSpec = readGoTo()
   let priceDraft = ''
+  // A step being typed into the step field ("15h"), or null while the field is the picker. Kept
+  // across renders like the price, and focused again after each: Play re-renders twice a second.
+  let stepDraft: string | null = null
+  let savedSteps = readSavedSteps()
+  // Whether the running advance is Next alert's, so its own button is the one that stops it.
+  let nextRunning = false
   // The status row's walk line while a walk or a search is in progress, so a progress report
   // can patch it.
   let walkLine: HTMLElement | null = null
@@ -220,6 +240,37 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     void controller.step().then((r) => r && options.onStop?.(r))
   }
 
+  /** Next alert, or Stop while its own run is showing: the button pressed most stops what it
+   * started, rather than sending the hand to Step. */
+  function pressNext(): void {
+    if (controller.busy) {
+      if (!nextRunning || !busyShown()) return
+      player.pause()
+      controller.cancel()
+      return
+    }
+    if (!nextEnabled()) return
+    player.pause()
+    nextRunning = true
+    void controller
+      .nextAlert()
+      .then((r) => r && options.onStop?.(r))
+      .finally(() => {
+        nextRunning = false
+        render()
+      })
+  }
+
+  /** What Next alert can stop at: every enabled alert, price watch, working order or stop and
+   * pending milestone. */
+  function nextStops(): number {
+    return controller.alertCount + controller.armedStops + controller.workingStops + (controller.pendingMilestones ?? 0)
+  }
+
+  function nextEnabled(): boolean {
+    return nextStops() > 0
+  }
+
   function pressPlay(): void {
     // Busy with an advance the player did not start (a Next alert run): Play waits for it.
     if (!player.playing && controller.busy) return
@@ -228,7 +279,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
 
   const onKey = (event: KeyboardEvent): void => {
     if (!event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
-    if (event.key !== 'ArrowRight' && event.key !== 'ArrowDown') return
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
     if (isEditable(event.target)) return
     event.preventDefault()
     event.stopPropagation()
@@ -237,6 +288,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       // still landing must not be cancelled by the same finger that asked for the next one.
       if (event.repeat && controller.busy) return
       pressStep()
+    } else if (event.key === 'ArrowUp') {
+      // Next alert (Stop while its run shows). A repeat never stops the run it asked for.
+      if (event.repeat && controller.busy) return
+      pressNext()
     } else if (!event.repeat) pressPlay()
   }
   window.addEventListener('keydown', onKey, true)
@@ -276,28 +331,40 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
 
   // -- the body ----------------------------------------------------------------------------
   //
-  //   [▶] [Step]  [1h v] × [1]  every [1 s v]      transport: each button beside what it uses
-  //   [Next alert]  Stepped 1h                      the other way to move, and why it stopped
+  //   [  Next alert  ⇧↑ ] [☾ 22:00–06:00]  Alert: …   the way the replay is mostly moved, first and
+  //                                                    largest, and why the last advance stopped
+  //   [▶] [Step]  [15h v]  every [1 s v]               transport: each button beside what it uses
   //   Alerts 2  Go to  Base 1h  Results  Sessions  Account  Trade   Exit replay
+  //
+  // Next alert leads (user, 2026-11-24: "the Next alert button should be more prominent. i use
+  // it the most"): the primary button, the size of a row, with Step and Play below it.
 
   function renderBody(): void {
     const body = win.body
     // Taking the list out of the page loses where it was scrolled to: put back below.
     const scrolled = sessionList?.scroller.scrollTop ?? 0
+    const typing = stepDraft !== null && win.body.querySelector('.wd-replay-step-custom') === document.activeElement
     body.innerHTML = ''
     walkLine = null
-    body.append(renderTransport(), renderNext())
+    body.append(renderNext(), renderTransport())
     const notice = controller.followNotice
     if (notice) body.appendChild(renderFollowNotice(notice))
     body.appendChild(renderToggles())
     if (panel === 'goto') body.appendChild(renderGoTo())
     if (panel === 'settings') body.appendChild(renderSettings())
     if (panel === 'results') body.appendChild(renderResults())
+    if (panel === 'quiet' && options.quiet) body.appendChild(renderQuiet(options.quiet))
     if (panel === 'sessions' && sessionList) {
       body.appendChild(renderSessions(sessionList))
       sessionList.scroller.scrollTop = scrolled
     }
     win.reflow()
+    // A step being typed keeps its caret through the rebuild.
+    if (typing) {
+      const field = body.querySelector<HTMLInputElement>('.wd-replay-step-custom')
+      field?.focus()
+      field?.setSelectionRange(field.value.length, field.value.length)
+    }
   }
 
   /** Write how far a running search or walk has got into `line`; false when neither runs. A
@@ -330,38 +397,33 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     play.disabled = busy && !playing
     play.title = playing
       ? 'Pause after this step (Shift+↓)'
-      : `Play: step ${describeAdvance(controller.advance)} every ${delayLabel(player.delayMs)} until a fill or a price watch stops it (Shift+↓)`
+      : `Play: step ${describeStep(controller.advance, timeframes())} every ${delayLabel(player.delayMs)} until a fill or a price watch stops it (Shift+↓)`
 
     // While an advance runs -- a Step or Next alert -- the same button stops it, at the next
     // base bar (or, while Next alert is still searching, before anything moves).
     const cancelling = controller.busy && controller.cancelling
     const label = !busy ? 'Step' : cancelling ? 'Stopping…' : 'Stop'
-    const step = button('kc-button kc-button-primary wd-replay-step', label, pressStep)
+    const step = button('kc-button kc-button-outline wd-replay-step', label, pressStep)
     step.classList.toggle('is-stop', busy)
     step.disabled = cancelling
-    step.title = busy ? 'Stop at the next bar (Shift+→)' : `Advance ${describeAdvance(controller.advance)} (Shift+→)`
+    step.title = busy ? 'Stop at the next bar (Shift+→)' : `Advance ${describeStep(controller.advance, timeframes())} (Shift+→)`
 
-    // How far one Step goes. The Step button is this group's label: it reads "Step 1h × 1".
+    // How far one Step goes. The Step button is this group's label: it reads "Step 15h". Any
+    // amount can be typed ("Custom step…": 15h, 30h, 90m, 2D, 3 × 4h), and what is typed is
+    // offered again (steps.ts).
     const size = el('span', 'wd-replay-group')
-    const choices = advanceChoices(controller, options.intervalsInUse())
-    const picker = select(
-      choices.map((c) => ({ value: c, label: c })),
-      controller.advance.interval,
-      (value) => controller.setAdvance({ interval: value, multiple: controller.advance.multiple })
-    )
-    picker.title = 'How far one Step goes: this timeframe…'
-    picker.setAttribute('aria-label', 'Step timeframe')
-    picker.disabled = busy
-    const times = el('span', 'wd-replay-times')
-    times.textContent = '×'
-    const multiple = numberInput(String(controller.advance.multiple), (raw) => {
-      const n = Math.max(1, Math.floor(Number(raw) || 1))
-      controller.setAdvance({ interval: controller.advance.interval, multiple: n })
-    })
-    multiple.title = '…times this many candles'
-    multiple.setAttribute('aria-label', 'Candles per step')
-    multiple.disabled = busy
-    size.append(picker, times, multiple)
+    size.appendChild(stepDraft === null ? stepPicker(busy) : stepField())
+    if (stepDraft === null && savedSteps.includes(describeStep(controller.advance, timeframes()))) {
+      const label = describeStep(controller.advance, timeframes())
+      const forget = button('kc-button kc-icon-button wd-replay-step-forget', '×', () => {
+        savedSteps = forgetStep(label)
+        renderBody()
+      })
+      forget.title = `Take ${label} off the list (the step stays as it is)`
+      forget.setAttribute('aria-label', `Forget the step ${label}`)
+      forget.disabled = busy
+      size.appendChild(forget)
+    }
 
     // The pace Play steps at. Never disabled: slowing down is most wanted while playing.
     const paceGroup = el('span', 'wd-replay-group')
@@ -381,15 +443,121 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     return row
   }
 
+  /** The picker's own intervals: the base, what is stored, what the panes show. */
+  function timeframes(): string[] {
+    return advanceChoices(controller, options.intervalsInUse())
+  }
+
+  /** The step picker: the timeframes, the steps typed before, the current one, and "Custom step…". */
+  function stepPicker(busy: boolean): HTMLSelectElement {
+    const frames = timeframes()
+    const choices: Array<{ value: string; label: string; step: StepSetting }> = frames.map((code) => ({
+      value: stepKey({ interval: code, multiple: 1 }),
+      label: code,
+      step: { interval: code, multiple: 1 }
+    }))
+    const add = (step: StepSetting): void => {
+      if (choices.some((c) => sameStep(c.step, step))) return
+      choices.push({ value: stepKey(step), label: describeStep(step, frames), step })
+    }
+    // A typed step that no longer fits the base (one typed on a finer wall) is left off, not lost.
+    for (const typed of savedSteps) {
+      const parsed = parseStep(typed, controller.base, frames)
+      if (parsed.ok) add(parsed.step)
+    }
+    add(controller.advance)
+    const picker = select(
+      [...choices.map(({ value, label }) => ({ value, label })), { value: CUSTOM_STEP, label: 'Custom step…' }],
+      stepKey(controller.advance),
+      (value) => {
+        if (value === CUSTOM_STEP) {
+          stepDraft = ''
+          renderBody()
+          const field = win.body.querySelector<HTMLInputElement>('.wd-replay-step-custom')
+          field?.focus()
+          return
+        }
+        const chosen = choices.find((c) => c.value === value)
+        if (chosen) controller.setAdvance(chosen.step)
+      }
+    )
+    picker.classList.add('wd-replay-step-size')
+    picker.title = 'How far one Step goes. Custom step… takes any amount: 15h, 30h, 90m, 2D, 3 × 4h'
+    picker.setAttribute('aria-label', 'Step size')
+    picker.disabled = busy
+    return picker
+  }
+
+  /** The step typed in words; Enter applies it (and remembers it), Escape gives the picker back. */
+  function stepField(): HTMLInputElement {
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.className = 'kc-input wd-replay-input wd-replay-step-custom'
+    input.value = stepDraft ?? ''
+    input.placeholder = '15h, 30h, 90m…'
+    input.setAttribute('aria-label', 'Step size, typed')
+    input.title = 'Any amount: 15h is fifteen hourly candles (the weekend skipped), 90m, 2D, 3 × 4h. Enter to use it, Esc to cancel.'
+    input.addEventListener('input', () => {
+      stepDraft = input.value
+    })
+    const done = (): void => {
+      stepDraft = null
+      renderBody()
+    }
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        done()
+        return
+      }
+      if (event.key !== 'Enter') return
+      event.preventDefault()
+      const frames = timeframes()
+      const parsed = parseStep(input.value, controller.base, frames)
+      if (!parsed.ok) {
+        flash(win.element, parsed.reason)
+        return
+      }
+      stepDraft = null
+      // A listed timeframe is on the list already; anything else is kept to pick again.
+      if (!(parsed.step.multiple === 1 && frames.includes(parsed.step.interval))) {
+        savedSteps = rememberStep(describeStep(parsed.step, frames))
+      }
+      controller.setAdvance(parsed.step)
+      renderBody()
+    })
+    // Clicking away gives the picker back -- but not the rebuild of the body, which takes the
+    // field out of the page (and puts it back focused) while it is still being typed in.
+    input.addEventListener('blur', () => {
+      setTimeout(() => {
+        if (stepDraft !== null && !input.isConnected) return
+        if (stepDraft !== null && document.activeElement !== input) done()
+      }, 0)
+    })
+    return input
+  }
+
   /** Next alert, and beside it what the replay is doing or why it last stopped. */
   function renderNext(): HTMLElement {
     const row = el('div', 'wd-replay-row wd-replay-next-row')
     const busy = busyShown()
-    const next = button('kc-button kc-button-outline wd-replay-next', 'Next alert', () => {
-      if (controller.busy) return
-      player.pause()
-      void controller.nextAlert().then((r) => r && options.onStop?.(r))
-    })
+    // While its own run shows, the same button stops it -- as Step does for a step -- so the
+    // hand that pressed it need not travel to Step.
+    const stopping = nextRunning && busy
+    const cancelling = stopping && controller.cancelling
+    const next = el('button', `kc-button kc-button-primary wd-replay-next${stopping ? ' is-stop' : ''}`) as HTMLButtonElement
+    next.type = 'button'
+    next.addEventListener('click', pressNext)
+    const nextLabel = el('span', 'wd-replay-next-label')
+    nextLabel.textContent = !stopping ? 'Next alert' : cancelling ? 'Stopping…' : 'Stop'
+    next.innerHTML = stopping ? '' : NEXT_ICON
+    next.appendChild(nextLabel)
+    if (!stopping) {
+      const key = el('kbd', 'wd-replay-key')
+      key.textContent = '⇧↑'
+      key.setAttribute('aria-hidden', 'true')
+      next.appendChild(key)
+    }
     // A price watch is a stop too, so a wall with watches and no alert can still run to the
     // next one.
     // Every enabled alert on the Alerts list, whatever instrument it watches -- and every price
@@ -398,18 +566,22 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const alerts = controller.alertCount
     const working = controller.workingStops
     const milestones = controller.pendingMilestones ?? 0
-    const stops = alerts + controller.armedStops + working + milestones
-    next.disabled = busy || stops === 0
+    const stops = nextStops()
+    next.disabled = stopping ? cancelling : busy || stops === 0
     const also = [
       controller.armedStops > 0 ? 'a price watch fires' : null,
       working > 0 ? 'an order, stop loss or take profit fills' : null,
       milestones > 0 ? 'a trade reaches a "Notify at"' : null
     ].filter((part) => part !== null)
-    next.title =
-      stops === 0
+    const quiet = options.quiet?.value
+    const quietNote = quiet?.on ? `, outside quiet hours (${describeQuiet(quiet)})` : ''
+    next.title = stopping
+      ? 'Stop the run where it has got to (Shift+↑)'
+      : stops === 0
         ? 'Enable an alert (Alerts), place a price watch, or rest an order or a stop first'
-        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} triggers${also.map((part) => `, or ${part}`).join('')}`
+        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} triggers${quietNote}${also.map((part) => `, or ${part}`).join('')} (Shift+↑)`
     row.appendChild(next)
+    if (options.quiet) row.appendChild(quietToggle(options.quiet.value))
 
     const last = controller.lastStop
     const progress = el('span', 'wd-replay-walk')
@@ -434,6 +606,86 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       row.appendChild(reason)
     }
     return row
+  }
+
+  /** The moon beside Next alert: lit, and reading the hours, while they silence anything. */
+  function quietToggle(setting: QuietSetting): HTMLButtonElement {
+    const on = setting.on
+    const toggle = iconButton(`kc-button wd-replay-toggle wd-replay-quiet-toggle${on ? ' is-on' : ''}${panel === 'quiet' ? ' is-open' : ''}`, MOON_ICON, () => showPanel('quiet'))
+    if (on) {
+      const hours = el('span', 'wd-replay-quiet-hours')
+      hours.textContent = describeQuiet(setting)
+      toggle.appendChild(hours)
+    }
+    toggle.setAttribute('aria-pressed', String(panel === 'quiet'))
+    toggle.setAttribute('aria-label', on ? `Quiet hours ${describeQuiet(setting)}` : 'Quiet hours')
+    toggle.title = on
+      ? `Quiet hours ${describeQuiet(setting)} ${zoneName(quietZone(setting))}: alerts then do not stop the replay or ring`
+      : 'Quiet hours: silence alerts at night (off)'
+    return toggle
+  }
+
+  function quietZone(setting: QuietSetting): string {
+    return setting.zone === 'local' ? localZone() : controller.grid.schedule.timezone
+  }
+
+  //   QUIET HOURS  [x] Silence alerts  from [22:00] to [06:00]  [New York time (replay) v]
+  //   what is silenced, and what is not
+
+  function renderQuiet(quiet: QuietHoursControl): HTMLElement {
+    const box = el('div', 'wd-replay-panel wd-replay-quiet')
+    const setting = quiet.value
+    const row = el('div', 'wd-replay-row')
+    const label = el('span', 'wd-replay-label')
+    label.textContent = 'Quiet hours'
+    const on = checkbox('Silence alerts', setting.on, (checked) => quiet.set({ ...quiet.value, on: checked }))
+    on.classList.add('wd-replay-quiet-on')
+    const time = (value: number, aria: string, apply: (minute: number) => QuietSetting): HTMLInputElement => {
+      const input = document.createElement('input')
+      input.type = 'time'
+      input.className = 'kc-input wd-replay-input wd-replay-quiet-time'
+      input.value = minuteValue(value)
+      input.setAttribute('aria-label', aria)
+      input.addEventListener('change', () => {
+        const minute = minuteOf(input.value)
+        if (minute !== null) quiet.set(apply(minute))
+      })
+      return input
+    }
+    const fromLabel = el('span', 'wd-replay-every')
+    fromLabel.textContent = 'from'
+    const from = time(setting.from, 'Quiet from', (minute) => ({ ...quiet.value, from: minute }))
+    const toLabel = el('span', 'wd-replay-every')
+    toLabel.textContent = 'to'
+    const to = time(setting.to, 'Quiet until', (minute) => ({ ...quiet.value, to: minute }))
+    row.append(label, on, fromLabel, from, toLabel, to)
+    // The clock they are read on: the replay's (the title bar's), or this browser's when it differs.
+    const replayZone = controller.grid.schedule.timezone
+    const mine = localZone()
+    if (mine !== replayZone) {
+      const zone = select(
+        [
+          { value: 'replay', label: `${zoneName(replayZone)} (replay)` },
+          { value: 'local', label: `${zoneName(mine)} (yours)` }
+        ],
+        setting.zone,
+        (value) => quiet.set({ ...quiet.value, zone: value === 'local' ? 'local' : 'replay' })
+      )
+      zone.setAttribute('aria-label', 'Quiet hours clock')
+      zone.title = 'The clock the hours are read on: the replay’s, as the title bar shows it, or your own'
+      row.appendChild(zone)
+    } else {
+      const zone = el('span', 'wd-replay-muted')
+      zone.textContent = zoneName(replayZone)
+      row.appendChild(zone)
+    }
+    box.appendChild(row)
+    const note = el('div', 'wd-replay-muted wd-replay-quiet-note')
+    note.textContent = setting.from === setting.to
+      ? 'From and to are the same time, so nothing is silenced.'
+      : 'Alerts and price watches that trigger in these hours do not stop the replay or ring: Next alert runs on to the first one outside them, and an alert set to fire once is still armed when they end. Orders, stops, take profits, "Notify at" and the Go to stop price still stop it.'
+    box.appendChild(note)
+    return box
   }
 
   /** The chart moved to an instrument the replay has not followed. It says which instrument the
@@ -816,9 +1068,9 @@ function advanceChoices(controller: ReplayController, inUse: string[]): string[]
   return sortByLength([...new Set([controller.base, ...controller.storedIntervals, ...inUse, controller.advance.interval])])
 }
 
-/** "1h" for one candle, "3 × 15m" for several. */
+/** "1h" for one candle, "15h" for fifteen hourly ones, "3 × 4h" for several longer ones. */
 function describeAdvance(advance: { interval: string; multiple: number }): string {
-  return advance.multiple === 1 ? advance.interval : `${advance.multiple} × ${advance.interval}`
+  return describeStep(advance)
 }
 
 /** "¼ s", "1 s": the pace picker's labels. */
@@ -936,6 +1188,11 @@ function describeStop(result: AdvanceResult, zone: string, trades?: readonly Sim
   }
 }
 
+/** Next alert's face: a skip-forward mark, so the button reads at a glance among the others. */
+const NEXT_ICON =
+  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M2.5 3v10l6-5zM8.5 3v10l6-5z" fill="currentColor"/></svg>'
+const MOON_ICON =
+  '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M13.5 10.2A6 6 0 0 1 5.8 2.5a6 6 0 1 0 7.7 7.7z" fill="currentColor"/></svg>'
 const PLAY_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4.5 2.75v10.5L13 8z" fill="currentColor"/></svg>'
 const PAUSE_ICON =
   '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/><rect x="9.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/></svg>'

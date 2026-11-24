@@ -220,6 +220,7 @@ function mount(
     settled?: () => Promise<void>
     busyRevealMs?: number
     sessions?: import('./controls').SessionsSource
+    quiet?: import('./controls').QuietHoursControl
   } = {}
 ): Mounted {
   const bounds = document.createElement('div')
@@ -252,6 +253,7 @@ function mount(
     sleep: opts.sleep,
     settled: opts.settled,
     sessions: opts.sessions,
+    quiet: opts.quiet,
     // Shown at once unless a test is about the delay itself.
     busyRevealMs: opts.busyRevealMs ?? 0,
     account:
@@ -287,7 +289,7 @@ function mount(
   const root = controls.element
   const label = (b: Element): string => {
     const clone = b.cloneNode(true) as HTMLElement
-    for (const badge of clone.querySelectorAll('.wd-replay-badge')) badge.remove()
+    for (const badge of clone.querySelectorAll('.wd-replay-badge, .wd-replay-key')) badge.remove()
     return (clone.textContent ?? '').trim()
   }
   const maybeButton = (text: string): HTMLButtonElement | null =>
@@ -487,19 +489,19 @@ describe('the advance row', () => {
     m.controller.armedStops = 1
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or a price watch fires')
+    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or a price watch fires (Shift+↑)')
 
     m.controller.armedStops = 0
     m.controller.workingStops = 1
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or an order, stop loss or take profit fills')
+    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or an order, stop loss or take profit fills (Shift+↑)')
 
     m.controller.workingStops = 0
     m.controller.alertCount = 2
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 2 alerts triggers')
+    expect(next().title).toBe('Advance to where the next of 2 alerts triggers (Shift+↑)')
 
     next().click()
     await flush()
@@ -511,41 +513,121 @@ describe('the advance row', () => {
     expect(next().disabled).toBe(true)
   })
 
+  test('Next alert leads the window, is the primary button, and carries its key', () => {
+    const m = mount()
+    const rows = [...m.root.querySelectorAll('.wd-window-body > .wd-replay-row')]
+    expect(rows[0]?.classList.contains('wd-replay-next-row')).toBe(true)
+    const next = m.button('Next alert')
+    expect(next.classList.contains('kc-button-primary')).toBe(true)
+    expect(m.button('Step').classList.contains('kc-button-primary')).toBe(false)
+    expect(next.querySelector('.wd-replay-key')?.textContent).toBe('⇧↑')
+  })
+
+  test('while its own run shows, Next alert is the Stop', async () => {
+    const m = mount()
+    m.controller.alertCount = 1
+    let finish: (r: AdvanceResult | null) => void = () => {}
+    m.controller.nextAlert = () => {
+      m.calls.nextAlert++
+      m.controller.busy = true
+      m.emit()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    }
+    m.emit()
+    m.button('Next alert').click()
+    const next = () => m.q<HTMLButtonElement>('.wd-replay-next') as HTMLButtonElement
+    expect(next().textContent).toBe('Stop')
+    expect(next().classList.contains('is-stop')).toBe(true)
+    expect(next().disabled).toBe(false)
+    next().click()
+    expect(m.calls.cancel).toBe(1)
+    expect(next().textContent).toBe('Stopping…')
+    m.controller.busy = false
+    m.controller.cancelling = false
+    finish(null)
+    await flush()
+    expect(m.maybeButton('Next alert')).not.toBeNull()
+    // A Step's run is stopped from Step: Next alert is only disabled meanwhile.
+    m.controller.busy = true
+    m.emit()
+    expect(m.button('Next alert').disabled).toBe(true)
+  })
+
   test('there is no Next signal any more', () => {
     expect(mount().maybeButton('Next signal')).toBeNull()
   })
 
-  test('the timeframe picker offers the base, the stored ladder and the panes, shortest first', () => {
+  const picker = (m: Mounted): HTMLSelectElement => m.q<HTMLSelectElement>('.wd-replay-step-size') as HTMLSelectElement
+  const field = (m: Mounted): HTMLInputElement | null => m.q<HTMLInputElement>('.wd-replay-step-custom')
+  const type = (m: Mounted, text: string, key = 'Enter'): void => {
+    const input = field(m) as HTMLInputElement
+    input.value = text
+    input.dispatchEvent(new Event('input'))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  }
+
+  test('the step picker offers the base, the stored ladder and the panes, shortest first, then a step of your own', () => {
     const m = mount()
-    const picker = m.q<HTMLSelectElement>('.wd-replay-row select') as HTMLSelectElement
-    expect([...picker.options].map((o) => o.value)).toEqual(['1m', '5m', '1h', '1D'])
-    expect(picker.value).toBe('5m')
-    change(picker, '1h')
+    expect([...picker(m).options].map((o) => o.textContent)).toEqual(['1m', '5m', '1h', '1D', 'Custom step…'])
+    expect(picker(m).value).toBe('1*5m')
+    change(picker(m), '1*1h')
     expect(m.calls.setAdvance).toEqual([{ interval: '1h', multiple: 1 }])
+    // No separate multiple any more: a step of several candles is typed ("3 × 4h", "15h").
+    expect(m.q('.wd-replay-number')).toBeNull()
   })
 
-  test('the multiple is a whole number of at least one', () => {
+  test('Custom step… takes any amount, applies it on Enter and offers it again', () => {
     const m = mount()
-    const cases: Array<[string, number]> = [
-      ['12', 12],
-      ['3.7', 3],
-      ['0', 1],
-      ['-4', 1],
-      ['abc', 1]
-    ]
-    for (const [typed, expected] of cases) {
-      // Every change re-renders the window, so the input is looked up fresh each time.
-      change(m.q<HTMLInputElement>('.wd-replay-number') as HTMLInputElement, typed)
-      expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '5m', multiple: expected })
-    }
+    change(picker(m), 'custom')
+    expect(field(m)).not.toBeNull()
+    type(m, '15h')
+    expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '1h', multiple: 15 })
+    expect(field(m)).toBeNull()
+    change(picker(m), 'custom')
+    type(m, '30h')
+    expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '1h', multiple: 30 })
+    // Both are on the list now, most recent first after the timeframes, in this browser.
+    expect([...picker(m).options].map((o) => o.textContent)).toEqual(['1m', '5m', '1h', '1D', '30h', '15h', 'Custom step…'])
+    expect(JSON.parse(window.localStorage.getItem('wd.replay.steps') ?? '[]')).toEqual(['30h', '15h'])
+    // A listed timeframe typed is that timeframe, and is not listed twice.
+    change(picker(m), 'custom')
+    type(m, '1h')
+    expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '1h', multiple: 1 })
+    expect(JSON.parse(window.localStorage.getItem('wd.replay.steps') ?? '[]')).toEqual(['30h', '15h'])
   })
 
-  test('busy, the picker and the multiple are disabled', () => {
+  test('a step that is not one is refused with the reason, and Escape gives the picker back', () => {
+    const m = mount()
+    change(picker(m), 'custom')
+    type(m, 'soon')
+    expect(m.calls.setAdvance).toEqual([])
+    expect(m.root.querySelector('.wd-replay-flash')?.textContent).toContain('not a step')
+    expect(field(m)).not.toBeNull()
+    type(m, '', 'Escape')
+    expect(field(m)).toBeNull()
+    expect(m.calls.setAdvance).toEqual([])
+  })
+
+  test('a remembered step the replay is on can be taken off the list', () => {
+    window.localStorage.setItem('wd.replay.steps', JSON.stringify(['15h']))
+    const m = mount()
+    m.controller.advance = { interval: '1h', multiple: 15 }
+    m.emit()
+    expect(picker(m).value).toBe('15*1h')
+    m.button('×').click()
+    expect(JSON.parse(window.localStorage.getItem('wd.replay.steps') ?? '[]')).toEqual([])
+    // Still the step: only the list forgot it.
+    expect(picker(m).value).toBe('15*1h')
+    expect([...picker(m).options].map((o) => o.textContent)).toContain('15h')
+  })
+
+  test('busy, the step picker is disabled', () => {
     const m = mount()
     m.controller.busy = true
     m.emit()
-    expect((m.q('.wd-replay-row select') as HTMLSelectElement).disabled).toBe(true)
-    expect((m.q('.wd-replay-number') as HTMLInputElement).disabled).toBe(true)
+    expect(picker(m).disabled).toBe(true)
   })
 })
 
@@ -1058,6 +1140,22 @@ describe('keys', () => {
     document.removeEventListener('keydown', chartListener)
   })
 
+  test('Shift+↑ is Next alert, and only when there is something to stop at', async () => {
+    const m = mount()
+    const event = key({ key: 'ArrowUp', shiftKey: true })
+    await flush()
+    expect(event.defaultPrevented).toBe(true)
+    expect(m.calls.nextAlert).toBe(0)
+    m.controller.alertCount = 1
+    m.emit()
+    key({ key: 'ArrowUp', shiftKey: true })
+    await flush()
+    expect(m.calls.nextAlert).toBe(1)
+    key({ key: 'ArrowUp' })
+    await flush()
+    expect(m.calls.nextAlert).toBe(1)
+  })
+
   test('Shift+→ while an advance runs is Stop -- but a held key repeating never cancels', () => {
     const m = mount()
     m.controller.busy = true
@@ -1079,7 +1177,8 @@ describe('keys', () => {
 
   test('a key typed into a field is the field\'s, and a disposed window hears nothing', async () => {
     const m = mount()
-    const input = m.q('.wd-replay-number') as HTMLInputElement
+    change(m.q('.wd-replay-step-size') as HTMLSelectElement, 'custom')
+    const input = m.q('.wd-replay-step-custom') as HTMLInputElement
     key({ key: 'ArrowRight', shiftKey: true }, input)
     // A pane grip moves its pane with the arrows, Shift or not.
     const grip = document.createElement('button')
@@ -1947,5 +2046,59 @@ describe('the session list keeps its place', () => {
     ;([...last.querySelectorAll('button')].find((b) => b.textContent === 'Stats') as HTMLButtonElement).click()
     expect(root.querySelector('.wd-replay-session-list')).toBe(list)
     expect(root.querySelectorAll('.wd-tk-figs').length).toBe(1)
+  })
+})
+
+describe('quiet hours', () => {
+  const stub = (on = false) => {
+    const sets: import('./quiet').QuietSetting[] = []
+    const holder = {
+      value: { on, from: 22 * 60, to: 6 * 60, zone: 'replay' as const } as import('./quiet').QuietSetting,
+      set(next: import('./quiet').QuietSetting) {
+        sets.push(next)
+        holder.value = next
+      }
+    }
+    return { holder, sets }
+  }
+
+  test('the moon beside Next alert opens them, and reads the hours while they are on', () => {
+    const { holder } = stub()
+    const m = mount(fake(), { quiet: holder })
+    const moon = () => m.q<HTMLButtonElement>('.wd-replay-quiet-toggle') as HTMLButtonElement
+    expect(moon().closest('.wd-replay-next-row')).not.toBeNull()
+    expect(moon().classList.contains('is-on')).toBe(false)
+    moon().click()
+    expect(m.q('.wd-replay-quiet')).not.toBeNull()
+    holder.value = { ...holder.value, on: true }
+    m.emit()
+    expect(moon().classList.contains('is-on')).toBe(true)
+    expect(moon().textContent).toBe('22:00–06:00')
+    moon().click()
+    expect(m.q('.wd-replay-quiet')).toBeNull()
+  })
+
+  test('the panel switches them on and sets the hours', () => {
+    const { holder, sets } = stub()
+    const m = mount(fake(), { quiet: holder })
+    ;(m.q('.wd-replay-quiet-toggle') as HTMLButtonElement).click()
+    check(m.q<HTMLInputElement>('.wd-replay-quiet-on input') as HTMLInputElement, true)
+    expect(sets.at(-1)).toEqual({ on: true, from: 22 * 60, to: 6 * 60, zone: 'replay' })
+    m.emit()
+    const [from, to] = [...m.root.querySelectorAll<HTMLInputElement>('.wd-replay-quiet-time')]
+    expect([from.value, to.value]).toEqual(['22:00', '06:00'])
+    change(from, '21:30')
+    expect(sets.at(-1)).toEqual({ on: true, from: 21 * 60 + 30, to: 6 * 60, zone: 'replay' })
+    m.emit()
+    change(m.root.querySelectorAll<HTMLInputElement>('.wd-replay-quiet-time')[1], '07:00')
+    expect(sets.at(-1)).toEqual({ on: true, from: 21 * 60 + 30, to: 7 * 60, zone: 'replay' })
+    // Next alert says it now runs past them.
+    m.controller.alertCount = 1
+    m.emit()
+    expect(m.button('Next alert').title).toBe('Advance to where the next of 1 alert triggers, outside quiet hours (21:30–07:00) (Shift+↑)')
+  })
+
+  test('without quiet hours wired there is no moon', () => {
+    expect(mount().q('.wd-replay-quiet-toggle')).toBeNull()
   })
 })

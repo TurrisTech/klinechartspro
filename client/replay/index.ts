@@ -16,6 +16,7 @@ import type { Alert } from '../alerts/types'
 import { ReplayAlerts } from './alerts'
 import { passesDailyClose } from './clock'
 import { createReplayControls, type ListedSession, openStartDialog } from './controls'
+import { ReplayQuiet } from './quiet'
 import { pickBarOnChart } from './pickbar'
 import { Engine } from './engine'
 import { ReplayFeedHub } from './feed'
@@ -353,7 +354,11 @@ export async function mountBarReplay(
   // The replay's price watches. Built before the session because the session takes it as its
   // observer, and bound to the session (`attach`) straight after -- the two cannot both be
   // constructed first.
-  const watches = new ReplayWatches({ symbol: stored.symbol, notify: ctx.notify })
+  // The viewer's quiet hours (quiet.ts): on the replay's clock -- the walked instrument's zone,
+  // the title bar's -- or the browser's. The watches and Next alert's search both ask it.
+  const quiet = new ReplayQuiet(() => grid.schedule.timezone)
+  const silenced = (at: number): boolean => quiet.isQuiet(at)
+  const watches = new ReplayWatches({ symbol: stored.symbol, notify: ctx.notify, silenced })
   watches.restore(stored.watches)
 
   // A fresh look-ahead per replay: the search caches what it read, and near the end of the data
@@ -383,7 +388,7 @@ export async function mountBarReplay(
     storedIntervals: storedIntervals.length > 0 ? storedIntervals : [stored.base],
     engine: Engine.fromState(stored.engine),
     observer: watches,
-    alerts: ctx.alerts ? new ReplayAlerts(() => ctx.alerts?.enabled() ?? [], ctx.alerts.search, ctx.alerts.catalogue) : undefined,
+    alerts: ctx.alerts ? new ReplayAlerts(() => ctx.alerts?.enabled() ?? [], ctx.alerts.search, ctx.alerts.catalogue, silenced) : undefined,
     warmLanding: (at) => void landings.warm(at),
     barSource: replayBars,
     dataEnd: () => latest,
@@ -540,7 +545,13 @@ export async function mountBarReplay(
       get: () => watches.stopPrice(),
       set: (price) => watches.setStopPrice(price),
       clear: () => watches.clearStopPrice()
-    }
+    },
+    quiet
+  })
+  // New quiet hours change where Next alert lands: the warmed landing is read again.
+  const unsubscribeQuiet = quiet.subscribe(() => {
+    controls.refresh()
+    session.warmAlerts()
   })
   // An alert added, switched or removed changes what Next alert can stop at.
   const unsubscribeAlerts =
@@ -596,6 +607,7 @@ export async function mountBarReplay(
     },
     teardown(): void {
       unsubscribeAlerts()
+      unsubscribeQuiet()
       unsubscribeMilestones()
       landings.dispose()
       container.classList.remove(REPLAY_WALL_CLASS)
