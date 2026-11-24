@@ -1,6 +1,6 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
 import { formatInstant } from '../../trading/format'
-import { type ContextMenu, flash, openContextMenu } from '../../watch/menu'
+import { flash } from '../../watch/menu'
 import { getByPath } from '../settings'
 import { DEFAULT_WATCH_COLORS } from '../../watch/overlays'
 import { instrumentTarget, type Watch, type WatchRepeat } from '../../watch/types'
@@ -23,11 +23,13 @@ import { describeZone, type Zone, zoneAround, zonePips, zoneUnit } from './zone'
 // The zone band is the one thing drawn outside that path: it follows the pointer, in a group
 // of its own.
 //
-//   click a line          a menu at the pointer: Alert once, Alert every time, Turn off (user,
-//                         2026-11-24: "clicking on a line should allow me to arm it once, arm it
-//                         recurring, or turn it off"). The choice is said at the foot of the pane.
-//                         Once fires the first time price enters the zone and then stays fired
-//                         until armed again; every time re-fires on each entry, after a cooldown
+//   click a line          one step round a cycle (user, 2026-11-24: "a click on one level turns
+//                         it to alert ... always. a second click, turns it to arm only once. a
+//                         third click turns the alert off. clicking again turns it to alert
+//                         always"): off -> every time -> once -> off. Each step is said at the
+//                         foot of the pane, and the hover says what the next click does. Every
+//                         time re-fires on each entry into the zone, after a cooldown; once fires
+//                         the first time and stays fired (a grey bell) until the cycle comes round
 //   click a bell          the alert's dialog: its buffer, the zone, Make default, Remove. A
 //                         bell is drawn for EVERY alert on the instrument in view, so one whose
 //                         line is no longer drawn (a level spent since, a timeframe switched
@@ -69,9 +71,29 @@ function colorFor(watch: Watch): string {
   return watch.status === 'fired' ? DEFAULT_WATCH_COLORS.fired : DEFAULT_WATCH_COLORS.armed
 }
 
-/** How a line's alert is armed, as its menu and its dialog say it. */
+/** How a line's alert is armed, as the pane and its dialog say it. */
 export function repeatLabel(repeat: WatchRepeat): string {
   return repeat === 'once' ? 'once' : 'every time'
+}
+
+/** Where a click on a line takes its alert: off -> every time -> once -> off. A switched-off alert
+ * counts as off; a one-shot that has fired is still once, so the next click turns it off. */
+export type LineStage = 'off' | WatchRepeat
+
+export function stageOf(watch: Watch | null): LineStage {
+  if (!watch?.enabled || watch.status === 'disabled') return 'off'
+  return watch.repeat
+}
+
+export function nextStage(watch: Watch | null): LineStage {
+  const stage = stageOf(watch)
+  return stage === 'off' ? 'always' : stage === 'always' ? 'once' : 'off'
+}
+
+/** What the next click on a line does, for the hover. */
+function nextClick(watch: Watch | null): string {
+  const next = nextStage(watch)
+  return next === 'always' ? 'click to alert every time' : next === 'once' ? 'click to alert once' : 'click to turn off'
 }
 
 function statusOf(watch: Watch): string {
@@ -87,7 +109,8 @@ function statusOf(watch: Watch): string {
 export class LayerAlertView<TDatum, TConfig> {
   private readonly panes = new Map<Chart, PaneState<TConfig>>()
   private editor: { chart: Chart; handle: PriceAlertEditor } | null = null
-  private menu: ContextMenu | null = null
+  /** The lines whose last click is still landing (`cycle`). */
+  private readonly landing = new Set<string>()
   private readonly unsubscribe: () => void
   /** The zone band's overlay group: the layer's own id, suffixed, so that removing the layer's
    * overlays never takes the band and one layer's band never takes another's. */
@@ -139,7 +162,6 @@ export class LayerAlertView<TDatum, TConfig> {
     const state = this.panes.get(chart)
     if (!state) return
     if (this.editor?.chart === chart) this.editor.handle.close()
-    this.menu?.close()
     state.hovered = null
     state.editing = null
     this.render(chart)
@@ -148,7 +170,6 @@ export class LayerAlertView<TDatum, TConfig> {
   }
 
   dispose(): void {
-    this.menu?.close()
     this.editor?.handle.close()
     for (const chart of [...this.panes.keys()]) this.clear(chart)
     this.unsubscribe()
@@ -184,7 +205,7 @@ export class LayerAlertView<TDatum, TConfig> {
 
   private handlers(target: AlertTarget, chart: Chart): Pick<OverlayCreate, 'onClick' | 'onMouseEnter' | 'onMouseLeave'> {
     return {
-      onClick: (event) => this.openLineMenu(chart, target, event),
+      onClick: () => void this.cycle(chart, target),
       onMouseEnter: () => this.hover(chart, { price: target.price, on: 'line' }),
       onMouseLeave: () => this.hover(chart, null)
     }
@@ -221,67 +242,33 @@ export class LayerAlertView<TDatum, TConfig> {
     this.render(chart)
   }
 
-  /** A click on a line: a menu of what its alert can be -- once, every time, off -- at the
-   * pointer. Where alerts cannot be set here, the reason instead. */
-  private openLineMenu(chart: Chart, target: AlertTarget, event?: { pageX?: number; pageY?: number; x?: number; y?: number }): void {
+  /** A click on a line moves its alert one step round the cycle (`nextStage`): off -> every
+   * time -> once -> off. Where alerts cannot be set here, the reason instead. A click while the
+   * last one is still landing is ignored, so a quick double click is one step, never a skip. */
+  private async cycle(chart: Chart, target: AlertTarget): Promise<void> {
     const state = this.panes.get(chart)
     const host = chart.getDom()
     if (!state || !host || !this.alerts.available) return
     const { ctx } = state
     const precision = ctx.symbol.pricePrecision ?? 5
+    const key = `${ctx.vendor}:${ctx.symbol.ticker}|${target.price.toFixed(precision)}`
+    if (this.landing.has(key)) return
     const existing = this.alerts.at(ctx.vendor, ctx.symbol.ticker, target.price, precision)
-    if (!existing) {
+    const next = nextStage(existing?.watch ?? null)
+    if (next !== 'off' && !existing) {
       const refusal = this.alerts.refusal(instrumentTarget(ctx.vendor, ctx.symbol.ticker))
       if (refusal) {
         flash(host, refusal)
         return
       }
     }
-    const watch = existing?.watch ?? null
-    // How it is armed now: the menu marks that row. A spent one-shot or a switched-off alert is
-    // armed as neither -- choosing either arms it again.
-    const armed = watch?.enabled && watch.status === 'armed' ? watch.repeat : null
-    const zone = existing?.zone ?? zoneAround(target.price, this.defaultPips(state.config), zoneUnit(ctx.symbol), precision)
-    const width = describeZone(zone, zoneUnit(ctx.symbol), precision)
-    const row = (repeat: WatchRepeat, label: string) => ({
-      label,
-      detail: armed === repeat ? '✓' : undefined,
-      onSelect: () => void this.arm(chart, target, repeat)
-    })
-    this.menu?.close()
-    const at = this.pointer(chart, target.price, event)
-    this.menu = openContextMenu({
-      x: at.x,
-      y: at.y,
-      host,
-      header: `Alert · ${target.label} ${target.price.toFixed(precision)} · ${width}`,
-      items: [
-        row('once', 'Alert once'),
-        row('always', 'Alert every time'),
-        {
-          label: 'Turn off',
-          danger: true,
-          separator: true,
-          disabled: watch === null,
-          onSelect: () => void this.turnOff(chart, target)
-        }
-      ],
-      onClose: () => {
-        this.menu = null
-      }
-    })
-  }
-
-  /** Where a click landed, in viewport coordinates: the event's own page position, or -- when it
-   * has none -- its place on the pane, or the line at the pane's right edge. */
-  private pointer(chart: Chart, price: number, event?: { pageX?: number; pageY?: number; x?: number; y?: number }): { x: number; y: number } {
-    if (typeof event?.pageX === 'number' && typeof event.pageY === 'number') {
-      return { x: event.pageX - window.scrollX, y: event.pageY - window.scrollY }
+    this.landing.add(key)
+    try {
+      if (next === 'off') await this.turnOff(chart, target)
+      else await this.arm(chart, target, next)
+    } finally {
+      this.landing.delete(key)
     }
-    const main = chart.getDom(CANDLE_PANE, 'main')
-    const rect = main?.getBoundingClientRect()
-    if (rect && typeof event?.x === 'number' && typeof event.y === 'number') return { x: rect.left + event.x, y: rect.top + event.y }
-    return this.bellAt(chart, price) ?? { x: 0, y: 0 }
   }
 
   /** The line's alert armed once or every time: made (the pane's default buffer) when there is
@@ -398,9 +385,10 @@ export class LayerAlertView<TDatum, TConfig> {
     if (hovered === null) return null
     const alert = this.alerts.at(ctx.vendor, ctx.symbol.ticker, hovered.price, precision)
     if (alert) {
-      // What a click on the thing under the pointer does: the line turns the alert off, the
-      // bell opens it.
-      const does = hovered.on === 'line' ? `alert ${repeatLabel(alert.watch.repeat)} · click to change` : 'click for options'
+      // How it is armed, and what a click on the thing under the pointer does: the line moves it
+      // one step round the cycle, the bell opens it.
+      const now = stageOf(alert.watch) === 'off' ? 'switched off' : `alert ${repeatLabel(alert.watch.repeat)}`
+      const does = hovered.on === 'line' ? `${now} · ${nextClick(alert.watch)}` : 'click for options'
       return { low: alert.zone.low, high: alert.zone.high, label: `${caption(alert.zone)} · ${does}`, color, preview: false }
     }
     if (!this.alerts.available || this.alerts.refusal(instrumentTarget(ctx.vendor, ctx.symbol.ticker))) return null
@@ -408,7 +396,7 @@ export class LayerAlertView<TDatum, TConfig> {
     return {
       low: zone.low,
       high: zone.high,
-      label: `Click to set an alert · zone ${describeZone(zone, unit, precision)}`,
+      label: `Click to alert every time · zone ${describeZone(zone, unit, precision)}`,
       color,
       preview: true
     }

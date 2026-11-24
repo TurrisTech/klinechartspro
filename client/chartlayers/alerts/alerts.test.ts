@@ -295,26 +295,12 @@ const lines = (pane: PaneChart) => pane.overlays.filter((overlay) => overlay.nam
 const bells = (pane: PaneChart) => pane.overlays.filter((overlay) => overlay.name === 'wdPriceAlert')
 const zoneBand = (pane: PaneChart) => pane.overlays.find((overlay) => overlay.name === 'wdPriceAlertZone')
 const editor = () => document.querySelector<HTMLElement>('.wd-price-alert')
-const lineMenu = () => document.querySelector<HTMLElement>('.wd-watch-menu')
-const menuRows = () =>
-  [...document.querySelectorAll<HTMLButtonElement>('.wd-watch-menu-item')].map((row) => ({
-    label: row.querySelector('.wd-watch-menu-label')?.textContent ?? '',
-    detail: row.querySelector('.wd-watch-menu-detail')?.textContent ?? '',
-    disabled: row.disabled,
-    row
-  }))
-const pick = (label: string) => {
-  const found = menuRows().find((r) => r.label === label)
-  if (!found) throw new Error(`no menu row "${label}"; have ${menuRows().map((r) => r.label).join(' | ')}`)
-  found.row.click()
-}
 
 let releases: Array<() => void> = []
 afterEach(() => {
   for (const release of releases) release()
   releases = []
   editor()?.remove()
-  for (const menu of document.querySelectorAll('.wd-watch-menu')) menu.remove()
   // A confirmation lingers for its own 1.6 s, in the root of the pane that raised it.
   for (const note of document.querySelectorAll('.wd-watch-flash')) note.remove()
 })
@@ -339,10 +325,9 @@ async function mountPane(
 
 const flashed = () => document.querySelector('.wd-watch-flash')?.textContent ?? null
 
-/** Clicks -- a line's menu answered with `choice` -- and lets the store's answer land. */
-async function clickAndSettle(overlay: OverlayCreate | undefined, choice = 'Alert every time') {
+/** Clicks and lets the store's answer land. */
+async function clickAndSettle(overlay: OverlayCreate | undefined) {
   click(overlay)
-  if (lineMenu()) pick(choice)
   await flush()
   await flush()
 }
@@ -360,49 +345,63 @@ describe('on a pane', () => {
     expect(lines(pane)[0].onClick).toBeUndefined()
   })
 
-  test('a click on a line offers its alert once, every time, or off -- no dialog -- and says what it did', async () => {
+  test('clicks step a line round off -> every time -> once -> off -> every time, saying each -- no dialog', async () => {
     const { pane, alerts } = await mountPane([{ price: 1.085, live: true }])
-    click(lines(pane)[0])
-    expect(lineMenu()?.querySelector('.wd-watch-menu-header')?.textContent).toBe('Alert · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
-    expect(menuRows().map(({ label, detail, disabled }) => ({ label, detail, disabled }))).toEqual([
-      { label: 'Alert once', detail: '', disabled: false },
-      { label: 'Alert every time', detail: '', disabled: false },
-      // Nothing to turn off yet.
-      { label: 'Turn off', detail: '', disabled: true }
-    ])
-    pick('Alert every time')
-    await flush()
-    await flush()
-    expect(lineMenu()).toBeNull()
-    expect(alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(1)
-    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.repeat).toBe('always')
+    const alert = () => alerts.forInstrument('oanda', 'EURUSD')
+    await clickAndSettle(lines(pane)[0])
+    expect(alert()).toHaveLength(1)
+    expect(alert()[0].watch.repeat).toBe('always')
     expect(bells(pane)).toHaveLength(1)
     expect(bells(pane)[0].points?.[0]?.value).toBeCloseTo(1.085, 9)
     expect(editor()).toBeNull()
     expect(flashed()).toBe('Alert every time · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
 
-    // The menu marks how it is armed; Turn off removes it.
-    click(lines(pane)[0])
-    expect(menuRows().map(({ label, detail, disabled }) => ({ label, detail, disabled }))).toEqual([
-      { label: 'Alert once', detail: '', disabled: false },
-      { label: 'Alert every time', detail: '✓', disabled: false },
-      { label: 'Turn off', detail: '', disabled: false }
-    ])
-    pick('Turn off')
-    await flush()
-    await flush()
-    expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
+    await clickAndSettle(lines(pane)[0])
+    expect(alert()).toHaveLength(1)
+    expect(alert()[0].watch.repeat).toBe('once')
+    expect(alert()[0].watch.status).toBe('armed')
+    expect(flashed()).toBe('Alert once · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
+
+    await clickAndSettle(lines(pane)[0])
+    expect(alert()).toEqual([])
     expect(bells(pane)).toHaveLength(0)
     expect(flashed()).toBe('Alert off · test line 1.08500')
+
+    await clickAndSettle(lines(pane)[0])
+    expect(alert()).toHaveLength(1)
+    expect(alert()[0].watch.repeat).toBe('always')
   })
 
-  test('armed once, an alert fires the first time and is done; asked for once again, it is armed again', async () => {
+  test('the hover says how the line is armed and what the next click does', async () => {
+    const { pane } = await mountPane([{ price: 1.085, live: true }], { zonePips: 3 })
+    const label = () => {
+      lines(pane)[0].onMouseEnter?.({} as never)
+      const text = (zoneBand(pane)?.extendData as { label?: string } | undefined)?.label
+      lines(pane)[0].onMouseLeave?.({} as never)
+      return text
+    }
+    expect(label()).toBe('Click to alert every time · zone ±3 pips (6 wide) · 1.08470–1.08530')
+    await clickAndSettle(lines(pane)[0])
+    expect(label()).toBe('Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · alert every time · click to alert once')
+    await clickAndSettle(lines(pane)[0])
+    expect(label()).toBe('Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · alert once · click to turn off')
+  })
+
+  test('a double click is one step, never two', async () => {
+    const { pane, alerts } = await mountPane([{ price: 1.085, live: true }])
+    click(lines(pane)[0])
+    click(lines(pane)[0])
+    await flush()
+    await flush()
+    expect(alerts.forInstrument('oanda', 'EURUSD').map((a) => a.watch.repeat)).toEqual(['always'])
+  })
+
+  test('armed once, an alert fires the first time and is done; the next click turns it off', async () => {
     const { alerts, registry } = backend()
     const { pane } = await mountPane([{ price: 1.085, live: true }], { alerts })
-    await clickAndSettle(lines(pane)[0], 'Alert once')
-    const [alert] = alerts.forInstrument('oanda', 'EURUSD')
-    expect(alert.watch.repeat).toBe('once')
-    expect(flashed()).toBe('Alert once · test line 1.08500 · ±5 pips (10 wide) · 1.08450–1.08550')
+    await clickAndSettle(lines(pane)[0])
+    await clickAndSettle(lines(pane)[0])
+    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.repeat).toBe('once')
     // Enters the zone from below (armed at 1.08): fires, and once is once.
     expect(registry.onEvent('price', 'oanda:EURUSD', 1, price(1.0846))).toHaveLength(1)
     expect(registry.onEvent('price', 'oanda:EURUSD', 2, price(1.08))).toHaveLength(0)
@@ -410,20 +409,23 @@ describe('on a pane', () => {
     await flush()
     await flush()
     expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.status).toBe('fired')
-    // Spent, it is armed as neither: both rows arm it again.
-    click(lines(pane)[0])
-    expect(menuRows().map((r) => r.detail)).toEqual(['', '', ''])
-    pick('Alert once')
-    await flush()
-    await flush()
-    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.status).toBe('armed')
-    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.repeat).toBe('once')
+    // Spent, it is still once: the cycle goes on to off, then every time, armed afresh.
+    await clickAndSettle(lines(pane)[0])
+    expect(alerts.forInstrument('oanda', 'EURUSD')).toEqual([])
+    await clickAndSettle(lines(pane)[0])
+    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch).toMatchObject({ repeat: 'always', status: 'armed' })
+  })
 
-    // Switched to every time: the same alert, re-armed, repeating.
-    await clickAndSettle(lines(pane)[0], 'Alert every time')
+  test('a switched-off alert counts as off: a click arms it every time again', async () => {
+    const { alerts, store } = backend()
+    const { pane } = await mountPane([{ price: 1.085, live: true }], { alerts })
+    await clickAndSettle(lines(pane)[0])
+    const [{ watch }] = alerts.forInstrument('oanda', 'EURUSD')
+    await store.update(watch.id, { enabled: false })
+    await flush()
+    await clickAndSettle(lines(pane)[0])
     expect(alerts.forInstrument('oanda', 'EURUSD')).toHaveLength(1)
-    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.repeat).toBe('always')
-    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch.status).toBe('armed')
+    expect(alerts.forInstrument('oanda', 'EURUSD')[0].watch).toMatchObject({ id: watch.id, repeat: 'always', enabled: true, status: 'armed' })
   })
 
   test('the bell opens the dialog', async () => {
@@ -462,7 +464,7 @@ describe('on a pane', () => {
       low: 1.0847,
       high: 1.0853,
       preview: true,
-      label: 'Click to set an alert · zone ±3 pips (6 wide) · 1.08470–1.08530'
+      label: 'Click to alert every time · zone ±3 pips (6 wide) · 1.08470–1.08530'
     })
     lines(pane)[0].onMouseLeave?.({} as never)
     expect(zoneBand(pane)).toBeUndefined()
@@ -471,7 +473,7 @@ describe('on a pane', () => {
     lines(pane)[0].onMouseEnter?.({} as never)
     expect(zoneBand(pane)?.extendData).toMatchObject({
       preview: false,
-      label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · alert every time · click to change'
+      label: 'Alert zone ±3 pips (6 wide) · 1.08470–1.08530 · alert every time · click to alert once'
     })
     lines(pane)[0].onMouseLeave?.({} as never)
     bells(pane)[0].onMouseEnter?.({} as never)
