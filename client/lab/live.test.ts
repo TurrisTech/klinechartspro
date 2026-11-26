@@ -40,6 +40,7 @@ describe.skipIf(!BASE_URL)('the lab against the graph-entry engine (real server)
     const to = Date.now()
     const from = to - 30 * 86_400_000
     let compared = 0
+    const counts: string[] = []
     for (const root of ['1D', '8h', '4h', '2h', '1h']) {
       const strategy = withRules(rank85Strategy(), [root], RANK_TIMEFRAMES)
       strategy.instrument = symbol
@@ -54,8 +55,12 @@ describe.skipIf(!BASE_URL)('the lab against the graph-entry engine (real server)
         const ours = run.entries.filter((e) => e.signal.interval === interval).map((e) => `${e.signal.sourceDate}|${e.side}`).sort()
         expect(ours).toEqual(expected)
         compared += ours.length
+        counts.push(`${root}/${interval} ${ours.length}`)
       }
     }
+    // Said, because "more than none" cannot tell a full pool from a nearly empty one (a server
+    // without INDICATOR_TILES_* serves a tenth of the signals, and still agrees with itself).
+    console.info(`[lab live] entries compared, root/interval: ${counts.join(', ')}`)
     expect(compared).toBeGreaterThan(0)
   }, 300_000)
 })
