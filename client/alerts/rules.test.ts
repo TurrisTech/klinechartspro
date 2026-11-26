@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { evaluate } from './conditions'
-import { compile, describeRule, formatMinute, intervalsOf, operandKey, operandsOf, RuleError } from './rules'
+import { compile, describeRule, formatMinute, operandKey, RuleError } from './rules'
 import { ANY_LABEL, type Operand, type Rule } from './types'
 
 const rsi: Operand = { kind: 'indicator', interval: '1h', name: 'RSI', params: [14], output: 'rsi1' }
@@ -72,11 +72,6 @@ describe('reading a rule', () => {
       { left: arev, op: '==', right: { label: 'long' } }
     ]
   }
-
-  test('operands and timeframes, deduplicated', () => {
-    expect(operandsOf(rule).map(operandKey)).toEqual([rsi, close, ema, arev].map(operandKey))
-    expect(intervalsOf(rule).sort()).toEqual(['1h', '4h'])
-  })
 
   test('one sentence, bracketing only the inner groups', () => {
     expect(describeRule(rule)).toBe(

@@ -41,22 +41,9 @@ export function withAlpha(color: string, alpha: number): string {
   return toCssRgba(parseColor(color), alpha)
 }
 
-// Shifts perceived lightness by `factor` (positive = brighter, negative = dimmer), holding
-// hue and saturation fixed — a 'brighter' reading that isn't also 'more see-through', for a
-// future colorMode that wants that distinction. The default Levels encoding drives
-// brightness through withAlpha instead, since these are thin lines on a dark canvas where
-// dimmer and more-transparent read the same.
-export function withLightness(color: string, factor: number): string {
-  const { r, g, b } = parseColor(color)
-  const [h, s, l] = rgbToHsl(r, g, b)
-  const nextL = Math.min(1, Math.max(0, l + factor))
-  const [nr, ng, nb] = hslToRgb(h, s, nextL)
-  return toCssRgba({ r: nr, g: ng, b: nb }, 1)
-}
-
 // Lowers perceived lightness by `amount`, stopping at `floor` rather than at black. This is
-// the shape a per-step gradient needs and `withLightness` is not: capping the SHIFT instead
-// of the RESULT bottoms out differently for every color it is given — the Levels 1W green
+// the shape a per-step gradient needs and a plain lightness shift is not: capping the SHIFT
+// instead of the RESULT bottoms out differently for every color it is given — the Levels 1W green
 // sits at lightness 0.32, so the same -0.3 that merely deepens a yellow erases it entirely.
 export function darkenToward(color: string, amount: number, floor: number): string {
   const { r, g, b } = parseColor(color)

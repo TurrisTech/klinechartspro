@@ -1,6 +1,6 @@
 import type { SymbolInfo } from '../../src'
 import { symbolVendor } from '../symbols'
-import type { SimSide, SimTrade } from './api'
+import type { SimTrade } from './api'
 
 // Small pure helpers shared by the panel, the ticket and the overlays.
 
@@ -60,13 +60,6 @@ export function toPips(priceDelta: number, pipSize: number | null): number | nul
   return priceDelta / pipSize
 }
 
-/** A pip distance to a price, from an anchor and the direction it applies. `awayBelow` true
- * puts the result below the anchor (a long's stop / a short's target). */
-export function pipsToPrice(anchor: number, pips: number, pipSize: number, awayBelow: boolean): number {
-  const off = pips * pipSize
-  return awayBelow ? anchor - off : anchor + off
-}
-
 export function formatPips(pips: number | null | undefined): string {
   if (pips === null || pips === undefined || !Number.isFinite(pips)) return '—'
   const sign = pips > 0 ? '+' : pips < 0 ? '−' : ''
@@ -83,10 +76,6 @@ export function tradePips(
   const exit = trade.side === 'buy' ? quote.bid : quote.ask
   const delta = trade.side === 'buy' ? exit - trade.entryPrice : trade.entryPrice - exit
   return delta / pipSize
-}
-
-export function sideLabel(side: SimSide): string {
-  return side === 'buy' ? 'Buy' : 'Sell'
 }
 
 //: Currencies conventionally quoted without minor units, so an amount in them reads as a whole

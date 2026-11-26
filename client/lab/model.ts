@@ -372,8 +372,6 @@ export const SCOPES = {
   }
 } satisfies Record<string, SlotScope>
 
-export type ScopeName = keyof typeof SCOPES
-
 /** Every function a slot can call, the common ones included -- for the field list. */
 export function scopeFunctions(scope: ExprScope): FnSpec[] {
   return [...COMMON_FUNCTIONS, ...scope.functions]

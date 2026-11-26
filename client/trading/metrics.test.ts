@@ -6,7 +6,6 @@ import {
   layoutLabels,
   levelForBalancePercent,
   orderFigures,
-  orderPriceValid,
   pairCurrencies,
   positionSummary,
   pricingContext,
@@ -207,12 +206,6 @@ describe('what the engine refuses', () => {
     expect(restingPriceValid('buy', 'stop', 1.1003, quote)).toBe(true)
     expect(restingPriceValid('sell', 'stop', 1.0999, quote)).toBe(true)
     expect(restingPriceValid('sell', 'stop', 1.1, quote)).toBe(false)
-  })
-
-  test("moving an order may not carry it past its own stop or target", () => {
-    const o = order({ stopLoss: 1.09 })
-    expect(orderPriceValid(o, 1.095, quote)).toBe(true)
-    expect(orderPriceValid(o, 1.089, quote)).toBe(false)
   })
 
   test('a starting stop sits beyond both the entry and the market, so it is valid when placed', () => {

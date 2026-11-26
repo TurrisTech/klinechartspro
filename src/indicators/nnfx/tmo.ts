@@ -110,8 +110,6 @@ function ptaRma(x: readonly number[], n: number): number[] {
   return ewmMean(x, (1 - a) / a)
 }
 
-export const TMO_MAMODES = ['SMA', 'EMA', 'RMA'] as const
-
 export function ptaMa(x: readonly number[], n: number, mode: number): number[] {
   return mode === 0 ? ptaSma(x, n) : mode === 1 ? ptaEma(x, n) : ptaRma(x, n)
 }

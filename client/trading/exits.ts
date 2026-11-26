@@ -46,14 +46,6 @@ export const EXIT_UNITS: Array<[ExitUnit, string]> = [
   ['r', 'R']
 ]
 
-export const EXIT_UNIT_NAMES: Record<ExitUnit, string> = {
-  pips: 'pips',
-  price: 'a price difference',
-  percent: 'a percentage of the price',
-  atr: 'multiples of the ATR',
-  r: 'multiples of R (the stop loss distance)'
-}
-
 /** The ATR a distance in `atr` units is a multiple of: its value (a price distance), its period
  * and the timeframe it was read on (a pane's period text, `1H`). */
 export interface AtrReading {
@@ -163,21 +155,6 @@ export function defaultExit(unit: ExitUnit, info: InstrumentInfo): number {
 export function distanceWords(distance: number, info: InstrumentInfo): string {
   if (info.pipSize !== null) return `${(distance / info.pipSize).toFixed(1)}p`
   return formatPrice(distance, info.precision)
-}
-
-/** A price distance in `unit`, short and signed when asked: `+1R`, `20.0p`, `2 ATR`, `0.15%`. */
-export function unitWords(distance: number, unit: ExitUnit, basis: ExitBasis, signed = false): string {
-  const size = unitSize(unit, basis)
-  if (size === null || !(size > 0)) return distanceWords(Math.abs(distance), basis.info)
-  const value = distance / size
-  const sign = signed ? (value > 0 ? '+' : value < 0 ? '−' : '') : value < 0 ? '−' : ''
-  const abs = Math.abs(value)
-  const number = unit === 'pips' ? abs.toFixed(1) : tidy(abs, unitDigits(unit, basis.info))
-  if (unit === 'pips') return `${sign}${number}p`
-  if (unit === 'percent') return `${sign}${number}%`
-  if (unit === 'atr') return `${sign}${number} ATR`
-  if (unit === 'r') return `${sign}${number}R`
-  return `${sign}${number}`
 }
 
 // -- the three fields --------------------------------------------------------------------------

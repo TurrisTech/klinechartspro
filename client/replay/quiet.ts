@@ -61,9 +61,10 @@ export function hhmm(minute: number): string {
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
 }
 
-/** "22:00" or "6:30" as minutes after midnight, or null. */
+/** "22:00" or "6:30" as minutes after midnight, or null. A time input's value may carry seconds
+ * ("22:00:00"); they are dropped. */
 export function parseHhmm(text: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(text.trim())
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(text.trim())
   if (!m) return null
   const h = Number(m[1])
   const mi = Number(m[2])

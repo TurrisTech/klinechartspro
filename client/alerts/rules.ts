@@ -245,28 +245,6 @@ function checkOperand(operand: Operand): void {
   }
 }
 
-/** Every operand a rule reads, deduplicated by key, in first-use order. Never throws: an
- * unfinished rule in the editor still has operands worth listing. */
-export function operandsOf(rule: Rule): Operand[] {
-  const seen = new Map<string, Operand>()
-  const walk = (node: Rule): void => {
-    if ('all' in node) node.all.forEach(walk)
-    else if ('any' in node) node.any.forEach(walk)
-    else if ('not' in node) walk(node.not)
-    else if (isLeaf(node)) {
-      seen.set(operandKey(node.left), node.left)
-      if (node.right && 'operand' in node.right) seen.set(operandKey(node.right.operand), node.right.operand)
-    }
-  }
-  walk(rule)
-  return [...seen.values()]
-}
-
-/** The timeframes a rule reads, deduplicated. */
-export function intervalsOf(rule: Rule): string[] {
-  return [...new Set(operandsOf(rule).map((o) => o.interval))]
-}
-
 // -- words -----------------------------------------------------------------------------------
 
 /** How an operand reads in a sentence ("RSI(14)", "AREV21 p"). Supplied by the catalogue,

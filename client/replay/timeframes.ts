@@ -59,12 +59,11 @@ export function isIntraday(code: string): boolean {
 /** Daily-and-coarser bars are dated on the wire by their canonical date (00:00 of the session
  * in the instrument's own zone). For the FX week that is open + 7h. (`services/wiredate.py`.)
  *
- * **This constant is the forex value**, and `toWireDate`/`fromWireDate` below are its
- * unparameterised form -- correct for every OANDA instrument and wrong for the others: a
- * crypto day is already dated by its open (0h) and a US equity day opens 9h into its date
- * (-9h). `scheduleWireShift` is the schedule-aware form; it is what the tile fold uses, and
- * what these two should become once replay and the MTF overlay carry an instrument's
- * `DayGeometry` rather than assuming one. */
+ * **This constant is the forex value**, and `toWireDate` below is its unparameterised form --
+ * correct for every OANDA instrument and wrong for the others: a crypto day is already dated by
+ * its open (0h) and a US equity day opens 9h into its date (-9h). `scheduleWireShift` is the
+ * schedule-aware form, and what a `CandleGrid`'s `toWire`/`fromWire` and the tile fold use;
+ * `toWireDate` is left for the tests' FX fixtures. */
 export const SESSION_DATE_OFFSET_MS = 7 * 3_600_000
 
 export function sessionDated(code: string): boolean {
@@ -73,10 +72,6 @@ export function sessionDated(code: string): boolean {
 
 export function toWireDate(code: string, openMs: number): number {
   return sessionDated(code) ? openMs + SESSION_DATE_OFFSET_MS : openMs
-}
-
-export function fromWireDate(code: string, dateMs: number): number {
-  return sessionDated(code) ? dateMs - SESSION_DATE_OFFSET_MS : dateMs
 }
 
 // --- divisibility ---------------------------------------------------------------------------
@@ -611,11 +606,6 @@ export function intervalEnd(code: string, ms: number, tz: string = MARKET_TZ): n
   return fromWall(sessionClose(last), tz)
 }
 
-/** The close of the bar labelled (store-clock open) `openMs`: its effective instant. */
-export function effectiveAt(code: string, openMs: number, tz: string = MARKET_TZ): number {
-  return intervalEnd(code, openMs, tz)
-}
-
 /** The instant `count` whole `code` candles after `cursor` have completed: the close of the
  * candle containing the cursor (when it lies strictly inside one), then each following
  * candle's close -- computed on the boundary rules, never by adding a timedelta, so a step
@@ -628,11 +618,6 @@ export function advanceTarget(code: string, cursor: number, count: number, tz: s
     else t = intervalEnd(code, nextIntervalStart(code, t, tz), tz)
   }
   return t
-}
-
-/** Whether `ms` is on the candle grid of `code` (an open). */
-export function isBoundary(code: string, ms: number, tz: string = MARKET_TZ): boolean {
-  return intervalStart(code, ms, tz) === ms
 }
 
 

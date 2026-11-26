@@ -42,11 +42,6 @@ export function toAbsolute(interval: string, wireMs: number, clock: CandleGrid):
   return clock.fromWire(interval, wireMs)
 }
 
-/** The inverse of `toAbsolute`, for stating a window back to the server in its own clock. */
-export function fromAbsolute(interval: string, absMs: number, clock: CandleGrid): number {
-  return clock.toWire(interval, absMs)
-}
-
 /** Whether `source` is a strictly finer timeframe than `chart`.
  *
  * Compared on NOMINAL durations, which is what `resolutionDurationMs` is for (periods.ts
