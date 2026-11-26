@@ -49,7 +49,7 @@ import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, w
  * few dozen bars.
  */
 
-export interface HoltWinters {
+interface HoltWinters {
   middle: number[]
   upper: number[]
   lower: number[]
@@ -62,7 +62,7 @@ function weight(v: unknown, fallback: number, max: number): number {
   return Math.min(max, realParam(v, fallback, 1e-6))
 }
 
-export function holtWinters(close: readonly number[], scalar: number, na: number, nb: number, nc: number, nd: number): HoltWinters {
+function holtWinters(close: readonly number[], scalar: number, na: number, nb: number, nc: number, nd: number): HoltWinters {
   const m = close.length
   const out: HoltWinters = {
     middle: new Array<number>(m).fill(Number.NaN),
@@ -111,7 +111,7 @@ export interface Hwma {
   side?: number
 }
 
-export function hwmaOptions(calcParams: readonly unknown[]): { na: number; nb: number; nc: number } {
+function hwmaOptions(calcParams: readonly unknown[]): { na: number; nb: number; nc: number } {
   // pandas-ta's hwma wants each weight strictly inside (0, 1).
   return {
     na: weight(calcParams[0], 0.3, 0.999999),
@@ -120,7 +120,7 @@ export function hwmaOptions(calcParams: readonly unknown[]): { na: number; nb: n
   }
 }
 
-export function hwmaRows(bars: readonly KLineData[], o: { na: number; nb: number; nc: number }): Hwma[] {
+function hwmaRows(bars: readonly KLineData[], o: { na: number; nb: number; nc: number }): Hwma[] {
   // The moving average is the channel's middle line; the band weights do not touch it.
   const hw = holtWinters(bars.map((b) => b.close), 1, o.na, o.nb, o.nc, 0.1)
   return hw.middle.map((m, i) => ({ hwma: value(m), side: Math.sign(bars[i].close - m) }))
@@ -159,7 +159,7 @@ export interface Hwc {
   side?: number
 }
 
-export interface HwcOptions {
+interface HwcOptions {
   scalar: number
   na: number
   nb: number
@@ -167,7 +167,7 @@ export interface HwcOptions {
   nd: number
 }
 
-export function hwcOptions(calcParams: readonly unknown[], defaults: readonly number[]): HwcOptions {
+function hwcOptions(calcParams: readonly unknown[], defaults: readonly number[]): HwcOptions {
   return {
     scalar: Math.min(100, realParam(calcParams[0], defaults[0], 1e-6)),
     na: weight(calcParams[1], defaults[1], 1),
@@ -179,7 +179,7 @@ export function hwcOptions(calcParams: readonly unknown[], defaults: readonly nu
 
 const HWC_DEFAULTS = [1, 0.3, 0.067, 0.15, 0.1]
 
-export function hwcRows(bars: readonly KLineData[], o: HwcOptions): Hwc[] {
+function hwcRows(bars: readonly KLineData[], o: HwcOptions): Hwc[] {
   const hw = holtWinters(bars.map((b) => b.close), o.scalar, o.na, o.nb, o.nc, o.nd)
   return hw.middle.map((m, i) => ({
     middle: value(m),
@@ -229,7 +229,7 @@ export interface HwcPct {
 
 const HWC_PCT_DEFAULTS = [0.67, 0.3, 0.15, 0.225, 0.165, 8, 1]
 
-export function hwcPctRows(bars: readonly KLineData[], calcParams: readonly unknown[]): HwcPct[] {
+function hwcPctRows(bars: readonly KLineData[], calcParams: readonly unknown[]): HwcPct[] {
   const o = hwcOptions(calcParams, HWC_PCT_DEFAULTS)
   const k = countParam(calcParams[5], 8, 1)
   const dir = countParam(calcParams[6], 1, 0) >= 1 ? -1 : 1

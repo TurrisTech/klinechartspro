@@ -49,13 +49,13 @@ export interface CorrTrend {
   long?: number
 }
 
-export interface CorrTrendOptions {
+interface CorrTrendOptions {
   short: number
   long: number
   price: number
 }
 
-export function corrTrendOptions(calcParams: readonly unknown[]): CorrTrendOptions {
+function corrTrendOptions(calcParams: readonly unknown[]): CorrTrendOptions {
   const a = countParam(calcParams[0], 40, 2)
   const b = countParam(calcParams[1], 80, 2)
   return { short: Math.min(a, b), long: Math.max(a, b), price: Math.min(MLADEN_PRICE_MAX, countParam(calcParams[2], 15, 0)) }
@@ -86,7 +86,7 @@ function correlation(x: readonly number[], per: number): number[] {
   return out
 }
 
-export function correlationTrend(bars: readonly KLineData[], options: CorrTrendOptions): CorrTrend[] {
+function correlationTrend(bars: readonly KLineData[], options: CorrTrendOptions): CorrTrend[] {
   const p = mladenPrice(bars, options.price)
   const short = correlation(p, options.short)
   const long = correlation(p, options.long)

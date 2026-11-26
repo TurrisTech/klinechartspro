@@ -50,14 +50,14 @@ export interface Keltner {
   age?: number
 }
 
-export interface KeltnerOptions {
+interface KeltnerOptions {
   window: number
   version: number
   atr: number
   mult: number
 }
 
-export function keltnerOptions(calcParams: readonly unknown[]): KeltnerOptions {
+function keltnerOptions(calcParams: readonly unknown[]): KeltnerOptions {
   return {
     window: countParam(calcParams[0], 20, 1),
     version: Math.min(1, countParam(calcParams[1], 0, 0)),
@@ -97,7 +97,7 @@ function ewmSpan(x: readonly number[], n: number): number[] {
   })
 }
 
-export function keltnerChannel(bars: readonly KLineData[], options: KeltnerOptions): Keltner[] {
+function keltnerChannel(bars: readonly KLineData[], options: KeltnerOptions): Keltner[] {
   const { window, version, mult } = options
   let mid: number[]
   let upper: number[]

@@ -47,13 +47,13 @@ export interface Ttf {
   ttf?: number
 }
 
-export interface TtfOptions {
+interface TtfOptions {
   period: number
   t3: number
   b: number
 }
 
-export function ttfOptions(calcParams: readonly unknown[]): TtfOptions {
+function ttfOptions(calcParams: readonly unknown[]): TtfOptions {
   return {
     period: countParam(calcParams[0], 45, 1),
     t3: countParam(calcParams[1], 0, 0),
@@ -120,7 +120,7 @@ function ttfBilak(bars: readonly KLineData[], p: number, t3: number, b: number):
   })
 }
 
-export function trendTriggerFactor(bars: readonly KLineData[], options: TtfOptions): Ttf[] {
+function trendTriggerFactor(bars: readonly KLineData[], options: TtfOptions): Ttf[] {
   const out = options.t3 === 0 ? ttfMql5(bars, options.period) : ttfBilak(bars, options.period, options.t3, options.b)
   return out.map((v) => ({ ttf: value(v) }))
 }

@@ -80,7 +80,7 @@ function coefficients(period: number, delta: number): { beta1: number; alpha: nu
 }
 
 /** windicators' `_band_stop`, Ehlers' Type "BS" block with b0 = 1, c1 = 0: NaN on bars 0-1. */
-export function ehlersBandStop(price: readonly number[], period: number, delta: number): number[] {
+function ehlersBandStop(price: readonly number[], period: number, delta: number): number[] {
   const n = price.length
   const out = new Array<number>(n).fill(Number.NaN)
   const c1 = 0
@@ -108,7 +108,7 @@ export function bandStopWarmup(period: number, delta: number): number {
   return 2 + decayBars(poleRadius(beta1, alpha), 1e-5)
 }
 
-export function bandStopSettings(calcParams: readonly unknown[]): { period: number; delta: number; warm: number } {
+function bandStopSettings(calcParams: readonly unknown[]): { period: number; delta: number; warm: number } {
   const period = Math.min(100000, realParam(calcParams[0], DEFAULTS[0], 2))
   // windicators requires 0 < delta < period / 8 (alpha exists).
   const delta = Math.min(period / 8 - 1e-9, realParam(calcParams[1], DEFAULTS[1], 1e-6))
@@ -116,7 +116,7 @@ export function bandStopSettings(calcParams: readonly unknown[]): { period: numb
   return { period, delta, warm }
 }
 
-export function bandStopRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandStop[] {
+function bandStopRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandStop[] {
   const { period, delta, warm } = bandStopSettings(calcParams)
   const bs = ehlersBandStop(bars.map((b) => b.close), period, delta)
   return bs.map((x, i) => (i < warm || !Number.isFinite(x) ? {} : { bs: x, state: sideOf(bars[i].close - x, 1) }))

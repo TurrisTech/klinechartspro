@@ -27,15 +27,15 @@ import type { LayoutPreset } from './layouts'
 
 /** The smallest cell still worth drawing a chart in: room for a price axis beside a readable
  * run of candles, and a candle area above the time axis. */
-export const MIN_PANE_WIDTH = 200
-export const MIN_PANE_HEIGHT = 180
+const MIN_PANE_WIDTH = 200
+const MIN_PANE_HEIGHT = 180
 
-export interface PaneMinimum {
+interface PaneMinimum {
   width: number
   height: number
 }
 
-export type WallFit =
+type WallFit =
   /** The preset as declared. */
   | { mode: 'preset' }
   /** Every pane, auto-placed in reading order into `columns` x `rows`. */

@@ -16,7 +16,7 @@
 // overlay template because importing klinecharts at runtime needs a window, and this is the
 // part worth testing.
 
-export interface MeasureInput {
+interface MeasureInput {
   /** The price pressed on, and the price now under the pointer (or released on). */
   from: number
   to: number
@@ -30,7 +30,7 @@ export interface MeasureInput {
   pipSize?: number | null
 }
 
-export interface MeasureReadout {
+interface MeasureReadout {
   /** The move was up (or flat): the label sits above the box and takes the up colour. */
   up: boolean
   /** "+0.00123 (+0.11%)  +12.3 pips" */

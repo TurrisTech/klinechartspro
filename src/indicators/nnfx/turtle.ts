@@ -64,7 +64,7 @@ function lowest(x: readonly number[], start: number, count: number): number {
   return v
 }
 
-export function turtleRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Turtle[] {
+function turtleRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Turtle[] {
   const trade = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1))
   const stopPeriod = Math.min(100000, countParam(calcParams[1], DEFAULTS[1], 1))
   const dir = countParam(calcParams[2], 1, 0) >= 1 ? -1 : 1

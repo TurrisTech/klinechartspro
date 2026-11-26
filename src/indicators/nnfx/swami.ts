@@ -16,10 +16,10 @@ import type { IndicatorTemplate, KLineData } from 'klinecharts'
 
 import { countParam, realParam, value } from './mt4'
 import { drawRange, fillBetween, guide, guideColor, signColors, signLineStyle, warmupMark, withAlpha } from './paint'
-import { npSum as pairwiseSum, vsMean, windowMean } from './pdwindow'
+import { vsMean, windowMean } from './pdwindow'
 
-// numpy's pairwise sum and the scan's `vs_sma` reading, shared with the other templates (pdwindow.ts).
-export { pairwiseSum, vsMean }
+// The scan's `vs_sma` reading, shared with the other templates (pdwindow.ts).
+export { vsMean }
 
 /**
  * SWAMI_SWING -- one line of Ehlers and Way's SwamiCharts swing wave in a sub-pane (windicators
@@ -89,7 +89,7 @@ function coefficients(period: number, delta: number): { beta: number; alpha: num
 }
 
 /** Ehlers' band-pass of `price` (windicators `_kernels/ehlers_emd.bandpass`): NaN on bars 0-1. */
-export function ehlersBandPass(price: readonly number[], period: number, delta: number): number[] {
+function ehlersBandPass(price: readonly number[], period: number, delta: number): number[] {
   const n = price.length
   const out = new Array<number>(n).fill(Number.NaN)
   const { beta, alpha } = coefficients(period, delta)
@@ -133,7 +133,7 @@ export function sideOf(d: number, dir: number): number {
   return s === 0 ? 0 : dir * s
 }
 
-export function swamiSettings(calcParams: readonly unknown[]): { period: number; delta: number; ma: number; dir: number; warm: number } {
+function swamiSettings(calcParams: readonly unknown[]): { period: number; delta: number; ma: number; dir: number; warm: number } {
   const period = Math.min(48, countParam(calcParams[0], DEFAULTS[0], 8))
   // windicators requires 0 < delta < 1.
   const delta = Math.min(0.999999, realParam(calcParams[1], DEFAULTS[1], 1e-6))
@@ -143,7 +143,7 @@ export function swamiSettings(calcParams: readonly unknown[]): { period: number;
   return { period, delta, ma: k >= 2 ? k : 0, dir, warm }
 }
 
-export function swamiRows(bars: readonly KLineData[], calcParams: readonly unknown[]): SwamiSwing[] {
+function swamiRows(bars: readonly KLineData[], calcParams: readonly unknown[]): SwamiSwing[] {
   const { period, delta, ma, dir, warm } = swamiSettings(calcParams)
   const bp = ehlersBandPass(bars.map((b) => (b.high + b.low) / 2), period, delta)
   const mean = ma > 0 ? windowMean(bp, ma) : null

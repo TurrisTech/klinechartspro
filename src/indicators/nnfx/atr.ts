@@ -40,7 +40,7 @@ export interface Atr {
   stop?: number
 }
 
-export function atrOptions(calcParams: readonly unknown[]): { period: number; method: number } {
+function atrOptions(calcParams: readonly unknown[]): { period: number; method: number } {
   return { period: countParam(calcParams[0], 14, 1), method: Math.min(1, countParam(calcParams[1], 0, 0)) }
 }
 

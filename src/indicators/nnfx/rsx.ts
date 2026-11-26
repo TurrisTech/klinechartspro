@@ -38,11 +38,11 @@ export interface Rsx {
   rsx?: number
 }
 
-export function rsxOptions(calcParams: readonly unknown[]): { length: number } {
+function rsxOptions(calcParams: readonly unknown[]): { length: number } {
   return { length: countParam(calcParams[0], 21, 2) }
 }
 
-export function jurikRsx(bars: readonly KLineData[], length: number): number[] {
+function jurikRsx(bars: readonly KLineData[], length: number): number[] {
   const m = bars.length
   const out = new Array<number>(m).fill(Number.NaN)
   if (m < length) return out

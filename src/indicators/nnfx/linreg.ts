@@ -39,11 +39,11 @@ export interface LinReg {
   side?: number
 }
 
-export function linRegOptions(calcParams: readonly unknown[]): { period: number } {
+function linRegOptions(calcParams: readonly unknown[]): { period: number } {
   return { period: countParam(calcParams[0], 28, 2) }
 }
 
-export function linearRegressionIntercept(bars: readonly KLineData[], n: number): LinReg[] {
+function linearRegressionIntercept(bars: readonly KLineData[], n: number): LinReg[] {
   // x = 0 at the oldest bar of the window, n - 1 at the newest.
   const sumX = (n * (n - 1)) / 2
   const sumXX = ((n - 1) * n * (2 * n - 1)) / 6

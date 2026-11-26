@@ -52,7 +52,7 @@ export interface Tcf {
   state?: number
 }
 
-export interface TcfOptions {
+interface TcfOptions {
   n: number
   t3: number
   b: number
@@ -171,7 +171,7 @@ export function trendContinuationFactor(close: readonly number[], o: TcfOptions,
   return { plus, minus }
 }
 
-export function tcfRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Tcf[] {
+function tcfRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Tcf[] {
   const { plus, minus } = trendContinuationFactor(bars.map((b) => b.close), tcfOptions(calcParams))
   const dir = countParam(calcParams[4], 1, 0) >= 1 ? -1 : 1
   return plus.map((p, i) => {

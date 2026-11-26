@@ -33,7 +33,7 @@ export function tdxSma(x: readonly number[], n: number, m: number): number[] {
 }
 
 /** TDX `MA(x, n)`. */
-export function tdxMa(x: readonly number[], n: number): number[] {
+function tdxMa(x: readonly number[], n: number): number[] {
   return rollingMean(infToNan(x), n)
 }
 
@@ -118,7 +118,7 @@ export function micdWarmup(smoothing: number, fast: number, slow: number): numbe
   return Math.max(fast, slow) + 1 + seedBars(Math.min(1 / smoothing, 1 / MICD_SMOOTHING))
 }
 
-export function micdSettings(calcParams: readonly unknown[]): {
+function micdSettings(calcParams: readonly unknown[]): {
   smoothing: number
   fast: number
   slow: number
@@ -136,7 +136,7 @@ export function micdSettings(calcParams: readonly unknown[]): {
 }
 
 /** TDX MICD's DIF and MICD lines, exactly as windicators `micd`. */
-export function micdLines(close: readonly number[], smoothing: number, fast: number, slow: number): { dif: number[]; micd: number[] } {
+function micdLines(close: readonly number[], smoothing: number, fast: number, slow: number): { dif: number[]; micd: number[] } {
   const mi = close.map((c, i) => c - (i >= 1 ? close[i - 1] : Number.NaN))
   const lagged = shift(tdxSma(mi, smoothing, 1), 1)
   const fastMa = tdxMa(lagged, fast)
@@ -145,7 +145,7 @@ export function micdLines(close: readonly number[], smoothing: number, fast: num
   return { dif, micd: tdxSma(dif, MICD_SMOOTHING, 1) }
 }
 
-export function micdRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Micd[] {
+function micdRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Micd[] {
   const { smoothing, fast, slow, k, dir, warm } = micdSettings(calcParams)
   const lines = micdLines(
     bars.map((b) => b.close),
@@ -233,7 +233,7 @@ export function rccdWarmup(period: number, fast: number, slow: number): number {
   return period + 1 + Math.max(fast, slow) + seedBars(1 / period)
 }
 
-export function rccdSettings(calcParams: readonly unknown[]): {
+function rccdSettings(calcParams: readonly unknown[]): {
   period: number
   fast: number
   slow: number
@@ -251,7 +251,7 @@ export function rccdSettings(calcParams: readonly unknown[]): {
 }
 
 /** TDX RCCD's DIF and RCCD lines, exactly as windicators `rccd`. */
-export function rccdLines(close: readonly number[], period: number, fast: number, slow: number): { dif: number[]; rccd: number[] } {
+function rccdLines(close: readonly number[], period: number, fast: number, slow: number): { dif: number[]; rccd: number[] } {
   // pandas divides as IEEE does: x / 0 is +-inf (a NaN to the window functions), 0 / 0 NaN.
   const rc = close.map((c, i) => c / (i >= period ? close[i - period] : Number.NaN))
   const lagged = shift(tdxSma(shift(rc, 1), period, 1), 1)
@@ -261,7 +261,7 @@ export function rccdLines(close: readonly number[], period: number, fast: number
   return { dif, rccd: tdxSma(dif, period, 1) }
 }
 
-export function rccdRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Rccd[] {
+function rccdRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Rccd[] {
   const { period, fast, slow, k, dir, warm } = rccdSettings(calcParams)
   const lines = rccdLines(
     bars.map((b) => b.close),

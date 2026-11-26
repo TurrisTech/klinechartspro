@@ -197,7 +197,7 @@ export class PaneState {
   }
 }
 
-export interface WallOptions {
+interface WallOptions {
   maxPanes: number
   initialLayoutId: string
   initialActiveId: string

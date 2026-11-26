@@ -53,7 +53,7 @@ export interface Macdext {
   state?: number
 }
 
-export function macdextRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Macdext[] {
+function macdextRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Macdext[] {
   let fast = Math.min(100000, countParam(calcParams[0], 24, 2))
   let slow = Math.min(100000, countParam(calcParams[1], 26, 2))
   const signal = Math.min(100000, countParam(calcParams[2], 4, 1))

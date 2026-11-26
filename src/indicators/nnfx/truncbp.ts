@@ -77,7 +77,7 @@ function coefficients(period: number, bandwidth: number): { l1: number; s1: numb
 }
 
 /** windicators' `_trunc_bp`: bpt NaN before bar length + 1; bp 0 on bars 0-2. */
-export function truncatedBandPass(close: readonly number[], period: number, bandwidth: number, length: number): { bpt: number[]; bp: number[] } {
+function truncatedBandPass(close: readonly number[], period: number, bandwidth: number, length: number): { bpt: number[]; bp: number[] } {
   const n = close.length
   const bp = new Array<number>(n).fill(Number.NaN)
   const bpt = new Array<number>(n).fill(Number.NaN)
@@ -109,7 +109,7 @@ export function truncWarmup(period: number, bandwidth: number, length: number): 
   return Math.max(length + 1, 3 + decayBars(poleRadius(l1, s1), 1e-2))
 }
 
-export function truncSettings(calcParams: readonly unknown[]): { period: number; bandwidth: number; length: number; dir: number; warm: number } {
+function truncSettings(calcParams: readonly unknown[]): { period: number; bandwidth: number; length: number; dir: number; warm: number } {
   const period = Math.min(100000, realParam(calcParams[0], DEFAULTS[0], 2))
   // windicators requires 0 < bandwidth < period / 4 (S1 exists) and 1 <= length <= 98 (Trunc[100]).
   const bandwidth = Math.min(period / 4 - 1e-9, realParam(calcParams[1], DEFAULTS[1], 1e-6))
@@ -119,7 +119,7 @@ export function truncSettings(calcParams: readonly unknown[]): { period: number;
   return { period, bandwidth, length, dir, warm }
 }
 
-export function truncRows(bars: readonly KLineData[], calcParams: readonly unknown[]): TruncBp[] {
+function truncRows(bars: readonly KLineData[], calcParams: readonly unknown[]): TruncBp[] {
   const { period, bandwidth, length, dir, warm } = truncSettings(calcParams)
   const { bpt, bp } = truncatedBandPass(bars.map((b) => b.close), period, bandwidth, length)
   return bars.map((_, i) => {

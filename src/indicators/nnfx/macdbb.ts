@@ -72,12 +72,12 @@ export interface MacdBb {
 }
 
 // scconstants.h's MOVAVGTYPE_* enum.
-export const SIERRA_EXPONENTIAL = 0
-export const SIERRA_SIMPLE = 2
-export const SIERRA_WEIGHTED = 3
-export const SIERRA_WILDERS = 4
-export const SIERRA_SIMPLE_SKIP_ZEROS = 5
-export const SIERRA_SMOOTHED = 6
+const SIERRA_EXPONENTIAL = 0
+const SIERRA_SIMPLE = 2
+const SIERRA_WEIGHTED = 3
+const SIERRA_WILDERS = 4
+const SIERRA_SIMPLE_SKIP_ZEROS = 5
+const SIERRA_SMOOTHED = 6
 const MA_TYPES = [SIERRA_EXPONENTIAL, SIERRA_SIMPLE, SIERRA_WEIGHTED, SIERRA_WILDERS, SIERRA_SIMPLE_SKIP_ZEROS, SIERRA_SMOOTHED]
 const FLT_MAX = 3.4028234663852886e38
 
@@ -151,7 +151,7 @@ function smoothed(inp: Float64Array, out: Float64Array, index: number, length: n
 }
 
 /** Sierra's `MovingAverage_S`: one bar of the chosen average; an unknown type is SIMPLE. */
-export function sierraMovingAverage(inp: Float64Array, out: Float64Array, maType: number, index: number, length: number): void {
+function sierraMovingAverage(inp: Float64Array, out: Float64Array, maType: number, index: number, length: number): void {
   if (maType === SIERRA_EXPONENTIAL) exponential(inp, out, index, length)
   else if (maType === SIERRA_WEIGHTED) weighted(inp, out, index, length)
   else if (maType === SIERRA_WILDERS) wilders(inp, out, index, length)
@@ -184,7 +184,7 @@ function standardDeviation(inp: Float64Array, out: Float64Array, index: number, 
   out[index] = variance < 0 ? 0 : Math.sqrt(variance)
 }
 
-export interface MacdBbOptions {
+interface MacdBbOptions {
   fast: number
   slow: number
   macdLength: number
@@ -193,7 +193,7 @@ export interface MacdBbOptions {
 }
 
 /** The four outputs, exactly as windicators `macd_bollinger_bands` (NaN before Sierra's DataStartIndex). */
-export function macdBollingerBands(real: readonly number[], o: MacdBbOptions): { macd: number[]; signal: number[]; upper: number[]; lower: number[] } {
+function macdBollingerBands(real: readonly number[], o: MacdBbOptions): { macd: number[]; signal: number[]; upper: number[]; lower: number[] } {
   const n = real.length
   // TA-Lib framing, as windicators: leading NaNs are skipped and the outputs placed back after them.
   let start = real.findIndex((v) => !Number.isNaN(v))
@@ -240,7 +240,7 @@ export function macdBollingerBands(real: readonly number[], o: MacdBbOptions): {
 
 const DEFAULTS = [12, 20, 7, 2, 5, 3, 0]
 
-export function macdBbSettings(calcParams: readonly unknown[]): MacdBbOptions & { k: number; dir: number } {
+function macdBbSettings(calcParams: readonly unknown[]): MacdBbOptions & { k: number; dir: number } {
   const fast = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1))
   const slow = Math.min(100000, countParam(calcParams[1], DEFAULTS[1], 1))
   const macdLength = Math.min(100000, countParam(calcParams[2], DEFAULTS[2], 1))
@@ -252,7 +252,7 @@ export function macdBbSettings(calcParams: readonly unknown[]): MacdBbOptions & 
   return { fast, slow, macdLength, devs, maType, k, dir }
 }
 
-export function macdBbRows(bars: readonly KLineData[], calcParams: readonly unknown[]): MacdBb[] {
+function macdBbRows(bars: readonly KLineData[], calcParams: readonly unknown[]): MacdBb[] {
   const o = macdBbSettings(calcParams)
   const r = macdBollingerBands(
     bars.map((b) => b.close),

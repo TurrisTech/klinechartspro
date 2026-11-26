@@ -33,16 +33,16 @@ export const DOUBLE_TAP_MS = 350
  * does not land on the same pixel. */
 export const DOUBLE_TAP_SLOP_PX = 30
 
-export interface TapPoint {
+interface TapPoint {
   x: number
   y: number
   /** Milliseconds, on any clock both calls share (an event's `timeStamp`). */
   t: number
 }
 
-export type TapKind = 'tap' | 'double-tap'
+type TapKind = 'tap' | 'double-tap'
 
-export interface TapRecognizer {
+interface TapRecognizer {
   /** A finger went down; `touches` is how many are down now, this one included. */
   start(point: TapPoint, touches: number): void
   /** A finger lifted at `point`; `remaining` is how many are still down. What the touch was,
@@ -109,7 +109,7 @@ export function createTapRecognizer(): TapRecognizer {
  * fling hundreds of bars from the rest. Each change inside the tail extends it by `gapMs`, so
  * it lasts exactly as long as the fling's frames keep coming, never longer than `maxMs`.
  */
-export interface GestureTail {
+interface GestureTail {
   /** The finger lifted at `now`. */
   begin(now: number): void
   /** A visible-range change at `now`: whether it belongs to the tail (and extends it). */

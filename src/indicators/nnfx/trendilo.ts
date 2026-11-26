@@ -71,7 +71,7 @@ export interface Trendilo {
 
 const DEFAULTS = [6, 25, 0.5695, 7, 8, 1]
 
-export function trendiloSettings(calcParams: readonly unknown[]): {
+function trendiloSettings(calcParams: readonly unknown[]): {
   smooth: number
   length: number
   offset: number
@@ -89,7 +89,7 @@ export function trendiloSettings(calcParams: readonly unknown[]): {
 }
 
 /** windicators' trendilo, upper and lower from the first bar, with the source's 0 before it. */
-export function trendiloLines(close: readonly number[], smooth: number, length: number, offset: number, sigma: number): {
+function trendiloLines(close: readonly number[], smooth: number, length: number, offset: number, sigma: number): {
   trendilo: number[]
   upper: number[]
   lower: number[]
@@ -123,7 +123,7 @@ export function trendiloLines(close: readonly number[], smooth: number, length: 
   return { trendilo: avpch, upper, lower }
 }
 
-export function trendiloRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Trendilo[] {
+function trendiloRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Trendilo[] {
   const { smooth, length, offset, sigma, ma, warm } = trendiloSettings(calcParams)
   const lines = trendiloLines(
     bars.map((b) => b.close),

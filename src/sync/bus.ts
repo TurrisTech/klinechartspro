@@ -82,7 +82,7 @@ export interface Measurement {
   clock: PaneClock
 }
 
-export interface SyncOptions {
+interface SyncOptions {
   crosshair: boolean
   // Click-to-scroll: a click on one pane scrolls every other one to that instant. Mutually
   // exclusive with `auto` -- see broadcastSeek.

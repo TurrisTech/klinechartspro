@@ -66,7 +66,7 @@ export interface Prc {
   state?: number
 }
 
-export interface PrcLines {
+interface PrcLines {
   middle: number[]
   upper1: number[]
   lower1: number[]
@@ -77,7 +77,7 @@ export interface PrcLines {
 const DEFAULTS = [2, 300, 1.08406, 1.34, 1, 1]
 
 /** windicators' `_prc`, 1-based as the source. */
-export function polynomialRegressionChannel(
+function polynomialRegressionChannel(
   close: readonly number[],
   degree: number,
   period: number,
@@ -197,7 +197,7 @@ export function polynomialRegressionChannel(
   return out
 }
 
-export function prcSettings(calcParams: readonly unknown[]): {
+function prcSettings(calcParams: readonly unknown[]): {
   degree: number
   period: number
   dev1: number
@@ -215,7 +215,7 @@ export function prcSettings(calcParams: readonly unknown[]): {
   return { degree, period, dev1, dev2, redraw, dir }
 }
 
-export function prcRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Prc[] {
+function prcRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Prc[] {
   const { degree, period, dev1, dev2, redraw, dir } = prcSettings(calcParams)
   const lines = polynomialRegressionChannel(bars.map((b) => b.close), degree, period, dev1, dev2, redraw)
   // Redraw off: blank the bands while the window still holds bars Sierra had not drawn (zeros).

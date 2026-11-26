@@ -44,7 +44,7 @@ import type { IndicatorTemplate, KLineData } from 'klinecharts'
 // Exported because the declaration build names it: `indicators` (src/indicators/index.ts)
 // infers its element type from this template, and tsc cannot write that .d.ts for a type
 // it has no name for (TS4023).
-export interface Wma {
+interface Wma {
   [key: string]: number | undefined
 }
 

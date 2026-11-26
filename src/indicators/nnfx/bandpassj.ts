@@ -69,7 +69,7 @@ function highPass1Pole(x: readonly number[], period: number): number[] {
   return r
 }
 
-export function bandPassJesse(close: readonly number[], period: number, bandwidth: number): {
+function bandPassJesse(close: readonly number[], period: number, bandwidth: number): {
   bp: number[]
   norm: number[]
   trigger: number[]
@@ -120,7 +120,7 @@ function bandPassJSettings(
 
 const DEFAULTS = [30, 0.1206, 1]
 
-export function bandPassJRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJ[] {
+function bandPassJRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJ[] {
   const { period, bandwidth, warm } = bandPassJSettings(calcParams, DEFAULTS, 2)
   const r = bandPassJesse(bars.map((b) => b.close), period, bandwidth)
   return r.bp.map((b, i) =>
@@ -157,7 +157,7 @@ export interface BandPassJRaw {
 
 const RAW_DEFAULTS = [36, 0.2412, 1, 1]
 
-export function bandPassJRawRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJRaw[] {
+function bandPassJRawRows(bars: readonly KLineData[], calcParams: readonly unknown[]): BandPassJRaw[] {
   const { period, bandwidth, warm } = bandPassJSettings(calcParams, RAW_DEFAULTS, 3)
   const dir = countParam(calcParams[2], 1, 0) >= 1 ? -1 : 1
   const r = bandPassJesse(bars.map((b) => b.close), period, bandwidth)

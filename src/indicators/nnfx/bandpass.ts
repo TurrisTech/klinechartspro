@@ -53,13 +53,13 @@ export interface BandPass {
   slope?: number
 }
 
-export interface BandPassOptions {
+interface BandPassOptions {
   period: number
   delta: number
   price: number
 }
 
-export function bandPassOptions(calcParams: readonly unknown[]): BandPassOptions {
+function bandPassOptions(calcParams: readonly unknown[]): BandPassOptions {
   return {
     period: countParam(calcParams[0], 50, 2),
     delta: realParam(calcParams[1], 0.1, 0.001),
@@ -67,7 +67,7 @@ export function bandPassOptions(calcParams: readonly unknown[]): BandPassOptions
   }
 }
 
-export function bandPassFilter(bars: readonly KLineData[], options: BandPassOptions): BandPass[] {
+function bandPassFilter(bars: readonly KLineData[], options: BandPassOptions): BandPass[] {
   const p = mladenPrice(bars, options.price)
   const n = p.length
   const beta = Math.cos((2 * Math.PI) / options.period)

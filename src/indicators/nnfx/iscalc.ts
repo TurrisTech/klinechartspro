@@ -50,7 +50,7 @@ export interface IsCalc {
 }
 
 /** MQL4's EMPTY_VALUE: what an indicator buffer holds before it is written. */
-export const EMPTY_VALUE = 2147483647
+const EMPTY_VALUE = 2147483647
 
 const DEFAULTS = [5, 22, 0, 1]
 
@@ -61,7 +61,7 @@ export function triggerFrom(nb: number, n: number): number {
   return nb - 1 + Math.ceil(Math.log(EMPTY_VALUE / 1e-12) / -Math.log(keep))
 }
 
-export function isCalcRows(bars: readonly KLineData[], calcParams: readonly unknown[]): IsCalc[] {
+function isCalcRows(bars: readonly KLineData[], calcParams: readonly unknown[]): IsCalc[] {
   const period = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1))
   const nb = Math.min(100000, countParam(calcParams[1], DEFAULTS[1], 1))
   const lag = Math.max(1 - period, Math.min(100000, countParam(calcParams[2], DEFAULTS[2], -100000)))

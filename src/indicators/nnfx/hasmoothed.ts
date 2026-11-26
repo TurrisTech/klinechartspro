@@ -60,14 +60,14 @@ export interface HaSmoothed {
   age?: number
 }
 
-export interface HaSmoothedOptions {
+interface HaSmoothedOptions {
   period: number
   method: number
   period2: number
   method2: number
 }
 
-export function haSmoothedOptions(calcParams: readonly unknown[]): HaSmoothedOptions {
+function haSmoothedOptions(calcParams: readonly unknown[]): HaSmoothedOptions {
   return {
     period: countParam(calcParams[0], 6, 1),
     method: Math.min(3, countParam(calcParams[1], 2, 0)),
@@ -76,7 +76,7 @@ export function haSmoothedOptions(calcParams: readonly unknown[]): HaSmoothedOpt
   }
 }
 
-export function heikenAshiSmoothed(bars: readonly KLineData[], options: HaSmoothedOptions): HaSmoothed[] {
+function heikenAshiSmoothed(bars: readonly KLineData[], options: HaSmoothedOptions): HaSmoothed[] {
   const { period, method, period2, method2 } = options
   const mo = maByMethod(bars.map((b) => b.open), period, method)
   const mh = maByMethod(bars.map((b) => b.high), period, method)

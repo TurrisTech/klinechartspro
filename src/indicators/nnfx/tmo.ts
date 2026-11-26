@@ -110,11 +110,11 @@ function ptaRma(x: readonly number[], n: number): number[] {
   return ewmMean(x, (1 - a) / a)
 }
 
-export function ptaMa(x: readonly number[], n: number, mode: number): number[] {
+function ptaMa(x: readonly number[], n: number, mode: number): number[] {
   return mode === 0 ? ptaSma(x, n) : mode === 1 ? ptaEma(x, n) : ptaRma(x, n)
 }
 
-export interface TmoOptions {
+interface TmoOptions {
   length: number
   calc: number
   smooth: number
@@ -123,7 +123,7 @@ export interface TmoOptions {
 }
 
 /** The four outputs, exactly as windicators `true_momentum_oscillator`. */
-export function trueMomentumOscillator(
+function trueMomentumOscillator(
   open: readonly number[],
   close: readonly number[],
   o: TmoOptions
@@ -148,7 +148,7 @@ export function trueMomentumOscillator(
 
 const DEFAULTS = [14, 4, 3, 1, 0, 1]
 
-export function tmoSettings(calcParams: readonly unknown[]): TmoOptions & { dir: number } {
+function tmoSettings(calcParams: readonly unknown[]): TmoOptions & { dir: number } {
   const exclusive = countParam(calcParams[3], DEFAULTS[3], 0) >= 1
   // pandas-ta's inclusive window needs two opens to leave one out.
   const length = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], exclusive ? 1 : 2))
@@ -159,7 +159,7 @@ export function tmoSettings(calcParams: readonly unknown[]): TmoOptions & { dir:
   return { length, calc, smooth, exclusive, mamode, dir }
 }
 
-export function tmoRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Tmo[] {
+function tmoRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Tmo[] {
   const o = tmoSettings(calcParams)
   const r = trueMomentumOscillator(
     bars.map((b) => b.open),

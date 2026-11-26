@@ -44,7 +44,7 @@ export interface Smi {
   ma?: number
 }
 
-export interface SmiOptions {
+interface SmiOptions {
   period: number
   fast: number
   slow: number
@@ -52,7 +52,7 @@ export interface SmiOptions {
   ma: number
 }
 
-export function smiOptions(calcParams: readonly unknown[]): SmiOptions {
+function smiOptions(calcParams: readonly unknown[]): SmiOptions {
   return {
     period: countParam(calcParams[0], 39, 1),
     fast: countParam(calcParams[1], 6, 1),
@@ -62,7 +62,7 @@ export function smiOptions(calcParams: readonly unknown[]): SmiOptions {
   }
 }
 
-export function stochasticMomentumIndex(bars: readonly KLineData[], options: SmiOptions): Smi[] {
+function stochasticMomentumIndex(bars: readonly KLineData[], options: SmiOptions): Smi[] {
   const { period, fast, slow } = options
   const hh = rollingExtreme(bars.map((b) => b.high), period, 'max')
   const ll = rollingExtreme(bars.map((b) => b.low), period, 'min')
