@@ -1,6 +1,6 @@
 import type { OverlayCreate } from 'klinecharts'
 import { levelsCoverageFor, hasFeature } from '../capabilities'
-import type { PriceAlert } from '../chartlayers/alerts/hub'
+import { firedOnce, type PriceAlert } from '../chartlayers/alerts/hub'
 import { centredOn } from '../chartlayers/alerts/zone'
 import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
@@ -215,12 +215,20 @@ export function levelAlertInterval(name: string): string | null {
  * since the pane's last bar must still count, so the end is well past any clock. */
 const STALE_READ_AHEAD_MS = 366 * ONE_DAY_MS
 
-/** Which level alerts are on a level no longer live -- spent since, or gone from the book. One
- * read of the instrument's live levels across the alerts' prices, at EVERY timeframe rather
- * than the ones the pane shows (an alert outlives its timeframe being switched off, and is not
- * stale for it), under whatever clock the wall reads at -- so in a replay, live as of the
- * replay. An alert is stale when no live level of its timeframe sits at its price. */
+/** Which level alerts are stale: armed once and fired, so done (user, 2026-11-26: "make fired
+ * once alerts count as stale too"), or on a level no longer live -- spent since, or gone from
+ * the book. The second is one read of the instrument's live levels across the other alerts'
+ * prices, at EVERY timeframe rather than the ones the pane shows (an alert outlives its
+ * timeframe being switched off, and is not stale for it), under whatever clock the wall reads
+ * at -- so in a replay, live as of the replay. An alert is stale there when no live level of
+ * its timeframe sits at its price. Fired once-alerts alone ask nothing. */
 export async function staleLevelAlerts(alerts: PriceAlert[], ctx: LayerContext): Promise<string[]> {
+  const gone = new Set(await offLiveLevels(alerts.filter((alert) => !firedOnce(alert.watch)), ctx))
+  return alerts.filter((alert) => firedOnce(alert.watch) || gone.has(alert.watch.id)).map((alert) => alert.watch.id)
+}
+
+/** The ids of those of `alerts` on no live level of their timeframe. */
+async function offLiveLevels(alerts: PriceAlert[], ctx: LayerContext): Promise<string[]> {
   if (alerts.length === 0) return []
   const precision = ctx.symbol.pricePrecision ?? 5
   const tick = 10 ** -precision
@@ -283,7 +291,7 @@ export const levelsLayer: ChartLayer<Level, LevelsConfig> = {
     target: (level) => (level.active ? { price: level.price, label: `${level.interval} level` } : null),
     zonePipsSetting: 'alerts.zonePips',
     // The dialog's Remove all and Remove stale: a level's alert is known by its name, and is
-    // stale once its level is no longer live.
+    // stale when it was armed once and has fired, or when its level is no longer live.
     owns: (alert) => levelAlertInterval(alert.watch.name) !== null,
     stale: staleLevelAlerts
   },

@@ -100,8 +100,8 @@ export interface LayerAlerts<TDatum> {
    * dialog's Remove all. Absent: every price alert on the instrument is. */
   owns?(alert: PriceAlert): boolean
   /** The ids of those of `alerts` -- this layer's, on the instrument `ctx` is on -- that are
-   * STALE: no longer on a datum that could have one (a level spent, or gone from the book,
-   * since the alert was made). The alert dialog's Remove stale. Rejects when it cannot tell;
-   * absent, the dialog offers Remove all alone. */
+   * STALE: armed once and fired, so done, or no longer on a datum that could have one (a level
+   * spent, or gone from the book, since the alert was made). The alert dialog's Remove stale.
+   * Rejects when it cannot tell; absent, the dialog offers Remove all alone. */
   stale?(alerts: PriceAlert[], ctx: LayerContext): Promise<string[]>
 }

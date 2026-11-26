@@ -688,7 +688,7 @@ describe('removing many at once, from the dialog\'s foot', () => {
     await clickAndSettle(lines(pane)[0])
     click(bells(pane)[0])
     await flush()
-    expect(button('.wd-price-alert-remove-stale')?.title).toBe('Remove the 1 stale alert: its line is no longer live')
+    expect(button('.wd-price-alert-remove-stale')?.title).toBe('Remove the 1 stale alert: fired once and done, or on a line no longer live')
     button('.wd-price-alert-remove-all')?.click()
     expect(text('.wd-price-alert-bulk-question')).toBe('Remove the 1 alert?')
     ;[...(editor()?.querySelectorAll<HTMLButtonElement>('.wd-price-alert-bulk-confirm button') ?? [])].find((b) => b.textContent === 'Cancel')?.click()
