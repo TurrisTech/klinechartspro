@@ -1,4 +1,5 @@
 import type { IndicatorGroup } from '../../src'
+import { getReadClock } from '../config'
 import { type PaneConfig, paneConfig } from '../plugins/paneconfig'
 import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire } from '../tsregistry/plugin'
 import type {
@@ -13,7 +14,7 @@ import type {
   SourceStore
 } from '../plugins/types'
 import type { PluginPointListener } from '../stream'
-import { fetchMtfGraph, type MtfInterval, type MtfSignalRow } from './api'
+import { fetchMtfGraph, type MtfInterval, type MtfSignalRow, warmMtfGraph } from './api'
 import {
   MTF_DEFAULTS,
   MTF_FIELDS,
@@ -53,6 +54,12 @@ import { createMtfGraphStore, type MtfGraphStore, NODES_ARRAY } from './store'
 // and the server relays it (`plugins.live`); a relayed point on a timeframe makes the binding
 // re-read everything knowable from that bar's close on, which is all a new bar can change. A
 // pushed point is never filed: it carries none of what the overlay draws.
+//
+// IN A BAR REPLAY, where the next Next alert press will land is known before the press
+// (client/replay/alerts.ts), and the first read of a region of history is the server's expensive
+// one. So each source offers `warm`: the window the pane will read there, under the clock the
+// landing sets, sent ahead (`PluginHost.warmAhead`) for the server to build and keep, and the
+// answer thrown away -- the press's own read is then a slice of what the server holds.
 
 /** The source's id in `extendData.seriesKeys`. */
 export const GRAPH_SOURCE = 'graph'
@@ -93,6 +100,38 @@ export async function mtfLiveWire(
   const entry = (await load.registry()).find((e) => e.name === overlay.liveEntry)
   const found = entry ? await liveWire(f, entry, load) : null
   return found && { ...found, direct: false }
+}
+
+/**
+ * Whether what became knowable at the close of a pane's last bar (opening `lastOpen`, closing
+ * `close`) is to be read: whether that instant has passed while the chart holds no bar for it.
+ *
+ * - In a replay, once the read clock has reached it: a replay standing on a bar's close (Next
+ *   alert stops on the close of the bar whose star it found) knows what became knowable then,
+ *   though the next bar has no prices yet.
+ * - Live, once it has passed where the market then closes -- Friday's 17:00 on the FX week, an
+ *   equity session's 16:00 -- so no bar opens until the market does. Until 2026-10-28 every
+ *   signal knowable at Friday's close (the 1D, 8h, 4h and every intraday one closing then) was
+ *   on no intraday chart all weekend. Not at any other close: the last bar is then forming, and
+ *   the next one opens at its close and carries what became knowable there; reading the
+ *   instant before it opens would file it as read before the research feed has written it.
+ *   (Around Friday's close that risk remains, healed by the overlay's live cue, which re-reads
+ *   from the bar's close once its signal is written: `graphSubscribe`.)
+ *
+ * The browser's clock decides "passed" live; it only matters within its error of the close.
+ * `readClock` is the page-wide one unless a caller asks about another: the clock a replay will
+ * stand at once its next press lands (`warm`).
+ */
+export function closeKnown(
+  clock: CandleGrid,
+  interval: string,
+  lastOpen: number,
+  close: number,
+  now: number = Date.now(),
+  readClock: number | null = getReadClock()
+): boolean {
+  if (readClock !== null) return close <= readClock
+  return close <= now && clock.nextStart(interval, lastOpen) > close
 }
 
 /** The store identity: everything that decides the answer, and nothing else. */
@@ -181,6 +220,19 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
     clock: CandleGrid
   ): SourceSpec<MtfSignalRow> => {
     const symbol = `${ctx.vendor}:${ctx.ticker}`
+    const request = { symbol, source: overlay.source, params: overlay.params, timeframes: shown, roots, maxStep }
+    /** The chart's loaded bars as instants: from the first one's open (less the gap before it) to
+     * the last one's close -- and that close itself once the read clock has reached it and no bar
+     * opens at it to carry what became knowable then, which the chart draws in the slot the next
+     * bar will take (shift.ts `chartBarAt`). */
+    const windowAt = (chartRange: Range, readClock: number | null): Range => {
+      const lastOpen = toAbsolute(ctx.interval, chartRange.to - 1, clock)
+      const close = clock.end(ctx.interval, lastOpen)
+      return {
+        from: toAbsolute(ctx.interval, chartRange.from, clock) - WINDOW_BACK_PAD_MS,
+        to: closeKnown(clock, ctx.interval, lastOpen, close, Date.now(), readClock) ? close + 1 : close
+      }
+    }
     return {
       id: GRAPH_SOURCE,
       key: graphSourceKey(overlay, symbol, shown, roots, maxStep),
@@ -188,27 +240,19 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       // are absolute -- so a replay step forgets from the cursor itself (plugins/horizon.ts),
       // which is exactly when each row came to exist.
       createStore: createMtfGraphStore,
-      /** The chart's loaded bars as instants: from the first one's open (less the gap before
-       * it) to the last one's close. */
-      window: (chartRange: Range): Range => ({
-        from: toAbsolute(ctx.interval, chartRange.from, clock) - WINDOW_BACK_PAD_MS,
-        to: clock.end(ctx.interval, toAbsolute(ctx.interval, chartRange.to - 1, clock))
-      }),
+      window: (chartRange: Range): Range => windowAt(chartRange, getReadClock()),
       fetch: async (range, limit) => {
-        const answer = await fetchMtfGraph({
-          symbol,
-          source: overlay.source,
-          params: overlay.params,
-          timeframes: shown,
-          roots,
-          maxStep,
-          from: range.from,
-          to: range.to,
-          limit
-        })
+        const answer = await fetchMtfGraph({ ...request, from: range.from, to: range.to, limit })
         return { points: answer.signals, nextFrom: answer.nextFrom, arrays: { [NODES_ARRAY]: answer.nodes } }
       },
-      subscribe: graphSubscribe(f, ctx, overlay, shown, clock, load)
+      subscribe: graphSubscribe(f, ctx, overlay, shown, clock, load),
+      // A bar replay's next landing, read by the server before the press (wdashboard-server
+      // services/mtfgraph.py): the window this pane will ask for there, under the clock the
+      // landing sets -- which the server's cache answers as a slice of what this read built.
+      warm: {
+        window: (chartRange: Range, at: number): Range => windowAt(chartRange, at),
+        read: (range: Range, at: number) => warmMtfGraph({ ...request, from: range.from, to: range.to, asof: at })
+      }
     }
   }
 

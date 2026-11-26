@@ -1,3 +1,9 @@
+diff --git a/node_modules/klinecharts/.bun-tag-268828f48cb5be6b b/.bun-tag-268828f48cb5be6b
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/klinecharts/.bun-tag-4b53a7d82e8fbc25 b/.bun-tag-4b53a7d82e8fbc25
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/index.d.ts b/dist/index.d.ts
 index eecffb9086e602ea8b523e8f8f28bbc94067b43e..28154eb227a12091265023bb8869b5b785395096 100644
 --- a/dist/index.d.ts
@@ -28,7 +34,7 @@ index eecffb9086e602ea8b523e8f8f28bbc94067b43e..28154eb227a12091265023bb8869b5b7
  export declare function getOverlayClass(name: string): Nullable<OverlayConstructor>;
  export declare function getSupportedOverlays(): string[];
 diff --git a/dist/index.esm.js b/dist/index.esm.js
-index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8ba6465424 100644
+index d47cebf01ee8727cee5948d528a7801f0f0e13dd..95a35661f3a79f20500970c5460b6d1535100543 100644
 --- a/dist/index.esm.js
 +++ b/dist/index.esm.js
 @@ -234,6 +234,72 @@ function isString(value) {
@@ -104,7 +110,160 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
  function requestAnimationFrame(fn) {
      if (isFunction(window.requestAnimationFrame)) {
          return window.requestAnimationFrame(fn);
-@@ -3248,7 +3314,8 @@ var IndicatorImp = /** @class */ (function () {
+@@ -1682,10 +1748,24 @@ var EventHandlerImp = /** @class */ (function () {
+         if (this._tapTimeoutId !== null && this._tapCount > 1) {
+             // check that both clicks are near enough
+             var manhattanDistance = this._mouseTouchMoveWithDownInfo(this._getCoordinate(touch), this._tapCoordinate).manhattanDistance;
+-            if (manhattanDistance < ManhattanDistance.DoubleTap && !this._cancelTap) {
++            var isDoubleTap = manhattanDistance < ManhattanDistance.DoubleTap && !this._cancelTap;
++            if (isDoubleTap) {
+                 this._processEvent(compatEvent, this._handler.doubleTapEvent);
+             }
+             this._resetTapTimeout();
++            // klinechartspro patch, "touch": a second tap too far from the first to be a double tap
++            // is a tap of its own, and the first of a new pair. Unpatched it was neither, and was
++            // dropped: two quick taps on two candles moved the crosshair once, and a drawing
++            // tapped within half a second of anything else could not be selected.
++            if (!isDoubleTap && !this._cancelTap) {
++                this._processEvent(compatEvent, this._handler.tapEvent);
++                if (isValid(this._handler.tapEvent)) {
++                    this._preventDefault(touchEndEvent);
++                }
++                this._tapCount = 1;
++                this._tapCoordinate = this._getCoordinate(touch);
++                this._tapTimeoutId = setTimeout(this._resetTapTimeout.bind(this), Delay.ResetClick);
++            }
+         }
+         else {
+             if (!this._cancelTap) {
+@@ -1733,10 +1813,18 @@ var EventHandlerImp = /** @class */ (function () {
+         if (this._clickTimeoutId !== null && this._clickCount > 1) {
+             // check that both clicks are near enough
+             var manhattanDistance = this._mouseTouchMoveWithDownInfo(this._getCoordinate(mouseUpEvent), this._clickCoordinate).manhattanDistance;
+-            if (manhattanDistance < ManhattanDistance.DoubleClick && !this._cancelClick) {
++            var isDoubleClick = manhattanDistance < ManhattanDistance.DoubleClick && !this._cancelClick;
++            if (isDoubleClick) {
+                 this._processEvent(compatEvent, this._handler.mouseDoubleClickEvent);
+             }
+             this._resetClickTimeout();
++            // klinechartspro patch, "touch": as for a tap -- a second click elsewhere is a click.
++            if (!isDoubleClick && !this._cancelClick) {
++                this._processEvent(compatEvent, this._handler.mouseClickEvent);
++                this._clickCount = 1;
++                this._clickCoordinate = this._getCoordinate(mouseUpEvent);
++                this._clickTimeoutId = setTimeout(this._resetClickTimeout.bind(this), Delay.ResetClick);
++            }
+         }
+         else {
+             if (!this._cancelClick) {
+@@ -2166,6 +2254,9 @@ var WidgetNameConstants = {
+     SEPARATOR: 'separator'
+ };
+ var REAL_SEPARATOR_HEIGHT = 7;
++// klinechartspro patch, "touch": the band a finger grabs a separator by. 7px is a mouse's
++// target; a fingertip covers about 40px and lands within ~12px of where it aims.
++var TOUCH_SEPARATOR_HEIGHT = 24;
+ 
+ /**
+  * Licensed under the Apache License, Version 2.0 (the "License");
+@@ -2224,6 +2315,8 @@ var Event = /** @class */ (function () {
+         // 用来记录捏合缩放的尺寸
+         this._pinchScale = 1;
+         this._mouseDownWidget = null;
++        // klinechartspro patch, "touch": the separator a one-finger drag is resizing panes with.
++        this._touchSeparatorWidget = null;
+         this._prevYAxisRanges = new Map();
+         this._xAxisStartScaleCoordinate = null;
+         this._xAxisStartScaleDistance = 0;
+@@ -2645,7 +2738,23 @@ var Event = /** @class */ (function () {
+     Event.prototype.touchStartEvent = function (e) {
+         var e_2, _a;
+         var _b;
+-        var _c = this._findWidgetByEvent(e), pane = _c.pane, widget = _c.widget;
++        // klinechartspro patch, "touch": a separator is dragged by a finger as by the mouse, and
++        // grabbed within a finger's band of it. Unpatched, a touch never reached one -- the widget
++        // registers touch handlers that nothing dispatched -- so an indicator pane could not be
++        // resized on a tablet. A separator that cannot be dragged leaves the touch to the pane
++        // beneath it, as an unpatched chart did.
++        this._touchSeparatorWidget = null;
++        var _c = this._findWidgetByEvent(e, TOUCH_SEPARATOR_HEIGHT);
++        if (_c.widget !== null && _c.widget.getName() === WidgetNameConstants.SEPARATOR) {
++            var separatorEvent = this._makeWidgetEvent(e, _c.widget);
++            if (_c.widget.dispatchEvent('touchStartEvent', separatorEvent)) {
++                (_b = separatorEvent.preventDefault) === null || _b === void 0 ? void 0 : _b.call(separatorEvent);
++                this._touchSeparatorWidget = _c.widget;
++                return true;
++            }
++            _c = this._findWidgetByEvent(e);
++        }
++        var pane = _c.pane, widget = _c.widget;
+         if (widget !== null) {
+             var event_8 = this._makeWidgetEvent(e, widget);
+             (_b = event_8.preventDefault) === null || _b === void 0 ? void 0 : _b.call(event_8);
+@@ -2695,8 +2804,12 @@ var Event = /** @class */ (function () {
+                             chartStore.setCrosshair({ x: event_8.x, y: event_8.y, paneId: pane === null || pane === void 0 ? void 0 : pane.getId() });
+                         }
+                         else {
++                            // klinechartspro patch, "touch": a press away from the crosshair hides
++                            // it -- a drag from here pans, and the crosshair must not ride along --
++                            // but no longer cancels the tap this may turn out to be, so a tap
++                            // elsewhere MOVES the crosshair there. Unpatched it only dismissed it,
++                            // and every other tap on a chart did nothing visible.
+                             this._touchCoordinate = null;
+-                            this._touchCancelCrosshair = true;
+                             chartStore.setCrosshair();
+                         }
+                     }
+@@ -2714,6 +2827,11 @@ var Event = /** @class */ (function () {
+     };
+     Event.prototype.touchMoveEvent = function (e) {
+         var _a, _b, _c;
++        if (this._touchSeparatorWidget !== null) {
++            // Held for the whole drag, as the mouse holds _mouseDownWidget: the finger leaves the
++            // thin separator band on the first move.
++            return this._touchSeparatorWidget.dispatchEvent('touchMoveEvent', e);
++        }
+         var _d = this._findWidgetByEvent(e), pane = _d.pane, widget = _d.widget;
+         if (widget !== null) {
+             var event_9 = this._makeWidgetEvent(e, widget);
+@@ -2749,6 +2867,13 @@ var Event = /** @class */ (function () {
+     };
+     Event.prototype.touchEndEvent = function (e) {
+         var _this = this;
++        if (this._touchSeparatorWidget !== null) {
++            var separator = this._touchSeparatorWidget;
++            this._touchSeparatorWidget = null;
++            separator.dispatchEvent('touchEndEvent', e);
++            this._chart.updatePane(1 /* UpdateLevel.Overlay */);
++            return true;
++        }
+         var widget = this._findWidgetByEvent(e).widget;
+         if (widget !== null) {
+             var event_10 = this._makeWidgetEvent(e, widget);
+@@ -2977,18 +3102,19 @@ var Event = /** @class */ (function () {
+             buildYAxisTick: true
+         });
+     };
+-    Event.prototype._findWidgetByEvent = function (event) {
++    Event.prototype._findWidgetByEvent = function (event, separatorHitHeight) {
+         var e_4, _a, e_5, _b, e_6, _c;
+         var x = event.x, y = event.y;
+         var separatorPanes = this._chart.getSeparatorPanes();
+         var separatorSize = this._chart.getStyles().separator.size;
++        var hitHeight = separatorHitHeight !== null && separatorHitHeight !== void 0 ? separatorHitHeight : REAL_SEPARATOR_HEIGHT;
+         try {
+             for (var separatorPanes_1 = __values(separatorPanes), separatorPanes_1_1 = separatorPanes_1.next(); !separatorPanes_1_1.done; separatorPanes_1_1 = separatorPanes_1.next()) {
+                 var items = separatorPanes_1_1.value;
+                 var pane_1 = items[1];
+                 var bounding = pane_1.getBounding();
+-                var top_1 = bounding.top - Math.round((REAL_SEPARATOR_HEIGHT - separatorSize) / 2);
+-                if (x >= bounding.left && x <= bounding.left + bounding.width && y >= top_1 && y <= top_1 + REAL_SEPARATOR_HEIGHT) {
++                var top_1 = bounding.top - Math.round((hitHeight - separatorSize) / 2);
++                if (x >= bounding.left && x <= bounding.left + bounding.width && y >= top_1 && y <= top_1 + hitHeight) {
+                     return { pane: pane_1, widget: pane_1.getWidget() };
+                 }
+             }
+@@ -3248,7 +3374,8 @@ var IndicatorImp = /** @class */ (function () {
                          this.result = result;
                          return [2 /*return*/, true];
                      case 2:
@@ -114,7 +273,109 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
                          return [2 /*return*/, false];
                      case 3: return [2 /*return*/];
                  }
-@@ -6309,8 +6376,10 @@ var View = /** @class */ (function (_super) {
+@@ -5156,6 +5283,13 @@ var Eventful = /** @class */ (function () {
+  * limitations under the License.
+  */
+ var DEVIATION = 2;
++// klinechartspro patch, "touch": how far from a line, an arc, a handle or a thin rect a
++// FINGER may land and still hit it. 2px is a mouse's precision; a fingertip lands within
++// ~10px of where it aims, so on a tablet a drawing could hardly be selected or dragged.
++var TOUCH_DEVIATION = 10;
++function hitDeviation(coordinate) {
++    return coordinate !== null && coordinate !== void 0 && coordinate.isTouch === true ? TOUCH_DEVIATION : DEVIATION;
++}
+ var FigureImp = /** @class */ (function (_super) {
+     __extends(FigureImp, _super);
+     function FigureImp(figure) {
+@@ -5211,6 +5345,7 @@ var FigureImp = /** @class */ (function (_super) {
+  * limitations under the License.
+  */
+ function checkCoordinateOnLine(coordinate, attrs) {
++    var deviation = hitDeviation(coordinate);
+     var e_1, _a;
+     var lines = [];
+     lines = lines.concat(attrs);
+@@ -5223,7 +5358,7 @@ function checkCoordinateOnLine(coordinate, attrs) {
+                     var prevCoordinate = coordinates[i - 1];
+                     var currentCoordinate = coordinates[i];
+                     if (prevCoordinate.x === currentCoordinate.x) {
+-                        if (Math.abs(prevCoordinate.y - coordinate.y) + Math.abs(currentCoordinate.y - coordinate.y) - Math.abs(prevCoordinate.y - currentCoordinate.y) < DEVIATION + DEVIATION && Math.abs(coordinate.x - prevCoordinate.x) < DEVIATION) {
++                        if (Math.abs(prevCoordinate.y - coordinate.y) + Math.abs(currentCoordinate.y - coordinate.y) - Math.abs(prevCoordinate.y - currentCoordinate.y) < deviation + deviation && Math.abs(coordinate.x - prevCoordinate.x) < deviation) {
+                             return true;
+                         }
+                     }
+@@ -5231,7 +5366,7 @@ function checkCoordinateOnLine(coordinate, attrs) {
+                         var kb = getLinearSlopeIntercept(prevCoordinate, currentCoordinate);
+                         var y = getLinearYFromSlopeIntercept(kb, coordinate);
+                         var yDif = Math.abs(y - coordinate.y);
+-                        if (Math.abs(prevCoordinate.x - coordinate.x) + Math.abs(currentCoordinate.x - coordinate.x) - Math.abs(prevCoordinate.x - currentCoordinate.x) < DEVIATION + DEVIATION && (yDif * yDif) / (kb[0] * kb[0] + 1) < DEVIATION * DEVIATION) {
++                        if (Math.abs(prevCoordinate.x - coordinate.x) + Math.abs(currentCoordinate.x - coordinate.x) - Math.abs(prevCoordinate.x - currentCoordinate.x) < deviation + deviation && (yDif * yDif) / (kb[0] * kb[0] + 1) < deviation * deviation) {
+                             return true;
+                         }
+                     }
+@@ -5428,19 +5563,20 @@ function getDistance(coordinate1, coordinate2) {
+  * limitations under the License.
+  */
+ function checkCoordinateOnArc(coordinate, attrs) {
++    var deviation = hitDeviation(coordinate);
+     var e_1, _a;
+     var arcs = [];
+     arcs = arcs.concat(attrs);
+     try {
+         for (var arcs_1 = __values(arcs), arcs_1_1 = arcs_1.next(); !arcs_1_1.done; arcs_1_1 = arcs_1.next()) {
+             var arc_1 = arcs_1_1.value;
+-            if (Math.abs(getDistance(coordinate, arc_1) - arc_1.r) < DEVIATION) {
++            if (Math.abs(getDistance(coordinate, arc_1) - arc_1.r) < deviation) {
+                 var r = arc_1.r, startAngle = arc_1.startAngle, endAngle = arc_1.endAngle;
+                 var startCoordinateX = r * Math.cos(startAngle) + arc_1.x;
+                 var startCoordinateY = r * Math.sin(startAngle) + arc_1.y;
+                 var endCoordinateX = r * Math.cos(endAngle) + arc_1.x;
+                 var endCoordinateY = r * Math.sin(endAngle) + arc_1.y;
+-                if (coordinate.x <= Math.max(startCoordinateX, endCoordinateX) + DEVIATION && coordinate.x >= Math.min(startCoordinateX, endCoordinateX) - DEVIATION && coordinate.y <= Math.max(startCoordinateY, endCoordinateY) + DEVIATION && coordinate.y >= Math.min(startCoordinateY, endCoordinateY) - DEVIATION) {
++                if (coordinate.x <= Math.max(startCoordinateX, endCoordinateX) + deviation && coordinate.x >= Math.min(startCoordinateX, endCoordinateX) - deviation && coordinate.y <= Math.max(startCoordinateY, endCoordinateY) + deviation && coordinate.y >= Math.min(startCoordinateY, endCoordinateY) - deviation) {
+                     return true;
+                 }
+             }
+@@ -5528,7 +5664,7 @@ function checkCoordinateOnCircle(coordinate, attrs) {
+     try {
+         for (var circles_1 = __values(circles), circles_1_1 = circles_1.next(); !circles_1_1.done; circles_1_1 = circles_1.next()) {
+             var circle_1 = circles_1_1.value;
+-            var x = circle_1.x, y = circle_1.y, r = circle_1.r;
++            var x = circle_1.x, y = circle_1.y, r = circle_1.r + hitDeviation(coordinate) - DEVIATION;
+             var difX = coordinate.x - x;
+             var difY = coordinate.y - y;
+             if (!(difX * difX + difY * difY > r * r)) {
+@@ -5602,6 +5738,7 @@ var circle = {
+  * limitations under the License.
+  */
+ function checkCoordinateOnRect(coordinate, attrs) {
++    var deviation = hitDeviation(coordinate);
+     var e_1, _a;
+     var rects = [];
+     rects = rects.concat(attrs);
+@@ -5610,15 +5747,15 @@ function checkCoordinateOnRect(coordinate, attrs) {
+             var rect_1 = rects_1_1.value;
+             var x = rect_1.x;
+             var width = rect_1.width;
+-            if (width < DEVIATION * 2) {
+-                x -= DEVIATION;
+-                width = DEVIATION * 2;
++            if (width < deviation * 2) {
++                x -= deviation;
++                width = deviation * 2;
+             }
+             var y = rect_1.y;
+             var height = rect_1.height;
+-            if (height < DEVIATION * 2) {
+-                y -= DEVIATION;
+-                height = DEVIATION * 2;
++            if (height < deviation * 2) {
++                y -= deviation;
++                height = deviation * 2;
+             }
+             if (coordinate.x >= x && coordinate.x <= x + width && coordinate.y >= y && coordinate.y <= y + height) {
+                 return true;
+@@ -6309,8 +6446,10 @@ var View = /** @class */ (function (_super) {
          return null;
      };
      View.prototype.draw = function (ctx) {
@@ -126,7 +387,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
      };
      View.prototype.checkEventOn = function (_) {
          return true;
-@@ -7021,10 +7090,68 @@ function i18n(key, locale) {
+@@ -7021,10 +7160,68 @@ function i18n(key, locale) {
   * See the License for the specific language governing permissions and
   * limitations under the License.
   */
@@ -195,7 +456,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
          _this._activeFeatureInfo = null;
          _this._featureClickEvent = function (type, featureInfo) { return function () {
              var pane = _this.getWidget().getPane();
-@@ -7063,6 +7190,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7063,6 +7260,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
              var tooltipTitleStyles_1 = tooltipStyles.title;
              var tooltipLegendStyles_1 = tooltipStyles.legend;
              indicators.forEach(function (indicator) {
@@ -204,7 +465,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
                  var prevRowHeight = 0;
                  var coordinate = { x: left, y: top };
                  var _a = _this.getIndicatorTooltipData(indicator), name = _a.name, calcParamsText = _a.calcParamsText, legends = _a.legends, featuresStyles = _a.features;
-@@ -7076,6 +7205,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7076,6 +7275,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                          if (calcParamsText.length > 0) {
                              text = "".concat(text).concat(calcParamsText);
                          }
@@ -213,7 +474,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
                          var color = tooltipTitleStyles_1.color;
                          prevRowHeight = _this.drawStandardTooltipLegends(ctx, [
                              {
-@@ -7086,12 +7217,16 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7086,12 +7287,16 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                      }
                      prevRowHeight = _this.drawStandardTooltipFeatures(ctx, features[1], coordinate, indicator, left, prevRowHeight, maxWidth);
                      if (legendValid) {
@@ -231,7 +492,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
              });
          }
          return top;
-@@ -7196,18 +7331,23 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7196,18 +7401,23 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
          }
          return prevRowHeight;
      };
@@ -258,7 +519,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
                  var h = marginTop_1 + size_1 + marginBottom_1;
                  if (coordinate.x + marginLeft_1 + totalTextWidth + marginRight_1 > maxWidth) {
                      coordinate.x = left;
-@@ -7234,6 +7374,93 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7234,6 +7444,93 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
          }
          return prevRowHeight;
      };
@@ -352,7 +613,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
      IndicatorTooltipView.prototype.isDrawTooltip = function (crosshair, styles) {
          var showRule = styles.showRule;
          return showRule === 'always' || (showRule === 'follow_cross' && isString(crosshair.paneId));
-@@ -7268,6 +7495,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7268,6 +7565,8 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
              var barSpace = chartStore.getBarSpace();
              var data_1 = (_a = result[dataIndex]) !== null && _a !== void 0 ? _a : {};
              var defaultValue_1 = tooltipStyles.legend.defaultValue;
@@ -361,7 +622,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
              // @ts-ignore
              eachFigures(indicator, dataIndex, barSpace, styles, function (figure, figureStyles) {
                  if (isString(figure.title)) {
-@@ -7280,7 +7509,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
+@@ -7280,7 +7579,7 @@ var IndicatorTooltipView = /** @class */ (function (_super) {
                          }
                          value = decimalFold.format(thousandsSeparator.format(value));
                      }
@@ -370,7 +631,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
                  }
              });
              tooltipData.legends = legends;
-@@ -7443,7 +7672,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
+@@ -7443,7 +7742,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
              prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[0], coordinate, null, left, prevRowHeight, maxWidth);
              prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[1], coordinate, null, left, prevRowHeight, maxWidth);
              if (legends.length > 0) {
@@ -380,7 +641,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
              }
              prevRowHeight = this.drawStandardTooltipFeatures(ctx, features[2], coordinate, null, left, prevRowHeight, maxWidth);
          }
-@@ -7664,6 +7894,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
+@@ -7664,6 +7964,8 @@ var CandleTooltipView = /** @class */ (function (_super) {
          var prevClose = (_d = prev === null || prev === void 0 ? void 0 : prev.close) !== null && _d !== void 0 ? _d : current.close;
          var changeValue = current.close - prevClose;
          var mapping = __assign(__assign({}, current), { time: formatter.formatDate(current.timestamp, PeriodTypeCrosshairTooltipFormat[(_e = period === null || period === void 0 ? void 0 : period.type) !== null && _e !== void 0 ? _e : 'day'], 'tooltip'), open: decimalFold.format(thousandsSeparator.format(formatPrecision(current.open, pricePrecision))), high: decimalFold.format(thousandsSeparator.format(formatPrecision(current.high, pricePrecision))), low: decimalFold.format(thousandsSeparator.format(formatPrecision(current.low, pricePrecision))), close: decimalFold.format(thousandsSeparator.format(formatPrecision(current.close, pricePrecision))), volume: decimalFold.format(thousandsSeparator.format(formatter.formatBigNumber(formatPrecision((_f = current.volume) !== null && _f !== void 0 ? _f : defaultValue, volumePrecision)))), turnover: decimalFold.format(thousandsSeparator.format(formatPrecision((_g = current.turnover) !== null && _g !== void 0 ? _g : defaultValue, pricePrecision))), change: prevClose === 0 ? defaultValue : "".concat(thousandsSeparator.format(formatPrecision((changeValue / prevClose) * 100)), "%") });
@@ -389,7 +650,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
          // @ts-ignore
          var legends = isFunction(template) ? template({ prev: prev, current: current, next: (_h = dataList[dataIndex + 1]) !== null && _h !== void 0 ? _h : null }, styles) : template;
          return legends.map(function (_a) {
-@@ -7686,10 +7918,62 @@ var CandleTooltipView = /** @class */ (function (_super) {
+@@ -7686,10 +7988,62 @@ var CandleTooltipView = /** @class */ (function (_super) {
              if (isValid(/{change}/.exec(v.text))) {
                  v.color = changeValue === 0 ? styles.priceMark.last.noChangeColor : changeValue > 0 ? styles.priceMark.last.upColor : styles.priceMark.last.downColor;
              }
@@ -452,7 +713,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
      return CandleTooltipView;
  }(IndicatorTooltipView));
  
-@@ -8038,6 +8322,8 @@ var IndicatorView = /** @class */ (function (_super) {
+@@ -8038,6 +8392,8 @@ var IndicatorView = /** @class */ (function (_super) {
          var defaultStyles = chartStore.getStyles().indicator;
          ctx.save();
          indicators.forEach(function (indicator) {
@@ -461,7 +722,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
              var yAxis = pane.getYAxisComponentById(indicator.yAxisId);
              if (indicator.visible) {
                  if (indicator.zLevel < 0) {
-@@ -8201,6 +8487,7 @@ var IndicatorView = /** @class */ (function (_super) {
+@@ -8201,6 +8557,7 @@ var IndicatorView = /** @class */ (function (_super) {
                      });
                  }
              }
@@ -469,7 +730,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
          });
          ctx.restore();
      };
-@@ -8892,14 +9179,21 @@ var OverlayView = /** @class */ (function (_super) {
+@@ -8892,14 +9249,21 @@ var OverlayView = /** @class */ (function (_super) {
      OverlayView.prototype.drawImp = function (ctx) {
          var _this = this;
          var overlays = this.getCompleteOverlays();
@@ -493,7 +754,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
          }
      };
      OverlayView.prototype._drawOverlay = function (ctx, overlay) {
-@@ -9085,6 +9379,7 @@ var Canvas = /** @class */ (function () {
+@@ -9085,6 +9449,7 @@ var Canvas = /** @class */ (function () {
          this._listener = listener;
          this._element = createDom('canvas', style);
          this._ctx = this._element.getContext('2d');
@@ -501,7 +762,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
          isSupportedDevicePixelContentBox()
              .then(function (result) {
              if (_this._destroyed) {
-@@ -9148,7 +9443,8 @@ var Canvas = /** @class */ (function () {
+@@ -9148,7 +9513,8 @@ var Canvas = /** @class */ (function () {
                      _this._ctx.scale(_this._pixelWidth / _this._width, _this._pixelHeight / _this._height);
                  }
                  try {
@@ -511,7 +772,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
                  }
                  finally {
                      _this._ctx.restore();
-@@ -14753,11 +15049,18 @@ var ChartImp = /** @class */ (function () {
+@@ -14753,11 +15119,18 @@ var ChartImp = /** @class */ (function () {
              this._layoutPending = true;
              Promise.resolve()
                  .then(function (_) {
@@ -535,7 +796,7 @@ index d47cebf01ee8727cee5948d528a7801f0f0e13dd..574f258d86123faaf171f59ee613fd8b
              });
          }
      };
-@@ -15933,4 +16236,7 @@ var utils = {
+@@ -15933,4 +16306,7 @@ var utils = {
      checkCoordinateOnText: checkCoordinateOnText
  };
  

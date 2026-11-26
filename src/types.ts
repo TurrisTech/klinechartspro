@@ -35,6 +35,12 @@ export interface SymbolInfo {
   // client ports wmarkettypes' `day_geometry`). Absent when the instrument has no schedule,
   // and then nothing that needs the grid -- the SESSIONS week-start line -- is drawn.
   dayGeometry?: DayGeometry
+  // When the instrument TRADES, which is not always its grid: the schedule's `trading` block
+  // where it carries one (the lira crosses on Istanbul hours, the metals' daily break), its own
+  // sessions otherwise (a US equity's 09:30-16:00 under a 09:00-anchored grid). The rule a row
+  // counts by in any OHLCV calculation -- wmarkettypes' `MarketHours.is_open` -- where
+  // `dayGeometry` is the rule a candle opens by. Absent with the schedule.
+  tradingWeek?: TradingWeek
   // The texts of the periods this instrument can be shown at, when that is narrower than the
   // chart's own list -- a 5s series exists for some instruments and not others. Absent:
   // every period the chart offers. The picker lists only these, and a pane moved onto an
@@ -52,6 +58,22 @@ export interface DayGeometry {
   openOffset: number
   closeOffset: number
   everyDayTrades: boolean
+}
+
+// wmarkettypes' `MarketHours.trading_hours` as `/instrument` states it: half-open
+// [open, close) spans of the repeating week on the wall clock of `timezone`, days 'mon'..'sun',
+// times 'HH:MM[:SS]'. A close earlier in the week than its open wraps the weekend; a close equal
+// to its open is the whole week.
+export interface TradingSession {
+  openDay: string
+  openTime: string
+  closeDay: string
+  closeTime: string
+}
+
+export interface TradingWeek {
+  timezone: string
+  sessions: TradingSession[]
 }
 
 export interface Period {

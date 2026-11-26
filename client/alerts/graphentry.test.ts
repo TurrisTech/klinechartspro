@@ -89,7 +89,8 @@ describe('GraphEntryEngine', () => {
       roots: ['1h', '8h'],
       maxStep: 8,
       from: T0,
-      to: END,
+      // On past the window by its own length, so the next window along is held already.
+      to: END + (END - T0),
       // An alert reads past a replay's clock: its look-ahead is what the clock would hide.
       asof: null
     })
@@ -120,6 +121,29 @@ describe('GraphEntryEngine', () => {
     const before = data.requests.length
     expect((await engine.entries(SYM, { ...operand, roots: ['4h'] }, T0, END)).points).toEqual([])
     expect(data.requests.length).toBe(before)
+  })
+
+  test('one read serves both entry timeframes and every later window inside what it held', async () => {
+    const data = new FakeGraphData(T0 + 100 * H)
+    const engine = new GraphEntryEngine(data)
+    const both = { ...operand, timeframes: [...operand.timeframes, '3m'] }
+    const [fives, threes] = await Promise.all([engine.entries(SYM, both, T0, END), engine.entries(SYM, { ...both, interval: '3m' }, T0, END)])
+    expect(fives.points.map((p) => p.date)).toEqual([T0 + 25 * 5 * M, T0 + 30 * 5 * M])
+    expect(threes.points.map((p) => p.date)).toEqual([T0 + 40 * 3 * M])
+    expect(data.requests.length).toBe(1)
+    // A window starting inside the held span and ending inside what was read ahead: no read.
+    expect((await engine.entries(SYM, both, T0 + 28 * 5 * M, END + H)).points.map((p) => p.date)).toEqual([T0 + 30 * 5 * M])
+    expect(data.requests.length).toBe(1)
+  })
+
+  test('what was not final when read is read again', async () => {
+    // Final only through the 27th 5m bar: the 30th bar's entry was answered, but not kept.
+    const data = new FakeGraphData(T0 + 29 * 5 * M - 1)
+    const engine = new GraphEntryEngine(data)
+    expect((await engine.entries(SYM, operand, T0, END)).points.map((p) => p.date)).toEqual([T0 + 25 * 5 * M, T0 + 30 * 5 * M])
+    expect((await engine.entries(SYM, operand, T0, END)).points.map((p) => p.date)).toEqual([T0 + 25 * 5 * M, T0 + 30 * 5 * M])
+    expect(data.requests.length).toBe(2)
+    expect(data.requests[1].from).toBe(T0 + 29 * 5 * M)
   })
 
   test('nothing is final past what the server has computed, nor past the window read', async () => {

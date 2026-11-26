@@ -84,6 +84,82 @@ describe('each overlay', () => {
     expect(spec?.sources[0].window?.({ from: t, to: t + 2 * 3_600_000 + 1 })).toEqual({ from: t - 4 * 86_400_000, to: t + 3 * 3_600_000 })
   })
 
+  test('a replay standing on the last bar\'s close reads that instant too; a live chart does not', async () => {
+    const { setReadClock } = await import('../config')
+    const { spec } = bound(2, '1h')
+    const t = Date.parse('2026-10-05T13:00Z')
+    const range = { from: t, to: t + 2 * 3_600_000 + 1 }
+    const close = t + 3 * 3_600_000
+    try {
+      // On the close: what became knowable at it is knowable now (drawn in the next bar's slot).
+      setReadClock(close)
+      expect(spec?.sources[0].window?.(range)?.to).toBe(close + 1)
+      // Inside the bar, it is still forming: its close is not knowable yet.
+      setReadClock(close - 60_000)
+      expect(spec?.sources[0].window?.(range)?.to).toBe(close)
+      // Live: the last bar is forming.
+      setReadClock(null)
+      expect(spec?.sources[0].window?.(range)?.to).toBe(close)
+    } finally {
+      setReadClock(null)
+    }
+  })
+
+  test("live, Friday's last close is read once it has passed; a close the next bar opens at is not", async () => {
+    const { closeKnown } = await import('./plugin')
+    const { FX_GRID } = await import('../replay/timeframes')
+    const H = 3_600_000
+    const { spec } = bound(2, '1h')
+    // Friday 2026-10-02 16:00 New York (20:00Z): the week's last hour, closing 17:00 (21:00Z).
+    const friday = Date.parse('2026-10-02T20:00Z')
+    const close = friday + H
+    expect(spec?.sources[0].window?.({ from: friday - 5 * H, to: friday + 1 })?.to).toBe(close + 1)
+    expect(closeKnown(FX_GRID, '1h', friday, close, close - 60_000)).toBe(false)
+    expect(closeKnown(FX_GRID, '1h', friday, close, close)).toBe(true)
+    // Thursday's 16:00: the next bar opens at 17:00 and carries it.
+    const thursday = friday - 24 * H
+    expect(spec?.sources[0].window?.({ from: thursday - 5 * H, to: thursday + 1 })?.to).toBe(thursday + H)
+    expect(closeKnown(FX_GRID, '1h', thursday, thursday + H, thursday + 2 * H)).toBe(false)
+  })
+
+  test("a replay's next landing is warmed under the clock the landing sets, for the server alone", async () => {
+    const { setReadClock } = await import('../config')
+    const { spec } = bound(2, '1h')
+    const source = spec?.sources[0]
+    if (!source?.warm) throw new Error('no warm-up')
+    const H = 3_600_000
+    const t = Date.parse('2026-10-05T13:00Z')
+    // The bars the pane will hold at the landing: 13:00Z .. 15:00Z, the press landing on 15:00's close.
+    const landing = { from: t, to: t + 2 * H + 1 }
+    const at = t + 3 * H
+    const requests: Array<{ url: URL; init?: RequestInit }> = []
+    globalThis.fetch = (async (url: URL, init?: RequestInit) => {
+      requests.push({ url: new URL(String(url)), init })
+      return new Response(JSON.stringify({ s: 'no_data', nextFrom: null, computedThrough: null }), { status: 200 })
+    }) as unknown as typeof fetch
+    try {
+      // The replay stands two hours earlier: under ITS clock the last close is not knowable, under
+      // the landing's it is -- and the landing's is the one the press's read will be under.
+      setReadClock(at - 2 * H)
+      expect(source.window?.(landing)?.to).toBe(at)
+      const window = source.warm.window(landing, at)
+      expect(window).toEqual({ from: t - 4 * 86_400_000, to: at + 1 })
+      await source.warm.read(window as { from: number; to: number }, at)
+    } finally {
+      setReadClock(null)
+    }
+    expect(requests).toHaveLength(1)
+    const q = requests[0].url.searchParams
+    expect(requests[0].url.pathname.endsWith('/mtf/graph')).toBe(true)
+    // The pane's own configuration, so the server builds what the press will ask it for...
+    expect([q.get('source'), q.get('timeframes'), q.get('roots'), q.get('maxStep')]).toEqual([MTF_OVERLAYS[2].source, '1h,2h,4h,8h,1D', '1D', '8'])
+    // ...under the landing's clock, not the page's; one signal back, since the server builds and
+    // keeps the whole window whatever the limit; and past the HTTP cache, whose revalidation the
+    // server would answer with a 304 before building anything.
+    expect([q.get('from'), q.get('to'), q.get('asof'), q.get('limit')]).toEqual([String(t - 4 * 86_400_000), String(at + 1), String(at), '1'])
+    expect(requests[0].init?.cache).toBe('no-store')
+  })
+
   test('nothing drawn, nothing read', () => {
     const { spec } = bound(2, '1D')
     // Only 1D is not finer than a daily chart; with it off nothing is drawable.

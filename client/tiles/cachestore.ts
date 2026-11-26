@@ -1,3 +1,5 @@
+import { objectStoreFetch } from '../objectstore'
+
 // What the three tile families share -- the chart's bars (tiles/), the OANDA books
 // (books/tiles.ts) and the stored indicators (indicatortiles/): the Cache Storage holding a
 // tile's raw bytes across reloads, and where a family's bucket is. Each used to carry its own
@@ -31,7 +33,7 @@ export function tileBytes(cacheName: string): (url: string) => Promise<ArrayBuff
         // fall through to the network
       }
     }
-    const response = await fetch(url)
+    const response = await objectStoreFetch(url)
     if (!response.ok) return null
     // Read the body before caching: cache.put() consumes the response, and the bytes are
     // needed in hand either way.

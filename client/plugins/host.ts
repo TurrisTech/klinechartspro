@@ -17,6 +17,7 @@ import type {
   SettingsRequest,
   SourceSpec,
   SourceStore,
+  SourceWarm,
   ValidateRequest
 } from './types'
 
@@ -34,6 +35,10 @@ import type {
 //
 // Built per MOUNT, not once per page: it holds per-pane state keyed by pane id, and
 // `sync([])` at teardown is the only signal it gets.
+//
+// One thing it does that is not coverage: on a bar replay's word, it has the server compute
+// ahead what the sources will read at the replay's next landing (`warmAhead`) -- only for the
+// sources that offer it, and never filing what comes back.
 
 const POLL_MS = 500
 const RANGE_DEBOUNCE_MS = 250
@@ -101,6 +106,13 @@ export interface PluginHost {
   /** The read clock moved forward off `clock` (a replay step): forget the coverage that
    * `clock` made incomplete and re-cover every binding. */
   invalidateFrom(clock: number): void
+  /** Have the server work out ahead of time what every source that offers it (`SourceSpec.warm`)
+   * will read once the read clock stands at `at` -- a bar replay's next landing -- for the bars
+   * `landingRange` says each pane will hold then. One read per store, over the union of the
+   * windows of the panes reading it; a store already warmed for `at` over as much is skipped, so
+   * asking again for the same landing sends nothing. Sends at once (when is the caller's call)
+   * and resolves, with how many reads it sent, once they are all answered. Nothing is filed. */
+  warmAhead(at: number, landingRange: (pane: ChartProPane) => Range | null): Promise<number>
   /** Resolves once no binding has a fetch in flight, or when `timeoutMs` is up -- for a caller
    * that must wait for what the panes draw AFTER a step, rather than what they drew before it
    * (the replay's Play). A timeout is not an error here: the caller reads whatever
@@ -161,6 +173,17 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     options.requestPersist?.()
     const entry = wired.get(paneId)
     if (entry) reconcile(entry)
+  }
+
+  /** One field of a pane's settings, by its dotted key: the indicator manager's edit, and a
+   * binding's own (`BindContext.editConfig`). The pane is looked up at the moment of the edit,
+   * so one that has since moved on the wall is written at its new index. */
+  const editField = (config: PaneConfig, paneId: string, key: string, value: unknown): void => {
+    const entry = wired.get(paneId)
+    if (!entry) return
+    const next = structuredClone(paneConfigs.read(config, entry.paneIndex))
+    setByPath(next, key, value)
+    writeConfig(config, entry.paneIndex, paneId, next)
   }
 
   const openConfigPanel = (config: PaneConfig, paneId: string): boolean => {
@@ -287,11 +310,66 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     }
   }
 
-  // Every fetch in flight, by store: what it covers and when it ends. A binding whose window
-  // overlaps a fetch another binding already has in flight waits for it rather than asking for
-  // the same bars again -- two panes on one instrument (an MTF overlay's 4h source under a 1h and
-  // a 15m pane) used to fetch the part they share twice.
-  const storeFetches = new Map<string, Set<{ range: Range; done: Promise<void> }>>()
+  // Every fetch in flight, by store: what it covers, the turn it was sent in, and when it ends. A
+  // binding whose window overlaps a fetch another binding already has in flight waits for it
+  // rather than asking for the same bars again -- two panes on one instrument (an MTF overlay's
+  // 4h source under a 1h and a 15m pane) used to fetch the part they share twice.
+  const storeFetches = new Map<string, Set<{ range: Range; turn: number; done: Promise<void> }>>()
+
+  // Waiting is wrong for a `refetch`, though: that is a live cue saying the producer has written
+  // something, and a fetch sent before the cue arrived was answered without it -- yet its answer
+  // is filed as covering the range, so a cue that only waited for it was lost until the next one.
+  // On prod the timeframes of one close arrive ~100 ms apart and a re-read takes 100-300 ms, so
+  // an MTF overlay's second timeframe routinely landed inside its first one's read (2026-10-27).
+  // So a refetch records, per store, the turn it came in and where the store is short; a fetch
+  // that lands with one recorded after the turn it was sent in reads that part again, once.
+  //
+  // A turn is one task: everything one stream message sets off -- every pane's listener for it,
+  // and the fetch the first of them sends -- shares one, so two panes on one store still read
+  // once per cue. Any call schedules the move to the next, so it moves before anything later runs.
+  const invalidations = new Map<string, Array<{ turn: number; from: number }>>()
+  let turn = 0
+  let turnEnding = false
+  const currentTurn = (): number => {
+    if (!turnEnding) {
+      turnEnding = true
+      queueMicrotask(() => {
+        turnEnding = false
+        turn++
+      })
+    }
+    return turn
+  }
+
+  /** What a refetch of `b` was told: from where each source it reads is short, at this turn. Only
+   * a store with a fetch in flight records it -- no other fetch can have been asked too early. */
+  const noteInvalidation = (entry: WiredPane, b: Binding): void => {
+    const range = chartRange(entry.chart)
+    if (!range) return
+    for (const source of b.sources) {
+      if (!storeFetches.has(source.key)) continue
+      const window = source.spec.window ? source.spec.window(range) : range
+      const gap = window ? source.store.missing(window)[0] : undefined
+      if (!gap) continue
+      const marks = invalidations.get(source.key) ?? []
+      marks.push({ turn: currentTurn(), from: gap.from })
+      invalidations.set(source.key, marks)
+    }
+  }
+
+  /** The part of a landed fetch's range a refetch invalidated after it was sent, or null. */
+  const staleSpan = (key: string, fetch: { range: Range; turn: number }): Range | null => {
+    let from = Number.POSITIVE_INFINITY
+    for (const mark of invalidations.get(key) ?? []) if (mark.turn > fetch.turn) from = Math.min(from, mark.from)
+    const span = { from: Math.max(from, fetch.range.from), to: fetch.range.to }
+    return span.from < span.to ? span : null
+  }
+
+  // What each store was last warmed for (`warmAhead`): the read clock and the window. Every
+  // advance that stops short of the next landing asks for it again, and none of those asks may
+  // reach the server: each would be a read of what the first one built, one per store per Step.
+  // One entry per store, so the next landing replaces the last.
+  const warmed = new Map<string, { at: number; window: Range }>()
 
   const scheduleRetry = (entry: WiredPane, b: Binding, afterMs: number): void => {
     if (b.retryTimer) clearTimeout(b.retryTimer)
@@ -307,7 +385,8 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     b.inFlight.add(tag)
     const store = source.store
     let finish = (): void => {}
-    const fetch = { range: gap, done: new Promise<void>((resolve) => (finish = resolve)) }
+    let filed = false
+    const fetch = { range: gap, turn: currentTurn(), done: new Promise<void>((resolve) => (finish = resolve)) }
     let running = storeFetches.get(source.key)
     if (!running) {
       running = new Set()
@@ -329,6 +408,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         }
         const to = page.nextFrom ?? gap.to
         store.ingest(page.points, { from, to }, page.arrays)
+        filed = true
         store.setPhase('ready')
         applyReaders(source.key)
         if (page.nextFrom === null) return
@@ -341,8 +421,14 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     } finally {
       b.inFlight.delete(tag)
       running.delete(fetch)
-      if (running.size === 0) storeFetches.delete(source.key)
+      const again = filed && !b.disposed ? staleSpan(source.key, fetch) : null
+      if (running.size === 0) {
+        storeFetches.delete(source.key)
+        invalidations.delete(source.key)
+      }
       finish()
+      // Sent before its waiters resume, so they wait for it rather than send their own.
+      if (again) void fetchGap(entry, b, source, again)
     }
   }
 
@@ -400,11 +486,16 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
   }
 
   // Everything a binding is made from: the indicator, the instrument, the pane's position (what
-  // its settings are kept under) and the revision of those settings.
-  const signatureOf = (ind: Indicator, ctx: Omit<BindContext, 'indicator' | 'siblings' | 'config'>): string => {
+  // its settings are kept under), the revision of those settings, and whatever else on the chart
+  // the plugin says it follows.
+  const signatureOf = (
+    ind: Indicator,
+    ctx: Omit<BindContext, 'indicator' | 'siblings' | 'config' | 'follows'>,
+    follows: unknown
+  ): string => {
     const config = configByTemplate.get(ind.name)
     const rev = config ? paneConfigs.rev(config, ctx.paneIndex) : null
-    return JSON.stringify([ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex, rev])
+    return JSON.stringify([ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex, rev, follows ?? null])
   }
 
   const bind = (entry: WiredPane, plugin: IndicatorPlugin, ind: Indicator, ctx: BindContext, sig: string): Binding | null => {
@@ -462,7 +553,10 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       try {
         s.unsubscribe = s.spec.subscribe(s.store, {
           changed: () => requestApply(entry, b),
-          refetch: () => void ensureCoverage(entry, b)
+          refetch: () => {
+            noteInvalidation(entry, b)
+            void ensureCoverage(entry, b)
+          }
         })
       } catch (err) {
         console.error(`[plugins] ${plugin.id} subscribe failed for ${s.id}`, err)
@@ -495,7 +589,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       const plugin = pluginFor(ind.name)
       if (!plugin) continue
       seen.add(ind.id)
-      const sig = signatureOf(ind, base)
+      let follows: unknown
+      try {
+        follows = plugin.follows?.(ind, indicators)
+      } catch (err) {
+        console.warn(`[plugins] ${plugin.id} follows failed for ${ind.name}`, err)
+      }
+      const sig = signatureOf(ind, base, follows)
       const existing = entry.bindings.get(ind.id)
       if (existing && existing.signature === sig) continue
       const siblings = [...entry.bindings.values()]
@@ -508,7 +608,21 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // binding still holds it is unreachable by key -- the template's `peekStore` finds
       // nothing and the pane stays blank however much the orphan is filled.
       const config = configByTemplate.get(ind.name)
-      const b = bind(entry, plugin, ind, { ...base, indicator: ind, siblings, config: config && paneConfigs.read(config, entry.paneIndex) }, sig)
+      const paneId = entry.pane.id
+      const b = bind(
+        entry,
+        plugin,
+        ind,
+        {
+          ...base,
+          indicator: ind,
+          siblings,
+          config: config && paneConfigs.read(config, entry.paneIndex),
+          editConfig: config ? (key: string, value: unknown) => editField(config, paneId, key, value) : undefined,
+          follows
+        },
+        sig
+      )
       if (b) entry.bindings.set(ind.id, b)
       else entry.bindings.delete(ind.id)
       if (existing) dispose(existing)
@@ -525,6 +639,12 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       apply(entry, b)
       void ensureCoverage(entry, b)
     }
+  }
+
+  /** The first and last bar a chart holds, or null when it holds none. */
+  const dataEnds = (chart: Chart): { first: number; last: number } | null => {
+    const data = chart.getDataList()
+    return data.length > 0 ? { first: data[0].timestamp, last: data[data.length - 1].timestamp } : null
   }
 
   const coverAll = (entry: WiredPane): void => {
@@ -545,8 +665,22 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     // A pan, a zoom or a page of history may expose bars a source has not covered. A tick that
     // only moves the forming bar cannot, and on a fast feed it would otherwise keep resetting
     // the debounce so that nothing newly exposed was fetched until the market went quiet.
+    //
+    // Bars replaced whole -- both ends moved, or the first load: a reload, as a replay's long jump
+    // makes -- are one event, not a pan's stream of them, and are covered at once. Debounced, a
+    // Next alert landing on prod waited 250 ms between its 5m pane's reload and the overlays'
+    // reads of it.
+    let ends = dataEnds(chart)
     entry.unwatchView = onViewMoved(chart, () => {
+      const now = dataEnds(chart)
+      const replaced = now !== null && (ends === null || (now.first !== ends.first && now.last !== ends.last))
+      ends = now
       if (entry.rangeTimer) clearTimeout(entry.rangeTimer)
+      entry.rangeTimer = null
+      if (replaced) {
+        coverAll(entry)
+        return
+      }
       entry.rangeTimer = setTimeout(() => {
         entry.rangeTimer = null
         coverAll(entry)
@@ -636,13 +770,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
           const entry = wired.get(paneId)
           return entry ? paneConfigs.read(config, entry.paneIndex) : null
         },
-        write: (paneId, key, value) => {
-          const entry = wired.get(paneId)
-          if (!entry) return
-          const next = structuredClone(paneConfigs.read(config, entry.paneIndex))
-          setByPath(next, key, value)
-          writeConfig(config, entry.paneIndex, paneId, next)
-        }
+        write: (paneId, key, value) => editField(config, paneId, key, value)
       }
     },
     paneDocs(): Record<number, PaneDoc> {
@@ -690,6 +818,45 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // gets the weakest true statement: nothing past the cursor was knowable.
       for (const [key, store] of liveStores()) if (!seen.has(key)) store.forgetAfter?.(clock)
       for (const entry of wired.values()) coverAll(entry)
+    },
+    async warmAhead(at: number, landingRange: (pane: ChartProPane) => Range | null): Promise<number> {
+      // One read per store: two panes on one key read one series, so the server is asked once,
+      // for everything either will ask -- the union of their windows.
+      const wanted = new Map<string, { window: Range; read: SourceWarm['read'] }>()
+      for (const entry of wired.values()) {
+        let range: Range | null | undefined
+        for (const b of entry.bindings.values()) {
+          if (b.disposed) continue
+          for (const s of b.sources) {
+            const warm = s.spec.warm
+            if (!warm) continue
+            if (range === undefined) range = landingRange(entry.pane)
+            if (range === null) break
+            const window = warm.window(range, at)
+            if (!window || window.to <= window.from) continue
+            const held = wanted.get(s.key)
+            if (held) held.window = { from: Math.min(held.window.from, window.from), to: Math.max(held.window.to, window.to) }
+            else wanted.set(s.key, { window, read: warm.read })
+          }
+        }
+      }
+      const reads: Promise<void>[] = []
+      for (const [key, { window, read }] of wanted) {
+        const done = warmed.get(key)
+        if (done && done.at === at && done.window.from <= window.from && done.window.to >= window.to) continue
+        const mark = { at, window }
+        warmed.set(key, mark)
+        reads.push(
+          read(window, at).catch((err) => {
+            // A warm-up that failed costs the press nothing it would not have paid anyway; it is
+            // forgotten, so the next ask for this landing tries again.
+            if (warmed.get(key) === mark) warmed.delete(key)
+            console.debug(`[plugins] warm-up of ${key} failed`, err)
+          })
+        )
+      }
+      await Promise.all(reads)
+      return reads.length
     },
     teardown(): void {
       host.sync([])

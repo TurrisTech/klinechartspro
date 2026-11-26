@@ -1,15 +1,61 @@
-import { capabilities } from '../capabilities'
-import { apiGet } from '../config'
+import { advertisedBaseIntervals, capabilities } from '../capabilities'
+import { apiGet, OhlcvApiError, type QueryParams } from '../config'
 import { getbarsSplit } from '../history'
-import type { OHLCVBar } from '../ohlcv'
+import { isNoData, type OHLCVBar } from '../ohlcv'
 import type { BarSource, Columns, ReplayBar } from './cache'
-import { type CandleGrid, nominalMs } from './timeframes'
+import { type CandleGrid, nominalMs, storedLadderFor } from './timeframes'
 
 // GLUE. `BarSource` over `/getbars` -- the only module in client/replay that fetches bars. It
 // reads PAST the page-wide read clock on purpose (`asof: null`): the caches are the replay's
 // own look-ahead, hidden from the chart until the cursor reaches them -- every read the chart
 // itself makes stays clamped by config.ts. The alert manager's look-ahead
-// (client/alerts/data.ts) reads bars through this too.
+// (client/alerts/data.ts) reads bars through this too. So does the probe of which intervals an
+// instrument has stored (`probeStoredIntervals`), one bar per interval.
+
+/** How far back the stored-ladder probe looks: a store's finest series may lag the newest
+ * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
+export const PROBE_WINDOW_MS = 10 * 86_400_000
+
+/** What the probe reads with -- the server and `/capabilities` by default, fakes in a test. */
+export interface StoredProbeDeps {
+  get: <T>(path: string, params: QueryParams) => Promise<T>
+  /** The intervals the server says a vendor stores, or null where it says nothing. */
+  advertised: (vendor: string) => readonly string[] | null
+}
+
+const SERVER: StoredProbeDeps = { get: apiGet, advertised: advertisedBaseIntervals }
+
+/** Which of the stored ladder the store holds for `symbol` (`vendor:ticker`) around `at`: of the
+ * intervals its vendor stores (`storedLadderFor`), those with a bar in the window before `at`.
+ * The answer is the replay's "stored" everywhere -- the bases it offers, the intervals a forming
+ * candle is composed from, the refinement ladder of the fill engine -- so an interval the server
+ * would only fold (schwab's 1h) is never asked about: its bar is there, and proves nothing. */
+export async function probeStoredIntervals(symbol: string, at: number, grid: CandleGrid, deps: StoredProbeDeps = SERVER): Promise<string[]> {
+  const vendor = symbol.includes(':') ? symbol.split(':', 1)[0] : 'oanda'
+  const candidates = storedLadderFor(deps.advertised(vendor))
+  // All at once, not one after another: they are independent one-bar reads, and the user is
+  // waiting on the last of them (the start dialog, or the replay wall's mount).
+  const held = await Promise.all(
+    candidates.map(async (code) => {
+      try {
+        const shift = grid.toWire(code, at) - at
+        const body = await deps.get<OHLCVBar[] | { s: 'no_data' }>('/getbars', {
+          symbol,
+          resolution: code,
+          from: at - Math.max(PROBE_WINDOW_MS, 30 * nominalMs(code)) + shift,
+          to: at + shift,
+          limit: 1,
+          asof: null
+        })
+        return Array.isArray(body) && body.length > 0 && !isNoData(body)
+      } catch (err) {
+        if (!(err instanceof OhlcvApiError)) throw err
+        return false
+      }
+    })
+  )
+  return candidates.filter((_, i) => held[i])
+}
 
 /** A `/getbars` bar (columns=all) as a store-clock `ReplayBar`, on the instrument's schedule. */
 export function toReplayBar(interval: string, bar: OHLCVBar & Record<string, unknown>, grid: CandleGrid): ReplayBar {

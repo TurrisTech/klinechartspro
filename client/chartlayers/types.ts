@@ -1,5 +1,6 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
+import type { PriceAlert } from './alerts/hub'
 import type { SettingsField } from './settings'
 
 // One rectangle of the price/time plane. A pane fetches these, not "whatever is on screen":
@@ -70,4 +71,37 @@ export interface ChartLayer<TDatum, TConfig> {
   staleAt?(fetchedAt: number, ctx: LayerContext): number
   /** Defaults to the controller's own redraw debounce when omitted. */
   debounceMs?: number
+  /** Price alerts on the layer's data (`alerts/`): a click on a datum's line enables an alert
+   * when price enters a zone around it, an enabled one carries a bell at the pane's right
+   * edge, and hovering shows the zone. Omit it and the layer's lines are read-only. */
+  alerts?: LayerAlerts<TDatum>
+}
+
+/** What a datum is to a price alert: the price it watches, and the words that name it. */
+export interface AlertTarget {
+  price: number
+  /** What the price is, after the ticker and before the price: `1W level` names the alert
+   * `EURUSD 1W level 1.08500`, which is the notification's title. */
+  label: string
+}
+
+/** How a layer offers its data to price alerts. The controller finds a datum through its
+ * overlays: each overlay `toOverlays` builds whose `extendData` is a datum is that datum's line,
+ * so an overlay that carries something else must carry nothing there. */
+export interface LayerAlerts<TDatum> {
+  /** What an alert on `datum` would watch, or null when it cannot have one -- a spent level,
+   * whose line stops where the market finished it. */
+  target(datum: TDatum): AlertTarget | null
+  /** The layer setting (a dotted key into its config, and one of its `fields`) holding the
+   * buffer a click gives a new alert, in the instrument's pips each side. Read for every new
+   * alert, and written by the alert dialog's "Make default". Each alert keeps its own. */
+  zonePipsSetting: string
+  /** Whether a price alert on the instrument is this layer's: what "all" means to the alert
+   * dialog's Remove all. Absent: every price alert on the instrument is. */
+  owns?(alert: PriceAlert): boolean
+  /** The ids of those of `alerts` -- this layer's, on the instrument `ctx` is on -- that are
+   * STALE: armed once and fired, so done, or no longer on a datum that could have one (a level
+   * spent, or gone from the book, since the alert was made). The alert dialog's Remove stale.
+   * Rejects when it cannot tell; absent, the dialog offers Remove all alone. */
+  stale?(alerts: PriceAlert[], ctx: LayerContext): Promise<string[]>
 }

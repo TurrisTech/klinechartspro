@@ -1,4 +1,4 @@
-import { apiUrl, OhlcvApiError } from '../config'
+import { apiUrl, OhlcvApiError, serverFetch } from '../config'
 
 // The multi-timeframe overlays' data, as the server builds it: `GET /mtf/graph`
 // (wdashboard-server services/mtfgraph.py, 0.56.0).
@@ -110,10 +110,8 @@ interface Envelope {
   computedThrough?: number | null
 }
 
-/** One read of `GET /mtf/graph`. The browser's HTTP cache revalidates a repeat with the server's
- * ETag (`Cache-Control: no-cache`), so asking again costs a header exchange. */
-export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphAnswer> {
-  const url = apiUrl('/mtf/graph', {
+function graphUrl(request: MtfGraphRequest): URL {
+  return apiUrl('/mtf/graph', {
     symbol: request.symbol,
     source: request.source,
     params: request.params && Object.keys(request.params).length > 0 ? JSON.stringify(request.params) : undefined,
@@ -126,7 +124,13 @@ export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphA
     // Present-but-null keeps the page-wide clock off this read (config.ts `apiUrl`).
     ...(request.asof !== undefined ? { asof: request.asof } : {})
   })
-  const response = await fetch(url)
+}
+
+/** One read of `GET /mtf/graph`. The browser's HTTP cache revalidates a repeat with the server's
+ * ETag (`Cache-Control: no-cache`), so asking again costs a header exchange. */
+export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphAnswer> {
+  const url = graphUrl(request)
+  const response = await serverFetch(url)
   const body = (await response.json().catch(() => null)) as (Envelope & { code?: string; detail?: string; field?: string }) | null
   if (!response.ok || body === null) {
     throw new OhlcvApiError(response.status, body?.code ?? 'internal', body?.detail ?? `${response.status} from ${url.pathname}`, body?.field)
@@ -137,4 +141,25 @@ export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphA
     nextFrom: body.nextFrom ?? null,
     computedThrough: body.computedThrough ?? null
   }
+}
+
+/**
+ * Have the server compute a window it will be asked for later, and keep it: a bar replay's next
+ * landing, before the press (plugin.ts `warm`). The first read of a region of history is the
+ * expensive one -- it reads the signals of every graph root's run back from the window, often
+ * months, then walks them; against prod data EURUSD's rank 85 overlay took 0.2-4.9 s for a landing
+ * a week to two months on --
+ * and the server caches what it built, so a later read of the same region is a slice of it.
+ *
+ * `limit: 1`, because the server builds and keeps the WHOLE window whatever the limit (the limit
+ * cuts the answer after it is built): the body is one signal. `no-store`, because a revalidation
+ * would defeat it: the browser would send the ETag of the last warm-up of this URL, and the
+ * server answers a matching one with a 304 before building anything -- which says the answer has
+ * not changed, not that the server still holds it.
+ */
+export async function warmMtfGraph(request: MtfGraphRequest): Promise<void> {
+  const url = graphUrl({ ...request, limit: 1 })
+  const response = await serverFetch(url, { cache: 'no-store' })
+  await response.text().catch(() => '')
+  if (!response.ok) throw new OhlcvApiError(response.status, 'internal', `${response.status} from ${url.pathname}`)
 }

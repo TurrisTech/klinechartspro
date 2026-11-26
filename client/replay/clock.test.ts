@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimOrder, SimTrade } from '../trading/api'
-import { canFill, intersectsWorking, planAdvance, targetOf } from './clock'
+import { canFill, intersectsWorking, passesDailyClose, planAdvance, targetOf } from './clock'
 import { FX_GRID, fromWall } from './timeframes'
 
 function ny(text: string): number {
@@ -52,7 +52,7 @@ describe('planAdvance', () => {
     expect(targetOf(cursor, { interval: '1h', multiple: 3 }, FX_GRID)).toBe(ny('2024-03-04 13:00'))
     expect(targetOf(cursor, { toEnd: true, end: 123 }, FX_GRID)).toBe(123)
   })
-  const alert = (effective: number) => ({ alertId: 'a1', name: 'oversold', effective, readings: '' })
+  const alert = (effective: number) => ({ alertId: 'a1', name: 'oversold', symbol: 'oanda:EURUSD', effective, readings: '' })
   test('an alert before the target wins', () => {
     const plan = planAdvance(cursor, { interval: '4h', multiple: 2 }, FX_GRID, alert(ny('2024-03-04 12:00')))
     // The 4h grid is anchored at 17:00: 09:00-13:00 then 13:00-17:00.
@@ -129,5 +129,27 @@ describe('canFill -- what makes an advance walk instead of seek', () => {
     expect(canFill([order({ status: 'cancelled', price: 1.1 })], [], sym)).toBe(false)
     expect(canFill([], [trade({ stopLoss: 1.09, closedAt: 5 })], sym)).toBe(false)
     expect(canFill([order({ symbol: 'oanda:GBPUSD', price: 1.1 })], [trade({ symbol: 'oanda:GBPUSD', stopLoss: 1 })], sym)).toBe(false)
+  })
+})
+
+describe('passesDailyClose: when a replay re-reads the 1W/1M levels', () => {
+  // March 2024, before the US DST change on the 10th: Mon 4 .. Fri 8.
+  const ny = (d: number, h: number, m = 0): number => fromWall(Date.UTC(2024, 2, d, h, m), 'America/New_York')
+
+  test('a step landing exactly on Friday 17:00 -- the week close -- passes it', () => {
+    // A floor comparison missed this one: both ends floor to Friday's session.
+    expect(FX_GRID.start('1D', ny(8, 16, 55))).toBe(FX_GRID.start('1D', ny(8, 17)))
+    expect(passesDailyClose(ny(8, 16, 55), ny(8, 17), FX_GRID)).toBe(true)
+  })
+
+  test('a step across a weekday close passes it; one inside a day does not', () => {
+    expect(passesDailyClose(ny(5, 16, 55), ny(5, 17, 5), FX_GRID)).toBe(true)
+    expect(passesDailyClose(ny(5, 17), ny(5, 17, 30), FX_GRID)).toBe(false)
+    expect(passesDailyClose(ny(6, 10), ny(6, 12), FX_GRID)).toBe(false)
+  })
+
+  test('a jump of days passes one; standing still does not', () => {
+    expect(passesDailyClose(ny(4, 10), ny(7, 10), FX_GRID)).toBe(true)
+    expect(passesDailyClose(ny(6, 10), ny(6, 10), FX_GRID)).toBe(false)
   })
 })

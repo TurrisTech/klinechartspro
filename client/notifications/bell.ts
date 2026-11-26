@@ -26,7 +26,16 @@ export interface NotificationBell {
   dispose(): void
 }
 
-export function createNotificationBell(center: NotificationCenter): NotificationBell {
+/** A button in the dropdown's footer, beside Clear all, for something that belongs with the
+ * notifications but is not one: where they are delivered (client/notifications/channels). The
+ * bell knows only the label and the click -- the caller decides what the click opens. */
+export interface BellAction {
+  label: string
+  title?: string
+  onClick: () => void
+}
+
+export function createNotificationBell(center: NotificationCenter, actions: BellAction[] = []): NotificationBell {
   const group = el('div', 'wd-notify')
 
   const bell = document.createElement('button')
@@ -168,6 +177,14 @@ export function createNotificationBell(center: NotificationCenter): Notification
       center.clear()
     })
     clear.disabled = rows.length === 0
+    for (const action of actions) {
+      const extra = button('kc-button kc-button-outline wd-notify-action', action.label, () => {
+        close()
+        action.onClick()
+      })
+      if (action.title) extra.title = action.title
+      footer.appendChild(extra)
+    }
     footer.appendChild(clear)
     node.appendChild(footer)
   }

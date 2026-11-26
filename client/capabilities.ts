@@ -78,16 +78,24 @@ export type Feature =
   // advertised where the server sets BOOKS_DEV_S3_* (prod). Registers the "dev data" BOOKDEV
   // templates, so they never masquerade as this environment's own books.
   | 'books_dev'
-  // POST /auth/login, /auth/logout, GET /auth/session — dev only. Client gates its login
-  // form on this: a server that doesn't advertise it (prod, today) gets the pre-auth
-  // ungated experience rather than a login form nothing can ever satisfy.
+  // POST /auth/login, /auth/logout, GET /auth/session: the dashboard login, on dev and prod.
+  // Where advertised the server requires the session on every route but /capabilities and
+  // the login's own two (a bearer on HTTP, an auth frame first on WS /stream), and the client
+  // shows its sign-in form. A server that doesn't advertise it serves everyone and gets no
+  // form, rather than one nothing could ever satisfy.
   | 'auth'
-  // GET/PUT /preferences — dev only, requires 'auth'.
+  // GET/PUT /preferences — wherever 'auth' is (it needs the session).
   | 'preferences'
   // GET /notifications, POST /notifications/{seen,clear}, and `notification` frames on
   // WS /stream — what the server has raised for this owner (wdashboard_server/notify).
   // Stored server-side, so a notification raised while every tab was closed is still there.
   | 'notifications'
+  // POST /notifications — this page raises a row through the server (a live client alert), with
+  // an idempotency key so two tabs raise one row. Without it a client alert stays in its tab.
+  | 'notification_raise'
+  // /notifications/channels — where live notifications are delivered beyond the dashboard
+  // (Pushover, Telegram). Without it the bell offers no Delivery window.
+  | 'notification_channels'
   // GET /watch/sources and the /watch CRUD — server-side conditions on live events
   // (wdashboard_server/watch). The client only mounts price watches when advertised: on an
   // older server there is nothing to hold them, and a browser-side monitor is not a

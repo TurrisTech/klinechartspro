@@ -138,8 +138,8 @@ function adoptLegacyIndicatorParams(
 // --- storage backends -----------------------------------------------------------------
 //
 // Two, with the same key space. The server document is authoritative wherever the server
-// advertises `preferences` (dev); prod has no appstate database, so localStorage is the only
-// persistence there. Writes ALSO go to localStorage even when the server copy is
+// advertises `preferences` (dev and prod, with the dashboard login); a server without it leaves
+// localStorage as the only persistence. Writes ALSO go to localStorage even when the server copy is
 // authoritative — it costs nothing and it is what a same-tab reload falls back to when
 // /preferences is unreachable, which is the behaviour client/layout.ts had before this.
 

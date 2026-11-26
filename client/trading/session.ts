@@ -27,6 +27,9 @@ export interface TradingSession {
   readonly mode?: 'paper' | 'replay'
   /** A replay's cursor -- the instant it has stepped to. Absent on a paper session (now). */
   readonly cursor?: number
+  /** When the account began on the session's clock: a replay's start. Absent on a paper session,
+   * whose snapshot's `createdAt` says it. */
+  readonly startedAt?: number
   /** The current account state. Always a valid snapshot -- a placeholder until the session
    * has loaded (`ready` is false until then). */
   readonly snapshot: SimSnapshot

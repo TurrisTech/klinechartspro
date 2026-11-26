@@ -1,3 +1,4 @@
+import { EXIT_UNITS, type ExitUnit } from './exits'
 import type { ReadoutPart } from './levels'
 import type { ProtectMode } from './prefs'
 import type { StatRow } from './stats'
@@ -105,6 +106,8 @@ export interface NumberFieldOptions {
   onUnit?: (unit: string) => void
   /** After Enter has committed (the trade box places the order). */
   onEnter?: () => void
+  /** No −/+: a list of numbers ('1, 2, 3') steps nowhere. */
+  noSteps?: boolean
 }
 
 /** `[− | 20.0 | pips ▾ | +]`: a number in one bordered group, with its steps and unit. */
@@ -130,6 +133,12 @@ export class NumberField {
     this.plus.classList.add('wd-tk-num-step')
     this.minus.tabIndex = -1
     this.plus.tabIndex = -1
+    if (options.noSteps) {
+      this.minus.hidden = true
+      this.plus.hidden = true
+      this.input.inputMode = 'text'
+      this.input.classList.add('is-list')
+    }
     this.element.append(this.minus, this.input)
     if (options.units) {
       const select = h('select', 'wd-tk-num-unit')
@@ -152,7 +161,7 @@ export class NumberField {
       // On the pane the field sits inside klinecharts' container, whose own keys (arrows scroll
       // the chart) must not see typing. Escape still travels: the layer cancels a waiting change.
       if (event.key !== 'Escape') event.stopPropagation()
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && !options.noSteps) {
         event.preventDefault()
         this.step(event.key === 'ArrowUp' ? 1 : -1, event.shiftKey)
       } else if (event.key === 'Enter') {
@@ -354,6 +363,206 @@ export class LevelField {
   /** A step, a drag or a preset wrote a new value: show it even while the field has the focus. */
   write(text: string): void {
     this.field.write(text)
+  }
+}
+
+// -- exit management: a trailing stop, a breakeven, milestones ----------------------------------
+
+export interface ExitExtraView {
+  text: string
+  placeholder: string
+}
+
+export interface ExitFieldView {
+  text: string
+  placeholder: string
+  unit: ExitUnit
+  unitRefusals: Record<string, string | null>
+  readout: ReadoutPart[]
+  presets: PresetView[]
+  removable: boolean
+  problem: string | null
+  pending: boolean
+  stepRefusal?: string | null
+  /** The secondary numbers (a trail's start and step, a breakeven's lock), in the same unit; shown
+   * once the field has a value. */
+  extras?: ExitExtraView[]
+}
+
+export interface ExitFieldOptions {
+  role: 'trail' | 'breakeven' | 'notify'
+  label: string
+  /** A list of numbers rather than one: no steps. */
+  list?: boolean
+  extras?: Array<{ label: string; title: string }>
+  onInput?: (text: string) => void
+  onCommit?: (text: string) => void
+  onStep?: (direction: 1 | -1, big: boolean) => void
+  onUnit: (unit: ExitUnit) => void
+  onPreset?: (index: number) => void
+  onClear?: () => void
+  onEnter?: () => void
+  onExtraInput?: (index: number, text: string) => void
+  onExtraCommit?: (index: number, text: string) => void
+}
+
+/** One piece of exit management, laid out as a level is -- the same in the trade box and on the
+ * pane's card:
+ *
+ *     ⋯ Trailing stop                        [1R]  [2 ATR]  [×]
+ *     [− | 20.0 | pips ▾ | +]   stop 1.16230 now · steps 5.0p
+ *        Start at [      ] pips   Step [      ] pips
+ *
+ * Its unit is one of the five ways a distance is stated (exits.ts): pips, a price difference, a
+ * percentage of the price, × ATR or R; the secondary numbers are in the same unit. */
+export class ExitField {
+  readonly element: HTMLElement
+  readonly field: NumberField
+  private readonly presets: HTMLElement
+  private presetButtons: HTMLButtonElement[] = []
+  private presetSignature = ''
+  private readonly remove: HTMLButtonElement
+  private readonly readout: HTMLElement
+  private readonly problem: HTMLElement
+  private readonly extrasRow: HTMLElement
+  private readonly extraInputs: HTMLInputElement[] = []
+  private readonly extraUnits: HTMLElement[] = []
+  private readonly extraCommitted: string[] = []
+
+  constructor(private readonly options: ExitFieldOptions) {
+    this.element = h('div', 'wd-tk-level wd-tk-exit')
+    this.element.dataset.role = options.role
+    const head = h('div', 'wd-tk-level-head')
+    const label = h('span', 'wd-tk-level-label')
+    label.append(h('i', 'wd-tk-mark'), options.label)
+    this.presets = h('span', 'wd-tk-presets')
+    this.remove = kbtn('×', () => options.onClear?.(), ['icon', 'quiet'], `Remove the ${options.label.toLowerCase()}`)
+    head.append(label, this.presets, this.remove)
+
+    const body = h('div', 'wd-tk-level-body')
+    this.field = new NumberField({
+      label: options.label,
+      onInput: options.onInput,
+      onCommit: options.onCommit,
+      onStep: (direction, big) => options.onStep?.(direction, big),
+      units: EXIT_UNITS,
+      onUnit: (unit) => options.onUnit(unit as ExitUnit),
+      onEnter: options.onEnter,
+      noSteps: options.list === true
+    })
+    this.readout = h('span', 'wd-tk-readout')
+    body.append(this.field.element, this.readout)
+
+    this.extrasRow = h('div', 'wd-tk-exit-extras')
+    ;(options.extras ?? []).forEach((extra, i) => {
+      const wrap = h('label', 'wd-tk-exit-extra')
+      wrap.title = extra.title
+      const input = h('input', 'wd-tk-exit-extra-input')
+      input.type = 'text'
+      input.inputMode = 'decimal'
+      input.autocomplete = 'off'
+      input.spellcheck = false
+      input.setAttribute('aria-label', `${options.label}: ${extra.label}`)
+      const unit = h('span', 'wd-tk-exit-extra-unit')
+      this.extraCommitted[i] = ''
+      const commit = (): void => {
+        if (input.value === this.extraCommitted[i]) return
+        this.extraCommitted[i] = input.value
+        options.onExtraCommit?.(i, input.value)
+      }
+      input.addEventListener('input', () => options.onExtraInput?.(i, input.value))
+      input.addEventListener('change', commit)
+      input.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') event.stopPropagation()
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          commit()
+          options.onEnter?.()
+        } else if (event.key === 'Escape' && options.onExtraCommit) {
+          input.value = this.extraCommitted[i]
+          input.blur()
+        }
+      })
+      wrap.append(h('span', 'wd-tk-exit-extra-label', extra.label), input, unit)
+      this.extraInputs.push(input)
+      this.extraUnits.push(unit)
+      this.extrasRow.appendChild(wrap)
+    })
+    this.problem = h('div', 'wd-tk-problem')
+    this.problem.setAttribute('role', 'status')
+    this.element.append(head, body, this.extrasRow, this.problem)
+  }
+
+  update(view: ExitFieldView): void {
+    this.field.show(view.text)
+    this.field.set({
+      placeholder: view.placeholder,
+      unit: view.unit,
+      unitRefusals: view.unitRefusals,
+      stepRefusal: view.stepRefusal ?? null,
+      invalid: view.problem !== null,
+      pending: view.pending
+    })
+    const unset = view.text.trim() === '' && !this.field.focused()
+    this.element.classList.toggle('is-unset', unset)
+    this.element.classList.toggle('is-pending', view.pending)
+    this.remove.hidden = !view.removable
+
+    const signature = view.presets.map((p) => p.text).join('|')
+    if (signature !== this.presetSignature) {
+      this.presetSignature = signature
+      this.presets.innerHTML = ''
+      this.presetButtons = view.presets.map((_, i) => {
+        const b = kbtn('', () => this.options.onPreset?.(i), ['chip'])
+        this.presets.appendChild(b)
+        return b
+      })
+    }
+    view.presets.forEach((preset, i) => {
+      const b = this.presetButtons[i]
+      b.textContent = preset.text
+      allow(b, preset.refusal === null ? null : `${preset.title} (${preset.refusal})`, preset.title)
+      b.classList.toggle('is-active', preset.active === true)
+    })
+
+    const unitText = EXIT_UNITS.find(([u]) => u === view.unit)?.[1] ?? ''
+    const extras = view.extras ?? []
+    this.extrasRow.hidden = extras.length === 0 || unset
+    extras.forEach((extra, i) => {
+      const input = this.extraInputs[i]
+      if (!input) return
+      if (document.activeElement !== input) {
+        input.value = extra.text
+        this.extraCommitted[i] = extra.text
+      }
+      input.placeholder = extra.placeholder
+      this.extraUnits[i].textContent = unitText
+    })
+
+    this.readout.innerHTML = ''
+    view.readout.forEach((part, i) => {
+      if (i > 0) this.readout.append(h('span', 'wd-tk-sep', '·'))
+      this.readout.append(h('span', part.tone ? `is-${part.tone}` : '', part.text))
+    })
+    this.problem.textContent = view.problem ?? ''
+    this.problem.hidden = view.problem === null
+  }
+
+  /** A step or a preset wrote a new value: show it even while the field has the focus. */
+  write(text: string): void {
+    this.field.write(text)
+  }
+
+  writeExtra(index: number, text: string): void {
+    const input = this.extraInputs[index]
+    if (!input) return
+    input.value = text
+    this.extraCommitted[index] = text
+  }
+
+  /** The input a problem with this field sends the focus to. */
+  get input(): HTMLInputElement {
+    return this.field.input
   }
 }
 

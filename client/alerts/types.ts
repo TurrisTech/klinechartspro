@@ -24,6 +24,9 @@ export type BarField = 'open' | 'high' | 'low' | 'close' | 'volume'
 /** Something a rule reads, on the alert's instrument, at `interval`. Every operand is a
  * value per bar of its interval, known at that bar's CLOSE (its effective instant) and never
  * before -- the no-lookahead rule every multi-timeframe calculation here keys off. */
+/** What a time operand reads at a bar close: the time of day, the weekday, or the date and time. */
+export type TimeField = 'minute' | 'weekday' | 'datetime'
+
 export type Operand =
   | { kind: 'bar'; interval: string; field: BarField }
   /** A klinecharts built-in (RSI, MA, MACD...), computed in the browser from the bars with the
@@ -53,9 +56,10 @@ export type Operand =
       maxStep: number
     }
   /** The clock at each bar close of `interval`, on `zone`'s wall clock: `minute` of the day
-   * (0-1439), or the `weekday` (`Mon`...`Sun`). What a "time" alert reads -- alone, an alert
-   * at a time of day; with other conditions, a window they must fall in. */
-  | { kind: 'time'; interval: string; field: 'minute' | 'weekday'; zone: string }
+   * (0-1439), the `weekday` (`Mon`...`Sun`), or the `datetime` -- the close itself, epoch ms,
+   * typed and shown on `zone`'s wall. What a "time" alert reads -- alone, an alert at a time of
+   * day or at a date and time; with other conditions, a window they must fall in. */
+  | { kind: 'time'; interval: string; field: TimeField; zone: string }
   /** An ENTRY of a strategy saved in the Strategy Lab (client/lab): the way it trades (`long` /
    * `short`) on a bar of `interval` where the strategy's own run finds an entry, '' on a bar where
    * it finds none. Named by id, so refining the strategy in the lab -- and saving it -- refines

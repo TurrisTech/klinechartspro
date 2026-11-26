@@ -219,6 +219,29 @@ describe('time conditions', () => {
     expect(second?.at).toBe(Date.UTC(2024, 0, 2, 15))
   })
 
+  test('"reaches 2024-01-03 09:30 New York" fires once, at the first close at or after it', async () => {
+    const { clockValue } = await import('./compute')
+    expect(clockValue(Date.UTC(2024, 0, 3, 15), 'datetime', 'America/New_York')).toBe(Date.UTC(2024, 0, 3, 15))
+    const search = new AlertSearch(data(), async () => NO_CATALOGUE)
+    const when: Operand = { kind: 'time', interval: '1h', field: 'datetime', zone: 'America/New_York' }
+    // 09:30 New York on 2024-01-03 is 14:30Z: the first hourly close at or after it is 15:00Z.
+    const rule: Rule = { left: when, op: 'crosses_above', right: { value: Date.UTC(2024, 0, 3, 14, 30) } }
+    const first = await search.next(alert(rule), bars[0].end, until)
+    expect(first?.at).toBe(Date.UTC(2024, 0, 3, 15))
+    // An instant is passed once: nothing after it.
+    expect(await search.next(alert(rule), first?.at ?? 0, until)).toBeNull()
+  })
+
+  test('a date and time the market is closed at fires at the first close once it opens', async () => {
+    // No bars from 2024-01-05 22:00Z to 2024-01-07 22:00Z (Friday's close to Sunday's open);
+    // the instant asked for is Saturday noon.
+    const open = bars.filter((b) => b.open < Date.UTC(2024, 0, 5, 22) || b.open >= Date.UTC(2024, 0, 7, 22))
+    const search = new AlertSearch(new FakeData(new Map([['1h', open]])), async () => NO_CATALOGUE)
+    const when: Operand = { kind: 'time', interval: '1h', field: 'datetime', zone: 'America/New_York' }
+    const rule: Rule = { left: when, op: 'crosses_above', right: { value: Date.UTC(2024, 0, 6, 17) } }
+    expect((await search.next(alert(rule), open[0].end, until))?.at).toBe(Date.UTC(2024, 0, 7, 23))
+  })
+
   test('a window: a condition holds only between 08:00 and 11:00', async () => {
     const search = new AlertSearch(data(), async () => NO_CATALOGUE)
     const minute: Operand = { kind: 'time', interval: '1h', field: 'minute', zone: 'America/New_York' }

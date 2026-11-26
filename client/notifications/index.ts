@@ -1,10 +1,14 @@
 import type { KLineChartPro } from '../../src'
 import { attachToSlot } from '../chrome/slot'
 import { notifications } from './center'
-import { createNotificationBell } from './bell'
+import { type BellAction, createNotificationBell } from './bell'
 
 export { NotificationCenter, notifications, MAX_NOTIFICATIONS } from './center'
 export { createNotificationBell, relativeTime } from './bell'
+export type { BellAction } from './bell'
+export { durableSink } from './durable'
+export type { RaiseRemote } from './durable'
+export { LOCAL_ONLY_SOURCES } from './types'
 export type {
   Notification,
   NotificationBackend,
@@ -25,9 +29,10 @@ export interface MountedNotificationCenter {
  * singleton, so nothing is lost across the switch — only the view is rebuilt. */
 export function mountNotificationCenter(
   chartPro: KLineChartPro,
-  center = notifications
+  center = notifications,
+  actions: BellAction[] = []
 ): MountedNotificationCenter {
-  const bell = createNotificationBell(center)
+  const bell = createNotificationBell(center, actions)
   const detach = attachToSlot(chartPro, 'toolbar-right', bell.element)
   return {
     teardown(): void {

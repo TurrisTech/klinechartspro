@@ -8,7 +8,12 @@ import type { IndicatorPoint, SeriesDoc } from './indicators/api'
 export type ErrorCode =
   | 'invalid_request'
   | 'unsupported'
+  // 401: a missing, invalid or expired session (config.ts serverFetch, stream.ts), or a wrong
+  // password at sign-in.
+  | 'unauthorized'
   | 'not_found'
+  // 412: PUT /preferences' If-Match lost to another write (preferences.ts).
+  | 'conflict'
   | 'too_large'
   | 'rate_limited'
   | 'internal'
@@ -123,11 +128,15 @@ export interface StreamPong {
   serverTime: number
 }
 
-// Non-fatal: the offending action is not performed, the connection stays open.
+// Non-fatal: the offending action is not performed, the connection stays open -- except an
+// `unauthorized` one, which the server follows with close code 4401 (stream.ts).
 export interface StreamError {
   type: 'error'
   code: ErrorCode
-  errmsg: string
+  /** What the server sends. `detail` is ErrorBody's spelling, read too in case a server
+   * moves to it. */
+  errmsg?: string
+  detail?: string
   vendor?: string | null
   symbol?: string | null
   interval?: string | null
@@ -219,7 +228,15 @@ export interface StreamNotification {
   serverTime: number
 }
 
+// The answer to the socket's first frame, `{"action": "auth"}` (stream.ts): the session is
+// good, or the server has the login off.
+export interface StreamAuthOk {
+  type: 'auth_ok'
+  serverTime: number
+}
+
 export type StreamServerMessage =
+  | StreamAuthOk
   | StreamSubscribed
   | StreamNotificationsSubscribed
   | StreamNotification
@@ -238,6 +255,8 @@ export type StreamServerMessage =
   | StreamPluginPoint
 
 export type StreamClientMessage =
+  // The socket's first frame wherever a session is held (stream.ts).
+  | { action: 'auth'; token: string }
   | {
       action: 'subscribe'
       vendor: string
@@ -255,11 +274,11 @@ export type StreamClientMessage =
       backfill?: number
     }
   | { action: 'unsubscribe'; vendor: string; symbol: string; interval: string; indicator?: SeriesDoc }
-  // Both identities ride in the frame: a browser cannot set a header on a WebSocket
-  // handshake, so `token` (the session bearer, when signed in) is the only way to present
-  // it, and `owner` is the anonymous fallback. The server prefers the handshake's
-  // Authorization if a non-browser client set one, then `token`, then `owner`.
   | { action: 'subscribe' | 'unsubscribe'; plugin: string; variant: string | null; vendor: string; symbol: string; interval: string }
+  // The notifications subscribe carries both identities: `token` (the session bearer, when
+  // signed in) for a server from before the stream login, which takes the session from no
+  // other frame, and `owner`, the identity where the login is off. A server with the stream
+  // login takes the session from the auth frame instead.
   | { action: 'subscribe'; notifications: true; owner: string; token?: string }
   | { action: 'unsubscribe'; notifications: true }
   | { action: 'ping'; id?: string }

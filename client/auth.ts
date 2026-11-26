@@ -1,10 +1,16 @@
+import { authHeaders, getToken, setToken } from './authtoken'
 import { apiSend, OhlcvApiError } from './config'
 
-// Dev-only login gate for wdashboard-server's appstate database (see appstate.py's module
-// docstring in that repo) — the client UI and /preferences are gated; /getbars, /search,
-// /levels and /stream are not, and stay reachable without a session.
+// Signing in and out of wdashboard-server's dashboard login (its `services/appstate.py`).
+// Dev and prod both run it, and where it is configured the SERVER enforces it on every route:
+// each HTTP request carries the session as a bearer (config.ts `serverFetch` adds it, so no
+// call site does) and WS /stream presents it in its first frame (stream.ts). Only
+// `/capabilities`, the login's own `/auth/login` and `/auth/logout` and the indicator config
+// page's HTML shell answer without one -- and the tile buckets, which are anonymous reads
+// (objectstore.ts). The token itself, and what the page does when the server refuses it, live
+// in authtoken.ts.
 
-const TOKEN_STORAGE_KEY = 'wd.auth.token'
+export { authHeaders, getToken } from './authtoken'
 
 export interface SessionUser {
   id: number
@@ -22,38 +28,11 @@ export interface SessionInfo {
   expiresAt: number
 }
 
-// localStorage can throw (private-browsing Safari, a full quota, a policy-blocked origin)
-// rather than merely fail silently. A user who can't persist a session should see the
-// login form again, not a crashed app, so every access here is wrapped.
-
-export function getToken(): string | null {
-  try {
-    return localStorage.getItem(TOKEN_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
-
-function setToken(token: string | null): void {
-  try {
-    if (token === null) localStorage.removeItem(TOKEN_STORAGE_KEY)
-    else localStorage.setItem(TOKEN_STORAGE_KEY, token)
-  } catch {
-    // Nothing to recover: the caller's own state (in-memory token, current page) is what
-    // actually drives this session; a failed persist just means it won't survive a reload.
-  }
-}
-
-// Every authenticated request goes through this rather than reading getToken() directly,
-// so "no token" and "empty headers" are the same call site.
-export function authHeaders(): Record<string, string> {
-  const token = getToken()
-  return token ? { Authorization: `Bearer ${token}` } : {}
-}
-
 export async function login(username: string, password: string): Promise<SessionUser> {
+  // A wrong password is a 401 too, and it is the form's to show, not a lost session.
   const { data } = await apiSend<LoginResult>('POST', '/auth/login', {
-    body: { username, password }
+    body: { username, password },
+    unauthorizedIsAnswer: true
   })
   setToken(data.token)
   return data.user
@@ -65,6 +44,7 @@ export async function logout(): Promise<void> {
   // as the user, regardless of whether the network round trip below succeeds.
   setToken(null)
   if (!headers.Authorization) return
+  // Passed explicitly: the token has already left storage, so serverFetch would find none.
   await apiSend('POST', '/auth/logout', { headers }).catch(() => {
     // Best-effort server-side invalidation; the token could already be expired, and this
     // browser's copy is gone either way.
@@ -75,10 +55,13 @@ export async function logout(): Promise<void> {
 // server-side (a shared dev deployment restarted, say) without this browser knowing. Clears
 // the stored token on any 401 so the caller doesn't need to duplicate that check.
 export async function currentSession(): Promise<SessionInfo | null> {
-  const headers = authHeaders()
-  if (!headers.Authorization) return null
+  if (!getToken()) return null
   try {
-    const { data } = await apiSend<SessionInfo>('GET', '/auth/session', { headers })
+    // The boot gate's own question: its 401 is answered here (the form), not by the page's
+    // signed-out path, which is not armed yet anyway.
+    const { data } = await apiSend<SessionInfo>('GET', '/auth/session', {
+      unauthorizedIsAnswer: true
+    })
     return data
   } catch (err) {
     if (err instanceof OhlcvApiError && err.status === 401) {

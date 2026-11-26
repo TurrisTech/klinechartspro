@@ -21,6 +21,7 @@
 // notes/architecture/tiered-indicator-storage.md); the manifest itself is never cached.
 
 import { parquetRead } from 'hyparquet'
+import { objectStoreFetch } from '../objectstore'
 import { bucketBase, tileBytes } from '../tiles/cachestore'
 
 export interface SeriesManifest {
@@ -93,7 +94,7 @@ const shards = new Map<string, Promise<SeriesTileEntry[] | null>>()
 const decoded = new Map<string, Promise<SeriesRows | null>>()
 
 async function json<T>(url: string): Promise<T | null> {
-  const response = await fetch(url, { cache: 'no-cache' })
+  const response = await objectStoreFetch(url, { cache: 'no-cache' })
   if (!response.ok) return null
   return (await response.json()) as T
 }

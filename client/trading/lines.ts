@@ -1,6 +1,6 @@
 import { registerOverlay, utils } from 'klinecharts'
 import type { OverlayFigure, OverlayTemplate } from 'klinecharts'
-import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './api'
+import type { ManagementPatch, SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './api'
 
 // The two chart figures a trade is drawn with, registered once per page.
 //
@@ -13,12 +13,26 @@ import type { SimOrder, SimOrderType, SimSide, SimSnapshot, SimTrade } from './a
 //
 // `wdTradeBracket` -- what connects a position's entry to its stop and target: a translucent
 // loss band from the entry to the stop, a profit band from the entry to the target, both from
-// the bar the position opened on to the right edge, a connector down that bar, and a dot
-// where the entry filled. Every figure ignores events, so the bracket never steals a pan or a
-// click from the chart underneath it.
+// the bar the position opened on to the right edge, a connector from the stop to the target,
+// and a dot where the entry filled. Every figure ignores events, so the bracket never steals a
+// pan or a click from the chart underneath it.
+//
+// The connector is NOT a wick (user, 2026-11-11: drawn green or red down the bar's centre it
+// read as one -- for a draft that bar is the live candle). So it is grey, never a candle colour,
+// and it runs down the gap before the anchor bar, where no wick can be; the bands start at that
+// same edge. Only the fill dot sits on the bar itself.
+//
+// `wdTradeHistory` -- a CLOSED trade (user, 2026-11-13: "allow historical trades to be shown on
+// the chart"), drawn while the History tab's "Show on chart" is on: the fill dot where it opened
+// (the same dot an open trade's bracket has), a ring where it closed, a dashed path between them
+// in the colour of its result, and the result beside the ring. Selected -- a click on it, or
+// "Show on chart" in its popup -- it is drawn stronger, with its last stop and target as bands
+// over the time it was open, the bracket it had. The dots and the path take clicks; the bands do
+// not.
 
 export const TRADE_LINE = 'wdTradeLine'
 export const TRADE_BRACKET = 'wdTradeBracket'
+export const TRADE_HISTORY = 'wdTradeHistory'
 
 export type LineRole = 'entry' | 'order' | 'stop' | 'target'
 
@@ -77,8 +91,31 @@ export interface TradeBracketData {
     lossColor: string
     profitColor: string
     entryColor: string
+    /** The connector's colour: a neutral, never the side's -- see the header. */
+    connectorColor: string
     /** A pending order or a draft has not filled: no fill dot, and a fainter band. */
     pending: boolean
+  }
+}
+
+export interface TradeHistoryData {
+  wd: {
+    owner: 'history'
+    id: string
+    side: SimSide
+    entry: number
+    exit: number
+    stop: number | null
+    target: number | null
+    /** The result beside the exit: '+12.3p' (or a percent off the pip instruments). */
+    text: string
+    /** The realised P&L's sign: the path's colour. */
+    result: 1 | -1 | 0
+    selected: boolean
+    entryColor: string
+    profitColor: string
+    lossColor: string
+    flatColor: string
   }
 }
 
@@ -120,50 +157,142 @@ export function withAlpha(hex: string, alpha: number): string {
   return `rgba(${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}, ${alpha})`
 }
 
+/** The bracket's figures, given the anchor bar's centre `barX` (which may be off either side of
+ * the pane), half the bar spacing, the pane's width and the price -> y conversion. The bands and
+ * the connector start at the anchor bar's LEFT EDGE, half a bar before its centre: in the gap
+ * between two candles, so the connector can never sit on a wick. Pure. */
+export function bracketFigures(
+  datum: TradeBracketData['wd'],
+  barX: number,
+  halfBar: number,
+  width: number,
+  toY: (price: number) => number
+): OverlayFigure[] {
+  const edge = barX - halfBar
+  // The anchor bar may be scrolled off either side; the bands still run to the right edge.
+  const x = Math.min(Math.max(edge, 0), width)
+  const yEntry = toY(datum.entry)
+  const alpha = (datum.selected ? 0.16 : 0.06) * (datum.pending ? 0.6 : 1)
+  const figures: OverlayFigure[] = []
+  const band = (price: number | null, color: string): number | null => {
+    if (price === null) return null
+    const y = toY(price)
+    figures.push({
+      type: 'rect',
+      attrs: { x, y: Math.min(y, yEntry), width: Math.max(width - x, 0), height: Math.abs(y - yEntry) },
+      styles: { style: 'fill', color: withAlpha(color, alpha) },
+      ignoreEvent: true
+    })
+    return y
+  }
+  const yStop = band(datum.stop, datum.lossColor)
+  const yTarget = band(datum.target, datum.profitColor)
+  if (datum.selected && (yStop !== null || yTarget !== null) && edge >= 0 && edge <= width) {
+    figures.push({
+      type: 'line',
+      attrs: { coordinates: [{ x, y: yStop ?? yEntry }, { x, y: yTarget ?? yEntry }] },
+      styles: { style: 'solid', color: datum.connectorColor, size: 1 },
+      ignoreEvent: true
+    })
+  }
+  if (!datum.pending && barX >= 0 && barX <= width) {
+    figures.push({
+      type: 'circle',
+      attrs: { x: barX, y: yEntry, r: datum.selected ? 4 : 3 },
+      styles: { style: 'fill', color: datum.entryColor },
+      ignoreEvent: true
+    })
+  }
+  return figures
+}
+
+/** A closed trade's figures, given where its entry and exit land on the pane and the price -> y
+ * conversion. Pure. Either end may be off the pane; the path is still drawn between them. */
+export function historyFigures(
+  datum: TradeHistoryData['wd'],
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  width: number,
+  toY: (price: number) => number
+): OverlayFigure[] {
+  const figures: OverlayFigure[] = []
+  const color = datum.result > 0 ? datum.profitColor : datum.result < 0 ? datum.lossColor : datum.flatColor
+  if (datum.selected) {
+    const left = Math.max(Math.min(from.x, to.x), 0)
+    const right = Math.min(Math.max(from.x, to.x), width)
+    const band = (price: number | null, bandColor: string): void => {
+      if (price === null || right <= left) return
+      const y = toY(price)
+      figures.push({
+        type: 'rect',
+        attrs: { x: left, y: Math.min(y, from.y), width: right - left, height: Math.abs(y - from.y) },
+        styles: { style: 'fill', color: withAlpha(bandColor, 0.12) },
+        ignoreEvent: true
+      })
+    }
+    band(datum.stop, datum.lossColor)
+    band(datum.target, datum.profitColor)
+  }
+  figures.push({
+    type: 'line',
+    attrs: { coordinates: [from, to] },
+    styles: { style: 'dashed', dashedValue: [4, 3], color: withAlpha(color, datum.selected ? 1 : 0.75), size: datum.selected ? 1.5 : 1 }
+  })
+  const r = datum.selected ? 4 : 3
+  figures.push({ type: 'circle', attrs: { x: from.x, y: from.y, r }, styles: { style: 'fill', color: datum.entryColor } })
+  figures.push({
+    type: 'circle',
+    attrs: { x: to.x, y: to.y, r },
+    styles: { style: 'stroke', borderColor: color, borderSize: 1.5, color: 'transparent' }
+  })
+  if (datum.text) {
+    // Beside the ring, to its right -- or to its left where it would run under the price axis (a
+    // trade closed at the live edge). The width is estimated: a canvas text figure has no
+    // measure before it is drawn, and 10px digits run about 6px.
+    const fits = to.x + r + 4 + datum.text.length * 6 + 6 <= width
+    figures.push({
+      type: 'text',
+      attrs: { x: fits ? to.x + r + 4 : to.x - r - 4, y: to.y, text: datum.text, align: fits ? 'left' : 'right', baseline: 'middle' },
+      styles: {
+        color: '#ffffff',
+        size: 10,
+        backgroundColor: withAlpha(color, datum.selected ? 0.95 : 0.7),
+        paddingLeft: 3,
+        paddingRight: 3,
+        paddingTop: 1,
+        paddingBottom: 1,
+        borderRadius: 2
+      }
+    })
+  }
+  return figures
+}
+
+const historyTemplate: OverlayTemplate<TradeHistoryData> = {
+  name: TRADE_HISTORY,
+  totalStep: 3,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+    const datum = overlay.extendData?.wd
+    if (!datum || coordinates.length < 2 || !yAxis) return []
+    return historyFigures(datum, coordinates[0], coordinates[1], bounding.width, (p) => yAxis.convertToPixel(p))
+  }
+}
+
 const bracketTemplate: OverlayTemplate<TradeBracketData> = {
   name: TRADE_BRACKET,
   totalStep: 2,
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures: ({ overlay, coordinates, bounding, yAxis }) => {
+  createPointFigures: ({ chart, overlay, coordinates, bounding, yAxis }) => {
     const datum = overlay.extendData?.wd
     if (!datum || coordinates.length === 0 || !yAxis) return []
-    // The anchor bar may be scrolled off either side; the bands still run to the right edge.
-    const x = Math.min(Math.max(coordinates[0].x, 0), bounding.width)
-    const yEntry = yAxis.convertToPixel(datum.entry)
-    const alpha = (datum.selected ? 0.16 : 0.06) * (datum.pending ? 0.6 : 1)
-    const figures: OverlayFigure[] = []
-    const band = (price: number | null, color: string): number | null => {
-      if (price === null) return null
-      const y = yAxis.convertToPixel(price)
-      figures.push({
-        type: 'rect',
-        attrs: { x, y: Math.min(y, yEntry), width: Math.max(bounding.width - x, 0), height: Math.abs(y - yEntry) },
-        styles: { style: 'fill', color: withAlpha(color, alpha) },
-        ignoreEvent: true
-      })
-      return y
-    }
-    const yStop = band(datum.stop, datum.lossColor)
-    const yTarget = band(datum.target, datum.profitColor)
-    if (datum.selected && (yStop !== null || yTarget !== null) && coordinates[0].x >= 0) {
-      figures.push({
-        type: 'line',
-        attrs: { coordinates: [{ x, y: yStop ?? yEntry }, { x, y: yTarget ?? yEntry }] },
-        styles: { style: 'solid', color: withAlpha(datum.entryColor, 0.7), size: 1 },
-        ignoreEvent: true
-      })
-    }
-    if (!datum.pending && coordinates[0].x >= 0 && coordinates[0].x <= bounding.width) {
-      figures.push({
-        type: 'circle',
-        attrs: { x, y: yEntry, r: datum.selected ? 4 : 3 },
-        styles: { style: 'fill', color: datum.entryColor },
-        ignoreEvent: true
-      })
-    }
-    return figures
+    return bracketFigures(datum, coordinates[0].x, chart.getBarSpace().halfBar, bounding.width, (p) =>
+      yAxis.convertToPixel(p)
+    )
   }
 }
 
@@ -174,13 +303,17 @@ export interface OverlayColors {
   sell: string
   stop: string
   target: string
+  /** The bracket's connector: a mid grey that reads on light and dark themes alike, and is
+   * neither candle colour (see the header). */
+  connector: string
 }
 
 export const DEFAULT_COLORS: OverlayColors = {
   buy: '#26a69a',
   sell: '#ef5350',
   stop: '#ef5350',
-  target: '#26a69a'
+  target: '#26a69a',
+  connector: '#787b86'
 }
 
 /** One line on the pane, as both the canvas and the HTML layer see it. */
@@ -195,6 +328,14 @@ export interface LineSpec {
 
 export function lineKey(line: Pick<LineSpec, 'role' | 'id'>): string {
   return `${line.role}:${line.id}`
+}
+
+/** The closed trades of one instrument that end at or after `since` (the oldest bar a pane has
+ * loaded: anything older is off its left edge), oldest first. */
+export function historyFor(snapshot: SimSnapshot, key: string, since: number): SimTrade[] {
+  return snapshot.trades
+    .filter((t) => t.symbol === key && t.closedAt !== null && t.closePrice !== null && t.closedAt >= since)
+    .sort((a, b) => a.openedAt - b.openedAt)
 }
 
 /** The open trades and pending orders of one instrument, oldest first. */
@@ -216,9 +357,54 @@ export function workingFor(snapshot: SimSnapshot, key: string): { trades: SimTra
 export interface Amendment {
   owner: 'trade' | 'order'
   id: string
-  role: 'stop' | 'target' | 'order'
+  /** `manage`: a change to the exit management (a trail, a breakeven, the milestones), carried in
+   * `manage`; `price` and `from` are then null. */
+  role: 'stop' | 'target' | 'order' | 'manage'
   price: number | null
   from: number | null
+  /** role `manage`: only the keys it changes; null removes one (null or [] the milestones). */
+  manage?: ManagementPatch
+}
+
+/** A record with `patch` applied, as the engine would leave it before any price: a new trail or
+ * breakeven not yet priced, new milestones not yet reached. Pure. */
+export function withManagement<T extends SimTrade | SimOrder>(record: T, patch: ManagementPatch): T {
+  const next = { ...record }
+  if (patch.trailingStop !== undefined) {
+    const t = patch.trailingStop
+    next.trailingStop = t ? { distance: t.distance, activation: t.activation ?? null, step: t.step ?? null, best: null } : null
+  }
+  if (patch.breakeven !== undefined) {
+    const b = patch.breakeven
+    next.breakeven = b ? { trigger: b.trigger, offset: b.offset ?? 0, done: false } : null
+  }
+  if (patch.milestones !== undefined) {
+    next.milestones = (patch.milestones ?? []).map((m) => ({ distance: m.distance, label: m.label ?? null, reachedAt: null, price: null }))
+  }
+  return next
+}
+
+/** Whether `patch` would leave `record`'s management as it is (so there is nothing to ask). */
+export function managementUnchanged(record: SimTrade | SimOrder, patch: ManagementPatch): boolean {
+  const same = (a: number | null | undefined, b: number | null | undefined): boolean => (a ?? null) === (b ?? null)
+  if (patch.trailingStop !== undefined) {
+    const now = record.trailingStop ?? null
+    const t = patch.trailingStop
+    if ((now === null) !== (t === null)) return false
+    if (now && t && !(same(now.distance, t.distance) && same(now.activation, t.activation) && same(now.step, t.step))) return false
+  }
+  if (patch.breakeven !== undefined) {
+    const now = record.breakeven ?? null
+    const b = patch.breakeven
+    if ((now === null) !== (b === null)) return false
+    if (now && b && !(same(now.trigger, b.trigger) && same(now.offset, b.offset ?? 0))) return false
+  }
+  if (patch.milestones !== undefined) {
+    const now = (record.milestones ?? []).map((m) => m.distance)
+    const next = (patch.milestones ?? []).map((m) => m.distance)
+    if (now.length !== next.length || now.some((d, i) => d !== next[i])) return false
+  }
+  return true
 }
 
 /** The level a working trade or order has now, null when it has none, or undefined when it is not
@@ -227,15 +413,17 @@ export function currentLevel(
   snapshot: SimSnapshot,
   owner: 'trade' | 'order',
   id: string,
-  role: 'stop' | 'target' | 'order'
+  role: 'stop' | 'target' | 'order' | 'manage'
 ): number | null | undefined {
   if (owner === 'trade') {
     const trade = snapshot.trades.find((t) => t.id === id && t.closedAt === null)
     if (!trade || role === 'order') return undefined
+    if (role === 'manage') return null
     return role === 'stop' ? trade.stopLoss : trade.takeProfit
   }
   const order = snapshot.orders.find((o) => o.id === id && o.status === 'pending')
   if (!order) return undefined
+  if (role === 'manage') return null
   return role === 'stop' ? order.stopLoss : role === 'target' ? order.takeProfit : order.price
 }
 
@@ -243,7 +431,12 @@ export function currentLevel(
  * waits, so the line, its bands, its label and the card all show the proposed level. A removal
  * is not applied: the line stays, marked, until it is confirmed. Pure. */
 export function applyAmendment(snapshot: SimSnapshot, amendment: Amendment | null): SimSnapshot {
-  if (!amendment || amendment.price === null) return snapshot
+  if (amendment?.role === 'manage' && amendment.manage) {
+    const patch = amendment.manage
+    if (amendment.owner === 'trade') return { ...snapshot, trades: snapshot.trades.map((t) => (t.id === amendment.id ? withManagement(t, patch) : t)) }
+    return { ...snapshot, orders: snapshot.orders.map((o) => (o.id === amendment.id ? withManagement(o, patch) : o)) }
+  }
+  if (!amendment || amendment.price === null || amendment.role === 'manage') return snapshot
   const { owner, id, role, price } = amendment
   if (owner === 'trade') {
     if (role === 'order') return snapshot
@@ -306,4 +499,5 @@ export function registerTradeOverlays(): void {
   registered = true
   registerOverlay(lineTemplate)
   registerOverlay(bracketTemplate)
+  registerOverlay(historyTemplate)
 }

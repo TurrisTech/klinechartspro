@@ -29,11 +29,12 @@ mode only for its title.
 
 ## Pieces
 
-- `api.ts` — the `/sim` wire (types + `simApi`). Owner is the signed-in user (dev) or a minted
-  `X-Sim-Owner` token kept in `localStorage`, sent on every call.
+- `api.ts` — the `/sim` wire (types + `simApi`). Owner is the signed-in user where the server
+  has the login on (dev and prod; the bearer rides on every server request, `config.ts`
+  `serverFetch`), else a minted `X-Sim-Owner` token kept in `localStorage`, sent on every call.
 - `session.ts` — the `TradingSession` interface and `PaperTradingSession` (load, poll, act).
 - `panel.ts` — the account window's contents: account strip (balance / equity / unrealized /
-  open + New order + flatten-all) and the positions / orders / history tabs. A click on a row
+  open + New order + flatten-all) and the positions / orders / history / performance tabs. A click on a row
   selects that position on every pane and opens its popup. Plain DOM, `wd-trade-*` with the
   kit's buttons and confirm bar. It owns no chrome — the title bar, close and drag are the window's —
   but it does own its shape: below 620px (a window floated small) the three grid areas stop
@@ -47,7 +48,11 @@ mode only for its title.
   in the **trade box**, a window of its own.
 - `kit.ts` — **the trading kit**: the controls every surface is built from (below) — `LevelField`
   (a stop, target or price: label, presets, `[− | 20.0 | pips ▾ | +]`, readout), `NumberField`,
+  `ExitField` (a trailing stop, a breakeven or Notify at, with its unit and secondary numbers),
   `FigureList`, `ConfirmBar`, `TradeActions`, `Arming` (two presses) and `armKey`.
+- `exits.ts` — PURE (tested): exit management as the surfaces state it — a trailing stop, an
+  auto-breakeven and the "Notify at" milestones, each in pips / price / % of price / × ATR / R,
+  parsed to the engine's price distances, read out, worded; Wilder's ATR; a position's R.
 - `levels.ts` — PURE (tested): how a level is stated in pips / price / % of balance and read back,
   stepped, and read out; the resting-price rules and default; fractional close; the reverse order.
 - `manage.ts` — what each `TradeActions` button may do now, partial close and the two-step reverse,
@@ -61,7 +66,12 @@ mode only for its title.
   it; shared by the chart and the tables.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
-- `format.ts` — pure price / pip / P&L helpers.
+- `format.ts` — pure price / pip / P&L helpers; `formatInstant` (to the second) and `formatShare`
+  (a P&L as a share of the balance).
+- `ledger.ts` — PURE (tested): the account through time from its trades — the balance before each
+  close, a closed trade's share of it, the balance and the equity at any instant.
+- `performance.ts` + `perfview.ts` — the Performance tab: the pure periods and bars (tested), and
+  the view that reads the bars past equity needs and draws them.
 - `dock.ts` — `mountTradingDock(session, opts)`: the mode-agnostic dock — panel, ticket, popup,
   overlays, the three windows they live in, open/close, teardown. The window is a `DockableWindow`
   (`client/chrome/window.ts`): **docked below the chart by default** (the account strip, the
@@ -112,6 +122,101 @@ They are now built from ONE kit (`kit.ts`, styles `wd-tk-*` under a `.wd-tk` roo
   or price are always confirmed, one-click or not (user, 2026-09-15). The armed state is one key
   space (`armKey`), so a label's × and the card's All arm the same thing.
 
+## History on the chart, Performance, percent and seconds (2026-11-13)
+
+The user asked (2026-11-13) for historical trades on the chart, a balance/equity histogram beside
+History for 1M / 3M / 6M / 1Y / all time, seconds on every replay and paper-trade timestamp, and a
+percentage beside pips and P&L — "and other changes that are consistent with the UX".
+
+- **History on the chart.** The History tab's **Show on chart** (one preference, `prefs.ts`
+  `historyOnChart`, every pane and tab, off until chosen) draws every closed trade on the panes of
+  its instrument (`lines.ts` `wdTradeHistory`): the fill as the same dot an open trade's bracket
+  has, a ring at the exit, a dashed path between them in the colour of the result, and the result
+  beside the ring (pips, or a percent off the pip instruments). Each end is placed on the pane's bar
+  that was open at that instant — floored on the instrument's own candle grid and labelled the way
+  the pane labels it (`grid.toWire(code, grid.start(code, ms))`), so a 1D pane does not put a fill
+  seven hours off. A click selects it (a closed trade is selectable only while drawn) and opens its
+  popup; selected it is drawn stronger, says `pips P&L %`, and shows its last stop and target as
+  bands over the time it was open. Near the live edge the result goes left of the ring rather than
+  under the price axis. The popup's **Show on chart** turns the history on, selects the trade and
+  brings every pane on its instrument to it (`pane.seekTo`).
+- **Performance** (`perfview.ts`), the tab after History: **Balance | Equity** and
+  **1M 3M 6M 1Y All**, kept per browser. One bar per period — the value at the period's end —
+  growing from a line at the value when the window began, green above and red below; the axis
+  states the line and the extremes; hover or focus a bar (←/→ move between bars) for its period and
+  figures. The last bar is the account now (lighter: the period is still running). Periods are
+  candles of the ACTIVE chart's instrument — FX days close at 17:00 New York and skip the weekend —
+  at the finest step that keeps the bars at or under 120 (`STEP_LADDER`); with no market hours
+  resolved, plain equal steps. A range older than the account begins at the account. Under a replay
+  the clock is the replay's (`session.cursor`, and `startedAt` for its start).
+  - The **balance** at an instant is today's less every close after it (`ledger.ts`), anchored on
+    the balance the server reports — the engine moves it only by a close.
+  - Past **equity** adds the trades open then, each marked at the close of its instrument's last
+    CLOSED stored bar (`1m` below an hour's step, `1h` from there), read once per window through
+    `fetchClosedBars` (tiles + `/getbars`, stopping at the replay clock) and kept while the window
+    and the trades are unchanged — a poll reads nothing. Bars are mids, so past equity reads up to
+    half a spread above the engine's; the tab says so, and counts any period with an unpriced open
+    trade (counted at entry). The last bar is the engine's own equity.
+- **Percent** (`formatShare`): a P&L as a share of the balance, beside pips and P&L everywhere they
+  appear — the `% bal` columns of Positions and History, the chart labels (not compact), the order
+  card's rows and header, the account strip's Unrealized, the title bar, the close announcement, the
+  popup's "Of balance", History's totals, the replay's Results. An open trade's is of the balance
+  now (`outcome().ofBalance`); a closed one's of the balance it was realised against, and only where
+  its own close gives the rate (account = quote, or = base at the close price) — a cross gets none.
+  Two decimals from 0.1% up and two significant figures below (`−0.0023%`): a 10K position on a
+  100K paper balance is thousandths of a percent, and two decimals printed 0.00% on nearly every
+  trade.
+- **Seconds**: `formatInstant` (every trading timestamp) and the replay's `formatClock` print
+  `hh:mm:ss`, with `hourCycle: 'h23'` so midnight is never `24:00`. History gained an Opened column.
+
+## Trailing stop, breakeven and Notify at (2026-11-15)
+
+The user asked (2026-11-15): "in the Trade box for wdashboard, alongside Take profit, allow several
+options for a trailing stop. also have options to notify when price goes a certain multiple (or
+multiples) from entry", then "make sure that these will stop at Next alert on bar replay".
+
+**In the engine, not the browser.** A paper account fills on the server, on ticks, with no tab
+open, so a trail the browser moved would stop trailing when the tab closed. The three pieces live
+in the fill engine (`wdashboard-server` 0.58.0 `sim/engine.py`, its Rust twin, and the replay's
+port `client/replay/engine.ts`, held together by the shared parity cases): an order carries them
+to its trade. Read `wdashboard-server/docs/replay.md` "Exit management" for the rules; in short:
+
+- **Trailing stop** — the trade's one stop loss follows the best closing-side price at a
+  distance. Options: where it **starts** (at once, or once that far in profit) and its **step**
+  (it moves only by at least that much). It only tightens, and only when the price makes new
+  ground, so a stop dragged looser stays put until the market goes further. Its label on the
+  chart reads **TSL**, and its tooltip says what it follows.
+- **Breakeven** — the stop goes to the entry, plus a **lock**, the first time the trade is that
+  far in profit; once. The label then reads **BE** (until a trail moves it).
+- **Notify at** — distances from the entry, a list (`1, 2, -0.5`). The first price to reach each
+  is a notification: from the SERVER for a paper trade (source `trade`, so it arrives with no tab
+  open, in the bell, and the card flashes "Reached +2R"), from this page for a replay (source
+  `replay`). Negative numbers are against the trade.
+
+**The "several options" are how a distance is stated** — one unit select per field, the same five
+for all three: **pips**, a **price** difference, **% of the price**, **× ATR** (the active pane's
+Wilder ATR(14) over its closed bars, on that pane's timeframe), or **R** (the stop loss's
+distance). Each field's unit is its own preference (`trailUnit` / `breakevenUnit` / `notifyUnit`,
+defaults pips / R / R), shared by the trade box and the cards. A trail's start and step are in the
+trail's unit, a breakeven's lock in its own. Whatever the unit, the order carries a PRICE distance:
+a trail of 2 × ATR is twice the ATR when it was placed, not a figure that follows the ATR (the
+engine runs on ticks and has no bars). The readout says what each comes to — where the stop goes
+now or where the trail takes over (beside a tighter stop loss it does nothing until it passes it),
+where the breakeven fires, the price of each milestone. Presets: **1R** and **2 ATR** on the trail,
+**1R** on the breakeven, **1R 2R 3R** toggles on Notify at. R needs a stop loss; × ATR needs a pane
+with fifteen closed bars; each unit says why it is unavailable.
+
+**On a working position** the order card has the same three fields (kit.ts `ExitField`), wired to
+PROPOSE: Enter, leaving a field, a step, a preset or × puts the change up for Confirm like a stop's
+change (`Amendment` role `manage`, worded in `amend.ts`: "Trail the EURUSD long 10K's stop 5.0p
+behind the bid? — The stop goes to 1.10187 now"). The popup shows them as rows (Trailing,
+Breakeven, Notify at, ✓ once reached). A working trade's R is its stop's distance when it was
+placed (its order's stop: `initialRisk`), so a trailed stop does not shrink it; a milestone list
+reads as the user wrote it ("1, 2" from its "+1R"/"+2R" labels), not as distance over an R measured
+from a fill half a pip from where the ticket priced it. **Reverse** carries all three across.
+History says "trailing stop" or "breakeven stop" where the stop that closed a trade was placed by
+one (`stopMovedBy`; the close reason stays `stop_loss`).
+
 ## The trade box (2026-09-19)
 
 The order ticket is a **non-modal, floating window of its own** — the trade box — not a part of
@@ -152,9 +257,13 @@ window is open** — an order placed from the ticket appears on the chart at onc
   for an entry; a pending order is heavier — with the label: a pending order's price, an open trade's entry, every stop and
   target, each with its price on the axis. The entry is locked; the rest are draggable.
 - **Bracket** (`wdTradeBracket`): what connects an entry to its stop and target — a loss band
-  and a profit band from the bar the position opened on to the right edge, a connector,
-  and a dot at the fill. Strong for the selected entry, faint for the rest. No figure takes
-  events, so it never steals a pan.
+  and a profit band from the bar the position opened on to the right edge, a connector from
+  stop to target, and a dot at the fill. Strong for the selected entry, faint for the rest. No
+  figure takes events, so it never steals a pan. **The connector is not a wick** (user,
+  2026-11-11): it is grey, never a candle colour, and runs down the gap *before* the anchor bar
+  rather than its centre, with the bands starting at that edge — drawn green or red down the
+  bar's centre it read as that candle's wick, and a draft's bar is the live candle. Only the
+  fill dot sits on the bar. `bracketFigures` is the geometry, pure and tested.
 - **Labels**, against the right edge beside each line's axis tag: `Long 10K −1.8p −1.80 ×`,
   `SL −20.0p −20.00 ×`, `Buy limit 10K 14.5p away ×`. Close lines are placed by `layoutLabels`
   so none overlap, with a leader back to the line; a line off the pane pins its label to that

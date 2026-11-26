@@ -96,6 +96,17 @@ describe('graph entries and the clock', () => {
     expect(compile({ left: entry, op: '==', right: { label: 'top' } }).condition).toEqual({ field: operandKey(entry), op: '==', value: 'top' })
   })
 
+  test('a date and time compares as the instant, and reads on its own clock', async () => {
+    const { describeRule, formatDateTime } = await import('./rules')
+    const when: Operand = { kind: 'time', interval: '5m', field: 'datetime', zone: 'America/New_York' }
+    const at = Date.UTC(2026, 10, 3, 14, 30) // 09:30 New York (EST)
+    expect(compile({ left: when, op: 'crosses_above', right: { value: at } }).condition).toEqual({ field: operandKey(when), op: 'crosses_above', value: at })
+    expect(formatDateTime(at, 'America/New_York')).toBe('2026-11-03 09:30')
+    expect(formatDateTime(at, 'Asia/Tokyo')).toBe('2026-11-03 23:30')
+    expect(describeRule({ left: when, op: 'crosses_above', right: { value: at } })).toBe('date and time (America/New_York) at 5m closes reaches 2026-11-03 09:30')
+    expect(describeRule({ left: when, op: 'inside', right: { band: [at, at + 3_600_000] } })).toBe('date and time (America/New_York) at 5m closes is between 2026-11-03 09:30 and 2026-11-03 10:30')
+  })
+
   test('a time of day compares as minutes; a weekday as a label', () => {
     expect(compile({ left: nyMinute, op: 'inside', right: { band: [480, 660] } }).condition).toEqual({ field: operandKey(nyMinute), op: 'inside', value: [480, 660] })
     expect(compile({ left: weekday, op: '==', right: { label: 'Mon' } }).condition).toEqual({ field: operandKey(weekday), op: '==', value: 'Mon' })

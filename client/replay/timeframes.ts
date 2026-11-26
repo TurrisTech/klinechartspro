@@ -141,6 +141,26 @@ export const CANDIDATE_LADDER: readonly string[] = [
  * it -- callers pass the instrument's own list). */
 export const STORED_LADDER: readonly string[] = ['5s', '1m', '1h', '1D']
 
+/** The part of the stored ladder an instrument of one vendor can hold: `STORED_LADDER` cut to
+ * the intervals the server says that vendor stores (`/capabilities` `baseIntervals`), or all of
+ * it where the server states nothing (an older server: probe everything, as before).
+ *
+ * The cut is what keeps "stored" meaning stored. `/getbars` answers an interval the vendor does
+ * not hold as readily as one it does -- it folds it -- so a probe that only asks "is there a
+ * bar?" counted schwab's 1h as stored, though schwab stores 1m, 30m and 1D and every 1h bar is
+ * a fold of 30m. Two folds that disagree, as it happens: the browser's (client/tiles/derive.ts)
+ * keeps the 09:00-09:30 pre-market half hour a stored read carries, the server's drops it
+ * (prod SPY 2026-10-05..23: the 09:00 hour differed in open and volume on 15 of 15 days, in its
+ * high or low on 9, and no other hour differed at all). Taken for stored, it became a replay
+ * base (`validateBase` requires a stored one), a rung of every 4h/1D forming candle
+ * (`composeLadder`) and a step of the fill engine's refinement (`finerStored`), each answering
+ * from whichever fold its period landed in.
+ * The cut also spares the probe the reads the server can only refuse: 5s for schwab and
+ * coinbase is a 500. */
+export function storedLadderFor(advertised: readonly string[] | null): string[] {
+  return advertised === null ? [...STORED_LADDER] : STORED_LADDER.filter((code) => advertised.includes(code))
+}
+
 /** The greatest common divisor of a set of intervals: the coarsest interval that tiles every
  * one of them. Intraday sets reduce exactly (3m + 5m -> 1m, 15m + 1h -> 15m); a set with a
  * calendar interval picks the coarsest ladder entry dividing all (1D + 1W -> 1D, 4h + 1D ->
@@ -487,21 +507,30 @@ export function isMarketOpen(ms: number, tz: string = MARKET_TZ): boolean {
   return true
 }
 
-function previousIntradayStart(code: string, start: number, tz: string): number {
-  return intervalStart(code, start - 1, tz)
+function previousIntradayStart(code: string, start: number, tz: string, day: DayGeometry): number {
+  return scheduleIntervalStart(code, start - 1, tz, day)
 }
 
-function nextIntradayStart(code: string, start: number, tz: string): number {
+/** The next open on `day`'s OWN intraday grid after the open `start`, closed window or not.
+ *
+ * The grid is the schedule's: until 2026-10-29 this floored on the FX week's (17:00-anchored)
+ * `intervalStart` whatever schedule was being walked. That is the same grid for every hourly
+ * length dividing 8 (17 and 9 are 8 apart), so 2h/4h/8h on New York equities were right -- they
+ * are what `fixtures/boundaries.json` pins -- but 3h and 6h stepped onto the FX grid (from 09:00
+ * the next 3h open came out 11:00, wmarkettypes says 12:00) and 12h never stepped onto the equity
+ * session at all (the FX grid's 05:00 and 17:00 both fall in its overnight), so the walk in
+ * `scheduleNextIntervalStart` never returned. */
+function nextIntradayStart(code: string, start: number, tz: string, day: DayGeometry = FX_DAY): number {
   const delta = nominalMs(code)
   const stepped = start + delta
-  let candidate = intervalStart(code, stepped, tz)
+  let candidate = scheduleIntervalStart(code, stepped, tz, day)
   if (candidate === stepped) return candidate
-  if (candidate <= start) candidate = intervalStart(code, fromWall(toWall(start, tz) + delta, tz), tz)
+  if (candidate <= start) candidate = scheduleIntervalStart(code, fromWall(toWall(start, tz) + delta, tz), tz, day)
   if (candidate <= start) throw new Error(`no ${code} candle opens after ${start}`)
-  let previous = previousIntradayStart(code, candidate, tz)
+  let previous = previousIntradayStart(code, candidate, tz, day)
   while (previous > start) {
     candidate = previous
-    previous = previousIntradayStart(code, previous, tz)
+    previous = previousIntradayStart(code, previous, tz, day)
   }
   return candidate
 }
@@ -536,9 +565,23 @@ export function nextIntervalStart(code: string, ms: number, tz: string = MARKET_
     return fromWall(shiftStart(iv, toWall(start, tz), 1), tz)
   }
   for (;;) {
-    start = nextIntradayStart(code, start, tz)
+    start = nextIntradayStart(code, start, tz, FX_DAY)
     if (isMarketOpen(start, tz)) return start
+    start = lastStartBeforeReopening(code, start, tz, FX_DAY)
   }
+}
+
+/** Where a walk of `code`'s candles, at `shut` inside a closed window, resumes: the last of them
+ * to open before the market reopens, so the next step is the first one after it does.
+ *
+ * Without it the walk stepped through the closed window a candle at a time -- 34,560 5s candles
+ * from Friday's close to Sunday's FX open, 46,800 across an equity weekend, each a timezone
+ * conversion or several: a quarter of a second per call, and a parity test over a few hundred of
+ * them that outran bun's five-second limit under load. Nothing can open in between, so skipping
+ * it changes no answer; the grid is still walked the same way on either side, across DST. */
+function lastStartBeforeReopening(code: string, shut: number, tz: string, day: DayGeometry): number {
+  const resume = scheduleIntervalStart(code, fromWall(reopening(toWall(shut, tz), day), tz) - 1, tz, day)
+  return resume > shut ? resume : shut
 }
 
 /** Close of the candle containing `ms` -- exclusive, and NOT the next candle's open: a week
@@ -658,6 +701,18 @@ function dayClose(sessionDay: number, day: DayGeometry): number {
   return sessionDay + day.closeOffset * HOUR
 }
 
+/** The naive wall clock at which a market shut at `wall` next opens -- the BOUNDARY notion, as
+ * `scheduleIsMarketOpen` has it: the open of the first weekday session after the one `wall`
+ * belongs to. A session date never lies after its own open (`sessionDateFor`), so an instant
+ * shut on a weekday is past that day's close and the next weekday's open is the answer, and one
+ * shut over a weekend reopens on Monday's session -- Sunday 17:00 for the FX week. Only for an
+ * instant that IS shut on a market that closes. */
+function reopening(wall: number, day: DayGeometry): number {
+  let next = sessionDateFor(wall, day) + DAY
+  while (weekday(next) >= 5) next += DAY
+  return dayOpen(next, day)
+}
+
 /** The session date that NAMES the bucket `sessionDay` falls in, for a market-day market.
  * `unitStartForSessionDate` answers with that bucket's FOREX open, so adding the FX offset
  * back off it leaves the midnight the bucket is named for -- the half of the answer that is
@@ -754,7 +809,19 @@ export function scheduleIntervalEnd(code: string, ms: number, tz: string, day: D
   return fromWall(dayClose(lastDay, day), tz)
 }
 
-/** `nextIntervalStart` under `day`. */
+/** How far past its starting candle `scheduleNextIntervalStart` looks for the next open before it
+ * gives up: longer than any closed window a weekday market has (the FX weekend is two days, an
+ * equity one under three), so only a schedule the walk cannot meet at all reaches it. */
+const NEXT_START_SEARCH_MS = 8 * DAY
+
+/** `nextIntervalStart` under `day`.
+ *
+ * The walk always ends: it steps `day`'s own grid, every intraday grid opens at the day's anchor
+ * (`scheduleIntervalStart` counts from it), and the anchor is the day's open -- so the first
+ * weekday session after any instant holds an open. The search is bounded all the same, and
+ * throws past `NEXT_START_SEARCH_MS`, as `nextIntradayStart` does on a grid that will not step:
+ * an unbounded `for (;;)` here hung a tab for good (12h on NY equities, before the walk used
+ * the schedule's own grid), where an error is reported and the caller carries on. */
 export function scheduleNextIntervalStart(code: string, ms: number, tz: string, day: DayGeometry): number {
   if (day.everyDayTrades) return scheduleIntervalEnd(code, ms, tz, day)
   const iv = parseInterval(code)
@@ -763,10 +830,12 @@ export function scheduleNextIntervalStart(code: string, ms: number, tz: string, 
     return fromWall(unitStepFor(iv, sessionDateFor(toWall(start, tz), day), 1, day), tz)
   }
   let cursor = start
-  for (;;) {
-    cursor = nextIntradayStart(code, cursor, tz)
+  while (cursor - start <= NEXT_START_SEARCH_MS) {
+    cursor = nextIntradayStart(code, cursor, tz, day)
     if (scheduleIsMarketOpen(cursor, tz, day)) return cursor
+    cursor = lastStartBeforeReopening(code, cursor, tz, day)
   }
+  throw new Error(`no ${code} candle opens within ${NEXT_START_SEARCH_MS / DAY} days of ${new Date(start).toISOString()} on ${tz} (${day.openOffset}, ${day.closeOffset})`)
 }
 
 /** `isMarketOpen` under `day` -- the BOUNDARY notion, which is not the schedule's own: an
@@ -779,6 +848,49 @@ export function scheduleIsMarketOpen(ms: number, tz: string, day: DayGeometry): 
   if (weekday(sessionDay) >= 5) return false
   if (contiguous(day)) return true
   return dayOpen(sessionDay, day) <= wall && wall < dayClose(sessionDay, day)
+}
+
+/** When an instrument trades, as `/instrument` states it (`client/daygeometry.ts`
+ * `tradingWeekOf`): half-open spans of the repeating week on `timezone`'s wall clock. The same
+ * shape as the library's `TradingWeek`, restated so this file keeps no imports. */
+export interface TradingWeek {
+  timezone: string
+  sessions: ReadonlyArray<{ openDay: string; openTime: string; closeDay: string; closeTime: string }>
+}
+
+const WEEK_DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+const WEEK = 7 * DAY
+
+/** Milliseconds from Monday 00:00 of a session's day and time-of-day ('HH:MM[:SS]'). */
+function weekPosition(dayName: string, time: string): number {
+  const [h = 0, m = 0, sec = 0] = time.split(':').map(Number)
+  return WEEK_DAYS.indexOf(dayName) * DAY + ((h * 60 + m) * 60 + sec) * 1000
+}
+
+/**
+ * The FILTERING rule of a schedule -- wmarkettypes' `MarketHours.is_open` / `is_open_index`,
+ * ported: does a row at `ms` count. Each instant is reduced to its place in the repeating week on
+ * the trading week's own wall clock (where DST is handled) and tested against every
+ * `[open, close)` span; a span whose close equals its open is the whole week.
+ *
+ * Not `scheduleIsMarketOpen`, which is the BOUNDARY rule (may a candle open here), and the two are
+ * different questions wherever the trading week is not the grid: a US equity is boundary-open
+ * from 09:00 and trades from 09:30; a lira cross keeps Istanbul's day on New York's FX grid. The
+ * spans are read once, so the returned test costs one wall-clock conversion per row.
+ */
+export function tradingFilter(week: TradingWeek): (ms: number) => boolean {
+  const spans = week.sessions.map((session) => {
+    const open = weekPosition(session.openDay, session.openTime)
+    const span = (((weekPosition(session.closeDay, session.closeTime) - open) % WEEK) + WEEK) % WEEK
+    return { open, length: span === 0 ? WEEK : span }
+  })
+  const tz = week.timezone
+  return (ms) => {
+    // 1970-01-01 was a Thursday, three days after a Monday.
+    const position = (((toWall(ms, tz) + 3 * DAY) % WEEK) + WEEK) % WEEK
+    for (const { open, length } of spans) if ((((position - open) % WEEK) + WEEK) % WEEK < length) return true
+    return false
+  }
 }
 
 /** The wire offset for daily-and-coarser bars under `day`: the negation of its open offset,
@@ -803,6 +915,11 @@ export function scheduleWireShift(code: string, day: DayGeometry): number {
 export interface Schedule {
   timezone: string
   day: DayGeometry
+  /** When its rows count (`SymbolInfo.tradingWeek`), where the grid does not say: a US equity's
+   * 09:30 open under its 09:00 anchor, a lira cross's Istanbul day. Absent, `CandleGrid.isTrading`
+   * falls back to the boundary rule -- the same answer only where the trading week is the grid
+   * (forex and crypto without a `trading` block). */
+  trading?: TradingWeek
 }
 
 /** The FX week on New York -- what every OANDA instrument resolves to. A value for tests and
@@ -810,8 +927,13 @@ export interface Schedule {
 export const FX_SCHEDULE: Schedule = { timezone: MARKET_TZ, day: FX_DAY }
 
 /** The schedule a `SymbolInfo` carries, or null when the server resolved none for it. */
-export function scheduleOf(symbol: { timezone?: string; dayGeometry?: DayGeometry } | null | undefined): Schedule | null {
-  return symbol?.timezone && symbol.dayGeometry ? { timezone: symbol.timezone, day: symbol.dayGeometry } : null
+export function scheduleOf(
+  symbol: { timezone?: string; dayGeometry?: DayGeometry; tradingWeek?: TradingWeek } | null | undefined
+): Schedule | null {
+  if (!symbol?.timezone || !symbol.dayGeometry) return null
+  const schedule: Schedule = { timezone: symbol.timezone, day: symbol.dayGeometry }
+  if (symbol.tradingWeek) schedule.trading = symbol.tradingWeek
+  return schedule
 }
 
 /** Every boundary question the replay asks, on one instrument's schedule. */
@@ -825,6 +947,9 @@ export interface CandleGrid {
   nextStart(code: string, ms: number): number
   /** The BOUNDARY notion of open: may a candle open here. */
   isOpen(ms: number): boolean
+  /** The FILTERING notion: is the instrument trading at `ms`, so that a row there counts in a
+   * fold of rows (`tradingFilter` on the schedule's trading week; `isOpen` without one). */
+  isTrading(ms: number): boolean
   /** A bar's wire label from its open (daily-and-coarser are dated by session). */
   toWire(code: string, openMs: number): number
   /** A bar's open from its wire label. */
@@ -845,12 +970,14 @@ export function gridOf(schedule: Schedule): CandleGrid {
   const end = (code: string, ms: number): number => scheduleIntervalEnd(code, ms, tz, day)
   const nextStart = (code: string, ms: number): number => scheduleNextIntervalStart(code, ms, tz, day)
   const isOpen = (ms: number): boolean => scheduleIsMarketOpen(ms, tz, day)
+  const isTrading = schedule.trading ? tradingFilter(schedule.trading) : isOpen
   return {
     schedule,
     start,
     end,
     nextStart,
     isOpen,
+    isTrading,
     nextDayAnchor(ms) {
       const wall = toWall(ms, tz)
       const anchor = floorDay(wall) + ((((day.closeOffset % 24) + 24) % 24) * HOUR)
@@ -877,7 +1004,9 @@ export const FX_GRID: CandleGrid = gridOf(FX_SCHEDULE)
 
 /** The grid of the instrument a `SymbolInfo` describes -- a pane's, say -- or null when the
  * server resolved no market hours for it. */
-export function gridFor(symbol: { timezone?: string; dayGeometry?: DayGeometry } | null | undefined): CandleGrid | null {
+export function gridFor(
+  symbol: { timezone?: string; dayGeometry?: DayGeometry; tradingWeek?: TradingWeek } | null | undefined
+): CandleGrid | null {
   const schedule = scheduleOf(symbol)
   return schedule ? gridOf(schedule) : null
 }

@@ -92,6 +92,65 @@ Only where the level is *drawn from* changes with the run — the turn, and ther
 becomes knowable, is the same candle. The life starts after the run's **last** candle, so the
 candles that built a zone can never be what erases it.
 
+### The largest candle (2026-10-26)
+
+**A candle too big is not supply or demand** (user, on EURUSD 1D: "the 8/19 bar is too big for
+supply"). That supply was the run 08-19..08-20: 08-20's body is 1.5 pips, under the smallest-zone
+threshold, so the run walked back into 08-19, a 109-pip impulse candle at **2.24×** ATR. The line
+landed on 08-19's open at 1.15763, the bottom of the rally rather than where the selling began. The
+zone was 102 pips tall, the stop sat 134 pips above the line, and the level was still live at the
+right edge 46 sessions later. His archive has no size rule; this is the user's, like the body extent.
+
+`maxCandle` (parameter 10, `Largest candle (% of ATR)`, default **200**, 0 = no limit) is the
+largest range, wicks included, a zone's candle may have, as a multiple of the **ATR(14) of the
+candles before it**. The ATR is measured before the candle so that a big candle is not its own
+yardstick. A candle over the limit has one of two effects:
+
+- **before the last candle**, it stops the run walking back, so the zone is the candles after it.
+  At 2× the 08-19 supply becomes 08-20 alone: line 1.16770, stop 1.17105 (34 pips). The 08-25
+  candle's range covers that thin zone, but it closes back under the line, so the zone stands; it
+  was still live at 2026-10-23, the end of the bars this was measured on. (Until 2026-11-21 a
+  candle covering the area erased it, and this zone ended on 08-25.)
+- **as the last opposite-colour candle itself**, that turn has **no level**. The candle before it is
+  not "the last up-close candle before the sell-off", so drawing from it would invent a level.
+
+`TT:entries` trades the zones the Heath levels indicator on its pane draws, this limit included
+(below, "It feeds the entries too"); with no Heath levels there it uses this default.
+
+**How 2× was chosen.** All figures come from prod bars of the seven majors, 2002 → 2026-10-23, at
+1D, 4h (folded from 1h on the 17:00 New York grid) and 1h. That is every level the shipped defaults
+find: 5,341 daily, 30,541 4h and 119,783 1h. A level is useful if price reacts at its line. The
+test, at the first bar after establishment whose range reaches the line, is whether price trades
+**1 ATR the zone's way before a close back through the line**; the touching bar itself can only
+fail. The control is the same test on 20 random bars of the same series per level, same side, with
+a line each bar traded into from its open.
+
+- **No size of candle makes a Heath line react more than a random line.** Levels whose largest
+  candle is under 0.75× ATR are level with the control: 43.1% against 42.5% on 1D, 42.0 against
+  41.7 on 4h, 40.7 against 40.9 on 1h. Larger candles do worse, falling to 28–35% by
+  1.25–1.5× and staying flat beyond that. There is no knee, so the data cannot say where "useful"
+  starts. Every limit makes the remaining levels slightly less bad, steadily, at a growing cost in
+  levels.
+- **What a limit does measure clearly is the levels it reshapes.** With the big candle dropped from
+  the run, they stop reacting worse than random and their stop moves a whole move closer:
+
+| at 2× | 1D | 4h | 1h |
+|---|---|---|---|
+| candles over the limit, of all candles | 3.7% | 6.0% | 6.3% |
+| levels deleted (the last candle too big) | 8.2% | 15.2% | 16.0% |
+| levels reshaped (an earlier candle too big) | 2.3% | 3.0% | 2.7% |
+| reshaped, reacting: before → after (control) | 33.3 → 38.9% (42–43) | 31.8 → 42.0% (42) | 31.8 → 37.1% (41–42) |
+| reshaped, median stop distance: before → after | 2.22 → 0.69 ATR | 2.32 → 0.70 | 2.39 → 0.81 |
+| all levels, reacting minus control: none → 2× | −10.4 → −10.3 pts | −8.1 → −7.6 | −5.3 → −4.8 |
+
+So the number is a definition of "too big", not a measured threshold of usefulness. The data gives
+it two bounds. **2× is the top 4–6% of candles on every timeframe**, the same meaning everywhere.
+And it is the largest round multiple that still catches 08-19 (2.24×); 2.5× lets that candle back
+in. Going lower than 2× costs levels quickly (1.5× deletes 26% of daily levels and 32–33%
+intraday) for a gain that only shrinks the gap to the control. Nothing here is a trade, and costs
+are not modelled. The scripts that reproduce every figure here are in
+`/workspace/notes/research/heath-largest-candle/`.
+
 **A candle is not a level until price trades away from it** (§3.3), and he means the whole
 candle:
 
@@ -106,21 +165,28 @@ drawn, and `TT:entries` cannot trade it. The one thing that ends a level before 
 **close beyond the stop** (`failed`): price went the other way instead of leaving.
 
 A level's life after that, all of it forward-looking: **tested** the first time a later bar's
-range reaches back *into* it, and **erased** two ways —
+range reaches back *into* it, and **erased** only by a **close through the line** he draws: above
+a supply's open, below a demand's. A **wick** through it is not a break, however far it reaches —
+the same rule as his support and resistance (§4.1, "only a body close counts"), and the user's:
+"wicks above supply or below demand do not invalidate a zone" (2026-10-27). A wick into the area
+marks it tested.
 
-| | |
-|---|---|
-| **closed** | a **close through the line** he draws: above a supply's open, below a demand's. A **wick** through it is not a break — the same rule as his support and resistance (§4.1, "only a body close counts"). |
-| **through** | one candle's *whole range*, wicks included, covers the area (user, 2026-09-21). A wick that reaches only **part way** in leaves it live, and marks it tested. |
+Until 2026-11-21 a candle whose *whole range* covered the area also erased it (user,
+2026-09-21). That is a wick through the zone whenever the candle closes back on the zone's side,
+so it went with the 10-27 restatement. On prod bars of the seven majors (2002 → 2026-10-23,
+shipped defaults) it had ended 8.0% of established 1D zones, 10.4% of 4h and 12.1% of 1h; almost
+all of them are now ended by a later close through the line, a median 4 (1D) to 5 (4h, 1h) bars
+later. Those zones re-test as well as any other (`notes/research/heath-retest`, 2026-10-27: 1D
+−4.0 points z −1.0, 4h +0.1, 1h −0.4 against the random-line control).
 
-Both are judged only once the level is established, which is what stops the move that *creates*
-a level from destroying it — the area is the origin run's own bodies, so the bars around the
-turn are still standing in it.
+The close is judged only once the level is established, which is what stops the move that
+*creates* a level from destroying it — the area is the origin run's own bodies, so the bars
+around the turn are still standing in it.
 
 Measured on 30 days of dev EURUSD 1h (2026-09-28), against the looser readings this replaced:
 63 levels found either way, of which **17 never become zones at all** (price closed through the
 stop before it ever left) and 46 are established; 35 of those are erased by a close through the
-line and 3 by a candle covering the area, and the median life is **13 bars against the old
+line and 3 by a candle covering the area (the rule retired 2026-11-21), and the median life is **13 bars against the old
 rule's 10** — the strict reading starts the clock later and then ends it sooner. On 400 days of
 1D: 30 of 36 established, 3 still live at the right edge where the loose rule left 7.
 
@@ -130,7 +196,8 @@ only when the parameter asks for it. The line is **dashed until the swing is con
 stretch exists in hindsight only, and dashing it is the difference between showing the method
 and flattering it). Everything dims once tested. Live levels are named at the right edge —
 `supply`, `demand · tested`. Params: `[left, right, sides, fresh only, stop edge, shading %,
-calendar, candles in one zone, smallest zone %]`, default `[5, 5, 0, 0, 0, 12, 1, 3, 50]`; each parameter after the
+calendar, candles in one zone, smallest zone %, largest candle %]`, default
+`[5, 5, 0, 0, 0, 12, 1, 3, 50, 200]`; each parameter after the
 fifth was **appended**, so a layout saved before one existed reads its default rather than zero.
 
 **The calendar levels, optionally underneath** (2026-09-21). A seventh parameter,
@@ -157,9 +224,20 @@ reading (#145), where on hourly charts drawn from the single line he scraps it o
 **the line** itself (#93, #94). The user asked for his readings, and the table above is now them.
 
 **It feeds the entries too** (2026-09-28). `TT:entries` parameter 7 (`supply and demand`, 0/1,
-default **on**) computes these same zones — the shipped defaults of this indicator, so what it
-trades is what the other indicator draws — and hands the entry rule one line per live zone, at the
-zone's open, labelled `supply` or `demand`. From there nothing about the rule changes: a candle
+default **on**) computes these same zones and hands the entry rule one line per live zone, at the
+zone's open, labelled `supply` or `demand`.
+
+**It follows the Heath levels indicator on its pane** (user, 2026-10-26: "make TradeTalk entries
+follow the Heath levels setting"). With a Heath levels indicator on the same pane, entries trades
+the zones that indicator draws: its bars before and after a turn, candles in one zone, smallest
+zone and **largest candle** (`zoneSettingsOf`). An edit to any of them rebinds entries, which trades
+the new zones within half a second. The plugin declares this through the host's `follows` hook,
+`followedHeath` in `plugin.ts`. With no Heath levels on the pane it uses that indicator's defaults
+(`ENTRY_HEATH`), and with two it follows the first. A Heath levels indicator on another wall pane
+is another chart and is not looked at. The drawing's own choices stay with the drawing: which
+side, the stop line, shading and calendar levels. **Fresh only** in particular is never followed:
+it filters zones by whether price ever came back, judged over the whole series, which a trade
+taken at the time could not know. From there nothing about the rule changes: a candle
 sweeps the line, closes back through it, and the break of that candle is the entry. His own setups
 read this way (§8 setup 1 pulls back "into a level"), and a zone is **live on the map from the bar
 its swing was confirmed until the bar that erased it** — the same forward-only life the other

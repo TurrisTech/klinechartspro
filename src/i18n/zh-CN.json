@@ -369,5 +369,12 @@
   "indicator_param_above": "{name} 不能大于 {bound}",
   "indicator_param_fraction": "{name} 必须是整数",
   "indicator_param_empty": "至少要保留一条线",
-  "indicator_param_refused": "此窗格不可用"
+  "indicator_param_refused": "此窗格不可用",
+  "drawing_actions": "已选中的绘图",
+  "drawing_delete": "删除绘图",
+  "drawing_lock": "锁定绘图",
+  "drawing_unlock": "解锁绘图",
+  "drawing_deselect": "完成",
+  "ruler": "测量尺：在图表上拖动即可测量（鼠标为 Shift + 拖动）",
+  "ruler_armed": "在图表上拖动以测量"
 }

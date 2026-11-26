@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { assertSignedIn, holdLiveToken, liveHeaders } from '../livetest'
 
 // THE LAB AGAINST THE OVERLAY'S GRAPH, on a real server: a long and a short rule from one root,
 // every slot at the rank 85 overlay's setting, must enter on exactly the 5m and 3m signals the
@@ -13,7 +14,8 @@ import { describe, expect, test } from 'bun:test'
 // Opt-in, like client/replay/e2e.test.ts: `LAB_LIVE=http://127.0.0.1:20002 bun test client/lab/live.test.ts`
 // against a wdashboard-server with arev21 rows (the dev stack). Passed 2026-10-15 on dev EURUSD,
 // 30 days, three root sets (28/3, 4/3 and 28/3 entries) against the client-built graph, and again
-// 2026-10-20 against the server's.
+// 2026-10-20 against the server's. A server with the login on also wants OHLCV_API_TOKEN
+// (client/livetest.ts says how to get one).
 
 const BASE_URL = process.env.LAB_LIVE
 
@@ -21,6 +23,7 @@ describe.skipIf(!BASE_URL)('the lab against the graph-entry engine (real server)
   test('the same entries, root by root', async () => {
     const g = globalThis as Record<string, unknown>
     g.window = { location: { origin: BASE_URL, href: `${BASE_URL}/`, search: '' }, navigator: { userAgent: 'test' }, OHLCV_BASE_URL: BASE_URL }
+    holdLiveToken()
     const { loadCapabilities } = await import('../capabilities')
     await loadCapabilities()
     const { HttpLabData } = await import('./data')
@@ -30,6 +33,10 @@ describe.skipIf(!BASE_URL)('the lab against the graph-entry engine (real server)
     const { GraphEntryEngine } = await import('../alerts/graphentry')
     const { HttpAlertData } = await import('../alerts/data')
     const symbol = process.env.LAB_LIVE_SYMBOL ?? 'oanda:EURUSD'
+    // /capabilities is public, so loading it above proves nothing about the login. Bun.fetch for
+    // the reason client/tiles/parity.test.ts gives.
+    const instrument = `${BASE_URL}/instrument?symbol=${encodeURIComponent(symbol)}`
+    assertSignedIn(await Bun.fetch(instrument, { headers: liveHeaders() }), instrument)
     const to = Date.now()
     const from = to - 30 * 86_400_000
     let compared = 0

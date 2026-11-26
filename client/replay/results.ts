@@ -1,5 +1,5 @@
 import type { SimSnapshot } from '../trading/api'
-import { formatDuration, formatMoney, formatPercent } from '../trading/format'
+import { formatDuration, formatMoney, formatShare } from '../trading/format'
 import type { StatRow, StatTone } from '../trading/stats'
 
 // PURE. How a replay session has gone, worked out from its snapshot: the closed trades' realised
@@ -86,7 +86,7 @@ export function replayResults(snapshot: SimSnapshot, startedAt: number, cursor: 
 
 /** The figure under the panel's title: net P&L, in the account's currency and as a return. */
 export function resultHeadline(r: ReplayResults): { text: string; tone: StatTone } {
-  return { text: `${formatMoney(r.net, r.currency)} · ${formatPercent(r.netPct)}`, tone: tone(r.net) }
+  return { text: `${formatMoney(r.net, r.currency)} · ${formatShare(r.netPct)}`, tone: tone(r.net) }
 }
 
 /** The rows, in pairs that read across the two columns. Money without the currency -- the

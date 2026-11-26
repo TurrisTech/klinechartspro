@@ -99,6 +99,22 @@ export interface SourceSpec<P = unknown> {
   createStore?(key: string): SourceStore<P>
   /** Live updates. Returns the disposer. */
   subscribe?(store: SourceStore<P>, notify: SourceNotify): () => void
+  /** Have the SERVER work out ahead of time what this source will read once the read clock
+   * stands at `at`: a bar replay's next landing, before the press (`PluginHost.warmAhead`).
+   * Optional, and only worth offering for a source whose first read of a region is expensive on
+   * the server and cached there -- the MTF overlays' `/mtf/graph`. */
+  warm?: SourceWarm
+}
+
+/** How a source is warmed (`SourceSpec.warm`). Two halves, so the host can send ONE read for
+ * every pane sharing a store, over the union of their windows. */
+export interface SourceWarm {
+  /** The window this source will read once the read clock stands at `at`, for the bars the pane
+   * will hold then (`chartRange`, on the chart's clock, as `window` takes it). */
+  window(chartRange: Range, at: number): Range | null
+  /** Ask the server for `window` under the read clock `at`, for its caches only. Nothing is
+   * filed: the answer lies past the chart's clock, and a store holding it would draw it early. */
+  read(window: Range, at: number): Promise<void>
 }
 
 export interface BoundSource {
@@ -149,6 +165,15 @@ export interface BindContext {
    * the pane's own, or what an unconfigured pane draws with. An edit rebinds, so a binding
    * reads this once and never has to watch it. */
   config: object | undefined
+  /** Change one of those settings (a dotted `key` into `config`), exactly as the gear's panel or
+   * the indicator manager would: kept for the pane, the wall saved, and the pane rebound -- so
+   * this binding is replaced by one made with the new `config`. For a control the binding draws
+   * itself (the level alerts' "Make default"). Absent when the plugin declares no settings for
+   * this template. */
+  editConfig?(key: string, value: unknown): void
+  /** What the plugin's `follows` answered for this indicator, or undefined for a plugin that
+   * follows nothing. Part of the binding's identity, so like `config` it is read once. */
+  follows?: unknown
 }
 
 export interface SettingsRequest {
@@ -246,4 +271,9 @@ export interface IndicatorPlugin {
   paneConfigs?: readonly PaneConfig[]
   /** Answer the params dialog (ChartProOptions.indicatorParamsValidator). */
   validateParams?(request: ValidateRequest): Promise<IndicatorParamsCheck>
+  /** What a binding reads from the chart beyond its own indicator: another template's
+   * parameters, say. Asked with the chart's indicators on every reconcile; the answer is part
+   * of the binding's identity, so a change rebinds just as an edit of the indicator's own
+   * parameters does, and `bind` gets it as `BindContext.follows`. JSON-serialisable. */
+  follows?(indicator: Indicator, indicators: readonly Indicator[]): unknown
 }

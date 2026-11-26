@@ -1,6 +1,6 @@
 // The trading choices a user makes once and expects to find again: how the ticket sizes an
-// order (and the number behind each way of sizing it) and states a stop, the risk and reward numbers, and whether the on-chart order card is
-// rolled up. One document per browser, read by the ticket and by every pane's card.
+// order (and the number behind each way of sizing it) and states a stop, a trail, a breakeven and the milestones, the risk and reward numbers, whether the on-chart order card is
+// rolled up, whether closed trades are drawn on the chart, and what the Performance tab shows. One document per browser, read by the ticket and by every pane's card.
 //
 // It is also the channel that keeps those consumers in step: a change from any of them notifies
 // the rest (rolling the card up on one pane rolls it up on every pane), and a change in another
@@ -18,6 +18,13 @@ export function sizedByStop(mode: SizeMode): boolean {
   return mode === 'risk' || mode === 'riskAmount'
 }
 export type ProtectMode = 'pips' | 'price' | 'percent'
+/** How a trailing stop, a breakeven or a milestone states its distance (exits.ts): pips, a price
+ * difference, a percentage of the price, a multiple of the ATR, or a multiple of R. */
+export type ExitUnit = 'pips' | 'price' | 'percent' | 'atr' | 'r'
+export const EXIT_UNIT_IDS: readonly ExitUnit[] = ['pips', 'price', 'percent', 'atr', 'r']
+export type PerfMetric = 'balance' | 'equity'
+export type PerfRange = '1M' | '3M' | '6M' | '1Y' | 'all'
+const PERF_RANGE_IDS: readonly PerfRange[] = ['1M', '3M', '6M', '1Y', 'all']
 
 export interface TradePrefs {
   /** The ticket's size when it is given in units. */
@@ -38,6 +45,10 @@ export interface TradePrefs {
   protectMode: ProtectMode
   /** The target multiple last chosen (1R/2R/3R), which the card's target button uses. */
   rewardRatio: number
+  /** How a trailing stop, a breakeven and the milestones are stated, each its own (exits.ts). */
+  trailUnit: ExitUnit
+  breakevenUnit: ExitUnit
+  notifyUnit: ExitUnit
   /** The on-chart order card rolled up on every pane; null until chosen, when a phone-sized pane
    * starts rolled up and a larger one open. */
   cardCollapsed: boolean | null
@@ -45,6 +56,12 @@ export interface TradePrefs {
    * confirming press within three seconds -- in the trade box, on the pane and in the popup alike.
    * A change to a working stop, target or price is confirmed either way (user, 2026-09-15). */
   oneClick: boolean
+  /** Closed trades drawn on the panes of their instrument: entry, exit and the path between
+   * (user, 2026-11-13). Off until chosen -- a busy history is a lot of marks on a chart. */
+  historyOnChart: boolean
+  /** The account window's Performance tab: which measure, over which range. */
+  perfMetric: PerfMetric
+  perfRange: PerfRange
 }
 
 export const DEFAULT_PREFS: TradePrefs = {
@@ -57,8 +74,14 @@ export const DEFAULT_PREFS: TradePrefs = {
   riskPercent: 1,
   protectMode: 'pips',
   rewardRatio: 2,
+  trailUnit: 'pips',
+  breakevenUnit: 'r',
+  notifyUnit: 'r',
   cardCollapsed: null,
-  oneClick: false
+  oneClick: false,
+  historyOnChart: false,
+  perfMetric: 'balance',
+  perfRange: '1M'
 }
 
 const STORAGE_KEY = 'wd-trade-prefs'
@@ -71,6 +94,8 @@ let watching = false
 
 const positive = (v: unknown, max = Number.POSITIVE_INFINITY): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v > 0 && v <= max
+
+const exitUnit = (v: unknown, fallback: ExitUnit): ExitUnit => (EXIT_UNIT_IDS.includes(v as ExitUnit) ? (v as ExitUnit) : fallback)
 
 /** Anything malformed falls back field by field, so a bad value never costs the rest. */
 export function parsePrefs(raw: unknown): TradePrefs {
@@ -88,8 +113,14 @@ export function parsePrefs(raw: unknown): TradePrefs {
         ? p.protectMode
         : DEFAULT_PREFS.protectMode,
     rewardRatio: positive(p.rewardRatio, 100) ? p.rewardRatio : DEFAULT_PREFS.rewardRatio,
+    trailUnit: exitUnit(p.trailUnit, DEFAULT_PREFS.trailUnit),
+    breakevenUnit: exitUnit(p.breakevenUnit, DEFAULT_PREFS.breakevenUnit),
+    notifyUnit: exitUnit(p.notifyUnit, DEFAULT_PREFS.notifyUnit),
     cardCollapsed: typeof p.cardCollapsed === 'boolean' ? p.cardCollapsed : null,
-    oneClick: p.oneClick === true
+    oneClick: p.oneClick === true,
+    historyOnChart: p.historyOnChart === true,
+    perfMetric: p.perfMetric === 'equity' ? 'equity' : 'balance',
+    perfRange: PERF_RANGE_IDS.includes(p.perfRange as PerfRange) ? (p.perfRange as PerfRange) : DEFAULT_PREFS.perfRange
   }
 }
 

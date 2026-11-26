@@ -3,8 +3,10 @@ import { installWindow } from '../plugins/testing'
 
 installWindow()
 const { dailyWindow } = await import('./api')
-const { clockFor, createTradeTalkPlugin, isSessionDated } = await import('./plugin')
-const { DEFAULT_PARAMS, settingsOf, summaryText, tradeLabel } = await import('./templates')
+const { clockFor, createTradeTalkPlugin, followedHeath, isSessionDated } = await import('./plugin')
+const { calc, DEFAULT_PARAMS, ENTRY_HEATH, settingsOf, summaryText, tradeLabel } = await import('./templates')
+const { DEFAULT_PARAMS: HEATH_DEFAULTS, zoneSettingsOf } = await import('./heathtemplate')
+import type { Indicator, KLineData } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
 import type { BindContext, BindingState, PluginFacilities } from '../plugins/types'
 import type { Trade } from './rules'
@@ -147,5 +149,68 @@ describe('the binding', () => {
   test('TradeTalk entries always reads daily bars', () => {
     expect(plugin.bind(ctx('TT:entries', [2, 1, 1, 5, 0, 1]))?.sources).toHaveLength(1)
     expect(plugin.bind(ctx('TT:entries', [2, 1, 1, 5, 0, 1]))?.label(state('ready'))).toBe('TradeTalk')
+  })
+
+  test('TradeTalk entries hands the template the Heath levels it follows, or null for none', () => {
+    const followed = zoneSettingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50, 150])
+    const extend = (follows: unknown) =>
+      plugin.bind({ ...ctx('TT:entries', [...DEFAULT_PARAMS]), follows })?.extendData?.(state('ready'))
+    expect(extend(followed)?.heath).toEqual(followed)
+    expect(extend(null)?.heath).toBeNull()
+    expect(extend(undefined)?.heath).toBeNull()
+  })
+})
+
+describe('TradeTalk entries trades the zones Heath levels draws', () => {
+  const ind = (name: string, id: string, calcParams: unknown[], paneId = 'candle_pane'): Indicator =>
+    ({ name, id, paneId, calcParams }) as unknown as Indicator
+  const entries = ind('TT:entries', 'e', [...DEFAULT_PARAMS])
+
+  test('it follows the Heath levels indicator on its own pane', () => {
+    const heath = ind('TT:heathlevels', 'h', [5, 5, 0, 0, 0, 12, 1, 3, 50, 150])
+    expect(followedHeath(entries, [entries, heath])).toEqual(zoneSettingsOf(heath.calcParams))
+    expect(followedHeath(entries, [entries, heath])?.maxCandle).toBe(1.5)
+    // The first of two; one on another chart pane (a sub-pane) is not this one's.
+    const second = ind('TT:heathlevels', 'h2', [5, 5, 0, 0, 0, 12, 1, 3, 50, 300])
+    expect(followedHeath(entries, [entries, heath, second])?.maxCandle).toBe(1.5)
+    expect(followedHeath(entries, [entries, ind('TT:heathlevels', 'h3', [5, 5, 0, 0, 0, 12, 1, 3, 50, 0], 'sub')])).toBeNull()
+  })
+
+  test('with none on the pane it follows nothing, and trades the Heath levels defaults', () => {
+    expect(followedHeath(entries, [entries, ind('SWING', 's', [])])).toBeNull()
+    expect(ENTRY_HEATH).toEqual(zoneSettingsOf(HEATH_DEFAULTS))
+    expect(ENTRY_HEATH.maxCandle).toBe(2)
+  })
+
+  test('the plugin says so to the host: entries follows, Heath levels itself does not', () => {
+    const plugin = createTradeTalkPlugin()
+    const heath = ind('TT:heathlevels', 'h', [5, 5, 0, 0, 0, 12, 1, 3, 50, 150])
+    expect(plugin.follows?.(entries, [entries, heath])).toEqual(zoneSettingsOf(heath.calcParams))
+    expect(plugin.follows?.(heath, [entries, heath])).toBeNull()
+  })
+
+  test('the largest candle it follows decides what it trades', () => {
+    // A supply at the swing top on bar 3, a candle 1.35x the ATR before it, established by
+    // bar 5's close under its low. Under a 1.3x limit that candle is too big to be a zone.
+    const raw = [
+      [10, 10.5, 9.4, 9.8],
+      [9.8, 10.3, 9.7, 10.2],
+      [10.2, 11.5, 10.1, 11.3],
+      [11.3, 12.6, 11.2, 12.4],
+      [12.4, 12.5, 11.5, 11.6],
+      [11.6, 11.7, 10.8, 10.9],
+      [10.9, 11, 10.4, 10.5],
+      [10.5, 10.6, 9.6, 9.65]
+    ]
+    const bars = raw.map(([open, high, low, close], i) => ({ timestamp: i * 3_600_000, open, high, low, close })) as KLineData[]
+    const zones = (maxCandle: number) => {
+      const heath = { left: 2, right: 2, sides: 0 as const, freshOnly: false, stopLine: false, maxRun: 1, minWidth: 99, maxCandle }
+      const extendData = { seriesKey: '', rev: 0, clock: { timezone: 'UTC', openOffset: 0, sessionDated: false }, barMs: 3_600_000, tick: 0.01, heath }
+      return calc(bars, { extendData, calcParams: [...DEFAULT_PARAMS] }).map((value) =>
+        (value.levels ?? []).filter((level) => level.source === 'heath').map((level) => level.price)
+      )
+    }
+    expect(zones(0)[5]).toEqual([11.3])
+    expect(zones(1.3).flat()).toEqual([])
   })
 })

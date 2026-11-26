@@ -3,13 +3,15 @@ import { mountAlertManager, startAlerts } from './alerts'
 import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './alerts/graphentry'
 import type { MtfConfig } from './mtf/config'
 import { currentSession, logout } from './auth'
+import { whenSessionRejected } from './authtoken'
 import { capabilities, hasFeature, loadCapabilities } from './capabilities'
 import { attachToSlot } from './chrome/slot'
 import { setFocusSource } from './chrome/focus'
 import { WdashboardDatafeed } from './datafeed'
 import { defaultLayout, hydrateLayout, toPaneOptions, toPersistedLayout, type PersistedLayout } from './layout'
 import { createLevelsIndicators } from './levels/indicator'
-import { mountNotificationCenter, notifications } from './notifications'
+import { durableSink, mountNotificationCenter, notifications } from './notifications'
+import { createChannelSettings, HttpChannelsApi } from './notifications/channels'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
 import { availablePeriods, periodToResolution } from './periods'
@@ -23,22 +25,22 @@ import {
   mountBarReplay,
   type ReplayBoot,
   replayAvailable,
-  startReplayFlow
+  startReplayFlow,
+  takeReplayNotice
 } from './replay'
 import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
 import { symbolKey } from './trading/format'
-import { Arming } from './trading/kit'
-import { mountPriceWatches, type PriceWatchesController } from './watch'
-import { createRemoteNotifications } from './watch/notifications'
+import { loadWatches, mountPriceWatches, type PriceWatchesController } from './watch'
+import { createRemoteNotifications, raiseNotification } from './watch/notifications'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { createWorkspaceSaveControls, type WorkspaceSaveControls } from './workspaces/save'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
 
 import './style.css'
 
-// Used only when the server doesn't advertise 'preferences' (prod, today) or a fetch of the
-// user's own set fails — the account's real starred set otherwise comes from
+// Used only when the server doesn't advertise 'preferences' (one without the dashboard login)
+// or a fetch of the user's own set fails — the account's real starred set otherwise comes from
 // loadStarredTimeframes(), seeded server-side by wdashboard-server's appstate migration.
 const DEFAULT_STARRED_TIMEFRAMES = ['1m', '1h', '1D', '1W', '1M']
 
@@ -61,10 +63,11 @@ async function bootstrap(): Promise<void> {
   const appContainer = document.getElementById('app')
   if (!appContainer) throw new Error('#app not found')
 
-  // The login gate is dev-only, and the client is one bundle deployed to both dev and
-  // prod: gating unconditionally would leave prod (which has no appstate database, so
-  // 'auth' is never advertised) stuck at a login form nothing could ever satisfy. See
-  // capabilities.ts's Feature union and appstate.py's module docstring.
+  // The sign-in, wherever the server has the dashboard login on (it advertises 'auth'; dev and
+  // prod both do). The server enforces it on every route -- this form is how a browser gets the
+  // session it must present, not the protection itself (config.ts `serverFetch`, stream.ts).
+  // Gated on the feature rather than unconditional because one bundle is served everywhere,
+  // and a server without the login would leave the page at a form nothing can satisfy.
   if (hasFeature('auth')) {
     const session = await currentSession()
     if (!session) {
@@ -73,6 +76,9 @@ async function bootstrap(): Promise<void> {
       })
       return
     }
+    // From here on a refusal means the session has gone while the page was open (expired,
+    // signed out in another tab, revoked): back to this form, the same way Sign out gets there.
+    whenSessionRejected(sessionEnded)
   }
 
   // The Strategy Lab is a page of its own (client/lab/page.ts): `/lab`, which both the dev server
@@ -84,6 +90,27 @@ async function bootstrap(): Promise<void> {
   }
 
   await runWall(appContainer)
+}
+
+/** The server refused the session mid-page (authtoken.ts `sessionRejected`, once however many
+ * requests it refused). The token is already gone, so a reload lands on the sign-in form --
+ * Sign out's own path. A wall with unsaved settings holds the reload behind the browser's
+ * leave-page prompt (runWall's `beforeunload`), so the notice says why nothing is loading to a
+ * user who chooses to stay. */
+function sessionEnded(): void {
+  const notice = document.createElement('div')
+  notice.className = 'wd-session-ended'
+  notice.setAttribute('role', 'alert')
+  const text = document.createElement('span')
+  text.textContent = 'Your session has ended.'
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'wd-session-ended-button'
+  button.textContent = 'Sign in again'
+  button.addEventListener('click', () => window.location.reload())
+  notice.append(text, button)
+  document.body.append(notice)
+  window.location.reload()
 }
 
 function isLabPage(): boolean {
@@ -131,6 +158,12 @@ async function runWall(container: HTMLElement): Promise<void> {
   }
 
   let scratch = linked !== null
+  // The scratch wall as it last stood. A rebuild -- entering or leaving replay, or a replay
+  // following its pane to another instrument -- builds from this, where the link alone would put
+  // every pane back on the linked instrument (and a followed replay would walk one the wall no
+  // longer shows). In memory only: a scratch wall still saves nothing, and a reload starts from
+  // the link again.
+  let scratchLayout: PersistedLayout | null = null
   const switcher = createWorkspaceSwitcher({
     store,
     transientLabel: () => (scratch ? `${linked} (link)` : null),
@@ -208,8 +241,11 @@ async function runWall(container: HTMLElement): Promise<void> {
             saveControls,
             // The draft when there is one: a rebuild (entering or leaving replay) or a switch
             // back to a workspace left with unsaved changes must not drop them.
-            layout: scratch ? defaultLayout(linked as string) : store.working(),
+            layout: scratch ? (scratchLayout ?? defaultLayout(linked as string)) : store.working(),
             persist: !scratch,
+            keepScratch: (layout) => {
+              scratchLayout = layout
+            },
             rebuild: () => void remount()
           })
         } catch (err) {
@@ -276,6 +312,8 @@ interface WallOptions {
   layout: PersistedLayout
   /** False for the `?symbol=` scratch wall, which deliberately saves nothing. */
   persist: boolean
+  /** Where a scratch wall's changes go instead: kept in memory for the next rebuild. */
+  keepScratch: (layout: PersistedLayout) => void
   /** Tear this wall down and build the next (entering or leaving replay). */
   rebuild: () => void
 }
@@ -361,9 +399,10 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // until Save (client/workspaces/save.ts). The store notifies the switcher and the Save and
   // Revert controls when that changes whether there is anything unsaved.
   const persist = (): void => {
-    if (!persistEnabled) return
     const layout = currentLayout()
-    if (layout) store.stageActiveLayout(layout)
+    if (!layout) return
+    if (persistEnabled) store.stageActiveLayout(layout)
+    else options.keepScratch(layout)
   }
   let latestSync = { ...hydrated.sync }
 
@@ -435,7 +474,12 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     // hand-scaled price axis. Before this, those survived only until some OTHER change
     // (a symbol, a timeframe, a layout) happened to persist the wall on their behalf.
     onPaneStateChange: persist,
-    onSymbolChange: persist,
+    onSymbolChange: (paneId, symbol) => {
+      // Staged first: a replay that follows the pane to its new instrument rebuilds the wall
+      // from the layout as it now stands (client/replay/follow.ts).
+      persist()
+      replay?.symbolChanged(paneId, symbol)
+    },
     onPeriodChange: persist,
     onSyncChange: (options) => {
       latestSync = options
@@ -456,7 +500,14 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // the first wall on (`startAlerts` is once per page), and the Alerts button + window for
   // this one. Mounted before the bell, so the two sit side by side in that order. A new alert
   // starts on the active pane's instrument and timeframe.
-  const alertsRuntime = await startAlerts(notifications)
+  //
+  // A live alert that fires is raised through the server where it can take one (`durableSink`,
+  // feature `notification_raise`): stored, shown on every tab, and delivered to the account's
+  // channels (Pushover, Telegram) like a watch's. A bar replay's notifications never go this way
+  // -- the replay raises its own into the centre directly.
+  const alertsRuntime = await startAlerts(
+    hasFeature('notification_raise') ? durableSink(notifications, raiseNotification) : notifications
+  )
   const alertManager = mountAlertManager(chartPro, alertsRuntime, {
     bounds: container,
     context: () => {
@@ -495,7 +546,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       notify: notifications,
       // Next alert: the same alerts, searched through the replay's own history.
       alerts: {
-        enabledOn: (symbol) => alertsRuntime.store.enabledOn(symbol),
+        enabled: () => alertsRuntime.store.enabled(),
         subscribe: (listener) => alertManager.subscribe(listener),
         search: alertsRuntime.search,
         catalogue: alertsRuntime.catalogue,
@@ -505,6 +556,11 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
     })
   } else {
     paper = mountPaperTrading(chartPro, container)
+    // The panes usually mounted during the awaits above, when `paper` was still undefined, and
+    // onPanesChange does not fire again until the layout changes -- so without this first sync
+    // nothing working was drawn on the chart after a page load (the same race `watches` covers
+    // below; the replay dock syncs itself).
+    paper?.sync(chartPro.getPanes())
   }
 
   // PRICE WATCHES: a line per level on every pane showing its instrument. One view, two
@@ -528,6 +584,18 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // waited for from onPanesChange -- which does not fire again until the layout changes.
   watches?.sync(chartPro.getPanes())
 
+  // LEVEL ALERTS: a level clicked on the Levels indicator is a price watch too -- price entering
+  // the level's zone -- on the same backend as the lines above, so it fires with the tab
+  // closed on a live wall and against the walked bars on a replay wall. Without `watch` a live
+  // wall has no backend, and the levels stay read-only.
+  levels.alerts.connect(
+    replay
+      ? { store: replay.watches.store, canWatch: (target) => replay?.watches.canWatch(target) ?? null }
+      : hasFeature('watch')
+        ? { store: await loadWatches() }
+        : null
+  )
+
   // The Notification Center, and the server store behind it. The two modules meet only
   // here: `client/watch/notifications.ts` is a `NotificationBackend` (client/notifications
   // knows nothing about watches), and a row arriving live also means a watch just changed
@@ -539,7 +607,19 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       })
     : null
   if (remoteNotifications) void notifications.attach(remoteNotifications)
-  const notificationCenter = mountNotificationCenter(chartPro)
+  // Where live notifications are delivered beyond the dashboard: the Delivery window
+  // (client/notifications/channels), opened from the bell's dropdown. The bell knows only a
+  // label and a click.
+  const deliverySettings = hasFeature('notification_channels')
+    ? createChannelSettings({ api: new HttpChannelsApi(), bounds: container })
+    : null
+  const notificationCenter = mountNotificationCenter(
+    chartPro,
+    notifications,
+    deliverySettings
+      ? [{ label: 'Delivery…', title: 'Send live notifications to Pushover or Telegram', onClick: () => deliverySettings.open() }]
+      : []
+  )
 
   // The pane the user last touched, which is where a body-level card opens on a page wide
   // enough to span displays (client/chrome/focus.ts).
@@ -574,7 +654,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       alertManager.teardown()
       watches?.teardown()
       watches = null
+      levels.dispose()
       notificationCenter.teardown()
+      deliverySettings?.dispose()
       setFocusSource(null)
       if (remoteNotifications) {
         notifications.detach(remoteNotifications)
@@ -597,7 +679,7 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
 // Returns a disposer, because a workspace switch replaces the chart these are attached to.
 /** A few words beside a rail button for a few seconds: the rail is 3rem wide, too narrow to
  * say why a press did nothing, and a press that silently does nothing reads as a broken one. */
-function railNote(anchor: HTMLElement, text: string): void {
+function railNote(anchor: HTMLElement, text: string, ms = 4000): void {
   const note = document.createElement('div')
   note.className = 'wd-rail-note'
   note.setAttribute('role', 'status')
@@ -606,7 +688,7 @@ function railNote(anchor: HTMLElement, text: string): void {
   note.style.left = `${box.right + 8}px`
   note.style.top = `${box.top + box.height / 2}px`
   document.body.appendChild(note)
-  setTimeout(() => note.remove(), 4000)
+  setTimeout(() => note.remove(), ms)
 }
 
 function mountChartExtras(
@@ -652,38 +734,25 @@ function mountChartExtras(
     const replayButton = document.createElement('button')
     replayButton.type = 'button'
     replayButton.className = `wd-rail-button${replay.inReplay ? ' is-on' : ''}`
-    const idleTitle = replay.inReplay ? 'Exit bar replay' : 'Bar replay: step through history from a date you choose'
+    const idleTitle = replay.inReplay ? 'Exit bar replay (it is kept: Replay → Sessions resumes it)' : 'Bar replay: step through history from a date you choose, or resume a past replay'
     const showIdle = (): void => {
       replayButton.textContent = 'Replay'
       replayButton.title = idleTitle
-      replayButton.classList.remove('is-armed')
     }
     showIdle()
-    // Leaving discards the replay -- nothing lists one to reopen -- so, like the controls' own
-    // Exit, it takes a second press within the trading kit's confirm window.
-    const exitArming = new Arming(() => {
-      if (exitArming.key === null) showIdle()
-      else {
-        replayButton.textContent = 'Exit?'
-        replayButton.title = 'Press again to leave replay. It cannot be reopened.'
-        replayButton.classList.add('is-armed')
-      }
-    })
+    // Leaving keeps the replay -- the start dialog's Sessions tab resumes it -- so, like the
+    // controls' own Exit, it is one press.
     replayButton.addEventListener('click', () => {
       if (replay.inReplay) {
-        if (!exitArming.press('exit', false)) return
         clearReplay()
         replay.rebuild()
         return
       }
-      // The start dialog needs the store probed first; say so while it is, and say why when
-      // the instrument has nothing to replay rather than doing nothing at all.
+      // The start dialog needs the store probed first; say so while it is. An instrument with
+      // nothing to replay still opens it, on Sessions, saying why (startReplayFlow).
       replayButton.disabled = true
       replayButton.textContent = 'Replay…'
       void startReplayFlow(chartPro, replayButton, replay.rebuild)
-        .then((refusal) => {
-          if (refusal) railNote(replayButton, refusal)
-        })
         .catch((err) => {
           console.error('[replay] could not open the start dialog', err)
           railNote(replayButton, "Couldn't open replay")
@@ -694,6 +763,11 @@ function mountChartExtras(
         })
     })
     footer.appendChild(replayButton)
+    // A replay that could not open drops the page on this live wall (client/replay/index.ts
+    // `takeReplayNotice`): say why beside the button that reopens it, once the rail is laid out.
+    // Longer than a press's note: nobody pressed anything here, so nobody is looking yet.
+    const notice = replay.inReplay ? null : takeReplayNotice()
+    if (notice) requestAnimationFrame(() => railNote(replayButton, notice, 10_000))
   }
 
   // The Strategy Lab, in a tab of its own so the wall stays where it is.

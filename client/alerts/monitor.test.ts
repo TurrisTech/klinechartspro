@@ -5,6 +5,8 @@ installWindow()
 const { AlertMonitor } = await import('./monitor')
 const { ClientAlertStore } = await import('./store')
 const { FX_GRID } = await import('../replay/timeframes')
+const { AREV21_OUTLIER_RANK_85_MTF } = await import('../mtf/overlays')
+import type { MtfGraphRequest, MtfNodeRow } from '../mtf/api'
 import type { NotificationSpec } from '../notifications'
 import type { OHLCVBar } from '../ohlcv'
 import type { StreamListener } from '../stream'
@@ -55,6 +57,9 @@ class FakeData implements AlertData {
   byInterval = new Map<string, AlertBar[]>()
   /** Set to hold every points read until it resolves -- a slow server. */
   gate: Promise<void> | null = null
+  /** The graph's nodes, and how far the server has computed it. */
+  nodes: MtfNodeRow[] = []
+  computedThrough: number | null = null
   constructor(public history: AlertBar[]) {}
   async grid() {
     return FX_GRID
@@ -62,8 +67,9 @@ class FakeData implements AlertData {
   async bars(_symbol: string, interval: string): Promise<AlertBar[]> {
     return this.byInterval.get(interval) ?? this.history
   }
-  async graph() {
-    return { signals: [], nodes: [], nextFrom: null, computedThrough: null }
+  async graph(request: MtfGraphRequest) {
+    const nodes = this.nodes.filter((n) => n.knownAt >= request.from && n.knownAt < request.to)
+    return { signals: [], nodes, nextFrom: null, computedThrough: this.computedThrough }
   }
   async points(_s: unknown, _sym: string, _i: string, from: number, to: number): Promise<Point[]> {
     if (this.gate) await this.gate
@@ -219,6 +225,43 @@ describe('AlertMonitor', () => {
     env.setClock(T0 + 55 * H)
     env.stream.push('1h', frame(54, 1.3))
     await settle()
+    expect(env.raised.length).toBe(1)
+  })
+
+  test('a star fires once: not at the next close of the other timeframe, nor the one there at the start', async () => {
+    const M = 60_000
+    const graph = (interval: string): Operand => ({ kind: 'graph', interval, overlay: AREV21_OUTLIER_RANK_85_MTF.id, timeframes: ['3m', '5m', '1h', '1D'], roots: ['1D'], maxStep: 8 })
+    const minuteBar = (step: number, i: number): AlertBar => {
+      const open = T0 + i * step * M
+      return { open, end: open + step * M, date: open, o: 1.1, h: 1.1, l: 1.1, c: 1.1, v: 1 }
+    }
+    const star = (step: number, i: number): MtfNodeRow => {
+      const b = minuteBar(step, i)
+      return { interval: `${step}m`, date: b.date, knownAt: b.end, price: 1.1, root: '1D', graph: 0, side: 'top', entry: true, parent: null }
+    }
+    // The newest closes at 01:00: 3m bar 19 and 5m bar 11, a 5m star on the latter.
+    const env = setup([], T0 + 60 * M + 1000)
+    env.data.byInterval.set('3m', Array.from({ length: 20 }, (_, i) => minuteBar(3, i)))
+    env.data.byInterval.set('5m', Array.from({ length: 12 }, (_, i) => minuteBar(5, i)))
+    env.data.nodes = [star(5, 11), star(3, 22)]
+    const step = async (interval: string, i: number) => {
+      const b = minuteBar(Number.parseInt(interval, 10), i)
+      env.setClock(b.end + 1000)
+      env.data.computedThrough = b.end + 999
+      env.stream.push(interval, { date: b.date, open: b.o, high: b.h, low: b.l, close: b.c, volume: 1 }, true)
+      await settle()
+    }
+    const either: Rule = { any: [graph('3m'), graph('5m')].map((left) => ({ left, op: '==', right: { label: '*' } })) }
+    await env.store.create(definition(either, { name: 'star' }))
+    await settle()
+    await step('3m', 20) // 01:03 -- the 5m star at 01:00 is still the latest 5m bar, and was there at the start
+    await step('5m', 12) // 01:05
+    await step('3m', 21) // 01:06
+    expect(env.raised.length).toBe(0)
+    await step('3m', 22) // 01:09 -- a 3m star
+    expect(env.raised.length).toBe(1)
+    expect(env.raised[0]).toMatchObject({ data: { eventAt: T0 + 69 * M } })
+    await step('5m', 13) // 01:10 -- the 3m star is still the latest 3m bar
     expect(env.raised.length).toBe(1)
   })
 

@@ -18,7 +18,8 @@
 // so this file can be tested without klinecharts.
 
 import { type Condition, ConditionError, OPS, parse } from './conditions'
-import { ANY_LABEL, type Operand, type Rule, type RuleLeaf, type RuleRight } from './types'
+import { toWall } from '../replay/timeframes'
+import { ANY_LABEL, type Operand, type Rule, type RuleLeaf, type RuleRight, type TimeField } from './types'
 
 export class RuleError extends Error {
   constructor(message: string) {
@@ -32,7 +33,7 @@ export const NUMERIC_OPS = ['crosses_above', 'crosses_below', 'crosses', '>', '>
 /** Operators against another OPERAND: the ones that read the difference's sign. */
 export const OPERAND_OPS = ['crosses_above', 'crosses_below', 'crosses', '>', '>=', '<', '<='] as const
 /** Operators a time of day is compared with: reached (once a day, at the first close at or
- * after it), between, not between, from, before. */
+ * after it), between, not between, from, before. A date and time takes the same, reached once. */
 export const TIME_OPS = ['crosses_above', 'inside', 'outside', '>=', '<'] as const
 
 /** How those read for a time of day -- "reaches 09:30" where a number "crosses above". */
@@ -94,6 +95,14 @@ export function isLabelOperand(operand: Operand): boolean {
 
 /** The weekdays a `weekday` operand reads, in the order the editor offers them. */
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+/** What each time field is called. */
+export const TIME_FIELD_NAMES: Record<TimeField, string> = { minute: 'time of day', weekday: 'weekday', datetime: 'date and time' }
+
+/** `2026-11-03 09:30` for an instant, on `zone`'s wall clock. */
+export function formatDateTime(at: number, zone: string): string {
+  return new Date(toWall(at, zone)).toISOString().slice(0, 16).replace('T', ' ')
+}
 
 /** `09:30` for 570 minutes past midnight. */
 export function formatMinute(minute: number): string {
@@ -224,7 +233,7 @@ function checkOperand(operand: Operand): void {
       if (!operand.strategy) throw new RuleError('choose a saved strategy')
       return
     case 'time':
-      if (operand.field !== 'minute' && operand.field !== 'weekday') throw new RuleError(`not a time field: ${operand.field}`)
+      if (!(operand.field in TIME_FIELD_NAMES)) throw new RuleError(`not a time field: ${operand.field}`)
       try {
         new Intl.DateTimeFormat('en-US', { timeZone: operand.zone })
       } catch {
@@ -277,7 +286,7 @@ export function plainLabel(operand: Operand): string {
     case 'graph':
       return `${operand.overlay} graph entry`
     case 'time':
-      return `${operand.field === 'minute' ? 'time of day' : 'weekday'} (${operand.zone})`
+      return `${TIME_FIELD_NAMES[operand.field]} (${operand.zone})`
     case 'strategy':
       return `${operand.strategy} entry`
   }
@@ -302,14 +311,15 @@ export function describeLeaf(node: RuleLeaf, label: Labeller = plainLabel): stri
   // A clock reading is read at each bar close of its timeframe: "at 5m closes" says so where
   // a bare "5m" after a time of day would read as a duration.
   const left = node.left.kind === 'time' ? `${label(node.left)} at ${node.left.interval} closes` : `${label(node.left)} ${node.left.interval}`
-  const clock = node.left.kind === 'time' && node.left.field === 'minute'
-  const words = (clock ? TIME_OP_WORDS[node.op] : undefined) ?? OP_WORDS[node.op] ?? node.op
+  const time = node.left.kind === 'time' && node.left.field !== 'weekday' ? node.left : null
+  const words = (time ? TIME_OP_WORDS[node.op] : undefined) ?? OP_WORDS[node.op] ?? node.op
   if (node.op === 'changed') return `${left} ${words}`
-  return `${left} ${words} ${describeRight(node.right, label, clock)}`
+  const format = time === null ? String : time.field === 'datetime' ? (at: number) => formatDateTime(at, time.zone) : formatMinute
+  return `${left} ${words} ${describeRight(node.right, label, time !== null, format)}`
 }
 
-function describeRight(right: RuleRight | undefined, label: Labeller, clock = false): string {
-  const number = (value: number): string => (clock ? formatMinute(value) : String(value))
+function describeRight(right: RuleRight | undefined, label: Labeller, clock = false, format: (value: number) => string = String): string {
+  const number = format
   if (!right) return '…'
   if ('operand' in right) return `${label(right.operand)} ${right.operand.interval}`
   if ('band' in right) return clock ? `${number(right.band[0])} and ${number(right.band[1])}` : `${number(right.band[0])}–${number(right.band[1])}`

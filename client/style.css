@@ -116,6 +116,31 @@ body {
   color: var(--foreground);
 }
 
+/* index.ts sessionEnded(): the server refused the session mid-page. Shown only while a
+   reload is held by the unsaved-settings prompt; otherwise the page is gone before it paints. */
+.wd-session-ended {
+  position: fixed;
+  top: 0.75rem;
+  left: 50%;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 6px;
+  background: #131722;
+  color: #d1d4dc;
+  transform: translateX(-50%);
+}
+
+.wd-session-ended-button {
+  color: #d1d4dc;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 /* client/chartlayers/settings.ts's settings panel. Wider than the library's default
    `.kc-popover` (16rem) — a layer's field list runs several groups deep — and scrolls
    internally rather than growing past the viewport.
@@ -1290,6 +1315,74 @@ body.wd-has-dock > #app {
   color: var(--kc-danger);
 }
 
+/* Exit management (kit.ts ExitField): a trailing stop is the stop's line with a step in it, a
+   breakeven a stop's dash meeting a dot, a milestone a dotted line -- the marks say "this moves the
+   stop" and "this only tells you". */
+.wd-tk-level[data-role='trail'] .wd-tk-mark {
+  --tk-mark: var(--tk-sell);
+  background:
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 0 100% / 45% 2px no-repeat,
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 100% 0 / 45% 2px no-repeat,
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 50% 50% / 2px 100% no-repeat;
+  height: 6px;
+}
+
+.wd-tk-level[data-role='breakeven'] .wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 6px, transparent 6px 9px);
+}
+
+.wd-tk-level[data-role='notify'] .wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 2px, transparent 2px 4px);
+}
+
+.wd-tk-num-input.is-list {
+  text-align: left;
+}
+
+.wd-tk-exit-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding-left: 1.375rem;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.wd-tk-exit-extras[hidden] {
+  display: none;
+}
+
+.wd-tk-exit-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.wd-tk .wd-tk-exit-extra-input {
+  width: 3.75rem;
+  height: calc(var(--tk-button) - 4px);
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--tk-radius);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.wd-tk .wd-tk-exit-extra-input:focus {
+  border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+}
+
+.wd-tk-exit-extra-input::placeholder {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
 /* Figures: label/value rows in two columns, the same rows on every surface. */
 .wd-tk .wd-tk-figs {
   display: grid;
@@ -1690,6 +1783,169 @@ body.wd-has-dock > #app {
   color: var(--muted-foreground);
 }
 
+/* History: whether it is on the chart, and what it adds up to. */
+.wd-trade-history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-trade-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.wd-trade-history-totals {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-history-totals.is-up {
+  color: #26a69a;
+}
+
+.wd-trade-history-totals.is-down {
+  color: #ef5350;
+}
+
+/* --- Performance: the balance or equity per period (client/trading/perfview.ts) ----------- */
+
+.wd-perf {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-perf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.wd-perf-seg {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.wd-perf-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.wd-perf-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.wd-perf-change {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wd-perf-change.is-up {
+  color: #26a69a;
+}
+
+.wd-perf-change.is-down {
+  color: #ef5350;
+}
+
+.wd-perf-since,
+.wd-perf-readout,
+.wd-perf-note {
+  color: var(--muted-foreground);
+}
+
+.wd-perf-note {
+  font-size: 0.6875rem;
+}
+
+.wd-perf-note[hidden] {
+  display: none;
+}
+
+.wd-perf-plot {
+  position: relative;
+  min-height: 132px;
+  /* A drawing measured a scrollbar ago may be a few pixels wide; it is redrawn on the next
+     resize or poll, and must not scroll the window sideways meanwhile. */
+  overflow-x: hidden;
+}
+
+.wd-perf-plot.is-loading {
+  opacity: 0.55;
+}
+
+.wd-perf-svg {
+  display: block;
+  overflow: visible;
+  color: var(--muted-foreground);
+}
+
+.wd-perf-grid {
+  stroke: color-mix(in oklab, var(--border) 70%, transparent);
+  stroke-width: 1;
+}
+
+.wd-perf-base {
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+}
+
+.wd-perf-tick {
+  fill: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-perf-tick.is-base {
+  fill: var(--foreground);
+}
+
+/* The period still running is the account now: the same colour, lighter until it closes. */
+.wd-perf-bar.is-live {
+  opacity: 0.6;
+}
+
+.wd-perf-plot.has-hover .wd-perf-bar:not(.is-hover) {
+  opacity: 0.45;
+}
+
+.wd-perf-bar.is-flat {
+  opacity: 0.5;
+}
+
+.wd-perf-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.wd-perf-hit:focus {
+  outline: none;
+}
+
+.wd-perf-hit:focus-visible {
+  fill: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.wd-perf-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 :root .wd-trade-cell-input.is-proposed {
   border-color: #f59e0b;
   background: color-mix(in oklab, #f59e0b 14%, transparent);
@@ -1794,6 +2050,10 @@ body.wd-has-dock > #app {
   padding: 0 5px 0 0;
 }
 
+.wd-oc-tag-share {
+  padding: 0 5px 0 0;
+}
+
 /* A drag the engine would refuse: said before it is sent. */
 .wd-oc-tag.is-invalid {
   border-style: dashed;
@@ -1862,7 +2122,8 @@ body.wd-has-dock > #app {
   display: none;
 }
 
-.wd-oc.is-compact .wd-oc-tag-amount {
+.wd-oc.is-compact .wd-oc-tag-amount,
+.wd-oc.is-compact .wd-oc-tag-share {
   display: none;
 }
 
@@ -2097,7 +2358,7 @@ body.wd-has-dock > #app {
 
 .wd-oc-row-main {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 0.5rem;
   width: 100%;
@@ -2161,10 +2422,15 @@ body.wd-has-dock > #app {
 }
 
 .wd-oc-row-pips,
-.wd-oc-row-pnl {
+.wd-oc-row-pnl,
+.wd-oc-row-share {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
+}
+
+.wd-oc.is-compact .wd-oc-row-share {
+  display: none;
 }
 
 .wd-oc-row-pnl {
@@ -2327,6 +2593,105 @@ body.wd-has-dock > #app {
 .wd-replay-next-row {
   flex-wrap: nowrap;
   min-width: 0;
+}
+
+/* Next alert: the button pressed most, so the one the eye lands on -- filled, a size up from
+   everything else in the window, with a skip-forward mark and its key. */
+.wd-replay-window .wd-replay-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  flex: 0 0 auto;
+  height: 2.125rem;
+  min-width: 8.5rem;
+  padding: 0 0.75rem 0 0.875rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.wd-replay-next svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: 0 0 auto;
+}
+
+.wd-replay-next-label {
+  flex: 1 1 auto;
+  text-align: left;
+}
+
+/* Its key, quiet: there to be learnt, not read. */
+.wd-replay-key {
+  font: inherit;
+  font-size: 0.625rem;
+  font-weight: 500;
+  padding: 0.0625rem 0.3125rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, var(--background) 22%, transparent);
+  opacity: 0.85;
+}
+
+/* Stopping its own run, it reads as Stop does on Step. */
+.wd-replay-window .wd-replay-next.is-stop {
+  background: color-mix(in oklab, #ef5350 80%, var(--background));
+  border-color: transparent;
+  color: #ffffff;
+  justify-content: center;
+}
+
+.wd-replay-next.is-stop .wd-replay-next-label {
+  text-align: center;
+}
+
+/* The moon beside Next alert: quiet hours. Lit, it reads the hours. */
+.wd-replay-window .wd-replay-quiet-toggle {
+  flex: 0 0 auto;
+  height: 2.125rem;
+  min-width: 2.125rem;
+  padding: 0 0.5rem;
+  justify-content: center;
+}
+
+.wd-replay-quiet-toggle svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  flex: 0 0 auto;
+}
+
+.wd-replay-quiet-toggle.is-on {
+  border-color: color-mix(in oklab, #7e57c2 60%, transparent);
+  background: color-mix(in oklab, #7e57c2 20%, transparent);
+  color: var(--foreground);
+}
+
+.wd-replay-quiet-toggle.is-open {
+  outline: 1px solid color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+.wd-replay-quiet-hours {
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-replay-quiet-time {
+  width: 6.25rem;
+}
+
+.wd-replay-quiet-note {
+  line-height: 1.4;
+}
+
+/* The step typed in words, and the × that takes a remembered one off the list. */
+.wd-replay-step-custom {
+  width: 7.5rem;
+}
+
+.wd-replay-window .wd-replay-step-forget {
+  width: 1.375rem;
+  height: 1.375rem;
+  padding: 0;
+  color: var(--muted-foreground);
 }
 
 /* The footer: panels and windows, ruled off from the transport above. */
@@ -2501,6 +2866,37 @@ body.wd-has-dock > #app {
   color: var(--muted-foreground);
 }
 
+/* The chart moved to an instrument the replay has not followed (client/replay/follow.ts): the
+   armed watch line's orange, as the stop it is -- the replay is still somewhere the chart is not.
+   Wraps, unlike the status beside Next alert: every word of it is the reason a pick did nothing. */
+.wd-replay-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklab, #ff9800 16%, transparent);
+  color: var(--foreground);
+  line-height: 1.35;
+}
+
+.wd-replay-notice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wd-replay-notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: none;
+}
+
+/* Docked, it takes a line of its own under the controls, as an open panel does. */
+.wd-replay-window[data-mode='dock'] .wd-replay-notice {
+  flex-basis: 100%;
+}
+
 /* The Results panel: net P&L large, then the kit's two-column figures. */
 .wd-replay-results-head {
   display: flex;
@@ -2617,6 +3013,9 @@ body.wd-has-dock > #app {
 
 .wd-replay-dialog {
   width: min(28rem, 92vw);
+  /* A short window (a phone held sideways) scrolls the card rather than cutting off Start. */
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   background: var(--background);
   color: var(--foreground);
   border: 1px solid var(--border);
@@ -2702,6 +3101,112 @@ body.wd-has-dock > #app {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+/* Its two tabs, New replay and Sessions (client/replay/controls.ts `mountSessionsTab`): the
+   replay window's own footer toggles, so the two read as one family. */
+.wd-replay-dialog-tabs {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wd-replay-dialog-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wd-replay-dialog-pane[hidden] {
+  display: none;
+}
+
+/* Past replays: a column of cards that scrolls inside the dialog, so thirty of them never push
+   the dialog off the screen. */
+.wd-replay-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: min(60vh, 32rem);
+  overflow-y: auto;
+  padding-right: 0.125rem;
+}
+
+.wd-replay-session {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 0.375rem);
+}
+
+.wd-replay-session-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.wd-replay-session-ticker {
+  font-weight: 600;
+}
+
+.wd-replay-session-base {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-replay-session-net {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wd-replay-session-span,
+.wd-replay-session-facts {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.wd-replay-session-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.125rem;
+}
+
+.wd-replay-session-actions .kc-button {
+  height: 1.625rem;
+  padding: 0 0.625rem;
+  font-size: 0.75rem;
+}
+
+.wd-replay-session-actions .wd-replay-session-delete:hover {
+  color: #ef5350;
+}
+
+.wd-replay-session-actions .wd-replay-session-delete.is-armed {
+  background: color-mix(in oklab, #ef5350 80%, var(--background));
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.wd-replay-session .wd-tk-figs {
+  margin-top: 0.125rem;
+}
+
+/* The same list in the replay window's Sessions panel: shorter, since the window floats over the
+   bars -- and docked, every row it is tall is a row the wall loses. */
+.wd-replay-window .wd-replay-session-list {
+  max-height: min(45vh, 20rem);
+}
+
+.wd-replay-window[data-mode='dock'] .wd-replay-session-list {
+  max-height: min(30vh, 12rem);
 }
 
 /* A replay's dock holds the account, ticket and tables alone -- the controls float over the
@@ -2906,19 +3411,135 @@ body.wd-has-dock > #app {
 .wd-notify-footer {
   display: flex;
   justify-content: flex-end;
+  gap: 0.375rem;
   border-top: 1px solid var(--border);
   padding: 0.375rem 0.5rem;
 }
 
-.wd-notify-clear {
+.wd-notify-clear,
+.wd-notify-action {
   height: 1.75rem;
   padding: 0 0.625rem;
   font-size: 0.75rem;
 }
 
+/* A footer action (Delivery…) sits at the left, Clear all keeps the right. */
+.wd-notify-action:first-child {
+  margin-right: auto;
+}
+
 .wd-notify-clear:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* --- Delivery (client/notifications/channels) ---------------------------------------------
+   Where live notifications go beyond the dashboard: a card per channel the server lists. */
+
+.wd-delivery-window > .wd-window-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.25rem 0.75rem 0.75rem;
+}
+
+.wd-delivery {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wd-delivery-intro {
+  margin: 0;
+  color: var(--muted-foreground);
+  line-height: 1.5;
+}
+
+.wd-delivery-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.wd-delivery-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-delivery-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.wd-delivery-badge {
+  flex: 1 1 auto;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.wd-delivery-help,
+.wd-delivery-field-help,
+.wd-delivery-last {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.wd-delivery-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wd-delivery-field > label {
+  font-size: 0.8125rem;
+}
+
+.wd-delivery-input {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.wd-delivery-input > .kc-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 2rem;
+}
+
+.wd-delivery-options,
+.wd-delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.wd-delivery-actions .kc-button,
+.wd-delivery-find,
+.wd-delivery-option {
+  height: 2rem;
+  padding: 0 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.wd-delivery-remove {
+  margin-left: auto;
+}
+
+.wd-delivery-status {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.wd-delivery-status.is-error,
+.wd-delivery-last.is-error {
+  color: var(--kc-danger);
 }
 
 /* --- Price watches (client/watch) ------------------------------------------------------ */
@@ -3084,15 +3705,156 @@ body.wd-has-dock > #app {
   background: color-mix(in oklab, var(--destructive, #ef5350) 16%, transparent);
 }
 
+/* --- Price alerts on a chart layer (client/chartlayers/alerts/editor.ts) ---------------- */
+
+/* The card beside an enabled line's bell. Compound selector so it wins over `.kc-popover`'s
+   own width. */
+.kc-popover.wd-price-alert {
+  z-index: 65;
+  display: flex;
+  width: 15rem;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-price-alert-title {
+  padding: 0 0 0.125rem;
+  font-size: 0.8125rem;
+}
+
+.wd-price-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-price-alert-label,
+.wd-price-alert-unit,
+.wd-price-alert-status {
+  color: var(--muted-foreground);
+}
+
+.wd-price-alert-input {
+  width: 4.5rem;
+  height: 1.75rem;
+  padding: 0 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-price-alert-input.is-invalid {
+  border-color: var(--destructive, #ef5350);
+}
+
+.wd-price-alert-zone {
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-price-alert-default {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.wd-price-alert-default-text {
+  color: var(--muted-foreground);
+}
+
+.wd-price-alert-make-default {
+  flex: none;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-price-alert-make-default:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wd-price-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.wd-price-alert-spacer {
+  flex: 1;
+}
+
+.wd-price-alert-remove {
+  color: var(--destructive, #ef5350);
+}
+
+/* The foot: every alert of the layer on the instrument, Remove stale and Remove all -- set off
+   from the alert's own controls above it, since it acts on others too. */
+.wd-price-alert-bulk {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.wd-price-alert-bulk-summary,
+.wd-price-alert-bulk-question {
+  color: var(--muted-foreground);
+}
+
+.wd-price-alert-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-price-alert-bulk-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.wd-price-alert-bulk button {
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-price-alert-bulk button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wd-price-alert-remove-stale:not(:disabled),
+.wd-price-alert-remove-all,
+.wd-price-alert-remove-all-confirm {
+  color: var(--destructive, #ef5350);
+}
+
 /* --- Touch ------------------------------------------------------------------------------ */
 
 /* The app's own controls at a fingertip's size, alongside src/app.css's `(pointer: coarse)`
    block for the library's. Keyed off the pointer, not the width: a tablet is wide and still a
    finger. */
 @media (pointer: coarse) {
+  /* Paper / Trade / Replay / Lab: full rail width, so the word never pushes past the 52px
+     rail, and tall enough to land on. */
   .wd-rail-button {
-    padding: 0.375rem 0.5rem;
+    width: calc(100% - 0.375rem);
+    min-height: 2.25rem;
+    padding: 0.375rem 0.125rem;
     font-size: 0.75rem;
+  }
+
+  /* The bell, its recent-notifications caret and Alerts set their own 30px height, which
+     outranks the library's coarse-pointer button size; the caret was a 17px-wide target. */
+  .kc-button.wd-notify-bell,
+  .kc-button.wd-notify-caret,
+  .kc-button.wd-alerts-button {
+    height: 2.5rem;
+  }
+
+  .wd-notify-caret {
+    min-width: 2rem;
   }
 
   .wd-ws-pick {
@@ -3166,8 +3928,11 @@ body.wd-has-dock > #app {
     font-size: 12px;
   }
 
+  /* Two 36px steps and a unit select at the 16px a touch input must be (below) left the
+     number itself ~40px: 10000 units read as "100", and "none" as "non". */
   .wd-tk .wd-tk-num {
-    width: 12.5rem;
+    width: 15rem;
+    max-width: 100%;
   }
 
   .wd-tk .wd-tk-num > .wd-tk-num-step {
@@ -3182,7 +3947,8 @@ body.wd-has-dock > #app {
   .wd-replay-input,
   .wd-replay-field .wd-replay-input,
   .wd-replay-field .wd-replay-select,
-  .wd-watch-input {
+  .wd-watch-input,
+  .wd-price-alert-input {
     height: 2.5rem;
   }
 
@@ -3205,6 +3971,7 @@ body.wd-has-dock > #app {
       .wd-replay-input,
       .wd-replay-select,
       .wd-watch-input,
+      .wd-price-alert-input,
       .wd-layer-panel input,
       .wd-layer-panel select
     ) {

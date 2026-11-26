@@ -35,7 +35,7 @@ An **operand** is a value per bar of its timeframe, on the alert's instrument:
 | `series` | a stored registry row's series — AREV19…23 `p`, arev21_outlier, krev01 | `/plugins/{id}/values` |
 | `signal` | a plugin's published label on a bar — `long`, `top` — or '' for none | `/plugins/{id}/values`' `signal` field |
 | `graph` | a multi-timeframe overlay's **graph entry** on a 3m/5m bar -- the star the overlay draws, `top`/`bottom`, or '' | the overlay's own fetch and graph code, headless (`graphentry.ts`) |
-| `time` | the clock at each bar close: **time of day** (minutes past midnight, typed HH:MM) or **weekday**, on a chosen zone | the bar's close, on that zone's wall clock |
+| `time` | the clock at each bar close: **time of day** (minutes past midnight, typed HH:MM), **weekday**, or **date and time** (the instant, typed on the zone's wall clock), on a chosen zone | the bar's close, on that zone's wall clock |
 
 A signal or a graph entry can be compared with **any side** (`is any side`, compiled to "not
 the empty label").
@@ -66,6 +66,20 @@ arev21 on 2h) holds nothing back.
 same for days. Read at each bar CLOSE of the condition's timeframe, on the chosen zone's wall
 clock (New York, London, Frankfurt, Tokyo, Sydney, UTC), so DST moves nothing. A window across
 midnight is written as "is not between" its complement.
+
+**Date and time** (2026-10-28, user: "is there an alert for recurring time of day when market is
+open? also have one for date/time"). `Date and time (New York) at 5m closes reaches 2026-11-03
+09:30` fires once, at the first close at or after that instant. "Is between", "is at or after"
+and "is before" make a window of dates, as for a time of day.
+- It reads the close instant itself (`clockValue` returns it); the zone is only how it is typed
+  and shown (`dateTimeInput`, `formatDateTime`).
+- Both time alerts fire only while the market is open, because they are read at bar closes and
+  there are no bars while it is shut. A time of day fires on trading days only. A date and time
+  that falls on a weekend fires at the first close after the market opens.
+- In a bar replay either is a Next alert stop like any other.
+- A new one starts at 09:30 the next morning -- by the replay's clock in a bar replay
+  (`ruletree.ts` `nextMorning` reads `getReadClock()`), so a condition written at a 2023 cursor
+  defaults to the 2023 day after it, which the replay can reach, rather than to tomorrow.
 
 OBV and PVT are not offered: they are running sums from the first bar loaded, so their value
 depends on where a window starts and never converges -- every alert reads a window, and a
@@ -118,6 +132,17 @@ carrying the last value forward would compare today's close against yesterday's 
 that is the crossing bar only, which is TradingView's "once per bar close". `edge` fires where
 it **starts** holding: two AREV longs on consecutive bars are one episode to an edge trigger.
 
+**An entry takes part in one firing** (2026-10-28, user: Next alert on the rank 85 3m or 5m star
+must stop once per star). A graph's star and a saved strategy's entry are ENTRIES: once the alert
+fires, every entry it read reads as none from then on. Every instant re-reads every timeframe's
+latest bar, so before this a 5m star fired again at the 3m close inside the next 5m bar (`level`),
+and a 3m star landing while the 5m one was still the latest began nothing (`edge`). Until it
+fires, a star counts like any other value: "3m star and 5m star" fires at the second of the two
+to close, and "5m star and the 3m close above X" at the first 3m close that holds, once. A star
+already on the chart when an alert starts is spent with the baseline. So in either mode it is one
+stop per star, back-to-back stars included -- an entry is not an episode. A signal is unchanged:
+it is a value like any other (`timeline.ts`, `compute.ts`).
+
 ## Live: `monitor.ts`
 
 Page-level (started once by `startAlerts`), so it keeps watching through a workspace switch
@@ -134,14 +159,18 @@ has not written yet. It is re-read every 30 s and evaluated anyway after 10 minu
 value missing — late and never cannot be told apart from one
 observation, so the wait is bounded (`notes/architecture/freshness-horizons.md`). A firing is
 raised into the Notification Center tagged **`alert`**, and recorded on the alert (count, last
-firing, `once` → fired).
+firing, `once` → fired). Where the server advertises `notification_raise`, the monitor's sink is
+`durableSink` (`client/notifications/durable.ts`): the row is also posted to the server with the
+key `alert:<id>:<bar close>`, so it is stored, shown on every tab and sent to the account's
+Delivery channels (Pushover, Telegram). A bar replay's Next alert raises nothing through it.
 
 A change that arrives during an evaluation re-runs it when it ends; an alert switched off,
 edited or deleted while the server is being read says nothing; a runner needing more lead-in
 than a shared feed has loaded waits for the deeper read before it seeds its baseline.
 
 Known limits: **only while a tab is open** (that is what server alerts are for); **every open
-tab evaluates and notifies on its own**; a firing while no tab was open is never caught up.
+tab evaluates on its own** (the key makes their firings one notification and one push where the
+server takes them); a firing while no tab was open is never caught up.
 
 ## A bar replay's Next alert: `search.ts`
 
@@ -159,6 +188,27 @@ a hole leaves too few), never a span of time that a gap could leave empty.
 enabled alert on the replay's instrument and takes the earliest (each later search is bounded
 by the best so far). Rows fetched stay in a `SpanCache` per series, so the next press refetches
 nothing it already holds. A Stop is heard between chunks.
+
+**Made faster, 2026-10-26** (the user: going to the next rank-85 3m/5m star "takes too long").
+Measured against prod first: a warm search was 0.4-0.5 s, one read after another -- each
+timeframe's bars, then each graph operand's `/mtf/graph` -- and an alert on the 3m AND the 5m
+star read the same ~310 KB graph twice. Now:
+
+- **Every timeframe, and every operand, is read at once** (`Promise.all`); a `SpanCache` reads
+  for one caller at a time, so two operands on one source never splice the same edge in twice.
+- **One graph is read once** (`graphentry.ts`): the engine holds each graph's entry nodes --
+  only the entries -- for the span the server has answered *finally* (never past its
+  `computedThrough`, so the live monitor's reads stay current), shared by every operand on the
+  same settings and every window over it, and reads on past a window by its own length.
+- **Bars are read a first chunk ahead** of what a chunk needs, so the next search -- starting a
+  few bars on, where this one stopped -- usually reads nothing at all.
+- **A chunk doubles while nothing is found** (`SEARCH_CHUNK_GROWTH`, up to 8x): a rare star
+  months away costs a handful of rounds instead of one per six days of 3m bars.
+
+Against prod, the follow-on searches went from 0.4-0.5 s to 1-2 ms when the next star lay in
+what was held, and one parallel round (~0.2 s) when not; the cold first one from 2.3 s to 1.1 s.
+And `client/replay/alerts.ts` now runs each search **ahead**, in the background after every
+advance, so a press usually finds the answer waiting (`client/replay/README.md`).
 
 Verified in the browser against the local stack (2026-10-04): "Close 1h crosses above MA(30)
 1h" stopped exactly on the bars where the chart's own MA30 is crossed, and "AREV arev21 signal

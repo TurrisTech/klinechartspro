@@ -26,7 +26,7 @@
 // resolution path across dev and production; until then this is the version that works.
 
 import type { KLineData } from 'klinecharts'
-import { parquetRead } from 'hyparquet'
+import { parquetMetadata, parquetRead } from 'hyparquet'
 
 /**
  * Decode one tile's bytes into bars.
@@ -55,4 +55,43 @@ export async function decodeTile(bytes: ArrayBuffer, precision: number): Promise
     bars[i] = { timestamp: ts[i], open: o[i] / scale, high: h[i] / scale, low: l[i] / scale, close: c[i] / scale, volume: v[i] }
   }
   return bars
+}
+
+/** A tile's columns, by name, as numbers: `ts` as stored, prices unscaled by the precision. */
+export type TileColumns = Record<string, Float64Array>
+
+/**
+ * Decode the named columns of one tile, ONE COLUMN AT A TIME, handing the page a turn
+ * (`between`) after each: a 5s week is ~70k rows, and decoding it whole -- and building an
+ * object per row -- held the main thread 240-440 ms per tile on prod (a bar replay's Run to a
+ * price three weeks out: six long tasks, 1.8 s). A column is a few milliseconds.
+ *
+ * Read into typed arrays at each chunk's own row offset. `scaled` names the price columns,
+ * divided by 10**precision; any other is taken as stored (`ts`, `v`).
+ */
+export async function decodeColumns(bytes: ArrayBuffer, names: readonly string[], precision: number, scaled: ReadonlySet<string>, between: () => Promise<void> = async () => {}): Promise<TileColumns> {
+  const metadata = parquetMetadata(bytes)
+  const rows = Number(metadata.num_rows)
+  const scale = 10 ** precision
+  const out: TileColumns = {}
+  for (const name of names) {
+    const column = new Float64Array(rows)
+    const divide = scaled.has(name)
+    await parquetRead({
+      file: bytes,
+      metadata,
+      columns: [name],
+      onChunk: (chunk: { columnName: string; columnData: ArrayLike<unknown>; rowStart: number }) => {
+        if (chunk.columnName !== name) return
+        const data = chunk.columnData
+        for (let i = 0; i < data.length; i++) {
+          const value = Number(data[i])
+          column[chunk.rowStart + i] = divide ? value / scale : value
+        }
+      }
+    })
+    out[name] = column
+    await between()
+  }
+  return out
 }

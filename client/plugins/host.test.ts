@@ -9,7 +9,7 @@ const { fakeChart, fakeFacilities, fakeIndicator, fakePane, flush } = await impo
 const { paneConfig } = await import('./paneconfig')
 
 import type { SettingsPanelOptions } from '../chartlayers/settings'
-import type { BindContext, IndicatorPlugin, Page, Range, SourceSpec } from './types'
+import type { BindContext, IndicatorPlugin, Page, Range, SourceNotify, SourceSpec, SourceStore } from './types'
 
 type Point = { date: number; v: number }
 
@@ -134,6 +134,33 @@ describe('createPluginHost', () => {
     ])
   })
 
+  test('bars replaced whole are covered at once; a page of history waits out the debounce', async () => {
+    const data = Array.from({ length: 30 }, (_, i) => ({ date: i, v: i }))
+    const { plugin, fetches } = pointsPlugin(data)
+    const f = facilities()
+    f.maxValuesPerRequest = 100
+    const host = await createPluginHost({ plugins: [plugin], facilities: f })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [5, 6, 7].map((timestamp) => ({ timestamp }))
+    fc.indicators = [fakeIndicator('PTS', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    expect(fetches).toEqual([{ from: 5, to: 8 }])
+    // A reload at a later cursor (a replay's long jump): both ends moved.
+    fc.data = [20, 21, 22].map((timestamp) => ({ timestamp }))
+    fc.fireRange()
+    await flush()
+    expect(fetches.slice(1)).toEqual([{ from: 20, to: 23 }])
+    // A page of older bars: one end moved, as a pan's stream of them does.
+    fc.data = [17, 18, 19, 20, 21, 22].map((timestamp) => ({ timestamp }))
+    fc.fireRange()
+    await flush()
+    expect(fetches).toHaveLength(2)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(fetches.slice(2)).toEqual([{ from: 17, to: 20 }])
+  })
+
   test('two panes reading one source share a store, dropped with the last of them', async () => {
     const { plugin } = pointsPlugin([{ date: 1, v: 1 }])
     const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
@@ -174,6 +201,37 @@ describe('createPluginHost', () => {
     fc.indicators = []
     await new Promise((r) => setTimeout(r, 600))
     expect([...keys].every((k) => peekStore(k) === undefined)).toBe(true)
+  })
+
+  test('what a plugin follows on the chart is part of the binding: a change there rebinds', async () => {
+    // PTS follows the params of an OTHER indicator on its chart, as TradeTalk entries follows
+    // Heath levels. An edit of that one must rebind PTS, which is handed the new answer.
+    const { plugin: base } = pointsPlugin([{ date: 1, v: 1 }])
+    const followed: unknown[] = []
+    const plugin: IndicatorPlugin = {
+      ...base,
+      follows: (_ind, indicators) => indicators.find((other) => other.name === 'OTHER')?.calcParams ?? null,
+      bind: (ctx) => {
+        followed.push(ctx.follows)
+        return base.bind(ctx)
+      }
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [{ timestamp: 1 }]
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5]), fakeIndicator('OTHER', 'o1', [1])]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    expect(followed).toEqual([[1]])
+    await new Promise((r) => setTimeout(r, 600)) // a reconcile with nothing changed binds nothing
+    expect(followed).toEqual([[1]])
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5]), fakeIndicator('OTHER', 'o1', [2])]
+    await new Promise((r) => setTimeout(r, 600))
+    expect(followed).toEqual([[1], [2]])
+    fc.indicators = [fakeIndicator('PTS', 'i1', [5])]
+    await new Promise((r) => setTimeout(r, 600))
+    expect(followed).toEqual([[1], [2], null])
   })
 
   test('a settings rebind that keeps a source keeps its store reachable by key', async () => {
@@ -286,6 +344,196 @@ describe('createPluginHost', () => {
     // binding's rev is its own sequence number folded with its stores' revs).
     expect((rev(a) as number) % 1_000_003).toBe(store?.rev as number)
     expect((rev(b) as number) % 1_000_003).toBe(store?.rev as number)
+  })
+
+  // A live cue says the producer has written something since the last read. A fetch already in
+  // flight was asked before that write, so it cannot answer the cue -- yet its answer is filed as
+  // covering the range, and a cue that merely waited for it was lost until the next one. On prod
+  // the timeframes of one close arrive ~100 ms apart and a re-read takes 100-300 ms, so the
+  // second timeframe's cue routinely lands inside the first one's read.
+  test('a refetch asked while an older fetch is in flight reads again once that one lands', async () => {
+    const data: Point[] = [1, 2, 3, 4, 5].map((d) => ({ date: d, v: d }))
+    const fetches: Range[] = []
+    let gate: Promise<void> = Promise.resolve()
+    // The binding's notify, once it has subscribed.
+    const cue = { refetch: (): void => {} }
+    const plugin: IndicatorPlugin = {
+      id: 'cue',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'CUE',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'cue|EURUSD|5m',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              // Answered from what the producer had written when the request arrived.
+              const answer = data.filter((p) => p.date >= range.from && p.date < range.to)
+              await gate
+              return { points: answer, nextFrom: null }
+            },
+            subscribe: (_store: SourceStore<Point>, n: SourceNotify) => {
+              cue.refetch = () => n.refetch()
+              return () => {}
+            }
+          }
+        ],
+        label: () => 'CUE'
+      })
+    }
+    const f = facilities()
+    f.maxValuesPerRequest = 100
+    const host = await createPluginHost({ plugins: [plugin], facilities: f })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = Array.from({ length: 9 }, (_, i) => ({ timestamp: i + 1 }))
+    fc.indicators = [fakeIndicator('CUE', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await host.settled()
+    const key = (fc.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key)
+    expect(fetches).toEqual([{ from: 1, to: 10 }])
+
+    let release: () => void = () => {}
+    gate = new Promise<void>((resolve) => (release = resolve))
+    // The first timeframe's cue: forget the tail, read it again -- in flight.
+    store?.forgetAfter(6)
+    cue.refetch()
+    await flush()
+    // The second timeframe is written, and its cue arrives while that read is still out.
+    data.push({ date: 7, v: 70 })
+    store?.forgetAfter(6)
+    cue.refetch()
+    await flush()
+    release()
+    await host.settled()
+
+    expect(store?.values.get(7)).toBe(70)
+    expect(fetches).toEqual([
+      { from: 1, to: 10 },
+      { from: 6, to: 10 },
+      { from: 6, to: 10 }
+    ])
+  })
+
+  test('a burst of refetches inside one read costs one more read, not one each', async () => {
+    const fetches: Range[] = []
+    let gate: Promise<void> = Promise.resolve()
+    // The binding's notify, once it has subscribed.
+    const cue = { refetch: (): void => {} }
+    const plugin: IndicatorPlugin = {
+      id: 'burst',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'BURST',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'burst|EURUSD|5m',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              await gate
+              return { points: [], nextFrom: null }
+            },
+            subscribe: (_store: SourceStore<Point>, n: SourceNotify) => {
+              cue.refetch = () => n.refetch()
+              return () => {}
+            }
+          }
+        ],
+        label: () => 'BURST'
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = Array.from({ length: 9 }, (_, i) => ({ timestamp: i + 1 }))
+    fc.indicators = [fakeIndicator('BURST', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await host.settled()
+    const key = (fc.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key)
+
+    let release: () => void = () => {}
+    gate = new Promise<void>((resolve) => (release = resolve))
+    store?.forgetAfter(6)
+    cue.refetch()
+    await flush()
+    // Four more timeframes close inside that read.
+    for (let i = 0; i < 4; i++) {
+      store?.forgetAfter(6)
+      cue.refetch()
+    }
+    await flush()
+    gate = Promise.resolve()
+    release()
+    await host.settled()
+    expect(fetches.slice(1)).toEqual([
+      { from: 6, to: 10 },
+      { from: 6, to: 10 }
+    ])
+  })
+
+  test('two panes on one store hearing one cue still read once', async () => {
+    const fetches: Range[] = []
+    let gate: Promise<void> = Promise.resolve()
+    const notifies: Array<{ refetch(): void }> = []
+    const plugin: IndicatorPlugin = {
+      id: 'pair',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'PAIR',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'pair|EURUSD|1h',
+            createStore: (k) => new WindowStore<Point, number>(k, (p) => p.v),
+            fetch: async (range): Promise<Page<Point>> => {
+              fetches.push({ ...range })
+              await gate
+              return { points: [], nextFrom: null }
+            },
+            subscribe: (_store: SourceStore<Point>, n: SourceNotify) => {
+              notifies.push(n)
+              return () => {}
+            }
+          }
+        ],
+        label: () => 'PAIR'
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const a = fakeChart()
+    const b = fakeChart()
+    a.data = b.data = Array.from({ length: 9 }, (_, i) => ({ timestamp: i + 1 }))
+    a.indicators = [fakeIndicator('PAIR', 'a')]
+    b.indicators = [fakeIndicator('PAIR', 'b')]
+    host.sync([fakePane('p1', a.chart), fakePane('p2', b.chart)])
+    await host.settled()
+    const key = (a.indicators[0].extendData as { seriesKey: string }).seriesKey
+    const store = peekStore<InstanceType<typeof WindowStore<Point, number>>>(key)
+    const before = fetches.length
+
+    let release: () => void = () => {}
+    gate = new Promise<void>((resolve) => (release = resolve))
+    // One stream message, both panes' listeners, in one task: the first one's read was sent
+    // after the cue arrived, so the second one's waits for it.
+    for (const n of notifies) {
+      store?.forgetAfter(6)
+      n.refetch()
+    }
+    await flush()
+    release()
+    await host.settled()
+    expect(notifies.length).toBe(2)
+    expect(fetches.slice(before)).toEqual([{ from: 6, to: 10 }])
   })
 
   test('a replaying page records the phase and retries', async () => {
@@ -508,6 +756,35 @@ describe('per-pane settings', () => {
     expect(host.paneDocs()).toEqual({ 0: { sz: { size: 9 } }, 1: { sz: { size: 3 } } })
   })
 
+  test('a binding edits its own pane\'s settings as the panel would: kept, saved, rebound', async () => {
+    const edits: Array<(key: string, value: unknown) => void> = []
+    const bound: unknown[] = []
+    const plugin: IndicatorPlugin = {
+      id: 'sized',
+      feature: null as never,
+      paneConfigs: [SIZE_CONFIG('SZ')],
+      register: () => [],
+      matches: (name) => name === 'SZ',
+      bind: (ctx) => {
+        bound.push(ctx.config)
+        if (ctx.editConfig) edits.push(ctx.editConfig)
+        return { sources: [], label: () => 'SZ' }
+      }
+    }
+    let persisted = 0
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities(), requestPersist: () => void persisted++ })
+    hosts.push(host)
+    const charts = [fakeChart(), fakeChart()]
+    for (const [i, c] of charts.entries()) c.indicators = [fakeIndicator('SZ', `i${i}`)]
+    host.sync(charts.map((c, i) => fakePane(`p${i + 1}`, c.chart)))
+    expect(edits).toHaveLength(2)
+    // The second pane's binding edits the second pane, clamped like any other edit.
+    edits[1]('size', 42)
+    expect(bound.at(-1)).toEqual({ size: 9 })
+    expect(persisted).toBe(1)
+    expect(host.paneDocs()).toEqual({ 1: { sz: { size: 9 } } })
+  })
+
   test("the gear and the manager are the host's, addressed by wall pane, not pane index", async () => {
     const { plugin } = sized()
     const opened: SettingsPanelOptions<object>[] = []
@@ -601,5 +878,139 @@ describe('per-pane settings', () => {
     host.sync([fakePane('p1', fakeChart().chart)])
     expect(host.settingsModel('SZ')?.read('p1')).toEqual({ size: 6 })
     expect(host.paneDocs()).toEqual({})
+  })
+})
+
+// A BAR REPLAY'S NEXT LANDING, WARMED ON THE SERVER (`warmAhead`). The host asks each source that
+// offers it for the window it will read at the landing, over the bars the replay says the pane
+// will hold then, and sends one read per store -- never a fetch into it, and never twice for one
+// landing.
+describe('warmAhead', () => {
+  /** A plugin whose source is keyed by instrument only, so two panes on one share a store, and
+   * which warms over the predicted bars to just past the landing. */
+  function warmPlugin(opts: { fail?: () => boolean } = {}) {
+    const fetches: Range[] = []
+    const reads: Array<{ key: string; window: Range; at: number }> = []
+    const plugin: IndicatorPlugin = {
+      id: 'warm',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'WARM',
+      bind: (ctx: BindContext) => {
+        const key = `warm|${ctx.ticker}`
+        return {
+          sources: [
+            {
+              id: 'v',
+              key,
+              fetch: async (range): Promise<Page<Point>> => {
+                fetches.push({ ...range })
+                return { points: [], nextFrom: null }
+              },
+              warm: {
+                window: (chartRange: Range, at: number) => ({ from: chartRange.from - 1, to: at + 1 }),
+                read: async (window: Range, at: number) => {
+                  reads.push({ key, window, at })
+                  if (opts.fail?.()) throw new Error('503')
+                }
+              }
+            }
+          ],
+          label: () => 'WARM'
+        }
+      }
+    }
+    return { plugin, fetches, reads }
+  }
+
+  async function wall(plugins: IndicatorPlugin[], panes: Array<{ id: string; ticker: string; data: number[]; template?: string }>) {
+    const host = await createPluginHost({ plugins, facilities: facilities() })
+    hosts.push(host)
+    const made = panes.map((p) => {
+      const fc = fakeChart()
+      fc.data = p.data.map((timestamp) => ({ timestamp }))
+      fc.indicators = [fakeIndicator(p.template ?? 'WARM', `${p.id}-i`)]
+      return fakePane(p.id, fc.chart, p.ticker)
+    })
+    host.sync(made)
+    await flush()
+    return host
+  }
+
+  test("one read per store, over the union of its panes' windows, under the landing's clock -- nothing filed", async () => {
+    const { plugin, fetches, reads } = warmPlugin()
+    const host = await wall(
+      [plugin],
+      [
+        { id: 'a', ticker: 'EURUSD', data: [10, 20] },
+        { id: 'b', ticker: 'EURUSD', data: [30, 40] },
+        { id: 'c', ticker: 'GBPUSD', data: [50, 60] }
+      ]
+    )
+    const before = fetches.length
+    // Where each pane will be at the landing: `a` reloads further on, `b` and `c` append.
+    const landing: Record<string, Range> = { a: { from: 70, to: 101 }, b: { from: 30, to: 101 }, c: { from: 50, to: 101 } }
+    const sent = await host.warmAhead(100, (pane) => landing[pane.id])
+    expect(sent).toBe(2)
+    expect(reads.sort((x, y) => x.key.localeCompare(y.key))).toEqual([
+      { key: 'warm|EURUSD', window: { from: 29, to: 101 }, at: 100 },
+      { key: 'warm|GBPUSD', window: { from: 49, to: 101 }, at: 100 }
+    ])
+    // The stores were not touched: the answer lies past the chart's clock.
+    expect(fetches.length).toBe(before)
+    expect(peekStore<InstanceType<typeof WindowStore<Point, number>>>('warm|EURUSD')?.size).toBe(0)
+  })
+
+  test('the same landing again sends nothing; more of a window, or another landing, sends again', async () => {
+    const { plugin, reads } = warmPlugin()
+    const host = await wall([plugin], [{ id: 'a', ticker: 'EURUSD', data: [10, 20] }])
+    let range: Range = { from: 30, to: 101 }
+    expect(await host.warmAhead(100, () => range)).toBe(1)
+    // Every advance that stops short of the landing asks again: a duplicate each time.
+    expect(await host.warmAhead(100, () => range)).toBe(0)
+    expect(await host.warmAhead(100, () => ({ from: 40, to: 101 }))).toBe(0)
+    // A pane reloaded further back reads more: that part is new to the server.
+    range = { from: 20, to: 101 }
+    expect(await host.warmAhead(100, () => range)).toBe(1)
+    // The landing after it.
+    expect(await host.warmAhead(200, () => ({ from: 150, to: 201 }))).toBe(1)
+    expect(reads.map((r) => [r.at, r.window.from])).toEqual([
+      [100, 29],
+      [100, 19],
+      [200, 149]
+    ])
+  })
+
+  test('a source that offers no warm-up, and a pane with no landing, are left alone', async () => {
+    const { plugin: warm, reads } = warmPlugin()
+    const { plugin: plain, fetches } = pointsPlugin([])
+    const host = await wall(
+      [warm, plain],
+      [
+        { id: 'a', ticker: 'EURUSD', data: [10, 20] },
+        { id: 'b', ticker: 'GBPUSD', data: [10, 20], template: 'PTS' }
+      ]
+    )
+    const before = fetches.length
+    expect(await host.warmAhead(100, (pane) => (pane.id === 'a' ? null : { from: 10, to: 101 }))).toBe(0)
+    expect(reads).toEqual([])
+    expect(fetches.length).toBe(before)
+  })
+
+  test('a failed warm-up is tried again at the next ask', async () => {
+    let failing = true
+    const { plugin, reads } = warmPlugin({ fail: () => failing })
+    const host = await wall([plugin], [{ id: 'a', ticker: 'EURUSD', data: [10, 20] }])
+    const realDebug = console.debug
+    console.debug = () => {}
+    try {
+      expect(await host.warmAhead(100, () => ({ from: 30, to: 101 }))).toBe(1)
+    } finally {
+      console.debug = realDebug
+    }
+    failing = false
+    expect(await host.warmAhead(100, () => ({ from: 30, to: 101 }))).toBe(1)
+    expect(await host.warmAhead(100, () => ({ from: 30, to: 101 }))).toBe(0)
+    expect(reads).toHaveLength(2)
   })
 })

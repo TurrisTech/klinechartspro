@@ -1,3 +1,4 @@
+import { getToken, sessionRejected } from './authtoken'
 import { capabilities, hasFeature } from './capabilities'
 import { STREAM_URL } from './config'
 import type { IndicatorPoint, SeriesDoc } from './indicators/api'
@@ -21,6 +22,23 @@ const RECONNECT_MAX_MS = 30_000
 // that a socket which still reads as OPEN is actually dead.
 const PING_INTERVAL_MS = 25_000
 const PONG_TIMEOUT_MS = 10_000
+
+// The session, on a server with the dashboard login on, is presented in the socket's FIRST frame,
+// `{"action": "auth", "token": ...}`: a browser cannot set a header on a WebSocket handshake, and
+// a token in the URL would land in every access log on the way. The server handles that frame
+// inline, so the subscribes go straight behind it without waiting for its `auth_ok`. It closes a
+// socket whose session is missing, wrong or since revoked with this code, after an
+// `unauthorized` error frame -- and a server with the login off answers `auth_ok` and changes
+// nothing.
+const UNAUTHORIZED_CLOSE_CODE = 4401
+
+// A server from before the stream login (wdashboard-server <= 0.56, and its Rust twin) does not
+// know the auth frame: it answers this error and keeps the connection open, exactly as for any
+// unknown action, and serves the subscribes behind it as it always has. Expected, harmless, and
+// never shown.
+function isUnknownAuthAction(message: { code: string; errmsg?: string; detail?: string }): boolean {
+  return message.code === 'invalid_request' && /Unknown action 'auth'/.test(message.errmsg ?? message.detail ?? '')
+}
 
 // Bars requested on subscribe to bridge the gap between the history load and the first
 // live push. Server default is 200 and its ceiling is advertised in limits.
@@ -118,7 +136,7 @@ interface IndicatorSubscription {
 // One shared `WS /stream` connection for the page, multiplexing every active subscription.
 // Requests "all" mode so a forming bar updates live and finalizes on close, rather than the
 // chart's right edge jumping only once per interval.
-class StreamClient {
+export class StreamClient {
   private ws: WebSocket | null = null
   private readonly subscriptions = new Map<string, Subscription>()
   // Keyed by the server's seriesKey (SeriesIdentity.key()), which every indicator frame
@@ -142,6 +160,10 @@ class StreamClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pingTimer: ReturnType<typeof setInterval> | null = null
   private pongTimer: ReturnType<typeof setTimeout> | null = null
+  //: Set when the server closed with UNAUTHORIZED_CLOSE_CODE. The session is gone and the page
+  //: is on its way to the sign-in (authtoken.ts `sessionRejected`), so no socket is opened again:
+  //: one without a session would only be closed again, every backoff, until then.
+  private rejected = false
 
   // Immediately reports the current status, then every change.
   onStatus(listener: StatusListener): () => void {
@@ -209,11 +231,12 @@ class StreamClient {
 
   /** Ask for this owner's notifications on this socket. Returns an unsubscribe.
    *
-   * `token` is the session bearer, when there is one. It rides in the FRAME because the
-   * WebSocket API gives a browser no way to set a request header: without it, on a
-   * deployment with auth on, this client's REST calls resolve to the signed-in user while
-   * its socket resolves to the anonymous owner token, the two never match, and every live
-   * push is delivered to nobody -- notifications then appear only on the next page load. */
+   * `token` is the session bearer, when there is one. It rides in this FRAME as well as in the
+   * socket's auth frame because a server from before the stream login knows only this one:
+   * without it there, on a deployment with auth on, this client's REST calls resolve to the
+   * signed-in user while its socket resolves to the anonymous owner token, the two never
+   * match, and every live push is delivered to nobody -- notifications then appear only on the
+   * next page load. A server with the stream login takes the session from the auth frame. */
   subscribeNotifications(
     identity: { owner: string; token?: string | null },
     listener: NotificationListener
@@ -410,6 +433,7 @@ class StreamClient {
   }
 
   private connect(): void {
+    if (this.rejected) return
     if (this.ws && this.ws.readyState !== WebSocket.CLOSED) return
     if (this.reconnectTimer) return
 
@@ -419,6 +443,11 @@ class StreamClient {
 
     ws.addEventListener('open', () => {
       if (this.ws !== ws) return
+      // Before anything else can reach the socket -- a status listener included -- so the
+      // auth frame is the first the server reads, on every open and every reconnect. The token
+      // is read now, not remembered: a reconnect presents whatever session the page holds.
+      const token = getToken()
+      if (token) ws.send(JSON.stringify({ action: 'auth', token } satisfies StreamClientMessage))
       this.reconnectAttempts = 0
       this.setStatus('connected')
       this.resubscribeAll()
@@ -431,11 +460,16 @@ class StreamClient {
       // 'error' is always followed by 'close', which owns the reconnect. Logging only.
       console.warn('[stream] socket error')
     })
-    ws.addEventListener('close', () => {
+    ws.addEventListener('close', (event: CloseEvent) => {
       if (this.ws !== ws) return
       this.ws = null
       this.stopKeepalive()
       this.setStatus('offline')
+      if (event.code === UNAUTHORIZED_CLOSE_CODE) {
+        this.rejected = true
+        sessionRejected()
+        return
+      }
       this.scheduleReconnect()
     })
   }
@@ -533,8 +567,16 @@ class StreamClient {
         if (this.pongTimer) clearTimeout(this.pongTimer)
         this.pongTimer = null
         return
+      case 'auth_ok':
+        return
       case 'error':
-        console.error(`[stream] ${message.code}: ${message.errmsg}`)
+        if (isUnknownAuthAction(message)) return
+        if (message.code === 'unauthorized') {
+          // The 4401 close follows, and is what acts (see the 'close' listener).
+          console.warn(`[stream] session refused: ${message.errmsg ?? message.detail}`)
+          return
+        }
+        console.error(`[stream] ${message.code}: ${message.errmsg ?? message.detail}`)
         return
       case 'subscribed': {
         const subscription = this.subscriptions.get(

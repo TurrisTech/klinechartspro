@@ -39,6 +39,87 @@ samples only its own pane, and only while its binding lives.
 | `store.ts` | the toolbar-era wall-wide settings, read once as the starting point of an unconfigured pane |
 | `settings.ts` | the declarative field schema and its plain-DOM renderer |
 | `encoding.ts`, `color.ts` | metrics → line width/opacity/colour |
+| `alerts/` | price alerts on a layer's lines -- see below |
+
+## Price alerts on a layer's lines (`alerts/`)
+
+A layer that declares `alerts` (types.ts `LayerAlerts`) makes its lines alertable: an alert when
+price enters a zone around a line, its price plus or minus a buffer in the instrument's pips (ticks
+where it has none). Each **click** on a line steps its alert round **off -> every time -> once ->
+off** (user, 2026-11-24), and the foot of the pane says which ("Alert once · 1W level 1.11776 · ±3
+pips (6 wide) · …"); no dialog opens. Every time fires on each entry into the zone, after a
+cooldown; once fires the first time and is then spent. An alerted line carries a **bell** at the
+pane's right edge -- a pill that says how it is armed (user, 2026-11-24: "a better indicator on the
+alert icon between single and recurring"): the bell and a **1** for once, the bell and a **repeat
+arrow** for every time, orange while armed, grey once fired; a switched-off alert is a dark pill
+with the bell struck through. The bell opens the alert's dialog: its buffer, the zone it makes,
+**Make default** (that buffer becomes the pane's default for new alerts), whether it has fired,
+Remove -- and in its foot, removal of many at once (user, 2026-11-24: "an option to remove all
+levels alerts and all stale levels alerts"): "Levels alerts on EURUSD: 5", **Remove stale (n)** and
+**Remove all (n)**, the second asking first. Both act on the instrument in view and say what went at
+the foot of the pane. Which alerts are the layer's is its `owns`, and which are stale its `stale`
+(types.ts): for Levels, an alert is known by its name (`EURUSD 1W level 1.08500`) and is stale
+when it was armed once and has fired, so is done (user, 2026-11-26: "make fired once alerts count
+as stale too"; `firedOnce`, hub.ts -- a switched-off one is off, not done), or when no LIVE level
+of its timeframe sits at its price any more -- spent since, or gone from the book -- found with
+one `/levels` read of the live levels at every timeframe (not only the ones the pane shows)
+across the other alerts' prices, under the wall's read clock, as the dialog opens.
+**Hovering** a line or a bell draws the zone across the pane with its width, how the alert
+is armed and what a click on that thing does; on a line not yet alerted, the zone a click would
+give it, fainter. Levels is the one layer that offers it so far: a live level, by its price and
+timeframe, with the pane's default buffer under the gear's "Alerts" (3 pips each side).
+
+The layer only says what is alertable (`target(datum)` -> price + label, or null) and which of its
+settings holds the default buffer (`zonePipsSetting`, a dotted key); everything else is here, and
+the controller applies it to every layer that opts in. It finds a datum through the layer's own
+overlays, by their `extendData` -- so a layer that offers alerts puts its datum there, and
+nothing else. **Make default** writes that setting through the binding's
+`BindContext.editConfig` (client/plugins) -- the same path as the gear and the indicator manager:
+kept for the pane, the wall saved, the pane rebound; the dialog stays open across the rebind.
+
+| file | what it is |
+|---|---|
+| `zone.ts` | **pure**: the alert's shape -- `any(price crosses_above low, price crosses_below high)`, entering the zone from either side -- its pips, its name |
+| `hub.ts` | `PriceAlerts`: one wall's view of a watch backend, narrowed to the alerts; enable / new buffer / remove |
+| `view.ts` | a layer's pane: the click (toggle) and hover handlers, the bells, the zone band, opening the dialog |
+| `figures.ts` | the registered overlays: the bell (`wdPriceAlert`) and the band (`wdPriceAlertZone`) |
+| `editor.ts` | the dialog beside a bell |
+
+**An alert is a price watch** (`client/watch`), on the same backend as the chart's price-watch
+lines, handed to the hub by `client/index.ts`: the server's `/watch` on a live wall, so it fires
+with the tab closed and lands in the Notification Center, and the replay's own registry on a
+replay wall. Nothing here evaluates anything: the condition is the server's language, and the
+crossing baseline is the server's to seed when it arms. It keeps watching once it has fired
+(`repeat: 'always'` -- the line is *enabled*, not set once), five minutes apart at the closest
+(`PRICE_ALERT_COOLDOWN_MS`); entering needs leaving first, so price wandering inside the zone
+raises nothing more. Armed with price already inside the zone, it waits for the next arrival.
+
+**The shape is the identity.** Nothing stores which line an alert belongs to: the zone's middle
+is the line's price, matched to half a tick. So two lines at one price share one alert, and an
+alert outlives its line -- a bell is drawn for every alert in the price band whether or not its
+line still is (a level spent since, a timeframe switched off), which is how it stays reachable.
+Its watch has two leaves, so `client/watch/overlays.ts` (one `price` leaf only) never draws it a
+second time. The bells are a layer's: two layers offering alerts on one pane would each draw them.
+
+**The bell must win a click where it sits on its line**, and klinecharts makes that two
+separate things. It numbers an overlay created without a zLevel by the pane's overlay COUNT
+(`StoreImp.addOverlays`), so a layer's lines run 0, 1, 2 ... into the hundreds and the bell is
+`BELL_Z_LEVEL` (1e9); and it raises a HOVERED overlay to `Number.MAX_SAFE_INTEGER`, so a pointer
+sliding along a line onto the bell kept the line and the click turned the alert off -- the
+layer's lines are `fixedZLevel` (the patched klinecharts' opt-out). Both were found in the
+browser; neither shows in a test that only reads the overlays it built.
+
+The handlers are left out of the paint signature (paint.ts), so a paint that changes nothing
+visible leaves the previous paint's handlers on the chart; they read the pane's context from the
+view at the moment of the event, never from what they captured. The zone band is the one thing
+drawn outside the layer's group (`<layer id>-alert-zone`), because it follows the pointer; the
+controller clears it, and closes an open editor, whenever it clears the layer.
+
+**Every overlay a layer paints keeps itself on a right-click.** klinecharts removes an overlay on
+right-click unless its handler prevents it, locked or not
+(`OverlayView._figureMouseRightClickEvent`), and a layer whose signature still said the line was
+drawn never put it back. The controller gives every overlay a preventing `onRightClick` unless
+the layer brings its own.
 
 ## Not fetching, and not repainting
 
@@ -82,18 +163,37 @@ events faster than the debounce window indefinitely, and a purely trailing debou
 never fire at all, leaving a pane showing the levels it had before the user panned until the
 market went quiet.
 
-The layer's own fetch deduplicates identical in-flight requests (`levels/api.ts`) — a wall of
-panes on one symbol shares a time axis, so one pan lands several byte-identical `/levels`
-reads on a browser with six connections per origin to spend. The server side of the same
-concern is `wdashboard-server` `docs/plugins.md`: the book is read once per closed 1W/1M bar
-and `/levels` answers a conditional GET.
+**One `/levels` read per instrument, not per pane** (`levels/api.ts`, since 2026-10-29). Whatever
+makes one pane of a wall re-read makes all of them re-read together -- a replay step across a day
+boundary invalidates every view at once, and a workspace opening or a new candle at 17:00 lands
+on every pane in the same moment -- and each asks for its own band and date window. Those asks
+are gathered per instrument and per everything else that decides the answer (interval set,
+spent levels, read clock) into ONE read of the union of their windows, and each pane is handed
+exactly what the server would have sent for its own window, picked out by the server's own
+filter (`levelsIn`). The controller is untouched: every view still holds and extends its own
+window, so it draws precisely what it drew when it read alone (under a replay clock too, since
+wdashboard-server 0.56.4 tests a level's lifespan on the clamped record). An ask inside a read already in
+flight waits on it, and one inside a window read recently re-reads that window's URL, so the
+browser revalidates the answer it already holds and the server's ETag answers 304. Measured on
+prod with six-pane EURUSD and EURGBP walls at four 2023 replay clocks: a day boundary went from
+6 concurrent reads and 1.4-2.3 s to 1 read and 0.44-0.79 s, with every pane's overlays
+identical; live, a wall opening went from 6 reads to 1, and six panes re-reading 300 ms apart
+after a new candle from 6 full reads to five 304s and one read. The server
+side of the same concern is `wdashboard-server` `docs/plugins.md`: the book is read once per
+closed 1W/1M bar and `/levels` answers a conditional GET.
 
 ## Tests
 
-`bun test client` — `indicator.test.ts` (drawn only on panes carrying the template, off when
+`bun test client` — `alerts/alerts.test.ts` (the shape, when it fires through the real
+condition language and firing policy, the hub over a real local registry, and panes driven
+through the real controller in happy-dom: click, bell, hover, editor, remove, refusal, teardown,
+and across panes -- a bell on every pane of the instrument, one editor at a time, an edit or a
+removal on one pane reaching the others),
+`indicator.test.ts` (drawn only on panes carrying the template, off when
 hidden or removed, settings per pane, the wall document's shape, the legend), `persist.test.ts`
 (what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
 `paint.test.ts` (the signature is blind to nothing visible and to everything invisible),
 `../levels/freshness.test.ts` (the horizon in all three states, both DST directions, and that
 a dead feed is still bounded), `../levels/levels.test.ts` (what identifies a request, what is
-drawn, the tick case end to end, and that the horizon is read per instrument).
+drawn, the tick case end to end, that the horizon is read per instrument, and that a wall reads
+once per instrument while every pane draws what it drew reading alone).

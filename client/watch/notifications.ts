@@ -1,6 +1,6 @@
 import { getToken } from '../auth'
 import { apiSend } from '../config'
-import type { NotificationBackend, RemoteNotification } from '../notifications'
+import type { NotificationBackend, NotificationSpec, RemoteNotification } from '../notifications'
 import type { NotificationWire } from '../ohlcv'
 import { ownerHeaders, ownerToken } from '../owner'
 import { stream } from '../stream'
@@ -38,6 +38,32 @@ async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Pr
   return data
 }
 
+/** Raise a row on the server (`POST /notifications`): stored, pushed to every open tab and
+ * delivered to the owner's channels, like a watch's. Resolves with the row the server holds --
+ * for a `key` it already has, the row it already had. What client/notifications/durable.ts is
+ * handed; page-level, because it needs no socket. */
+export async function raiseNotification(spec: NotificationSpec): Promise<RemoteNotification> {
+  const body = await call<{ notification: NotificationWire }>('POST', '/notifications', {
+    // Cut to the server's limits rather than refused by them: an alert named after a long
+    // compound rule would otherwise never be stored or reach a phone, with nothing to say so.
+    title: cut(spec.title, RAISE_TITLE_LIMIT),
+    body: cut(spec.body ?? '', RAISE_BODY_LIMIT),
+    level: spec.level ?? 'info',
+    source: spec.source ?? '',
+    data: spec.data && typeof spec.data === 'object' ? spec.data : {},
+    ...(spec.key ? { key: spec.key } : {})
+  })
+  return toRemote(body.notification)
+}
+
+/** `POST /notifications`' limits (wdashboard-server `notify/api.py` RaiseRequest). */
+export const RAISE_TITLE_LIMIT = 200
+export const RAISE_BODY_LIMIT = 2000
+
+export function cut(text: string, limit: number): string {
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`
+}
+
 export interface RemoteNotifications extends NotificationBackend {
   dispose(): void
 }
@@ -46,9 +72,9 @@ export interface RemoteNotifications extends NotificationBackend {
 export function createRemoteNotifications(
   onPush: (row: RemoteNotification) => void
 ): RemoteNotifications {
-  // Both identities: the bearer where the user is signed in (dev), the owner token
-  // otherwise. The server resolves them in that order, exactly as the REST routes do -- see
-  // stream.ts's subscribeNotifications for why the bearer cannot be a header here.
+  // Both identities: the bearer where the user is signed in (dev and prod), the owner token
+  // where the login is off. The server resolves them in that order, exactly as the REST routes
+  // do -- see stream.ts's subscribeNotifications for why the bearer rides in this frame too.
   const unsubscribe = stream.subscribeNotifications(
     { owner: ownerToken(), token: getToken() },
     (row) => onPush(toRemote(row))

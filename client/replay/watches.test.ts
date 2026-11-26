@@ -65,7 +65,7 @@ function fixedAlerts(at: number[]): ReplayAlertBook {
     count: () => (at.length > 0 ? 1 : 0),
     next: async (after, until) => {
       const effective = at.find((t) => t > after && t <= until)
-      return effective === undefined ? null : { alertId: 'a1', name: 'oversold', effective, readings: '' }
+      return effective === undefined ? null : { alertId: 'a1', name: 'oversold', symbol: 'oanda:EURUSD', effective, readings: '' }
     }
   }
 }
@@ -80,11 +80,12 @@ interface Harness {
 /** The cursor starts one bar in, so a crossing armed before the first step has a bar behind
  * it to be seeded from -- which is the ordinary case (a replay starts inside stored history).
  */
-async function make(cursor = START + H, alertsAt: number[] = []): Promise<Harness> {
+async function make(cursor = START + H, alertsAt: number[] = [], silenced?: (at: number) => boolean): Promise<Harness> {
   const raised: NotificationSpec[] = []
   const saved: Array<{ watches: unknown[] }> = []
   const watches = new ReplayWatches({
     symbol: SYM,
+    silenced,
     notify: {
       notify: (spec) => {
         raised.push(spec)
@@ -393,5 +394,42 @@ describe('ReplayWatches', () => {
     const h = await make()
     expect(h.watches.store.catalogue().map((source) => source.id)).toEqual([PRICE_SOURCE])
     expect(h.watches.store.source(PRICE_SOURCE)?.fields.map((f) => f.name)).toEqual(['price', 'bid', 'ask', 'spread'])
+  })
+})
+
+describe('ReplayWatches in quiet hours', () => {
+  // Quiet from 05:30 to 06:30 New York: the bar 05:00-06:00 closes inside, the next does not.
+  const quiet = (at: number) => at >= ny('2024-03-04 05:30') && at < ny('2024-03-04 06:30')
+
+  test('a watch is held: it does not fire or ring, a one-shot stays armed, and the crossing is not fired late', async () => {
+    const h = await make(START + H, [], quiet)
+    // Crossed by the bar closing 06:00 (mid 1.1011 -> 1.1021 across the level), inside quiet hours.
+    const watch = await create(h, 1.1015)
+    const first = await h.session.step()
+    expect(first?.reason).toBe('target')
+    expect(first?.to).toBe(ny('2024-03-04 06:00'))
+    expect(h.raised).toEqual([])
+    expect(h.watches.store.list().find((w) => w.id === watch?.id)?.status).toBe('armed')
+    // Out of quiet hours, the price is above the level already: nothing new crossed, nothing fires.
+    const second = await h.session.step()
+    expect(second?.reason).toBe('target')
+    expect(h.raised).toEqual([])
+    expect(h.watches.store.list().find((w) => w.id === watch?.id)?.status).toBe('armed')
+  })
+
+  test('outside quiet hours the same watch fires as ever', async () => {
+    const h = await make(START + H, [], () => false)
+    await create(h, 1.1015)
+    const result = await h.session.step()
+    expect(result?.reason).toBe('watch')
+    expect(h.raised).toHaveLength(1)
+  })
+
+  test('the Go to stop price is not an alert: it still stops the run in quiet hours', async () => {
+    const h = await make(START + H, [], quiet)
+    await h.watches.setStopPrice(1.1015)
+    const result = await h.session.step()
+    expect(result?.reason).toBe('watch')
+    expect(h.watches.stopPrice()).toBeNull()
   })
 })

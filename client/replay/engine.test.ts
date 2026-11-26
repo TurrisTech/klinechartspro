@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { type BidAskBar, Engine, type Quote, SimError } from './engine'
+import { type BidAskBar, type BreakevenRequest, Engine, type ManagementPatch, type MilestoneRequest, type Quote, SimError, type TrailRequest } from './engine'
 import cases from './fixtures/engine_cases.json'
 
 // The fill engine's parity suite: the SAME case file wdashboard-server's tests/sim/
@@ -22,6 +22,13 @@ const TOLERANCE = 1e-9
 
 function approx(a: unknown, b: unknown): boolean {
   if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) <= TOLERANCE * Math.max(1, Math.abs(a), Math.abs(b))
+  // A trail, a breakeven and the milestones are nested: compared member by member.
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((x, i) => approx(x, b[i]))
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+    const ak = Object.keys(a).sort()
+    const bk = Object.keys(b).sort()
+    return ak.join() === bk.join() && ak.every((k) => approx((a as Doc)[k], (b as Doc)[k]))
+  }
   return a === b
 }
 
@@ -67,6 +74,16 @@ function bar(d: Doc, symbol: string, spread: number): BidAskBar {
 function amend(d: Doc, key: string): number | null | undefined {
   if (!(key in d)) return undefined
   return d[key] === 'unset' ? null : (d[key] as number)
+}
+
+/** The case file's exit management: a trail `{distance, activation?, step?}`, a breakeven
+ * `{trigger, offset?}`, milestones `[{distance, label?}]`; "unset" clears, absent leaves. */
+function management(d: Doc): ManagementPatch {
+  const out: ManagementPatch = {}
+  if ('trailingStop' in d) out.trailingStop = d.trailingStop === 'unset' ? null : (d.trailingStop as TrailRequest)
+  if ('breakeven' in d) out.breakeven = d.breakeven === 'unset' ? null : (d.breakeven as BreakevenRequest)
+  if ('milestones' in d) out.milestones = d.milestones as MilestoneRequest[]
+  return out
 }
 
 function check(engine: Engine, d: Doc, where: string, symbol: string): void {
@@ -130,7 +147,8 @@ function runCase(c: Case, symbol: string, spread: number): void {
           price: d.price as number | undefined,
           stopLoss: d.stopLoss as number | undefined,
           takeProfit: d.takeProfit as number | undefined,
-          label: d.label as string | undefined
+          label: d.label as string | undefined,
+          ...management(d)
         })
         order = r.order as unknown as Doc
         events = r.events as unknown as Doc[]
@@ -140,11 +158,12 @@ function runCase(c: Case, symbol: string, spread: number): void {
         order = engine.modifyOrder(d.id as string, {
           price: d.price as number | undefined,
           stopLoss: amend(d, 'stopLoss'),
-          takeProfit: amend(d, 'takeProfit')
+          takeProfit: amend(d, 'takeProfit'),
+          ...management(d)
         }) as unknown as Doc
       } else if ('modifyTrade' in step) {
         const d = step.modifyTrade as Doc
-        engine.modifyTrade(d.id as string, { stopLoss: amend(d, 'stopLoss'), takeProfit: amend(d, 'takeProfit') })
+        engine.modifyTrade(d.id as string, { stopLoss: amend(d, 'stopLoss'), takeProfit: amend(d, 'takeProfit'), ...management(d) })
       } else if ('closeTrade' in step) {
         const d = step.closeTrade as Doc
         events = engine.closeTrade(d.id as string, d.units as number | undefined) as unknown as Doc[]

@@ -1,7 +1,7 @@
 import type { SymbolInfo } from '../src'
 import { offeredIntervalCodes } from './periods'
 import { apiGet } from './config'
-import { dayGeometryOf } from './daygeometry'
+import { dayGeometryOf, tradingWeekOf } from './daygeometry'
 import { pipSizeOf } from './pipsize'
 import { instrumentConfig } from './instrumentconfig'
 
@@ -24,9 +24,16 @@ export interface MarketSession {
 // US equity is five daily ones, and crypto is a single span covering all of it.
 // Always the EFFECTIVE schedule: the server has already resolved any per-instrument
 // override against the vendor's default.
+//
+// `trading`, when present, is when the instrument actually TRADES where that is not its grid
+// (wmarkettypes `MarketHours.trading`): the lira crosses keep Istanbul hours on New York's FX
+// grid, the metals stop for an hour at 17:00. The top level stays the grid every candle
+// boundary is read from (`dayGeometryOf`); rows are filtered on `trading ?? the top level`
+// (`tradingWeekOf`). Exactly one level deep; null or absent where the two coincide.
 export interface MarketHours {
   timezone: string
   sessions: MarketSession[]
+  trading?: MarketHours | null
 }
 
 // The vendor's own configuration for an instrument (wdashboard-server's
@@ -107,6 +114,8 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
     // not apply to a market whose days run midnight to midnight.
     timezone: config?.marketHours?.timezone,
     dayGeometry: dayGeometryOf(config?.marketHours) ?? undefined,
+    // And when its rows count, which a fold of finer bars must filter on (replay/feed.ts).
+    tradingWeek: tradingWeekOf(config?.marketHours) ?? undefined,
     // The periods this instrument can be charted at. Capabilities are loaded before any
     // symbol is resolved (index.ts boot), and an instrument the server does not name for a
     // scoped code -- 5s anywhere but the fed FX pairs -- is simply not offered it.

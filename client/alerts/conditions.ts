@@ -265,3 +265,55 @@ export function evaluate(document: Condition, now: Observation, previous?: Obser
   if (op === 'crosses_below') return down
   return up || down
 }
+
+/** How much wider than its stated band a summary is taken to be by `neverWithin`, relative to
+ * the level: a coarse candle stored a tick short of the finer ones inside it must not be what
+ * steps over a level. About a quarter of a pip on EURUSD's 1.16; it costs nothing but a
+ * descent into a candle that did come close. */
+export const SUMMARY_SLACK = 2e-5
+
+/**
+ * Whether the condition is CERTAINLY not true at any reading taken inside a span that `summary`
+ * summarises -- a coarser candle over the same instants, so every finer reading's value and band
+ * lie inside its band -- with `previous` the reading before the span. True lets a replay hand the
+ * evaluator that one summary instead of every bar inside it (client/replay/session.ts): nothing
+ * could have fired on any of them, and the summary leaves the same baseline the last of them would
+ * (its close is theirs). False whenever that cannot be shown -- which costs only the finer walk.
+ *
+ * Shown only for what is monotone in the band: `>`/`>=` read the high and `<`/`<=` the low, so
+ * a summary's band that does not reach the level means no finer one does; a crossing needs the
+ * level strictly outside the band AND the previous reading on the same side, since a finer
+ * reading could otherwise cross back over it inside the span. A field with no band (`spread`, a
+ * label) proves nothing; neither does `inside`/`outside`/`==`/`!=`/`changed`, which read the
+ * value alone, nor a `not` (it would need the converse). `all` is quiet when any term is, `any`
+ * when every term is. A field the summary does not carry is never true, so it is quiet.
+ */
+export function neverWithin(document: Condition, summary: Observation, previous?: Observation | null): boolean {
+  const doc = document as Doc
+  if ('all' in doc) return (doc.all as Condition[]).some((term) => neverWithin(term, summary, previous))
+  if ('any' in doc) return (doc.any as Condition[]).every((term) => neverWithin(term, summary, previous))
+  if ('not' in doc) return false
+  const field = String(doc.field)
+  const current = summary[field]
+  if (current === undefined) return true
+  const op = String(doc.op)
+  const threshold = num(doc.value)
+  if (threshold === null || typeof current.value === 'string' || current.low === undefined || current.high === undefined) return false
+  const slack = Math.abs(threshold) * SUMMARY_SLACK
+  const high = Math.max(current.value, current.high) + slack
+  const low = Math.min(current.value, current.low) - slack
+  if (op === '>') return high <= threshold
+  if (op === '>=') return high < threshold
+  if (op === '<') return low >= threshold
+  if (op === '<=') return low > threshold
+  if (op === 'crosses' || op === 'crosses_above' || op === 'crosses_below') {
+    // No reading before the span: the first one inside it seeds the crossing and cannot cross,
+    // and the rest lie inside the band.
+    const before = previous?.[field]?.value
+    if (typeof before === 'string') return false
+    const below = high < threshold && (before === undefined || before < threshold)
+    const above = low > threshold && (before === undefined || before > threshold)
+    return below || above
+  }
+  return false
+}

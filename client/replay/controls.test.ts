@@ -20,6 +20,9 @@ const { createReplayControls, openStartDialog, defaultStartAt } = await import('
 const { formatClock } = await import('./format')
 const { validateBase, nominalMs, FX_GRID, CONTINUOUS_DAY, gridOf } = await import('./timeframes')
 const { setFocusSource } = await import('../chrome/focus')
+const { Engine } = await import('./engine')
+const { serialize, stampSaved } = await import('./persist')
+const { summarizeSessions } = await import('./sessions')
 
 const SYM = 'oanda:EURUSD'
 const NY_TZ = 'America/New_York'
@@ -32,11 +35,15 @@ interface Fake {
   calls: {
     step: number
     nextAlert: number
+    goTo: number[]
+    runToWatch: number
     cancel: number
     persist: number
     setAdvance: Array<{ interval: string; multiple: number }>
     setBase: string[]
     setPauseOnFill: boolean[]
+    follow: number
+    dismissFollow: number
   }
   /** What the controller's own change notification does: every listener re-renders. */
   emit(): void
@@ -82,13 +89,13 @@ function closedTrade(id: string, pnl: number, closedAt: number): SimTrade {
 }
 
 function result(over: Partial<AdvanceResult> = {}): AdvanceResult {
-  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', alert: null, events: [], bars: [], walked: false, observed: [], ...over }
+  return { from: 0, to: H, request: { interval: '5m', multiple: 1 }, reason: 'target', alert: null, events: [], bars: [], walked: false, observed: [], seeking: null, ...over }
 }
 
 function fake(): Fake {
   const listeners = new Set<(change?: 'walk') => void>()
   const snapshotListeners = new Set<SessionListener>()
-  const calls: Fake['calls'] = { step: 0, nextAlert: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [] }
+  const calls: Fake['calls'] = { step: 0, nextAlert: 0, goTo: [], runToWatch: 0, cancel: 0, persist: 0, setAdvance: [], setBase: [], setPauseOnFill: [], follow: 0, dismissFollow: 0 }
   const emit = (): void => {
     for (const l of [...listeners]) l()
   }
@@ -108,6 +115,7 @@ function fake(): Fake {
     lastStop: null,
     alertCount: 0,
     armedStops: 0,
+    workingStops: 0,
     storedIntervals: ['1m', '1h', '1D'],
     intervalsInUse: ['5m', '1h'],
     symbol: SYM,
@@ -145,6 +153,14 @@ function fake(): Fake {
       calls.nextAlert++
       return result({ reason: 'none' })
     },
+    async goTo(at) {
+      calls.goTo.push(at)
+      return result({ reason: 'target', request: { to: at }, to: at })
+    },
+    async runToWatch() {
+      calls.runToWatch++
+      return result({ reason: 'none', seeking: 'watches', request: { toEnd: true, end: 0 } })
+    },
     cancel() {
       calls.cancel++
       controller.cancelling = true
@@ -158,6 +174,17 @@ function fake(): Fake {
     },
     persist() {
       calls.persist++
+    },
+    followNotice: null,
+    followBlockers: { trades: 0, orders: 0, watches: 0 },
+    async follow() {
+      calls.follow++
+      return 'followed'
+    },
+    dismissFollow() {
+      calls.dismissFollow++
+      controller.followNotice = null
+      emit()
     }
   }
   const emitSnapshot = (): void => {
@@ -173,6 +200,8 @@ interface Mounted extends Fake {
   account: { open: boolean; toggles: number }
   trade: { open: boolean; toggles: number }
   alerts: { open: boolean; toggles: number }
+  /** The stop price the Go to panel sets, as a stub of the watch it is. */
+  priceStop: { price: number | null; sets: number[]; clears: number }
   dispose(): void
   /** A button in the window by its visible label (badge excluded). */
   button(label: string): HTMLButtonElement
@@ -184,7 +213,15 @@ let mounted: Mounted[] = []
 
 function mount(
   f: Fake = fake(),
-  opts: { account?: boolean; alerts?: boolean; sleep?: (ms: number) => Promise<void>; settled?: () => Promise<void>; busyRevealMs?: number } = {}
+  opts: {
+    account?: boolean
+    alerts?: boolean
+    sleep?: (ms: number) => Promise<void>
+    settled?: () => Promise<void>
+    busyRevealMs?: number
+    sessions?: import('./controls').SessionsSource
+    quiet?: import('./controls').QuietHoursControl
+  } = {}
 ): Mounted {
   const bounds = document.createElement('div')
   document.body.appendChild(bounds)
@@ -193,7 +230,19 @@ function mount(
   const account = { open: false, toggles: 0 }
   const trade = { open: false, toggles: 0 }
   const alerts = { open: false, toggles: 0 }
+  const priceStop = { price: null as number | null, sets: [] as number[], clears: 0 }
   const controls = createReplayControls({
+    priceStop: {
+      get: () => priceStop.price,
+      set: async (price) => {
+        priceStop.sets.push(price)
+        priceStop.price = price
+      },
+      clear: async () => {
+        priceStop.clears++
+        priceStop.price = null
+      }
+    },
     controller: f.controller,
     intervalsInUse: () => [...f.controller.intervalsInUse],
     bounds,
@@ -203,6 +252,8 @@ function mount(
     onStop: (r) => stops.push(r),
     sleep: opts.sleep,
     settled: opts.settled,
+    sessions: opts.sessions,
+    quiet: opts.quiet,
     // Shown at once unless a test is about the delay itself.
     busyRevealMs: opts.busyRevealMs ?? 0,
     account:
@@ -238,7 +289,7 @@ function mount(
   const root = controls.element
   const label = (b: Element): string => {
     const clone = b.cloneNode(true) as HTMLElement
-    for (const badge of clone.querySelectorAll('.wd-replay-badge')) badge.remove()
+    for (const badge of clone.querySelectorAll('.wd-replay-badge, .wd-replay-key')) badge.remove()
     return (clone.textContent ?? '').trim()
   }
   const maybeButton = (text: string): HTMLButtonElement | null =>
@@ -253,6 +304,7 @@ function mount(
     account,
     trade,
     alerts,
+    priceStop,
     dispose: () => controls.dispose(),
     maybeButton,
     button(text) {
@@ -306,7 +358,7 @@ describe('the title bar and the transport', () => {
     const m = mount()
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
     // With the weekday: a cursor in the weekend has to read as one.
-    expect(clock.textContent).toBe('Mon, Mar 04, 09:00')
+    expect(clock.textContent).toBe('Mon, Mar 04, 09:00:00')
     expect(clock.textContent).toBe(formatClock(m.controller.cursor, NY_TZ))
     expect(clock.title).toStartWith(new Date(m.controller.cursor).toISOString())
 
@@ -413,39 +465,43 @@ describe('the title bar and the transport', () => {
     const m = mount(f)
     const clock = m.q('.wd-replay-clock-value') as HTMLElement
     // 14:00 UTC, which New York would have shown as 09:00.
-    expect(clock.textContent).toBe('Mon, Mar 04, 14:00')
+    expect(clock.textContent).toBe('Mon, Mar 04, 14:00:00')
     expect(clock.title).toContain('UTC')
   })
 
-  test('Exit takes two presses: the first only asks, because a replay cannot be reopened', () => {
+  test('Exit is one press: the replay is kept, and the Sessions tab resumes it', () => {
     const m = mount()
-    m.button('Exit replay').click()
-    expect(m.exits).toBe(0)
-    const armed = m.button('Confirm exit')
-    expect(armed.classList.contains('is-armed')).toBe(true)
-    expect(armed.title).toContain('cannot be reopened')
-    armed.click()
+    const exit = m.button('Exit replay')
+    expect(exit.title).toContain('Sessions resumes it')
+    exit.click()
     expect(m.exits).toBe(1)
+    expect(exit.classList.contains('is-armed')).toBe(false)
   })
 })
 
 describe('the advance row', () => {
-  test('Next alert needs something to stop at: an alert on the instrument, or an armed watch', async () => {
+  test('Next alert needs something to stop at: an alert, an armed watch, or an order or stop that can fill', async () => {
     const m = mount()
     const next = (): HTMLButtonElement => m.button('Next alert')
     expect(next().disabled).toBe(true)
-    expect(next().title).toBe('Add an alert on EURUSD (Alerts) or place a price watch first')
+    expect(next().title).toBe('Enable an alert (Alerts), place a price watch, or rest an order or a stop first')
 
     m.controller.armedStops = 1
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 0 alerts on EURUSD triggers, or a price watch fires')
+    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or a price watch fires (Shift+↑)')
 
     m.controller.armedStops = 0
+    m.controller.workingStops = 1
+    m.emit()
+    expect(next().disabled).toBe(false)
+    expect(next().title).toBe('Advance to where the next of 0 alerts triggers, or an order, stop loss or take profit fills (Shift+↑)')
+
+    m.controller.workingStops = 0
     m.controller.alertCount = 2
     m.emit()
     expect(next().disabled).toBe(false)
-    expect(next().title).toBe('Advance to where the next of 2 alerts on EURUSD triggers')
+    expect(next().title).toBe('Advance to where the next of 2 alerts triggers (Shift+↑)')
 
     next().click()
     await flush()
@@ -457,50 +513,132 @@ describe('the advance row', () => {
     expect(next().disabled).toBe(true)
   })
 
+  test('Next alert leads the window, is the primary button, and carries its key', () => {
+    const m = mount()
+    const rows = [...m.root.querySelectorAll('.wd-window-body > .wd-replay-row')]
+    expect(rows[0]?.classList.contains('wd-replay-next-row')).toBe(true)
+    const next = m.button('Next alert')
+    expect(next.classList.contains('kc-button-primary')).toBe(true)
+    expect(m.button('Step').classList.contains('kc-button-primary')).toBe(false)
+    expect(next.querySelector('.wd-replay-key')?.textContent).toBe('⇧↑')
+  })
+
+  test('while its own run shows, Next alert is the Stop', async () => {
+    const m = mount()
+    m.controller.alertCount = 1
+    let finish: (r: AdvanceResult | null) => void = () => {}
+    m.controller.nextAlert = () => {
+      m.calls.nextAlert++
+      m.controller.busy = true
+      m.emit()
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    }
+    m.emit()
+    m.button('Next alert').click()
+    const next = () => m.q<HTMLButtonElement>('.wd-replay-next') as HTMLButtonElement
+    expect(next().textContent).toBe('Stop')
+    expect(next().classList.contains('is-stop')).toBe(true)
+    expect(next().disabled).toBe(false)
+    next().click()
+    expect(m.calls.cancel).toBe(1)
+    expect(next().textContent).toBe('Stopping…')
+    m.controller.busy = false
+    m.controller.cancelling = false
+    finish(null)
+    await flush()
+    expect(m.maybeButton('Next alert')).not.toBeNull()
+    // A Step's run is stopped from Step: Next alert is only disabled meanwhile.
+    m.controller.busy = true
+    m.emit()
+    expect(m.button('Next alert').disabled).toBe(true)
+  })
+
   test('there is no Next signal any more', () => {
     expect(mount().maybeButton('Next signal')).toBeNull()
   })
 
-  test('the timeframe picker offers the base, the stored ladder and the panes, shortest first', () => {
+  const picker = (m: Mounted): HTMLSelectElement => m.q<HTMLSelectElement>('.wd-replay-step-size') as HTMLSelectElement
+  const field = (m: Mounted): HTMLInputElement | null => m.q<HTMLInputElement>('.wd-replay-step-custom')
+  const type = (m: Mounted, text: string, key = 'Enter'): void => {
+    const input = field(m) as HTMLInputElement
+    input.value = text
+    input.dispatchEvent(new Event('input'))
+    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  }
+
+  test('the step picker offers the base, the stored ladder and the panes, shortest first, then a step of your own', () => {
     const m = mount()
-    const picker = m.q<HTMLSelectElement>('.wd-replay-row select') as HTMLSelectElement
-    expect([...picker.options].map((o) => o.value)).toEqual(['1m', '5m', '1h', '1D'])
-    expect(picker.value).toBe('5m')
-    change(picker, '1h')
+    expect([...picker(m).options].map((o) => o.textContent)).toEqual(['1m', '5m', '1h', '1D', 'Custom step…'])
+    expect(picker(m).value).toBe('1*5m')
+    change(picker(m), '1*1h')
     expect(m.calls.setAdvance).toEqual([{ interval: '1h', multiple: 1 }])
+    // No separate multiple any more: a step of several candles is typed ("3 × 4h", "15h").
+    expect(m.q('.wd-replay-number')).toBeNull()
   })
 
-  test('the multiple is a whole number of at least one', () => {
+  test('Custom step… takes any amount, applies it on Enter and offers it again', () => {
     const m = mount()
-    const cases: Array<[string, number]> = [
-      ['12', 12],
-      ['3.7', 3],
-      ['0', 1],
-      ['-4', 1],
-      ['abc', 1]
-    ]
-    for (const [typed, expected] of cases) {
-      // Every change re-renders the window, so the input is looked up fresh each time.
-      change(m.q<HTMLInputElement>('.wd-replay-number') as HTMLInputElement, typed)
-      expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '5m', multiple: expected })
-    }
+    change(picker(m), 'custom')
+    expect(field(m)).not.toBeNull()
+    type(m, '15h')
+    expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '1h', multiple: 15 })
+    expect(field(m)).toBeNull()
+    change(picker(m), 'custom')
+    type(m, '30h')
+    expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '1h', multiple: 30 })
+    // Both are on the list now, most recent first after the timeframes, in this browser.
+    expect([...picker(m).options].map((o) => o.textContent)).toEqual(['1m', '5m', '1h', '1D', '30h', '15h', 'Custom step…'])
+    expect(JSON.parse(window.localStorage.getItem('wd.replay.steps') ?? '[]')).toEqual(['30h', '15h'])
+    // A listed timeframe typed is that timeframe, and is not listed twice.
+    change(picker(m), 'custom')
+    type(m, '1h')
+    expect(m.calls.setAdvance.at(-1)).toEqual({ interval: '1h', multiple: 1 })
+    expect(JSON.parse(window.localStorage.getItem('wd.replay.steps') ?? '[]')).toEqual(['30h', '15h'])
   })
 
-  test('busy, the picker and the multiple are disabled', () => {
+  test('a step that is not one is refused with the reason, and Escape gives the picker back', () => {
+    const m = mount()
+    change(picker(m), 'custom')
+    type(m, 'soon')
+    expect(m.calls.setAdvance).toEqual([])
+    expect(m.root.querySelector('.wd-replay-flash')?.textContent).toContain('not a step')
+    expect(field(m)).not.toBeNull()
+    type(m, '', 'Escape')
+    expect(field(m)).toBeNull()
+    expect(m.calls.setAdvance).toEqual([])
+  })
+
+  test('a remembered step the replay is on can be taken off the list', () => {
+    window.localStorage.setItem('wd.replay.steps', JSON.stringify(['15h']))
+    const m = mount()
+    m.controller.advance = { interval: '1h', multiple: 15 }
+    m.emit()
+    expect(picker(m).value).toBe('15*1h')
+    m.button('×').click()
+    expect(JSON.parse(window.localStorage.getItem('wd.replay.steps') ?? '[]')).toEqual([])
+    // Still the step: only the list forgot it.
+    expect(picker(m).value).toBe('15*1h')
+    expect([...picker(m).options].map((o) => o.textContent)).toContain('15h')
+  })
+
+  test('busy, the step picker is disabled', () => {
     const m = mount()
     m.controller.busy = true
     m.emit()
-    expect((m.q('.wd-replay-row select') as HTMLSelectElement).disabled).toBe(true)
-    expect((m.q('.wd-replay-number') as HTMLInputElement).disabled).toBe(true)
+    expect(picker(m).disabled).toBe(true)
   })
 })
 
 describe('the status line', () => {
   const reasons: Array<[string, Partial<AdvanceResult>, string]> = [
-    ['an alert, by its name', { reason: 'alert', alert: { alertId: 'a1', name: 'RSI oversold', effective: 0, readings: '' } }, 'Alert: RSI oversold'],
+    ['an alert, by its name', { reason: 'alert', alert: { alertId: 'a1', name: 'RSI oversold', symbol: 'oanda:EURUSD', effective: 0, readings: '' } }, 'Alert: RSI oversold'],
     ['nothing ahead', { reason: 'none' }, 'No alert triggers before the end of the data'],
-    ['a fill pause', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Paused on a fill'],
-    ['a close pause', { reason: 'fill', events: [{ kind: 'close' } as never] }, 'Paused on a close'],
+    ['a fill', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Order filled'],
+    ['a stop loss', { reason: 'fill', events: [{ kind: 'fill' }, { kind: 'close', reason: 'stop_loss' }] as never }, 'Stop loss hit'],
+    ['a take profit', { reason: 'fill', events: [{ kind: 'close', reason: 'take_profit' } as never] }, 'Take profit hit'],
+    ['a close', { reason: 'fill', events: [{ kind: 'close', reason: 'manual' } as never] }, 'Trade closed'],
     ['a watch', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }] }, 'Stopped at watch EURUSD 1.10000'],
     ['several watches on one bar', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }, { label: 'b' }, { label: 'c' }] }, 'Stopped at watch EURUSD 1.10000 +2'],
     ['a cancel after walking', { reason: 'cancel', walked: true, bars: [{}, {}, {}] as never }, 'Stopped by you after 3 bars'],
@@ -578,7 +716,7 @@ describe('the status line', () => {
 
   test('an alert stop carries what the rule read, on hover', () => {
     const m = mount()
-    m.controller.lastStop = result({ reason: 'alert', alert: { alertId: 'a1', name: 'oversold', effective: 0, readings: 'RSI(14) 1h 28.1' } })
+    m.controller.lastStop = result({ reason: 'alert', alert: { alertId: 'a1', name: 'oversold', symbol: 'oanda:EURUSD', effective: 0, readings: 'RSI(14) 1h 28.1' } })
     m.emit()
     expect((m.q('.wd-replay-stop-reason') as HTMLElement).title).toBe('Alert: oversold — RSI(14) 1h 28.1')
   })
@@ -625,7 +763,7 @@ describe('the panels', () => {
   test('Alerts opens the alert manager and badges the alerts Next alert can stop at', () => {
     const m = mount()
     expect(m.q('.wd-replay-badge')).toBeNull()
-    expect(m.button('Alerts').title).toBe('The alert manager: 0 enabled on EURUSD, which is where Next alert stops')
+    expect(m.button('Alerts').title).toBe('The alert manager: 0 enabled, which is where Next alert stops')
     m.controller.alertCount = 3
     m.emit()
     expect((m.q('.wd-replay-badge') as HTMLElement).textContent).toBe('3')
@@ -725,6 +863,107 @@ describe('the panels', () => {
     expect(m.account.toggles).toBe(0)
     expect(m.button('Trade').getAttribute('aria-pressed')).toBe('true')
     expect(m.button('Trade').title).toBe('Hide the order ticket')
+  })
+})
+
+describe('the Go to panel', () => {
+  // The fake's cursor: Monday 2024-03-04 14:00Z, 09:00 New York.
+  const typeInto = (input: HTMLInputElement, value: string, event = 'change'): void => {
+    input.value = value
+    input.dispatchEvent(new Event(event))
+  }
+
+  test('goes to 06:00 on the next trading day by default, saying where before it goes', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    const time = m.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement
+    expect(time.value).toBe('06:00')
+    // Tuesday 06:00 New York (EST in early March): 11:00Z.
+    expect(m.q('.wd-replay-goto-target')?.textContent).toContain('06:00')
+    m.button('Go').click()
+    await flush()
+    expect(m.calls.goTo).toEqual([Date.UTC(2024, 2, 5, 11, 0)])
+    expect(m.stops.at(-1)?.reason).toBe('target')
+  })
+
+  test('the next time today, a time typed in, and Enter goes', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    const mode = m.q<HTMLSelectElement>('.wd-replay-goto select') as HTMLSelectElement
+    mode.value = 'next'
+    mode.dispatchEvent(new Event('change'))
+    const time = m.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement
+    typeInto(time, '10:30')
+    ;(m.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement).dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    await flush()
+    // 10:30 New York the same Monday.
+    expect(m.calls.goTo).toEqual([Date.UTC(2024, 2, 4, 15, 30)])
+    // The time and the day are remembered; a re-mount opens on them.
+    m.dispose()
+    const again = mount()
+    again.button('Go to').click()
+    expect((again.q<HTMLInputElement>('.wd-replay-goto-time') as HTMLInputElement).value).toBe('10:30')
+    expect((again.q<HTMLSelectElement>('.wd-replay-goto select') as HTMLSelectElement).value).toBe('next')
+  })
+
+  test('on a date: a date before the clock cannot be gone to', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    const mode = m.q<HTMLSelectElement>('.wd-replay-goto select') as HTMLSelectElement
+    mode.value = 'date'
+    mode.dispatchEvent(new Event('change'))
+    const day = m.q<HTMLInputElement>('.wd-replay-goto-day') as HTMLInputElement
+    typeInto(day, '2024-03-01')
+    expect(m.button('Go').disabled).toBe(true)
+    typeInto(m.q<HTMLInputElement>('.wd-replay-goto-day') as HTMLInputElement, '2024-03-07')
+    m.button('Go').click()
+    await flush()
+    expect(m.calls.goTo).toEqual([Date.UTC(2024, 2, 7, 11, 0)])
+  })
+
+  test('a stop price is set from the panel, shown, run to and removed', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    // Run needs something to run to.
+    expect(m.button('Run').disabled).toBe(true)
+    const price = m.q<HTMLInputElement>('.wd-replay-price') as HTMLInputElement
+    typeInto(price, '1.08500', 'input')
+    m.button('Stop here').click()
+    await flush()
+    expect(m.priceStop.sets).toEqual([1.085])
+    expect(m.q('.wd-replay-price-current')?.textContent).toBe('stops at 1.085')
+    // The watch it is counts as an armed stop, which is what Run (and Next alert) need.
+    m.controller.armedStops = 1
+    m.emit()
+    m.button('Run').click()
+    await flush()
+    expect(m.calls.runToWatch).toBe(1)
+    // The controller keeps the stop; the status line says what a run that found nothing means.
+    m.controller.lastStop = m.stops.at(-1) ?? null
+    m.emit()
+    expect(m.q('.wd-replay-stop-reason')?.textContent).toBe('The price is not reached before the end of the data')
+    m.button('×').click()
+    await flush()
+    expect(m.priceStop.clears).toBe(1)
+    expect(m.q('.wd-replay-price-current')).toBeNull()
+  })
+
+  test('a price that is not one is refused, and nothing is set', async () => {
+    const m = mount()
+    m.button('Go to').click()
+    typeInto(m.q<HTMLInputElement>('.wd-replay-price') as HTMLInputElement, 'abc', 'input')
+    m.button('Stop here').click()
+    await flush()
+    expect(m.priceStop.sets).toEqual([])
+    expect(m.root.textContent).toContain('Type the price to stop at')
+  })
+
+  test('a Go to stop says where it went', async () => {
+    const m = mount()
+    m.controller.lastStop = result({ reason: 'target', request: { to: Date.UTC(2024, 2, 5, 11) }, to: Date.UTC(2024, 2, 5, 11) })
+    m.emit()
+    expect(m.q('.wd-replay-stop-reason')?.textContent).toContain('Went to')
+    expect(m.q('.wd-replay-stop-reason')?.textContent).toContain('06:00')
   })
 })
 
@@ -901,6 +1140,22 @@ describe('keys', () => {
     document.removeEventListener('keydown', chartListener)
   })
 
+  test('Shift+↑ is Next alert, and only when there is something to stop at', async () => {
+    const m = mount()
+    const event = key({ key: 'ArrowUp', shiftKey: true })
+    await flush()
+    expect(event.defaultPrevented).toBe(true)
+    expect(m.calls.nextAlert).toBe(0)
+    m.controller.alertCount = 1
+    m.emit()
+    key({ key: 'ArrowUp', shiftKey: true })
+    await flush()
+    expect(m.calls.nextAlert).toBe(1)
+    key({ key: 'ArrowUp' })
+    await flush()
+    expect(m.calls.nextAlert).toBe(1)
+  })
+
   test('Shift+→ while an advance runs is Stop -- but a held key repeating never cancels', () => {
     const m = mount()
     m.controller.busy = true
@@ -922,7 +1177,8 @@ describe('keys', () => {
 
   test('a key typed into a field is the field\'s, and a disposed window hears nothing', async () => {
     const m = mount()
-    const input = m.q('.wd-replay-number') as HTMLInputElement
+    change(m.q('.wd-replay-step-size') as HTMLSelectElement, 'custom')
+    const input = m.q('.wd-replay-step-custom') as HTMLInputElement
     key({ key: 'ArrowRight', shiftKey: true }, input)
     // A pane grip moves its pane with the arrows, Shift or not.
     const grip = document.createElement('button')
@@ -935,6 +1191,68 @@ describe('keys', () => {
     key({ key: 'ArrowRight', shiftKey: true })
     await flush()
     expect(m.calls.step).toBe(0)
+  })
+})
+
+describe('the follow notice', () => {
+  const notice = (m: Mounted): HTMLElement | null => m.q('.wd-replay-notice')
+
+  test('absent while the chart and the replay agree', () => {
+    const m = mount()
+    expect(notice(m)).toBeNull()
+  })
+
+  test('kept by something open: which instrument it walks, why it stayed, what to do', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: null, moving: false }
+    f.controller.followBlockers = { trades: 1, orders: 0, watches: 1 }
+    const m = mount(f)
+    const box = notice(m) as HTMLElement
+    expect(box.getAttribute('role')).toBe('status')
+    expect(box.textContent).toContain('The replay walks EURUSD, not GBPUSD: EURUSD has 1 open trade and 1 armed price watch. Close or remove them to follow GBPUSD, or exit the replay.')
+    // Below the transport and Next alert, above the footer.
+    const body = m.q('.wd-window-body') as HTMLElement
+    expect([...body.children].indexOf(box)).toBe([...body.children].indexOf(m.q('.wd-replay-toggles') as HTMLElement) - 1)
+    // Follow is offered, and refused until they are gone.
+    const follow = m.button('Follow GBPUSD')
+    expect(follow.disabled).toBe(true)
+    expect(follow.title).toContain('Close or remove them first')
+
+    // The trade closed and the watch removed: the same notice now offers the follow.
+    f.controller.followBlockers = { trades: 0, orders: 0, watches: 0 }
+    f.emit()
+    expect((notice(m) as HTMLElement).textContent).toContain('Nothing is open on it any more, so it can follow the chart to GBPUSD from here.')
+    expect(m.button('Follow GBPUSD').disabled).toBe(false)
+    m.button('Follow GBPUSD').click()
+    expect(f.calls.follow).toBe(1)
+  })
+
+  test('× keeps walking the instrument walked, and the notice goes', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: null, moving: false }
+    f.controller.followBlockers = { trades: 0, orders: 2, watches: 0 }
+    const m = mount(f)
+    const keep = m.q('.wd-replay-notice-close') as HTMLButtonElement
+    expect(keep.getAttribute('aria-label')).toBe('Keep walking EURUSD')
+    keep.click()
+    expect(f.calls.dismissFollow).toBe(1)
+    expect(notice(m)).toBeNull()
+  })
+
+  test('an instrument that cannot be walked: its reason, and Follow to try again', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: 'No stored bars for GBPUSD at the replay’s clock', moving: false }
+    const m = mount(f)
+    expect((notice(m) as HTMLElement).textContent).toContain('The replay walks EURUSD, not GBPUSD: no stored bars for GBPUSD at the replay’s clock.')
+    expect(m.button('Follow GBPUSD').disabled).toBe(false)
+  })
+
+  test('being made: it says so and offers nothing', () => {
+    const f = fake()
+    f.controller.followNotice = { symbol: 'oanda:GBPUSD', ticker: 'GBPUSD', problem: null, moving: true }
+    const m = mount(f)
+    expect((notice(m) as HTMLElement).textContent).toBe('Following GBPUSD…')
+    expect(m.maybeButton('Follow GBPUSD')).toBeNull()
   })
 })
 
@@ -1016,7 +1334,7 @@ describe('the start dialog', () => {
     // On whatever base the dialog suggests (here 1h, for 1h + 4h panes)...
     for (const base of ['1m', '1h', '4h']) expect(formatClock(defaultStartAt(base, saturday, FX_GRID), NY_TZ).startsWith('Fri, Jul 12')).toBe(true)
     // ...and the daily base's own session floor already lands on a trading day.
-    expect(formatClock(defaultStartAt('1D', saturday, FX_GRID), NY_TZ)).toBe('Thu, Jul 11, 17:00')
+    expect(formatClock(defaultStartAt('1D', saturday, FX_GRID), NY_TZ)).toBe('Thu, Jul 11, 17:00:00')
   })
 
   test('a coinbase replay is chosen on its own clock: UTC, named so, and its weekend is a market', () => {
@@ -1210,5 +1528,585 @@ describe('the start dialog', () => {
     d.root.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(d.isOpen()).toBe(true)
     expect([...a.starts, ...b.starts, ...c.starts, ...d.starts]).toEqual([])
+  })
+})
+
+// Past replays as `GET /sim/sessions` lists them and the Sessions list shows them: the start
+// dialog's Sessions tab and the replay window's Sessions panel.
+
+type Listed = import('./controls').ListedSession
+type Summary = import('./sessions').ReplaySessionSummary
+
+// Tue 3 Jan 2023 17:00 New York, and 20 Jan 09:00.
+const STARTED = Date.UTC(2023, 0, 3, 22, 0)
+const CURSOR = Date.UTC(2023, 0, 20, 14, 0)
+
+/** A replay session as `GET /sim/sessions` lists it: its blob holds an engine that traded. */
+function stored(id: string, opts: { savedAt?: number; win?: boolean; trade?: boolean; ticker?: string } = {}): SimSnapshot {
+  const symbol = `oanda:${opts.ticker ?? 'EURUSD'}`
+  const engine = new Engine(10_000)
+  if (opts.trade !== false) {
+    engine.onQuote({ symbol, time: STARTED, bid: 1.1, ask: 1.1 })
+    const { order } = engine.submit({ symbol, side: 'buy', type: 'market', units: 10_000 })
+    const exit = opts.win === false ? 1.09 : 1.12
+    engine.onQuote({ symbol, time: CURSOR, bid: exit, ask: exit })
+    engine.closeTrade(order.tradeId as string)
+  }
+  const blob = serialize({ vendor: 'oanda', symbol, cursor: CURSOR, startedAt: STARTED, base: '1m', advance: { interval: '1h', multiple: 1 }, pauseOnFill: false, watches: [], engine: engine.toState() })
+  return {
+    id,
+    mode: 'replay',
+    name: 'Replay',
+    createdAt: Date.UTC(2026, 10, 1),
+    rev: 3,
+    // The server's own copy of a replay's account never moves: its engine runs in the client.
+    account: { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 },
+    quotes: {},
+    orders: [],
+    trades: [],
+    symbols: [symbol],
+    state: opts.savedAt === undefined ? blob : stampSaved(blob, opts.savedAt)
+  }
+}
+
+function listed(snapshots: SimSnapshot[]): Listed[] {
+  return summarizeSessions(snapshots).map((summary) => ({ summary, zone: 'America/New_York' }))
+}
+
+describe('the start dialog: past sessions', () => {
+  const JULY = Date.UTC(2024, 6, 15, 20, 0)
+
+  function open(rows: Listed[] | Promise<Listed[]>) {
+    const resumed: Summary[] = []
+    const removed: string[] = []
+    let failRemove = false
+    const starts: unknown[] = []
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    const dialog = openStartDialog({
+      anchor,
+      symbol: SYM,
+      intervalsInUse: ['5m', '1h'],
+      stored: ['1m', '1h', '1D'],
+      latest: JULY,
+      grid: FX_GRID,
+      onStart: (choice) => starts.push(choice),
+      sessions: {
+        load: () => Promise.resolve(rows),
+        resume: (s) => {
+          resumed.push(s)
+        },
+        remove: async (id) => {
+          if (failRemove) throw new Error('nope')
+          removed.push(id)
+        }
+      }
+    })
+    const root = document.querySelector('.wd-replay-dialog') as HTMLElement
+    const buttons = (): HTMLButtonElement[] => [...root.querySelectorAll('button')] as HTMLButtonElement[]
+    const tab = (name: string): HTMLButtonElement => buttons().find((b) => b.getAttribute('role') === 'tab' && (b.textContent ?? '').startsWith(name)) as HTMLButtonElement
+    const cards = (): HTMLElement[] => [...root.querySelectorAll('.wd-replay-session')] as HTMLElement[]
+    const inCard = (card: HTMLElement, text: string): HTMLButtonElement => [...card.querySelectorAll('button')].find((b) => b.textContent === text) as HTMLButtonElement
+    const panes = (): HTMLElement[] => [...root.querySelectorAll('.wd-replay-dialog-pane')] as HTMLElement[]
+    return {
+      dialog,
+      root,
+      starts,
+      resumed,
+      removed,
+      failNextRemove: () => {
+        failRemove = true
+      },
+      tab,
+      cards,
+      inCard,
+      newPane: () => panes()[0],
+      sessionsPane: () => panes()[1],
+      isOpen: (): boolean => document.querySelector('.wd-replay-dialog') !== null
+    }
+  }
+
+  test('opens on New replay; the Sessions tab counts the replays once they load', async () => {
+    const d = open(listed([stored('a'), stored('b')]))
+    expect((d.root.querySelector('.wd-replay-dialog-title') as HTMLElement).textContent).toBe('Bar replay')
+    expect(d.newPane().hidden).toBe(false)
+    expect(d.sessionsPane().hidden).toBe(true)
+    expect(d.tab('Sessions').textContent).toBe('Sessions')
+    await flush()
+    expect(d.tab('Sessions').textContent).toBe('Sessions2')
+    d.tab('Sessions').click()
+    expect(d.newPane().hidden).toBe(true)
+    expect(d.sessionsPane().hidden).toBe(false)
+    expect(d.cards().length).toBe(2)
+  })
+
+  test('a row says what it replayed, how far, its score, and scores the BLOB, not the server account', async () => {
+    const d = open(listed([stored('a', { savedAt: Date.UTC(2026, 10, 14, 15, 22) })]))
+    await flush()
+    d.tab('Sessions').click()
+    const card = d.cards()[0]
+    expect((card.querySelector('.wd-replay-session-ticker') as HTMLElement).textContent).toBe('EURUSD')
+    expect((card.querySelector('.wd-replay-session-base') as HTMLElement).textContent).toBe('1m base')
+    // 10,000 units bought at 1.10 and sold at 1.12: +200 on a 10,000 account. The server's copy
+    // of the account says 10,000 flat; the row must not believe it.
+    const net = card.querySelector('.wd-replay-session-net') as HTMLElement
+    expect(net.textContent).toBe('+200.00 USD · +2.00%')
+    expect(net.classList.contains('is-up')).toBe(true)
+    expect((card.querySelector('.wd-replay-session-span') as HTMLElement).textContent).toBe('Tue, Jan 03, 2023, 17:00:00 → Fri, Jan 20, 09:00:00')
+    const facts = (card.querySelector('.wd-replay-session-facts') as HTMLElement).textContent ?? ''
+    expect(facts.startsWith('1 closed · 100% win · replayed 16d 16h · played ')).toBe(true)
+  })
+
+  test('Stats opens the Results figures for that session, and closes them again', async () => {
+    const d = open(listed([stored('a'), stored('b', { win: false })]))
+    await flush()
+    d.tab('Sessions').click()
+    expect(d.root.querySelector('.wd-tk-figs')).toBeNull()
+    d.inCard(d.cards()[0], 'Stats').click()
+    const figs = d.cards()[0].querySelector('.wd-tk-figs') as HTMLElement
+    const read = (label: string): string | null =>
+      [...figs.querySelectorAll('.wd-tk-fig')].find((f) => f.querySelector('dt')?.textContent === label)?.querySelector('dd')?.textContent ?? null
+    expect(read('Closed')).toBe('1')
+    expect(read('Win rate')).toBe('100% · 1W 0L')
+    expect(read('Best')).toBe('+200.00')
+    // Only the row asked about.
+    expect(d.cards()[1].querySelector('.wd-tk-figs')).toBeNull()
+    d.inCard(d.cards()[0], 'Hide stats').click()
+    expect(d.root.querySelector('.wd-tk-figs')).toBeNull()
+  })
+
+  test('a session with no trades has no Stats to open', async () => {
+    const d = open(listed([stored('a', { trade: false })]))
+    await flush()
+    d.tab('Sessions').click()
+    const card = d.cards()[0]
+    expect(d.inCard(card, 'Stats')).toBeUndefined()
+    // No "0.00 USD · 0.00%" on a replay that never traded.
+    expect(card.querySelector('.wd-replay-session-net')).toBeNull()
+    expect((card.querySelector('.wd-replay-session-facts') as HTMLElement).textContent?.startsWith('No trades · replayed 16d 16h')).toBe(true)
+  })
+
+  test('Delete takes two presses, then the row and the count go', async () => {
+    const d = open(listed([stored('a'), stored('b')]))
+    await flush()
+    d.tab('Sessions').click()
+    d.inCard(d.cards()[0], 'Delete').click()
+    expect(d.removed).toEqual([])
+    const armed = d.inCard(d.cards()[0], 'Confirm delete')
+    expect(armed.classList.contains('is-armed')).toBe(true)
+    expect(armed.title).toContain('gone for good')
+    armed.click()
+    await flush()
+    expect(d.removed).toEqual(['a'])
+    expect(d.cards().map((c) => c.dataset.session)).toEqual(['b'])
+    expect(d.tab('Sessions').textContent).toBe('Sessions1')
+    // Still in the dialog, on the list: deleting is housekeeping, not leaving.
+    expect(d.isOpen()).toBe(true)
+  })
+
+  test('a delete the server refuses keeps the row and says so', async () => {
+    const d = open(listed([stored('a')]))
+    await flush()
+    d.tab('Sessions').click()
+    d.failNextRemove()
+    d.inCard(d.cards()[0], 'Delete').click()
+    d.inCard(d.cards()[0], 'Confirm delete').click()
+    await flush()
+    expect(d.cards().length).toBe(1)
+    expect(d.inCard(d.cards()[0], 'Delete').disabled).toBe(false)
+    expect((d.root.querySelector('.wd-replay-flash') as HTMLElement).textContent).toBe('Could not delete that replay')
+  })
+
+  test('Resume closes the dialog and hands the session over; nothing is started', async () => {
+    const d = open(listed([stored('a'), stored('b')]))
+    await flush()
+    d.tab('Sessions').click()
+    d.inCard(d.cards()[1], 'Resume').click()
+    expect(d.isOpen()).toBe(false)
+    expect(d.resumed.map((s) => s.id)).toEqual(['b'])
+    expect(d.resumed[0].state?.cursor).toBe(CURSOR)
+    expect(d.starts).toEqual([])
+  })
+
+  test('a blob this client cannot read is listed to delete, not to resume', async () => {
+    const unreadable = { ...stored('old'), state: { version: 0 } }
+    const d = open(listed([unreadable]))
+    await flush()
+    d.tab('Sessions').click()
+    const card = d.cards()[0]
+    expect(d.inCard(card, 'Resume').disabled).toBe(true)
+    expect(d.inCard(card, 'Delete').disabled).toBe(false)
+    expect(card.querySelector('.wd-replay-session-net')).toBeNull()
+    expect((card.querySelector('.wd-replay-session-facts') as HTMLElement).textContent).toContain('can be deleted, not resumed')
+  })
+
+  test('the tab is remembered, and a remembered Sessions tab with nothing in it opens on New', async () => {
+    const a = open(listed([stored('a')]))
+    await flush()
+    a.tab('Sessions').click()
+    a.dialog.close()
+
+    const b = open(listed([stored('a')]))
+    expect(b.sessionsPane().hidden).toBe(false)
+    await flush()
+    expect(b.cards().length).toBe(1)
+    b.dialog.close()
+
+    const c = open(listed([]))
+    await flush()
+    expect(c.newPane().hidden).toBe(false)
+    c.tab('Sessions').click()
+    expect((c.sessionsPane().textContent ?? '').startsWith('No past replays')).toBe(true)
+  })
+
+  test('Enter does not start a replay from the Sessions tab', async () => {
+    const d = open(listed([stored('a')]))
+    await flush()
+    d.tab('Sessions').click()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(d.starts).toEqual([])
+    expect(d.isOpen()).toBe(true)
+    d.tab('New replay').click()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(d.starts.length).toBe(1)
+  })
+
+  test('a list that will not load says so; New still works', async () => {
+    const d = open(Promise.reject(new Error('down')))
+    await flush()
+    d.tab('Sessions').click()
+    expect(d.sessionsPane().textContent).toBe('Could not load your replays.')
+    d.tab('New replay').click()
+    expect(d.newPane().hidden).toBe(false)
+  })
+})
+
+// The active pane's instrument cannot start a replay (no market hours, nothing stored): the dialog
+// opens anyway, so every other replay stays one press away rather than out of reach until the
+// pane is moved, and its New replay tab says why in place of a form that could only fail.
+describe('the start dialog: a new replay refused', () => {
+  function openRefused(rows: Listed[]) {
+    const resumed: Summary[] = []
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    const dialog = openStartDialog({
+      anchor,
+      symbol: 'oanda:GBPUSD',
+      intervalsInUse: ['1h'],
+      refusal: 'No market hours for GBPUSD',
+      sessions: {
+        load: () => Promise.resolve(rows),
+        resume: (s) => {
+          resumed.push(s)
+        },
+        remove: async () => {}
+      }
+    })
+    const root = document.querySelector('.wd-replay-dialog') as HTMLElement
+    const panes = (): HTMLElement[] => [...root.querySelectorAll('.wd-replay-dialog-pane')] as HTMLElement[]
+    const tab = (name: string): HTMLButtonElement =>
+      [...root.querySelectorAll('button')].find((b) => b.getAttribute('role') === 'tab' && (b.textContent ?? '').startsWith(name)) as HTMLButtonElement
+    return {
+      dialog,
+      resumed,
+      tab,
+      newPane: () => panes()[0],
+      sessionsPane: () => panes()[1],
+      cards: (): HTMLElement[] => [...root.querySelectorAll('.wd-replay-session')] as HTMLElement[],
+      isOpen: (): boolean => document.querySelector('.wd-replay-dialog') !== null
+    }
+  }
+
+  test('it opens on Sessions; New replay says why, with no form and nothing to start', async () => {
+    const d = openRefused(listed([stored('a')]))
+    expect(d.sessionsPane().hidden).toBe(false)
+    expect(d.newPane().hidden).toBe(true)
+    await flush()
+    expect(d.cards().length).toBe(1)
+    d.tab('New replay').click()
+    expect(d.newPane().hidden).toBe(false)
+    expect((d.newPane().querySelector('.wd-replay-dialog-error') as HTMLElement).textContent).toBe('No market hours for GBPUSD')
+    expect(d.newPane().textContent).toContain('resume a past replay from Sessions')
+    expect(d.newPane().querySelector('input, select')).toBeNull()
+    expect([...d.newPane().querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Close'])
+    // Enter has no Start to press.
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter' }))
+    expect(d.isOpen()).toBe(true)
+    ;(d.newPane().querySelector('button') as HTMLButtonElement).click()
+    expect(d.isOpen()).toBe(false)
+  })
+
+  test('another replay resumes from it', async () => {
+    const d = openRefused(listed([stored('a'), stored('b', { ticker: 'EURUSD' })]))
+    await flush()
+    ;([...d.cards()[1].querySelectorAll('button')].find((b) => b.textContent === 'Resume') as HTMLButtonElement).click()
+    expect(d.isOpen()).toBe(false)
+    expect(d.resumed.map((s) => s.id)).toEqual(['b'])
+  })
+
+  test('with no past replays it shows New replay, which says why', async () => {
+    const d = openRefused(listed([]))
+    await flush()
+    expect(d.newPane().hidden).toBe(false)
+    expect(d.newPane().textContent).toContain('No market hours for GBPUSD')
+  })
+
+  test('opening on Sessions is not remembered: the next dialog opens on the tab last chosen', async () => {
+    const d = openRefused(listed([stored('a')]))
+    await flush()
+    d.dialog.close()
+    expect(window.localStorage.getItem('wd.replay.dialogTab')).toBeNull()
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    openStartDialog({
+      anchor,
+      symbol: SYM,
+      intervalsInUse: ['5m', '1h'],
+      stored: ['1m', '1h', '1D'],
+      latest: Date.UTC(2024, 6, 15, 20, 0),
+      grid: FX_GRID,
+      onStart: () => {},
+      sessions: { load: () => Promise.resolve(listed([stored('a')])), resume: () => {}, remove: async () => {} }
+    })
+    const panes = [...document.querySelectorAll('.wd-replay-dialog-pane')] as HTMLElement[]
+    expect(panes[0].hidden).toBe(false)
+    expect(panes[1].hidden).toBe(true)
+  })
+})
+
+describe('the Sessions panel: switching replays from the replay window', () => {
+  type Source = import('./controls').SessionsSource
+
+  function source(rows: Listed[]) {
+    const resumed: Summary[] = []
+    const removed: string[] = []
+    const state = { loads: 0, failResume: false }
+    const src: Source = {
+      load: () => {
+        state.loads++
+        return Promise.resolve(rows)
+      },
+      // Resolves without the wall rebuilding: in the app the rebuild disposes the window first.
+      resume: async (s) => {
+        if (state.failResume) throw new Error('nope')
+        resumed.push(s)
+      },
+      remove: async (id) => {
+        removed.push(id)
+      }
+    }
+    return { src, resumed, removed, state }
+  }
+
+  const cards = (m: Mounted): HTMLElement[] => [...m.root.querySelectorAll('.wd-replay-session')] as HTMLElement[]
+  const inCard = (card: HTMLElement, text: string): HTMLButtonElement =>
+    [...card.querySelectorAll('button')].find((b) => b.textContent === text) as HTMLButtonElement
+  const panel = (m: Mounted): HTMLElement | null => m.q('.wd-replay-sessions-panel')
+
+  test('without a list to show there is no Sessions toggle', () => {
+    expect(mount().maybeButton('Sessions')).toBeNull()
+  })
+
+  test('Sessions opens the list as one of the panels, and loads it afresh each time it opens', async () => {
+    const s = source(listed([stored('a'), stored('b', { ticker: 'GBPUSD' })]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    expect(m.button('Sessions').getAttribute('aria-pressed')).toBe('true')
+    expect(panel(m)?.textContent).toBe('Loading your replays…')
+    await flush()
+    expect(cards(m).map((c) => c.dataset.session)).toEqual(['a', 'b'])
+    expect(cards(m)[1].textContent).toContain('GBPUSD')
+    // One panel at a time: Results takes its place.
+    m.button('Results').click()
+    expect(panel(m)).toBeNull()
+    expect(m.q('.wd-replay-results')).not.toBeNull()
+    m.button('Sessions').click()
+    await flush()
+    expect(s.state.loads).toBe(2)
+    expect(cards(m).length).toBe(2)
+    // A second press closes it.
+    m.button('Sessions').click()
+    expect(panel(m)).toBeNull()
+  })
+
+  test('a re-render keeps the list it has: not loaded again, not rebuilt', async () => {
+    const s = source(listed([stored('a'), stored('b')]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    const list = m.q('.wd-replay-session-list')
+    inCard(cards(m)[0], 'Stats').click()
+    // Every step re-renders the window, twice a second while playing.
+    m.emit()
+    m.emit()
+    expect(s.state.loads).toBe(1)
+    expect(m.q('.wd-replay-session-list')).toBe(list)
+    expect(inCard(cards(m)[0], 'Hide stats')).toBeDefined()
+  })
+
+  test('nothing else to switch to: it says so', async () => {
+    const m = mount(fake(), { sessions: source([]).src })
+    m.button('Sessions').click()
+    await flush()
+    expect(panel(m)?.textContent).toBe('No other replays. A replay you start from the live wall is kept here to switch to.')
+  })
+
+  test('Resume ends a play and hands the session over; the row says Opening… until the wall is rebuilt', async () => {
+    const s = source(listed([stored('a'), stored('b')]))
+    // A play whose pause between steps never ends: it is playing until something stops it.
+    const m = mount(fake(), { sessions: s.src, sleep: () => new Promise(() => {}) })
+    m.button('Sessions').click()
+    await flush()
+    ;(m.q('.wd-replay-play') as HTMLButtonElement).click()
+    await flush()
+    expect(m.q('.wd-replay-play')?.getAttribute('aria-pressed')).toBe('true')
+
+    inCard(cards(m)[1], 'Resume').click()
+    expect(s.resumed.map((r) => r.id)).toEqual(['b'])
+    expect(m.q('.wd-replay-play')?.getAttribute('aria-pressed')).toBe('false')
+    await flush()
+    expect(inCard(cards(m)[1], 'Opening…').disabled).toBe(true)
+    // One switch at a time.
+    expect(inCard(cards(m)[0], 'Resume').disabled).toBe(true)
+    expect(inCard(cards(m)[0], 'Delete').disabled).toBe(true)
+  })
+
+  test('a switch that fails says so, and the list can be used again', async () => {
+    const s = source(listed([stored('a')]))
+    s.state.failResume = true
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    inCard(cards(m)[0], 'Resume').click()
+    await flush()
+    expect(m.q('.wd-replay-flash')?.textContent).toBe('Could not open that replay')
+    expect(inCard(cards(m)[0], 'Resume').disabled).toBe(false)
+  })
+
+  test('while an advance shows its Stop, Resume is refused and says why', async () => {
+    const s = source(listed([stored('a')]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    m.controller.busy = true
+    m.emit()
+    inCard(cards(m)[0], 'Resume').click()
+    await flush()
+    expect(s.resumed).toEqual([])
+    expect(m.q('.wd-replay-flash')?.textContent).toBe('Stop the advance first')
+  })
+
+  test('a step already landing (too quick to show) is waited for, then the switch goes ahead', async () => {
+    const s = source(listed([stored('a')]))
+    const m = mount(fake(), { sessions: s.src, busyRevealMs: 60_000 })
+    m.button('Sessions').click()
+    await flush()
+    m.controller.busy = true
+    inCard(cards(m)[0], 'Resume').click()
+    await flush()
+    expect(s.resumed).toEqual([])
+    m.controller.busy = false
+    m.emit()
+    await flush()
+    expect(s.resumed.map((r) => r.id)).toEqual(['a'])
+  })
+
+  test('Delete takes two presses here too, and the row goes', async () => {
+    const s = source(listed([stored('a'), stored('b')]))
+    const m = mount(fake(), { sessions: s.src })
+    m.button('Sessions').click()
+    await flush()
+    inCard(cards(m)[0], 'Delete').click()
+    expect(s.removed).toEqual([])
+    inCard(cards(m)[0], 'Confirm delete').click()
+    await flush()
+    expect(s.removed).toEqual(['a'])
+    expect(cards(m).map((c) => c.dataset.session)).toEqual(['b'])
+  })
+})
+
+describe('the session list keeps its place', () => {
+  test('in the start dialog, Stats far down the list does not rebuild the box the rows scroll in', async () => {
+    const anchor = document.createElement('div')
+    document.body.appendChild(anchor)
+    openStartDialog({
+      anchor,
+      symbol: SYM,
+      intervalsInUse: ['5m', '1h'],
+      stored: ['1m', '1h', '1D'],
+      latest: Date.UTC(2024, 6, 15, 20, 0),
+      grid: FX_GRID,
+      onStart: () => {},
+      sessions: { load: () => Promise.resolve(listed([stored('a'), stored('b'), stored('c')])), resume: () => {}, remove: async () => {} }
+    })
+    await flush()
+    const root = document.querySelector('.wd-replay-dialog') as HTMLElement
+    const list = root.querySelector('.wd-replay-session-list')
+    const last = [...root.querySelectorAll('.wd-replay-session')][2] as HTMLElement
+    ;([...last.querySelectorAll('button')].find((b) => b.textContent === 'Stats') as HTMLButtonElement).click()
+    expect(root.querySelector('.wd-replay-session-list')).toBe(list)
+    expect(root.querySelectorAll('.wd-tk-figs').length).toBe(1)
+  })
+})
+
+describe('quiet hours', () => {
+  const stub = (on = false) => {
+    const sets: import('./quiet').QuietSetting[] = []
+    const holder = {
+      value: { on, from: 22 * 60, to: 6 * 60, zone: 'replay' as const } as import('./quiet').QuietSetting,
+      set(next: import('./quiet').QuietSetting) {
+        sets.push(next)
+        holder.value = next
+      }
+    }
+    return { holder, sets }
+  }
+
+  test('the moon beside Next alert opens them, and reads the hours while they are on', () => {
+    const { holder } = stub()
+    const m = mount(fake(), { quiet: holder })
+    const moon = () => m.q<HTMLButtonElement>('.wd-replay-quiet-toggle') as HTMLButtonElement
+    expect(moon().closest('.wd-replay-next-row')).not.toBeNull()
+    expect(moon().classList.contains('is-on')).toBe(false)
+    moon().click()
+    expect(m.q('.wd-replay-quiet')).not.toBeNull()
+    holder.value = { ...holder.value, on: true }
+    m.emit()
+    expect(moon().classList.contains('is-on')).toBe(true)
+    expect(moon().textContent).toBe('22:00–06:00')
+    moon().click()
+    expect(m.q('.wd-replay-quiet')).toBeNull()
+  })
+
+  test('the panel switches them on and sets the hours', () => {
+    const { holder, sets } = stub()
+    const m = mount(fake(), { quiet: holder })
+    ;(m.q('.wd-replay-quiet-toggle') as HTMLButtonElement).click()
+    check(m.q<HTMLInputElement>('.wd-replay-quiet-on input') as HTMLInputElement, true)
+    expect(sets.at(-1)).toEqual({ on: true, from: 22 * 60, to: 6 * 60, zone: 'replay' })
+    m.emit()
+    const [from, to] = [...m.root.querySelectorAll<HTMLInputElement>('.wd-replay-quiet-time')]
+    expect([from.value, to.value]).toEqual(['22:00', '06:00'])
+    change(from, '21:30')
+    expect(sets.at(-1)).toEqual({ on: true, from: 21 * 60 + 30, to: 6 * 60, zone: 'replay' })
+    m.emit()
+    change(m.root.querySelectorAll<HTMLInputElement>('.wd-replay-quiet-time')[1], '07:00')
+    expect(sets.at(-1)).toEqual({ on: true, from: 21 * 60 + 30, to: 7 * 60, zone: 'replay' })
+    // Next alert says it now runs past them.
+    m.controller.alertCount = 1
+    m.emit()
+    expect(m.button('Next alert').title).toBe('Advance to where the next of 1 alert triggers, outside quiet hours (21:30–07:00) (Shift+↑)')
+    // They silence the price watches and a trade's "Notify at" too, but never a fill.
+    m.controller.armedStops = 1
+    m.controller.workingStops = 1
+    m.controller.pendingMilestones = 1
+    m.emit()
+    expect(m.button('Next alert').title).toBe(
+      'Advance to where the next of 1 alert triggers, or a price watch fires, or a trade reaches a "Notify at", outside quiet hours (21:30–07:00), or an order, stop loss or take profit fills (Shift+↑)'
+    )
+  })
+
+  test('without quiet hours wired there is no moon', () => {
+    expect(mount().q('.wd-replay-quiet-toggle')).toBeNull()
   })
 })

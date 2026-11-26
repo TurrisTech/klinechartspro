@@ -4,13 +4,20 @@ import type { OrderPatch, OrderRequest, SimAnswer, SimEvent, SimSnapshot, TradeP
 import type { SessionListener, TradingSession } from '../trading/session'
 import { BarCache, type BarSource, type ReplayBar } from './cache'
 import type { ReplayAlertBook } from './alerts'
-import { type AdvanceRequest, type AlertOccurrence, type StopReason, canFill, intersectsWorking, planAdvance, targetOf } from './clock'
+import { type AdvanceRequest, type AlertOccurrence, type StopReason, canFill, intersectsWorking, onBaseBoundary, planAdvance, targetOf } from './clock'
 import { type BidAskBar, type Engine, SimError } from './engine'
+import { blocked, type FollowBlockers, type FollowNotice, type FollowResolution, type FollowTarget, followBase, movedState } from './follow'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
-import { type BaseCheck, type CandleGrid, finerStored, nominalMs, validateBase } from './timeframes'
+import { snapshotOf } from './sessions'
+import { type BaseCheck, type CandleGrid, coarser, divides, finerStored, nominalMs, sortByLength, validateBase } from './timeframes'
+import { nextTask } from './yield'
 
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50
+
+/** How many probes `quoteAt` makes at most: within a session the span widens eightfold, and a
+ * session with nothing in it hands over to the one before -- a day at a 5s base is four probes. */
+const QUOTE_PROBE_ATTEMPTS = 12
 
 /** How much of the span a walk fetches at once, in base bars: about one server page
  * (`HttpBarSource` pages at 80% of the 5,000-bar cap). A walk used to fetch the whole span
@@ -50,6 +57,9 @@ export interface AdvanceResult {
   /** What the observer raised on the bar a `watch` stop landed on. Empty for any other
    * reason. */
   observed: ObserverStop[]
+  /** What a run to the end of the data was looking for -- Next alert's alerts, or Run to
+   * price's watches -- which is what a `none` stop found none of. Null for a Step or a Go to. */
+  seeking: 'alerts' | 'watches' | null
 }
 
 /** Something an observer raised on a bar that is worth stopping an advance for -- a price
@@ -81,6 +91,14 @@ export interface ReplayObserver {
   seeked(): void
   /** Whatever this observer keeps in the replay's state blob. */
   toState(): LocalWatchState[]
+  /** Whether nothing it watches could raise anything on any base bar inside the span `bar` --
+   * a coarser stored candle -- covers. True lets the walk hand it `bar` (through `onBar`)
+   * instead of every base bar inside, which is what makes a price watch months away cost a
+   * handful of reads rather than a walk of every minute. Optional: without it every base bar is
+   * walked. */
+  quietOver?(bar: ReplayBar): boolean
+  /** Put back what `toState` returned: a run that found nothing is taken back. */
+  restoreState?(rows: readonly LocalWatchState[]): void
 }
 
 export interface ReplayController {
@@ -103,10 +121,16 @@ export interface ReplayController {
    * Reported with the walk's progress (`'walk'` change). */
   readonly searchedTo: number | null
   readonly lastStop: AdvanceResult | null
-  /** The client alerts Next alert can stop at (enabled, on this instrument). */
+  /** The client alerts Next alert can stop at: every enabled one, on any instrument. */
   readonly alertCount: number
   /** Armed stops besides the alerts (price watches): Next alert stops at those too. */
   readonly armedStops: number
+  /** What can fill on the walked instrument -- resting orders, and open trades' stop loss or take
+   * profit: Next alert stops where one does, too. */
+  readonly workingStops: number
+  /** Milestones ("notify at") not yet reached on the instrument's open trades: each ends a run
+   * to the next event where a price reaches it. Optional for a controller without trading. */
+  readonly pendingMilestones?: number
   readonly storedIntervals: readonly string[]
   readonly intervalsInUse: readonly string[]
   readonly symbol: string
@@ -127,6 +151,13 @@ export interface ReplayController {
   /** Advance to where the next enabled alert triggers -- stopping sooner for a firing price
    * watch or a fill pause, as every advance does. Does not move when nothing would stop it. */
   nextAlert(): Promise<AdvanceResult | null>
+  /** Advance to `at` -- or to the close of the base candle it falls inside, never mid-candle --
+   * stopping sooner for a fill pause or a firing price watch, as a Step does. Null when `at` is
+   * not after the cursor (a replay cannot step back). */
+  goTo(at: number): Promise<AdvanceResult | null>
+  /** Run on until a price watch fires (or a fill pauses it), however far that is -- and do not
+   * move at all when none would fire before the end of the data and nothing could fill. */
+  runToWatch(): Promise<AdvanceResult | null>
   /** Ask the running advance to stop at its next natural place. No-op when idle. */
   cancel(): void
   /** A cancel has been asked for and the advance has not stopped yet. */
@@ -137,7 +168,23 @@ export interface ReplayController {
   onControlChange(listener: (change?: 'walk') => void): () => void
   /** Persist now (a star/arm change). */
   persist(): void
+  /** The instrument the active pane moved to that the replay has not followed -- yet, or because
+   * it cannot -- with why; null while the chart and the replay agree (follow.ts). */
+  readonly followNotice: FollowNotice | null
+  /** What keeps the replay on its instrument as of now: the open trades, pending orders and armed
+   * price watches on it. Read live, so a notice follows a trade closed or an order cancelled. */
+  readonly followBlockers: FollowBlockers
+  /** Follow the instrument the notice names -- the retry once whatever kept the replay is gone. */
+  follow(): Promise<FollowOutcome>
+  /** Keep walking this instrument, and drop the notice. */
+  dismissFollow(): void
 }
+
+/** How a follow ended: the blob moved and the wall told to rebuild (`followed`); kept on the
+ * walked instrument by something open on it (`blocked`) or by the instrument followed
+ * (`refused`: no market hours, nothing stored, nothing that fits the panes, a failed save); or
+ * withdrawn before it was made (`withdrawn`: the pane went back, or the notice was dismissed). */
+export type FollowOutcome = 'followed' | 'blocked' | 'refused' | 'withdrawn'
 
 export interface ReplaySessionOptions {
   id: string
@@ -165,6 +212,19 @@ export interface ReplaySessionOptions {
   observer?: ReplayObserver
   /** Where the client alerts next trigger: what Next alert runs to. */
   alerts?: ReplayAlertBook
+  /** Whether an instant is in the viewer's quiet hours (quiet.ts). A trade's "Notify at" reached
+   * then is an alert silenced: the engine records it reached, but the run does not hear it
+   * (`heard`). Absent: nothing is silenced. */
+  silenced?: (at: number) => boolean
+  /** Told where a Next alert press would land, once the look-ahead has found it and while no
+   * advance is running: the instant the cursor -- and the read clock -- will stand at. For the
+   * wall to have the server compute ahead what its panes will read there (client/replay/index.ts,
+   * `PluginHost.warmAhead`). Told again after every advance that leaves the landing where it was;
+   * whoever listens keeps it to one warm-up per landing. */
+  warmLanding?: (at: number) => void
+  /** The blob for the instrument followed has been written (`follow`): rebuild the wall from it,
+   * as a reload would. Nothing of this session is used after it. */
+  onFollowed?: (state: ReplayState) => void
 }
 
 export class ReplayTradingSession implements TradingSession, ReplayController {
@@ -194,6 +254,20 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   private saveChain: Promise<void> = Promise.resolve()
   private disposed = false
   private cancelRequested = false
+  /** The base bar a Next alert press would land on, read while the look-ahead's answer waits for
+   * the press (`warmAlerts`): the quote a seek takes there, so the press does not wait a round
+   * trip for it before the cursor moves. */
+  private landing: { base: string; at: number; bar: Promise<ReplayBar | null> } | null = null
+  /** The instrument the active pane moved to and the replay has not followed: the newest request
+   * (follow.ts). `moving` while an attempt is under way -- advances and orders wait for it. */
+  private pending: { target: FollowTarget; problem: string | null; moving: boolean } | null = null
+  /** The one follow attempt in flight: a newer request is taken up by it, never run beside it. */
+  private followRun: Promise<FollowOutcome> | null = null
+  /** The blob for another instrument has been queued: nothing this session saves after it may
+   * write the old instrument back over it. */
+  private moved = false
+  /** Who is waiting for the running advance to land (`idle`). */
+  private idleWaiters: Array<() => void> = []
 
   constructor(private readonly opts: ReplaySessionOptions) {
     this.symbol = opts.symbol
@@ -226,6 +300,11 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   async placeOrder(order: OrderRequest): Promise<void> {
     this.act(() => {
+      // A replay walks one instrument, and an order on any other would never be filled or marked
+      // -- nothing walks its bars. The engine's own "no price yet" used to be what refused these;
+      // since a replay can follow the chart (follow.ts) the instrument it left keeps its last
+      // quote in the account, frozen, and an order there would fill against it.
+      if (order.symbol !== this.symbol) throw new SimError(`This replay walks ${tickerOf(this.symbol)} only`)
       const { events } = this.engine.submit({
         symbol: order.symbol,
         side: order.side,
@@ -234,7 +313,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         price: order.price,
         stopLoss: order.stopLoss,
         takeProfit: order.takeProfit,
-        label: order.label
+        label: order.label,
+        trailingStop: order.trailingStop,
+        breakeven: order.breakeven,
+        milestones: order.milestones
       })
       return events
     })
@@ -246,14 +328,27 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   async modifyOrder(orderId: string, patch: OrderPatch): Promise<void> {
     this.act(() => {
-      this.engine.modifyOrder(orderId, { price: patch.price, stopLoss: patch.stopLoss, takeProfit: patch.takeProfit })
+      this.engine.modifyOrder(orderId, {
+        price: patch.price,
+        stopLoss: patch.stopLoss,
+        takeProfit: patch.takeProfit,
+        trailingStop: patch.trailingStop,
+        breakeven: patch.breakeven,
+        milestones: patch.milestones
+      })
       return []
     })
   }
 
   async modifyTrade(tradeId: string, patch: TradePatch): Promise<void> {
     this.act(() => {
-      this.engine.modifyTrade(tradeId, { stopLoss: patch.stopLoss, takeProfit: patch.takeProfit })
+      this.engine.modifyTrade(tradeId, {
+        stopLoss: patch.stopLoss,
+        takeProfit: patch.takeProfit,
+        trailingStop: patch.trailingStop,
+        breakeven: patch.breakeven,
+        milestones: patch.milestones
+      })
       return []
     })
   }
@@ -269,6 +364,9 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   /** Run an engine request; a refusal surfaces as the same error shape the paper session's
    * server would answer with (the panel shows `message`). */
   private act(fn: () => SimEvent[]): void {
+    // While a follow is being made the account is about to be written for another instrument: an
+    // order placed now would be left out of that blob, or keep the replay where it is.
+    if (this.following) throw new ReplayRequestError(`The replay is moving to ${this.pending?.target.ticker ?? 'another instrument'}`)
     let events: SimEvent[]
     try {
       events = fn()
@@ -292,28 +390,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     this.persist()
   }
 
+  /** The same snapshot the Sessions list scores a stored engine with (sessions.ts), so the
+   * Results panel and the list can never disagree about one session. */
   private buildSnapshot(): SimSnapshot {
-    const e = this.engine
-    const quotes: SimSnapshot['quotes'] = {}
-    for (const [k, q] of e.quotes) quotes[k] = { time: q.time, bid: q.bid, ask: q.ask }
-    return {
-      id: this.opts.id,
-      mode: 'replay',
-      name: this.opts.name,
-      createdAt: this.opts.createdAt,
-      rev: this.rev,
-      account: {
-        currency: e.currency,
-        initialBalance: e.initialBalance,
-        balance: e.balance,
-        unrealizedPnl: e.unrealizedPnl(),
-        equity: e.equity()
-      },
-      quotes,
-      orders: [...e.orders.values()].map((o) => ({ ...o })),
-      trades: [...e.trades.values()].map((t) => ({ ...t })),
-      symbols: [...new Set([this.symbol, ...e.quotes.keys()])].sort()
-    }
+    return snapshotOf(this.engine, { id: this.opts.id, name: this.opts.name, createdAt: this.opts.createdAt, rev: this.rev, symbol: this.symbol })
   }
 
   // -- persistence -------------------------------------------------------------------------
@@ -338,7 +418,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 
   persist(): void {
-    if (this.disposed) return
+    if (this.disposed || this.moved) return
     // A watch placed or removed is persisted through here and must also re-render the controls
     // (it is what enables Next alert with no alert).
     this.controlsChanged()
@@ -354,18 +434,49 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
    * passed through: a watch armed before the first step has to be seeded from the bar the
    * cursor is standing on, and this is the one place that knows how to find it. */
   async barAt(at: number): Promise<ReplayBar | null> {
-    let span = QUOTE_PROBE_BARS * nominalMs(this.base)
-    for (let attempt = 0; attempt < 5; attempt++, span *= 8) {
+    const held = this.landing
+    if (held && held.at === at && held.base === this.base) {
+      const bar = await held.bar
+      if (bar) return bar
+    }
+    return this.readBarAt(at)
+  }
+
+  private async readBarAt(at: number): Promise<ReplayBar | null> {
+    // Looked for one session at a time, on the instrument's own schedule: back from `at` (or the
+    // close of the session it falls after, when the market is shut), widening, but never into the
+    // closed window before the session -- a session with no bar closed by then hands over to the
+    // close of the one before. Widened by time alone, the probe walked back through the weekend a
+    // page at a time: a Step from Saturday stops on Sunday's first 5s close, and at a 5s base the
+    // fifth probe read ~12 days of 5s bars to find Friday's last one (prod EURGBP, 63 reads, 12-20 s
+    // before the cursor moved).
+    const first = QUOTE_PROBE_BARS * nominalMs(this.base)
+    let edge = Math.min(at, this.sessionCloseBefore(at))
+    let span = first
+    for (let attempt = 0; attempt < QUOTE_PROBE_ATTEMPTS; attempt++) {
+      const open = this.grid.start('1D', edge - 1)
+      const from = Math.max(edge - span, open)
       const probe = new BarCache(this.opts.barSource, this.symbol, this.base, this.grid, 'all')
-      probe.seek(at - span)
-      await probe.ensure(at)
+      probe.seek(from)
+      await probe.ensure(edge)
       const last = probe
-        .slice(at - span, at)
+        .slice(from, edge)
         .filter((b) => b.end <= at)
         .at(-1)
       if (last) return last
+      if (from > open) span *= 8
+      else {
+        edge = this.sessionCloseBefore(open)
+        span = first
+      }
     }
     return null
+  }
+
+  /** The close of the session in force just before `t` (the 1D candle containing it): `t` or later
+   * while a session runs on through it, the last close before it when the market is shut. */
+  private sessionCloseBefore(t: number): number {
+    return this.grid.end('1D', this.grid.start('1D', t - 1))
   }
 
   /** Feed the engine the closing quote at `at`. Primes the ticket before the first step, and
@@ -408,6 +519,23 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   get armedStops(): number {
     return this.opts.observer?.armedStops() ?? 0
+  }
+
+  get workingStops(): number {
+    const orders = [...this.engine.orders.values()].filter((o) => o.symbol === this.symbol && o.status === 'pending' && o.price !== null).length
+    // A trail or a breakeven yet to move the stop counts as a stop: it is one, or will be.
+    const trades = [...this.engine.trades.values()].filter(
+      (t) => t.symbol === this.symbol && t.closedAt === null && (t.stopLoss !== null || t.takeProfit !== null || t.trailingStop || (t.breakeven && !t.breakeven.done))
+    ).length
+    return orders + trades
+  }
+
+  get pendingMilestones(): number {
+    let n = 0
+    for (const t of this.engine.trades.values()) {
+      if (t.symbol === this.symbol && t.closedAt === null) n += (t.milestones ?? []).filter((m) => m.reachedAt === null).length
+    }
+    return n
   }
 
   get alertCount(): number {
@@ -461,6 +589,16 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     return this.advanceBy({ toEnd: true, end: this.opts.dataEnd() }, { alerts: true })
   }
 
+  async goTo(at: number): Promise<AdvanceResult | null> {
+    const to = onBaseBoundary(at, this.base, this.grid)
+    if (!Number.isFinite(to) || to <= this.cursor) return null
+    return this.advanceBy({ to })
+  }
+
+  runToWatch(): Promise<AdvanceResult | null> {
+    return this.advanceBy({ toEnd: true, end: this.opts.dataEnd() }, { watches: true })
+  }
+
   /** Ask the running advance to stop at its next natural place: before the next base bar it
    * would consume, or -- asked while the advance is still planning -- before it moves at all.
    * Whole base bars only, so the engine and the watches never see a bar half-walked, and the
@@ -476,8 +614,10 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     return this.cancelRequested
   }
 
-  async advanceBy(request: AdvanceRequest, options: { alerts?: boolean } = {}): Promise<AdvanceResult | null> {
-    if (this.busy || this.disposed) return null
+  async advanceBy(request: AdvanceRequest, options: { alerts?: boolean; watches?: boolean } = {}): Promise<AdvanceResult | null> {
+    // Not while a follow is being made: it writes the new instrument's blob at the cursor it
+    // found, and an advance meanwhile would move the cursor under it. Play stops on the null.
+    if (this.busy || this.disposed || this.following) return null
     this.busy = true
     this.cancelRequested = false
     const from = this.cursor
@@ -489,11 +629,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       const alert = options.alerts ? await this.findAlert(from, end) : null
       const plan = planAdvance(from, { toEnd: true, end }, this.grid, alert)
       let reason: StopReason = plan.reason === 'alert' ? 'alert' : 'toEnd' in request || end < target ? 'end' : 'target'
-      // An alert on a timeframe finer than the base triggers inside a base bar, and the walk moves
-      // in whole base bars: stopping mid-bar would leave the rest of that bar -- with the price
-      // action before the cursor in it -- for the next advance to fill against. So the stop is the
-      // close of the base bar it falls in: later, never earlier, so nothing is seen ahead of time.
-      const stopAt = plan.reason === 'alert' ? Math.min(end, Math.max(plan.stopAt, this.grid.end(this.base, plan.stopAt - 1))) : plan.stopAt
+      const stopAt = plan.reason === 'alert' ? this.alertStop(plan.stopAt, end) : plan.stopAt
       const events: SimEvent[] = []
       const consumed: ReplayBar[] = []
       let observed: ObserverStop[] = []
@@ -502,8 +638,20 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // at all. A search abandoned for either reason answered "nothing found", which must not
       // read as a run to the end of the data.
       let cancelled: boolean = this.cancelRequested || this.disposed
-      // Next alert found nothing, and no price watch could stop the run either: nowhere to go.
-      const nowhere = options.alerts === true && plan.reason !== 'alert' && !cancelled && this.armedStops === 0
+      // A run to the end with nothing but the price watches to stop it: Next alert that found no
+      // alert, or Run to price.
+      const seeking: AdvanceResult['seeking'] = options.alerts ? 'alerts' : options.watches ? 'watches' : null
+      const watchRun = seeking !== null && plan.reason !== 'alert'
+      const fillable = canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
+      // A run to the next event stops at the first one -- an alert, a watch firing, or a fill or a
+      // close: a stop loss or a take profit hit, a resting order filled (user, 2026-10-28: "when
+      // price hits a stop or take profit, that is also another next alert") -- a trailing or
+      // breakeven stop among them -- or a trade reaching a milestone, its "notify at" (user,
+      // 2026-11-15: "make sure that these will stop at Next alert"). Step and Play pause on one
+      // only with Pause on fill set.
+      const pauseOn = this.pauseOnFill || seeking !== null
+      // Nothing that could stop the run at all: nowhere to go.
+      const nowhere = watchRun && !cancelled && this.armedStops === 0 && !fillable
       // Walk the base bars only when one of them could actually do something. With nothing
       // resting and nothing protected the account cannot change however the price moves, so
       // the advance SEEKS: the cursor lands on the same instant, the engine takes the closing
@@ -511,27 +659,33 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       // ...or when an observer needs the bars. A watch armed on this wall is answered by the
       // walk, so it is as good a reason to walk as a resting order is: seeking past the span
       // would step over the very move it was placed to see.
-      const walked =
-        canFill([...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol) ||
-        (this.opts.observer?.needsBars() ?? false)
+      const walked = fillable || (this.opts.observer?.needsBars() ?? false)
+      // With nothing that could fill, the engine has nothing to learn from the bars: it is not fed
+      // them, and is quoted once where the advance lands -- the state a walk would have left it
+      // in. That is also what lets a run that found nothing be taken back whole.
+      // ...and the walk SKIMS: wherever nothing could happen over a whole coarser stored candle --
+      // the watches quiet on it, and its bid/ask range reaching no resting order, stop loss or
+      // take profit -- that candle is handed over in place of every base bar inside it (`skim`).
+      const watchesSkim = !(this.opts.observer?.needsBars() ?? false) || this.opts.observer?.quietOver !== undefined
+      const levels = walked && watchesSkim ? this.summaryIntervals() : []
+      const trail: WalkState = { consumed, observed: [], cancelled: false, last: null, sliceStart: performance.now(), report: () => {}, fillable, pauseOn, events, paused: false }
+      // A run that may be taken back keeps what it would put back: the watches, and the account.
+      const before = watchRun ? structuredClone(this.opts.observer?.toState() ?? []) : null
+      const account = watchRun && fillable ? this.engine.toState() : null
       if (cancelled || nowhere) {
         // Neither walk nor seek: the cursor stays where it was.
+      } else if (levels.length > 0) {
+        trail.report = this.reporter()
+        await this.skim(0, this.cursor, stopAt, levels, trail)
+        this.baseCache.seek(this.cursor)
+        observed = trail.observed
+        cancelled = trail.cancelled
+        paused = trail.paused
       } else if (walked) {
         const chunk = WALK_CHUNK_BARS * nominalMs(this.base)
         let reach = this.cursor
         let sliceStart = performance.now()
-        // Tell the controls how far the walk has got, or a months-long walk shows a frozen
-        // chart and a Stop button and cannot be told from a hung one. The cursor, not `reach`:
-        // a chunk is fetched ahead of the bars in it, and the date shown must never be past
-        // where a Stop would leave the cursor. Throttled, and skipped when nothing moved.
-        let reportedAt = Number.NEGATIVE_INFINITY
-        const report = (): void => {
-          const now = performance.now()
-          if (this.walkedTo === this.cursor || now - reportedAt < WALK_PROGRESS_MS) return
-          this.walkedTo = this.cursor
-          reportedAt = now
-          this.controlsChanged('walk')
-        }
+        const report = this.reporter()
         walk: for (;;) {
           // Before the page downloads: that wait is the likeliest to look like a hang.
           report()
@@ -550,13 +704,14 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
             }
             this.baseCache.take(bar.end)
             consumed.push(bar)
-            const produced = await this.consume(bar, this.base)
+            trail.last = bar
+            const produced = this.heard(fillable ? await this.consume(bar, this.base) : [])
             events.push(...produced)
             // After the engine, so anything an observer raises sees the account as this bar
             // left it -- and the BASE bar, not the refinement's parts.
             const raised = this.opts.observer?.onBar(bar) ?? []
             this.cursor = bar.end
-            if (this.pauseOnFill && produced.some((e) => e.kind === 'fill' || e.kind === 'close')) {
+            if (pauseOn && produced.some(stopsARun)) {
               paused = true
               break walk
             }
@@ -586,16 +741,32 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       }
       // The walk is over, however it ended: from here the controls say why it stopped.
       this.walkedTo = null
+      // A run to the end that nothing stopped -- no watch fired, nothing filled -- would spend the
+      // whole replay for nothing: a replay cannot step back. So it is taken back, as Next alert
+      // with no alert ahead never moves (the user's rule, 2026-10-04): the cursor, the watches and
+      // the account as they were. Nothing filled, so the account only ever took quotes.
+      const takenBack = before !== null && !cancelled && !paused && observed.length === 0 && !nowhere
+      if (takenBack) {
+        this.cursor = from
+        this.opts.observer?.restoreState?.(before)
+        if (account) this.engine.restore(account)
+        this.baseCache.seek(from)
+        consumed.length = 0
+        events.length = 0
+      } else if (walked && !fillable && trail.last) {
+        const bar = toBidAsk(trail.last, this.symbol)
+        this.engine.onQuote({ symbol: this.symbol, time: trail.last.end, bid: bar.bidClose, ask: bar.askClose })
+      }
       if (paused) reason = 'fill'
       else if (cancelled) reason = 'cancel'
-      else if (nowhere) reason = 'none'
+      else if (nowhere || takenBack) reason = 'none'
       else if (observed.length === 0) this.cursor = stopAt
       // A watch firing on the very bar the advance was going to stop at anyway leaves an alert
       // stop an alert stop: that is the one the user ran for, and the watch has its own row in
       // the Notification Center. Against `target` or `end` it is the more useful answer.
       else if (!(this.cursor === stopAt && reason === 'alert')) reason = 'watch'
       if (reason !== 'watch') observed = []
-      const result: AdvanceResult = { from, to: this.cursor, request, reason, alert: reason === 'alert' ? plan.alert : null, events, bars: consumed, walked, observed }
+      const result: AdvanceResult = { from, to: this.cursor, request, reason, alert: reason === 'alert' ? plan.alert : null, events, bars: consumed, walked, observed, seeking }
       this.lastStop = result
       this.rev++
       this.snapshot = this.buildSnapshot()
@@ -619,7 +790,309 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       this.walkedTo = null
       this.searchedTo = null
       this.controlsChanged()
+      // Look for the next alert from where this landed, while the chart loads and the user
+      // reads it: the next Next alert then usually finds its answer waiting (alerts.ts).
+      this.warmAlerts()
+      for (const resolve of this.idleWaiters.splice(0)) resolve()
     }
+  }
+
+  /** Resolves once no advance is running: at once when idle, else when the running one lands. */
+  private idle(): Promise<void> {
+    if (!this.busy) return Promise.resolve()
+    return new Promise((resolve) => this.idleWaiters.push(resolve))
+  }
+
+  // -- following the chart (follow.ts) -------------------------------------------------------
+
+  get followNotice(): FollowNotice | null {
+    const p = this.pending
+    return p ? { symbol: p.target.symbol, ticker: p.target.ticker, problem: p.problem, moving: p.moving } : null
+  }
+
+  get followBlockers(): FollowBlockers {
+    return {
+      trades: this.engine.openTrades(this.symbol).length,
+      orders: this.engine.pendingOrders(this.symbol).length,
+      watches: this.opts.observer?.armedStops() ?? 0
+    }
+  }
+
+  /** A follow is being made: from the first check that passed until the wall rebuilds, or the
+   * attempt gives up. */
+  private get following(): boolean {
+    return this.pending?.moving === true
+  }
+
+  /** Follow `target` -- the instrument the active pane now shows -- or, with no target, the one
+   * the notice names (its Follow button). Resolves with how it ended; a request made while an
+   * attempt is in flight is taken up by that attempt, which then answers for the newest one. */
+  follow(target?: FollowTarget): Promise<FollowOutcome> {
+    if (target) {
+      if (target.symbol === this.symbol) {
+        this.dismissFollow()
+        return this.followRun ?? Promise.resolve('withdrawn')
+      }
+      const moving = this.pending?.moving === true
+      this.pending = { target, problem: null, moving }
+    } else if (this.pending) {
+      this.pending.problem = null
+    }
+    this.controlsChanged()
+    if (!this.followRun) {
+      this.followRun = this.runFollow().finally(() => {
+        this.followRun = null
+      })
+    }
+    return this.followRun
+  }
+
+  dismissFollow(): void {
+    if (!this.pending) return
+    this.pending = null
+    this.controlsChanged()
+  }
+
+  /** The follow itself, one attempt at a time, always for the NEWEST request: every await is
+   * followed by a look at whether the request changed meanwhile, and a changed one is started
+   * over. In order: nothing open on the walked instrument; the advance in flight, if any, landed
+   * (then nothing open, again -- the walk may have filled an order); the new instrument resolved
+   * as a mount resolves it (follow.ts `followTarget`) and a base chosen for it (`followBase`);
+   * nothing open, once more (a watch placed meanwhile); and the blob written for it -- after
+   * which nothing this session saves may land over it (`moved`), and the wall is rebuilt. */
+  private async runFollow(): Promise<FollowOutcome> {
+    for (;;) {
+      const pending = this.pending
+      if (!pending || this.disposed) return 'withdrawn'
+      const stay = (problem: string | null): FollowOutcome => {
+        pending.moving = false
+        pending.problem = problem
+        this.controlsChanged()
+        return problem === null ? 'blocked' : 'refused'
+      }
+      if (blocked(this.followBlockers)) return stay(null)
+      pending.moving = true
+      this.controlsChanged()
+      await this.idle()
+      if (this.pending !== pending) continue
+      if (this.disposed) return 'withdrawn'
+      if (blocked(this.followBlockers)) return stay(null)
+      let resolved: FollowResolution
+      try {
+        resolved = await pending.target.resolve(this.cursor)
+      } catch (err) {
+        console.error(`[replay] could not resolve ${pending.target.symbol}`, err)
+        resolved = { problem: `Could not look ${pending.target.ticker} up` }
+      }
+      if (this.pending !== pending) continue
+      if (this.disposed) return 'withdrawn'
+      if ('problem' in resolved) return stay(resolved.problem)
+      const base = followBase(this.base, resolved.inUse, resolved.stored, resolved.grid, this.cursor)
+      if (base === null) return stay(`Nothing stored for ${pending.target.ticker} fits these panes at this time`)
+      if (blocked(this.followBlockers)) return stay(null)
+      const state = movedState(this.toState(), pending.target, base)
+      this.moved = true
+      const saving = this.saveChain.then(() => this.opts.save(state))
+      this.saveChain = saving.catch(() => {})
+      try {
+        await saving
+      } catch (err) {
+        console.error('[replay] could not save the follow', err)
+        this.moved = false
+        // The blob may or may not have landed: write this instrument's back, so it is the one a
+        // reload finds either way.
+        this.persist()
+        return stay('Could not save the replay; try again')
+      }
+      if (this.pending !== pending) {
+        this.moved = false
+        // Withdrawn while the blob was being written: write this instrument's back over it. A
+        // newer request instead writes its own over it, next time round.
+        if (this.pending === null) {
+          this.persist()
+          return 'withdrawn'
+        }
+        continue
+      }
+      if (this.disposed) return 'withdrawn'
+      this.opts.onFollowed?.(state)
+      return 'followed'
+    }
+  }
+
+  /** Start the alert book looking ahead of the cursor in the background. Called after every
+   * advance, and by the wall when the replay opens or the alerts change. */
+  warmAlerts(): void {
+    if (this.disposed || this.busy) return
+    // The bars the next advance reads first: the base it walks, and the coarser candles the skim
+    // asks before them -- the tile each falls in at the cursor, and the next (tiled.ts).
+    void this.opts.barSource.warm?.(this.symbol, [this.base, ...this.summaryIntervals()], this.cursor, this.grid).catch(() => {})
+    const end = this.opts.dataEnd()
+    const found = this.opts.alerts?.prefetch?.(this.cursor, end)
+    // ...and once it has found one, the base bar a press would land on (`landing`), and what the
+    // wall will read there (`warmLanding`). Not when a press has got there first and is landing
+    // on it already: the panes are about to read it themselves.
+    void found?.then((at) => {
+      if (at === null || this.disposed) return
+      const stopAt = this.alertStop(at, end)
+      if (!this.busy) this.opts.warmLanding?.(stopAt)
+      if (this.landing?.at === stopAt && this.landing.base === this.base) return
+      this.landing = { base: this.base, at: stopAt, bar: this.readBarAt(stopAt).catch(() => null) }
+    })
+  }
+
+  /** Where an advance stops for an alert triggering at `at`. An alert on a timeframe finer than
+   * the base triggers inside a base bar, and the walk moves in whole base bars: stopping mid-bar
+   * would leave the rest of that bar -- with the price action before the cursor in it -- for the
+   * next advance to fill against. So the stop is the close of the base bar it falls in: later,
+   * never earlier, so nothing is seen ahead of time. */
+  private alertStop(at: number, end: number): number {
+    return Math.min(end, Math.max(at, this.grid.end(this.base, at - 1)))
+  }
+
+  /** How far the walk has got, for the controls -- throttled, and skipped when nothing moved. A
+   * months-long walk otherwise shows a frozen chart and a Stop button and cannot be told from a
+   * hung one. The cursor, not how far a page was fetched: the date shown must never be past
+   * where a Stop would leave the cursor. */
+  private reporter(): () => void {
+    let reportedAt = Number.NEGATIVE_INFINITY
+    return () => {
+      const now = performance.now()
+      if (this.walkedTo === this.cursor || now - reportedAt < WALK_PROGRESS_MS) return
+      this.walkedTo = this.cursor
+      reportedAt = now
+      this.controlsChanged('walk')
+    }
+  }
+
+  /** The stored intervals a skim reads in place of base bars: coarser than the base, made of
+   * whole base candles, a day at most -- coarsest first (1D then 1h over a 1m base). */
+  private summaryIntervals(): string[] {
+    const day = nominalMs('1D')
+    return sortByLength(this.storedIntervals.filter((code) => coarser(code, this.base) && divides(this.base, code) && nominalMs(code) <= day)).reverse()
+  }
+
+  /**
+   * THE SKIM: the walk of `[from, to)` by the coarsest candles nothing can happen on. Each whole
+   * candle of `levels[level]` inside the span is asked about first: when it is quiet -- no watch
+   * could fire on any bar inside it, and its bid/ask range reaches no resting order, stop loss or
+   * take profit -- it is handed over as one bar and the cursor moves past it; otherwise the walk
+   * descends into it a level finer, down to the base bars, which are handed over one by one
+   * exactly as a walk hands them (to the engine first, then the watches). The parts of the span
+   * no whole candle covers -- the head before the first, the tail after the last, a hole in the
+   * coarser store -- descend the same way; a stretch the market is closed throughout is passed
+   * over.
+   *
+   * So a watch, or a stop loss, a month away costs one read of daily candles and, near the
+   * level, one of hours and one of minutes, where the walk read every minute between. What
+   * happens, and where, is the walk's answer: `neverWithin` (client/alerts/conditions.ts) only
+   * skips a candle on which no watch could have fired, `intersectsWorking` (clock.ts) one on
+   * which nothing could have filled -- the engine takes such a candle whole, and only its quote
+   * and clock move, as they would over the bars inside it -- and the base bars decide the rest.
+   * True when it stopped (a watch fired, a fill or a close paused it, or a Stop was pressed).
+   */
+  private async skim(level: number, from: number, to: number, levels: readonly string[], trail: WalkState): Promise<boolean> {
+    if (to <= from) return false
+    // A span shorter than one candle of this level holds none whole: on to the next, unread.
+    if (level < levels.length && to - from < nominalMs(levels[level])) return this.skim(level + 1, from, to, levels, trail)
+    const observer = this.opts.observer
+    if (level === levels.length) {
+      for (const bar of await this.opts.barSource.fetch(this.symbol, this.base, from, to, 'all', this.grid)) {
+        if (bar.open < from || bar.end > to) continue
+        if (await this.breathe(trail)) return true
+        const produced = this.heard(trail.fillable ? await this.consume(bar, this.base) : [])
+        trail.events.push(...produced)
+        const raised = observer?.onBar(bar) ?? []
+        trail.consumed.push(bar)
+        trail.last = bar
+        this.cursor = bar.end
+        if (trail.pauseOn && produced.some(stopsARun)) {
+          trail.paused = true
+          return true
+        }
+        if (raised.length > 0) {
+          trail.observed = raised
+          return true
+        }
+      }
+      return false
+    }
+    const candles = (await this.opts.barSource.fetch(this.symbol, levels[level], from, to, 'all', this.grid)).filter((b) => b.open >= from && b.end <= to)
+    let at = from
+    for (const candle of candles) {
+      if (candle.open > at && !this.closedThroughout(at, candle.open) && (await this.skim(level + 1, at, candle.open, levels, trail))) return true
+      if (await this.breathe(trail)) return true
+      if (this.quietOver(candle, trail)) {
+        // Nothing can happen on it, so nothing does: the watches' baseline moves on, and the
+        // engine takes its quote and clock. Whatever it reports all the same is kept, and ends the
+        // run as a fill on a base bar would -- never dropped.
+        const produced = this.heard(trail.fillable ? this.engine.onBar(toBidAsk(candle, this.symbol)) : [])
+        trail.events.push(...produced)
+        observer?.onBar(candle)
+        trail.consumed.push(candle)
+        trail.last = candle
+        this.cursor = candle.end
+        if (trail.pauseOn && produced.some(stopsARun)) {
+          trail.paused = true
+          return true
+        }
+      } else if (await this.skim(level + 1, candle.open, candle.end, levels, trail)) return true
+      at = candle.end
+    }
+    if (at < to && !this.closedThroughout(at, to)) return this.skim(level + 1, at, to, levels, trail)
+    return false
+  }
+
+  /** What of the events a bar produced the run HEARS: every one, but a milestone -- a trade's
+   * "Notify at" -- reached in quiet hours (user, 2026-11-26: "align notify at to be an alert, it
+   * stays silent during quiet hours and doesn't alert at the end"). The engine has recorded it
+   * reached -- the trade did get there, at that instant -- so it is not told later either; but it
+   * ends no run, rings nothing and opens no panel. Fills and closes are the account, and are
+   * always heard ("fills and exits should alert even during quiet hours"). */
+  private heard(produced: SimEvent[]): SimEvent[] {
+    const silenced = this.opts.silenced
+    if (!silenced || produced.length === 0) return produced
+    return produced.filter((event) => event.kind !== 'milestone' || !silenced(event.time))
+  }
+
+  /** Whether nothing could happen on `candle`: no watch could fire on it, and -- when something
+   * can fill -- its bid/ask range, from the last quote on, reaches no resting order, stop loss or
+   * take profit. From the last quote, because a price can GAP through a level without any bar's
+   * range holding it: a buy limit at 1.0900 with Friday's close at 1.1000 and Sunday's open at
+   * 1.0800 fills at the open, and Sunday's candles alone never reach 1.0900. */
+  private quietOver(candle: ReplayBar, trail: WalkState): boolean {
+    const observer = this.opts.observer
+    if (observer?.needsBars() && !observer.quietOver?.(candle)) return false
+    if (!trail.fillable) return true
+    const bid = candle.bid ?? { l: candle.l, h: candle.h }
+    const ask = candle.ask ?? { l: candle.l, h: candle.h }
+    const quote = this.engine.quotes.get(this.symbol)
+    const band = {
+      bidLow: Math.min(bid.l, quote?.bid ?? bid.l),
+      bidHigh: Math.max(bid.h, quote?.bid ?? bid.h),
+      askLow: Math.min(ask.l, quote?.ask ?? ask.l),
+      askHigh: Math.max(ask.h, quote?.ask ?? ask.h)
+    }
+    return !intersectsWorking(band, [...this.engine.orders.values()], [...this.engine.trades.values()], this.symbol)
+  }
+
+  /** Between two bars of a skim: hand the event loop back now and then, report the progress,
+   * and say whether a Stop was pressed (the natural place to stop). */
+  private async breathe(trail: WalkState): Promise<boolean> {
+    if (performance.now() - trail.sliceStart > WALK_YIELD_MS) {
+      trail.report()
+      await nextTask()
+      trail.sliceStart = performance.now()
+    }
+    if (!this.cancelRequested) return false
+    trail.cancelled = true
+    return true
+  }
+
+  /** Whether the market is closed from `from` until `to` (a weekend between two daily candles):
+   * no candle of any interval opens in it, so there is nothing to read. */
+  private closedThroughout(from: number, to: number): boolean {
+    return !this.grid.isOpen(from) && this.grid.nextStart(this.base, from) >= to
   }
 
   /** The alert Next alert runs to, searched ahead of the cursor. A Stop press is heard between
@@ -680,6 +1153,8 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
 
   dispose(): void {
     this.disposed = true
+    for (const resolve of this.idleWaiters.splice(0)) resolve()
+    this.opts.alerts?.dispose?.()
     this.listeners.clear()
     this.controlListeners.clear()
     this.baseCache.dump()
@@ -687,24 +1162,23 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
   }
 }
 
-/** Hand the event loop back for one turn, so a click, a paint or a due timer can run.
- *
- * NOT `setTimeout(0)`: a hidden tab clamps chained timers to about a second each (measured in
- * this project's Chrome: ten chained zero-delay timers took 3.1 s, while ten MessageChannel
- * turns took 2 ms), so a walk left running behind another tab would yield once a second and
- * crawl. `scheduler.yield()` is built for exactly this and lets input through; a MessageChannel
- * turn is the fallback where it does not exist -- neither is throttled in a hidden tab. */
-function nextTask(): Promise<void> {
-  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
-  if (typeof scheduler?.yield === 'function') return scheduler.yield()
-  return new Promise((resolve) => {
-    const channel = new MessageChannel()
-    channel.port1.onmessage = () => {
-      channel.port1.close()
-      resolve()
-    }
-    channel.port2.postMessage(null)
-  })
+/** Where a walk has got: what it handed the observer, why it stopped. */
+interface WalkState {
+  consumed: ReplayBar[]
+  observed: ObserverStop[]
+  cancelled: boolean
+  /** Something can fill: the engine is fed what is handed over, and a candle whose range reaches
+   * a resting order, a stop loss or a take profit is not handed over whole. */
+  fillable: boolean
+  /** Whether a fill or a close ends the advance, and whether one did. */
+  pauseOn: boolean
+  paused: boolean
+  /** What the engine produced on the way. */
+  events: SimEvent[]
+  /** The last bar handed over: its close is the quote the engine lands on. */
+  last: ReplayBar | null
+  sliceStart: number
+  report: () => void
 }
 
 /** An engine refusal, as the server's `invalid_request` would arrive (the panel shows an
@@ -714,6 +1188,11 @@ export class ReplayRequestError extends OhlcvApiError {
     super(400, 'invalid_request', message)
     this.name = 'ReplayRequestError'
   }
+}
+
+/** `EURUSD` of `oanda:EURUSD`: how the controls and the refusals name an instrument. */
+function tickerOf(symbol: string): string {
+  return symbol.split(':').pop() ?? symbol
 }
 
 export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
@@ -735,3 +1214,10 @@ export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
 }
 
 export type { SimAnswer }
+
+/** What ends a run to the next event (and a Step or Play with Pause on fill): a fill, a close --
+ * a stop loss, take profit, trailing or breakeven stop hit -- or a milestone reached (outside
+ * quiet hours: one reached inside them is never heard, `heard`). */
+function stopsARun(event: SimEvent): boolean {
+  return event.kind === 'fill' || event.kind === 'close' || event.kind === 'milestone'
+}

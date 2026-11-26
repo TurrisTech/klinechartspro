@@ -1,19 +1,23 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src'
+import { baseIntervalsFor } from '../capabilities'
 import { fetchBarsWidened } from '../history'
-import type { PluginStream } from '../plugins/types'
+import { answerableTo } from '../plugins/horizon'
+import type { PluginStream, Range } from '../plugins/types'
 import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
-import { BarCache, type BarSource, type ReplayBar, composeForming, nonWeekendGaps } from './cache'
-import { type CandleGrid, gridFor, nominalMs } from './timeframes'
+import { foldsIntradayRows } from '../tiles/derive'
+import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
+import { type CandleGrid, gridFor, isIntraday, nominalMs } from './timeframes'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
 // every pane. No stream: only this client moves the clock.
 //
 // History loads go through the ordinary `/getbars` path, which the page-wide read clock
 // (config.ts) clamps to the cursor -- the server answers the closed bars plus the forming
-// one. A window the chart asks for "ending now" is re-anchored to end at the cursor, so a
-// pane opening a year back does not load an empty window and widen into nothing.
+// one. A window the chart asks for "ending now" is re-anchored to end at the cursor -- just
+// past the bar forming there, on the wire clock -- so a pane opening a year back does not load
+// an empty window and widen into nothing.
 //
 // Stepping pushes through the pane's subscribe callback -- klinecharts' updateData path,
 // which appends a bar newer than the last and replaces one at the same timestamp. The hub
@@ -24,8 +28,24 @@ import { type CandleGrid, gridFor, nominalMs } from './timeframes'
 
 export const HISTORY_WINDOW_BARS = 500
 
-/** Above this many whole bars to append, a pane is reloaded at the cursor instead. */
-export const SEEK_THRESHOLD_BARS = 300
+/** Above this many whole bars to append, a pane is reloaded at the cursor instead.
+ *
+ * Each bar handed to a pane recalculates every indicator on it over every bar it holds, and
+ * lays it out (src/ChartPane.svelte `subscribeBar`): measured on a six-pane EURUSD wall carrying
+ * the usual overlays (2026-10-26), about 2.4 ms a bar: a 10-hour Go to appending ~340 bars
+ * across the panes stopped in 1.26 s, about 0.8 s of it handing bars over. A reload is one read of the
+ * pane's window and one recalculation; with the threshold at 60 the same jump stopped in 0.34 s.
+ * 100 sits about where the two cost the same on that wall with prod's round trip; it was 300. */
+export const SEEK_THRESHOLD_BARS = 100
+
+/** Whether a push from `previous` to `cursor` reloads a pane whose last bar opened at `lastOpen`,
+ * rather than appending to it: the jump, from the later of the two, is longer than the append
+ * threshold. The one rule both the push and the landing it is predicted for (`landingRange`)
+ * follow. */
+function reloads(interval: string, lastOpen: number, previous: number, cursor: number): boolean {
+  const nominal = Math.max(1, Math.floor((cursor - Math.max(lastOpen, previous)) / nominalMs(interval)))
+  return nominal > SEEK_THRESHOLD_BARS
+}
 
 export class ReplayDatafeed implements Datafeed {
   private readonly callbacks = new Map<string, DatafeedSubscribeCallback>()
@@ -44,20 +64,30 @@ export class ReplayDatafeed implements Datafeed {
   async getHistoryKLineData(symbol: SymbolInfo, period: Period, from: number, to: number, direction: 'older' | 'newer' = 'older'): Promise<KLineData[]> {
     const vendor = symbolVendor(symbol)
     const interval = periodToResolution(period)
-    const cursor = this.hub.cursor
-    // A window ending after the cursor (ChartPane's "now") is re-anchored to end at it.
+    // A window ending after what the cursor lets be answered (ChartPane's "now") is re-anchored
+    // to end there. That is the cursor itself only for a bar dated by its open: a forex day
+    // forming from Tuesday 17:00 is dated Wednesday 00:00, AFTER the cursor, so a window ending
+    // at the cursor left it out -- a 1D pane reloaded between 17:00 and midnight drew no forming
+    // candle (prod EURGBP, 2023-10-24 19:00 New York: Tuesday's bar last). The end is the date
+    // after the bar forming at the cursor (`plugins/horizon.ts` `answerableTo`), which holds it
+    // and nothing later; with no schedule to find it on, the cursor.
+    const reach = answerableTo(interval, this.hub.cursor, gridFor(symbol))
+    const end = Number.isFinite(reach) ? reach : this.hub.cursor
     let f = from
     let t = to
-    if (t > cursor) {
+    if (t > end) {
       const span = t - f
-      t = cursor
+      t = end
       f = t - span
     }
+    this.hub.loadsInFlight++
     try {
       return await fetchBarsWidened(`${vendor}:${symbol.ticker}`, interval, f, t, direction === 'older' ? HISTORY_WINDOW_BARS : null, direction)
     } catch (err) {
       console.error('[replay] history fetch failed', err)
       return []
+    } finally {
+      this.hub.loadsInFlight--
     }
   }
 
@@ -92,19 +122,41 @@ export interface PushReport {
   problem: string | null
 }
 
-/** Owns the pane caches and the per-symbol base caches the forming bars are composed from,
- * and pushes stepped bars into the wall's panes. */
+/** Which of the stored ladder the store holds for an instrument around `at`. */
+export type StoredProbe = (symbol: string, at: number, grid: CandleGrid) => Promise<string[]>
+
+/** Owns the pane caches and the per-symbol caches the forming bars are composed from, and
+ * pushes stepped bars into the wall's panes. */
 export class ReplayFeedHub {
   cursor: number
+  /** History loads the panes have in flight through the replay's datafeed: a pane reloaded at the
+   * cursor is loading its bars, and its plugins have not asked for anything yet. What the next
+   * landing's warm-up waits out (landing.ts). */
+  loadsInFlight = 0
   private readonly paneCaches = new Map<string, BarCache>()
-  private readonly baseCaches = new Map<string, BarCache>()
+  /** Per instrument and interval of its compose ladder (`composeLadder`): the base, and the
+   * stored intervals between it and the panes'. */
+  private readonly composeCaches = new Map<string, BarCache>()
+  /** Per instrument, what the store holds -- set for the walked one, probed for the others. */
+  private readonly stored = new Map<string, Promise<readonly string[]>>()
 
   constructor(
     private readonly source: BarSource,
     private base: string,
-    cursor: number
+    cursor: number,
+    /** How an instrument the hub was not told about is probed; without one it composes from
+     * the base alone. */
+    private readonly probe: StoredProbe | null = null,
+    /** A vendor's stored intervals (`/capabilities` `baseIntervals`): what says which pane
+     * intervals are the server's folds, whose forming candles take only trading rows. */
+    private readonly bases: (vendor: string) => string[] = baseIntervalsFor
   ) {
     this.cursor = cursor
+  }
+
+  /** What the store holds for `symbol` (the walked instrument's ladder, probed at start). */
+  setStored(symbol: string, intervals: readonly string[]): void {
+    this.stored.set(symbol, Promise.resolve(intervals))
   }
 
   createFeed(): ReplayDatafeed {
@@ -118,16 +170,16 @@ export class ReplayFeedHub {
   setBase(base: string): void {
     if (base === this.base) return
     this.base = base
-    for (const c of this.baseCaches.values()) c.dump()
-    this.baseCaches.clear()
+    for (const c of this.composeCaches.values()) c.dump()
+    this.composeCaches.clear()
   }
 
   /** Dump every cache (a symbol or interval change on the wall, or a large jump). */
   dumpAll(): void {
     for (const c of this.paneCaches.values()) c.dump()
-    for (const c of this.baseCaches.values()) c.dump()
+    for (const c of this.composeCaches.values()) c.dump()
     this.paneCaches.clear()
-    this.baseCaches.clear()
+    this.composeCaches.clear()
   }
 
   private paneCache(symbol: string, interval: string, grid: CandleGrid): BarCache {
@@ -140,36 +192,154 @@ export class ReplayFeedHub {
     return c
   }
 
-  private baseCache(symbol: string, grid: CandleGrid): BarCache {
-    let c = this.baseCaches.get(symbol)
+  private composeCache(symbol: string, interval: string, grid: CandleGrid): BarCache {
+    const key = `${symbol}|${interval}`
+    let c = this.composeCaches.get(key)
     if (!c) {
-      c = new BarCache(this.source, symbol, this.base, grid, 'core')
-      this.baseCaches.set(symbol, c)
+      c = new BarCache(this.source, symbol, interval, grid, 'core')
+      this.composeCaches.set(key, c)
     }
     return c
   }
 
-  /** After the cursor moved from `previous` to `this.cursor`: bring every pane up to the
-   * cursor -- whole bars appended from the pane cache, the forming bar composed from base
-   * bars -- or reload the pane when the span is too long to append. */
-  async push(panes: readonly ChartProPane[], previous: number): Promise<PushReport[]> {
-    const reports: PushReport[] = []
-    for (const pane of panes) {
-      const report = await this.pushPane(pane, previous)
-      if (report) reports.push(report)
+  /** What the store holds for `symbol`: as set, or probed once at the cursor. A probe that
+   * fails composes from the base alone. */
+  private storedFor(symbol: string, grid: CandleGrid): Promise<readonly string[]> {
+    let held = this.stored.get(symbol)
+    if (!held) {
+      const probe = this.probe
+      held = probe
+        ? probe(symbol, this.cursor, grid).catch((err) => {
+            console.warn(`[replay] could not probe the stored intervals of ${symbol}; composing from the base`, err)
+            return []
+          })
+        : Promise.resolve([])
+      this.stored.set(symbol, held)
     }
-    // Let go of base bars no pane's forming bucket can still need -- each pane's bucket on its
-    // own instrument's schedule.
+    return held
+  }
+
+  /** The spans the forming candle of `interval` opening at `bucketOpen` takes its bars from. */
+  private async formingSpans(symbol: string, interval: string, bucketOpen: number, grid: CandleGrid): Promise<ComposeSpan[]> {
+    const ladder = composeLadder(interval, this.base, await this.storedFor(symbol, grid))
+    return composeSpans(bucketOpen, this.cursor, ladder, grid)
+  }
+
+  /** After the cursor moved from `previous` to `this.cursor`: bring every pane up to the
+   * cursor -- whole bars appended from the pane cache, the forming bar composed from the
+   * coarsest stored bars that fit -- or reload the pane when the span is too long to append. */
+  async push(panes: readonly ChartProPane[], previous: number): Promise<PushReport[]> {
+    // A pane too far behind to append to is reloaded at the cursor, and before anything is read:
+    // its reload is the pane's own read of its window, and needs none of the bars the other
+    // panes' forming candles are composed from. Sent after them, it waited a round trip (a Next
+    // alert landing on prod: the 5m and 3m panes' reloads went out 150-200 ms after the press).
+    const reports = new Map<ChartProPane, PushReport | null>()
+    for (const pane of panes) {
+      const reloaded = this.reloadIfFar(pane, previous)
+      if (reloaded) reports.set(pane, reloaded)
+    }
+    const appending = panes.filter((pane) => !reports.has(pane))
+    // Every other pane at once: each reads its own bars, and one after another a six-pane wall
+    // paid six round trips per step. The bars the forming bars are composed from are shared by
+    // every pane of an instrument, so they are read first, once -- a pane reading them itself
+    // would re-anchor a shared cache under another's read.
+    await this.coverForming(appending)
+    await Promise.all(appending.map(async (pane) => reports.set(pane, await this.pushPane(pane))))
+    // Let go of bars no pane's forming bucket can still need -- each pane's bucket on its own
+    // instrument's schedule.
     const opens = panes.flatMap((p) => {
       const grid = gridFor(p.getSymbol())
       return grid ? [grid.start(periodToResolution(p.getPeriod()), Math.max(this.cursor - 1, 0))] : []
     })
     const earliest = Math.min(...opens)
-    if (Number.isFinite(earliest)) for (const c of this.baseCaches.values()) c.trimBefore(earliest)
-    return reports
+    if (Number.isFinite(earliest)) for (const c of this.composeCaches.values()) c.trimBefore(earliest)
+    return panes.map((pane) => reports.get(pane)).filter((r): r is PushReport => r !== null && r !== undefined)
   }
 
-  private async pushPane(pane: ChartProPane, previous: number): Promise<PushReport | null> {
+  /** Reload `pane` at the cursor when the jump since its last bar is longer than the append
+   * threshold, and say so; null for a pane to append to (or one `pushPane` reports on). */
+  private reloadIfFar(pane: ChartProPane, previous: number): PushReport | null {
+    const held = this.held(pane)
+    if (!held || !reloads(held.interval, held.grid.fromWire(held.interval, held.last), previous, this.cursor)) return null
+    const symbolInfo = pane.getSymbol()
+    const vendor = symbolVendor(symbolInfo)
+    this.reload(pane, `${vendor}:${symbolInfo.ticker}`, held.interval, held.grid)
+    return { paneId: pane.id, key: feedKey(vendor, symbolInfo.ticker, held.interval), pushed: 0, forming: false, reloaded: true, problem: null }
+  }
+
+  /**
+   * The bars `pane` will hold once a push brings it from the hub's cursor to `at`, as the plugin
+   * host reads a chart's range: from its first bar's date to just past its last one's. What a
+   * bar replay warms its next landing over (`PluginHost.warmAhead`), so it is worked out by the
+   * same rule the push follows (`reloads`):
+   * - a jump past the append threshold reloads the pane at the cursor, into ChartPane's 500-bar
+   *   window ending there (`ReplayDatafeed.getHistoryKLineData`). Its first bar is taken at the
+   *   window's start, at or before the first one the reload will hold, so a window worked out
+   *   from it holds everything the pane will ask for;
+   * - anything shorter keeps the pane's bars and appends up to the bar open at `at`: forming
+   *   there, or closing on it.
+   *
+   * Null for a pane a push would leave as it is: no bars, no subscription, no schedule.
+   */
+  landingRange(pane: ChartProPane, at: number): Range | null {
+    const held = this.held(pane)
+    if (!held) return null
+    const { interval, grid } = held
+    const to = grid.toWire(interval, grid.start(interval, at - 1)) + 1
+    if (reloads(interval, grid.fromWire(interval, held.last), this.cursor, at)) return { from: at - HISTORY_WINDOW_BARS * nominalMs(interval), to }
+    return { from: held.first, to }
+  }
+
+  /** What a push needs to know about `pane` before reading anything: its interval and schedule,
+   * and its first and last bars' dates. Null for a pane it cannot push to. */
+  private held(pane: ChartProPane): { interval: string; grid: CandleGrid; first: number; last: number } | null {
+    const symbolInfo = pane.getSymbol()
+    const interval = periodToResolution(pane.getPeriod())
+    const feed = pane.getDatafeed() as ReplayDatafeed
+    if (typeof feed?.callbackFor !== 'function' || !feed.callbackFor(symbolVendor(symbolInfo), symbolInfo.ticker, interval)) return null
+    let data: KLineData[]
+    try {
+      data = pane.getChart().getDataList()
+    } catch {
+      return null
+    }
+    const first = data[0]?.timestamp
+    const last = data.at(-1)?.timestamp
+    const grid = gridFor(symbolInfo)
+    if (first === undefined || last === undefined || !grid) return null
+    return { interval, grid, first, last }
+  }
+
+  /** Read, per instrument and compose interval, the one range every forming candle of its
+   * panes takes from it -- all of them at once. A 1D pane at 06:00 on a 5s base reads 1h bars
+   * from 17:00, 1m bars from 06:00 and 5s bars from the last whole minute; not 5s bars from
+   * 17:00, nor (after a jump) from wherever the previous cursor was. */
+  private async coverForming(panes: readonly ChartProPane[]): Promise<void> {
+    const ranges = new Map<string, { symbol: string; grid: CandleGrid } & ComposeSpan>()
+    await Promise.all(
+      panes.map(async (pane) => {
+        const info = pane.getSymbol()
+        const grid = gridFor(info)
+        if (!grid) return
+        const symbol = `${symbolVendor(info)}:${info.ticker}`
+        const interval = periodToResolution(pane.getPeriod())
+        const bucketOpen = grid.start(interval, this.cursor - 1)
+        if (bucketOpen >= this.cursor) return
+        for (const span of await this.formingSpans(symbol, interval, bucketOpen, grid)) {
+          const key = `${symbol}|${span.interval}`
+          const held = ranges.get(key)
+          if (!held) ranges.set(key, { symbol, grid, ...span })
+          else {
+            held.from = Math.min(held.from, span.from)
+            held.to = Math.max(held.to, span.to)
+          }
+        }
+      })
+    )
+    await Promise.all([...ranges.values()].map((r) => this.composeCache(r.symbol, r.interval, r.grid).cover(r.from, r.to)))
+  }
+
+  private async pushPane(pane: ChartProPane): Promise<PushReport | null> {
     const symbolInfo = pane.getSymbol()
     const vendor = symbolVendor(symbolInfo)
     const ticker = symbolInfo.ticker
@@ -198,13 +368,7 @@ export class ReplayFeedHub {
     if (!grid) return { ...base, problem: `no market hours for ${symbol}` }
     const cursor = this.cursor
     const lastOpen = grid.fromWire(interval, last)
-
-    // A jump longer than the append threshold: reload the pane's window at the cursor.
-    const nominal = Math.max(1, Math.floor((cursor - Math.max(lastOpen, previous)) / nominalMs(interval)))
-    if (nominal > SEEK_THRESHOLD_BARS) {
-      this.reload(pane, symbol, interval, grid)
-      return { ...base, reloaded: true }
-    }
+    // (A jump longer than the append threshold was reloaded already: `reloadIfFar`.)
 
     // Whole bars: every stored bar of the interval opening at or after the chart's last bar
     // (the last may be the previously forming bar, now closed: its final version replaces
@@ -222,14 +386,24 @@ export class ReplayFeedHub {
       callback(toKLine(b))
       expectedLast = b.date
     }
-    // The forming bar: the bucket containing the cursor, composed from base bars that
-    // closed by the cursor. Its label is the same open `/getbars` labels the whole bar with.
+    // The forming bar: the bucket containing the cursor, composed from the stored bars inside
+    // it that closed by the cursor, coarsest first. Its label is the same open `/getbars`
+    // labels the whole bar with, and it takes the rows the whole bar will: where that bar is the
+    // server's fold of intraday rows (schwab's 1h, any 4h), only those of them the instrument
+    // trades at (`grid.isTrading`, aggregate_ohlcv's filter) -- schwab's 09:00-09:29 minutes are
+    // stored and are in no folded bar. A stored bar, or a fold of daily ones, is the store's
+    // rows as they are, and so is the candle forming towards it.
     let forming = false
     const bucketOpen = grid.start(interval, cursor - 1)
     if (bucketOpen < cursor && (whole.length === 0 || bucketOpen > whole[whole.length - 1].open) && bucketOpen >= lastOpen) {
-      const baseCache = this.baseCache(symbol, grid)
-      await baseCache.cover(bucketOpen, cursor)
-      const parts = baseCache.slice(bucketOpen, cursor).filter((b) => b.end <= cursor)
+      const filtered = foldsIntradayRows(interval, this.bases(vendor))
+      const parts: ReplayBar[] = []
+      for (const span of await this.formingSpans(symbol, interval, bucketOpen, grid)) {
+        const c = this.composeCache(symbol, span.interval, grid)
+        await c.cover(span.from, span.to)
+        const counts = filtered && isIntraday(span.interval)
+        for (const b of c.slice(span.from, span.to)) if (b.end <= cursor && (!counts || grid.isTrading(b.open))) parts.push(b)
+      }
       const bar = composeForming(interval, bucketOpen, parts, grid)
       if (bar) {
         callback(toKLine(bar))

@@ -39,6 +39,10 @@ export interface InspectorContext {
   onSelectionChange(listener: (id: string | null) => void): () => void
   /** The waiting change shared with the pane and the account window (TradingOverlays). */
   amendments: PanelAmendments
+  /** A closed trade drawn, selected and brought on screen on the panes of its instrument
+   * (TradingOverlays.showClosed); whether some pane shows that instrument. */
+  showClosed(id: string): boolean
+  showsInstrument(symbol: string): boolean
 }
 
 /** A click this recent placed the popup beside itself. Older, it opens where it last was. */
@@ -52,6 +56,8 @@ export class PositionInspector {
   private readonly tradeActions: TradeActions
   private readonly orderActions: HTMLElement
   private readonly cancel: HTMLButtonElement
+  private readonly closedActions: HTMLElement
+  private readonly showClosed: HTMLButtonElement
   private readonly errorNode: HTMLElement
   private readonly arming: Arming
   private id: string | null = null
@@ -83,10 +89,16 @@ export class PositionInspector {
     this.orderActions = h('div', 'wd-tk-row is-end')
     this.cancel = kbtn('Cancel order', () => this.act({ kind: 'cancel' }), ['danger'])
     this.orderActions.append(this.cancel)
+    // A closed trade has nothing left to do but be looked at where it happened.
+    this.closedActions = h('div', 'wd-tk-row is-end')
+    this.showClosed = kbtn('Show on chart', () => {
+      if (this.id) this.ctx.showClosed(this.id)
+    }, [], 'Draw the history on the chart and bring this trade on screen')
+    this.closedActions.append(this.showClosed)
     this.errorNode = h('div', 'wd-tk-problem is-error')
     this.errorNode.setAttribute('role', 'alert')
     this.errorNode.hidden = true
-    this.win.body.append(this.headline, this.confirmBar.element, this.figures.element, this.tradeActions.element, this.orderActions, this.errorNode)
+    this.win.body.append(this.headline, this.confirmBar.element, this.figures.element, this.tradeActions.element, this.orderActions, this.closedActions, this.errorNode)
 
     // Where the click that opens it happened. Captured on the window, before the chart layer stops
     // the event reaching anything else.
@@ -186,6 +198,10 @@ export class PositionInspector {
     const cancelArmed = item.kind === 'order' && armed === armKey.cancel(item.order.id)
     this.cancel.textContent = cancelArmed ? 'Confirm cancel' : 'Cancel order'
     this.cancel.classList.toggle('is-armed', cancelArmed)
+    this.closedActions.hidden = stats.kind !== 'closed'
+    const onScreen = this.ctx.showsInstrument(key)
+    this.showClosed.disabled = !onScreen
+    this.showClosed.title = onScreen ? 'Draw the history on the chart and bring this trade on screen' : `No pane shows ${key.split(':').pop()}`
     this.win.reflow()
   }
 

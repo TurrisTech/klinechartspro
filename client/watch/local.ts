@@ -7,6 +7,7 @@ import {
   describe,
   evaluate,
   needsPrevious,
+  neverWithin,
   OPS,
   parse
 } from '../alerts/conditions'
@@ -230,12 +231,27 @@ export class LocalWatchRegistry implements WatchApi {
   /** One observation of one target, evaluated against every armed watch on it.
    *
    * `at` is the SOURCE's clock -- for a replay, the base bar's close. Nothing here reads the
-   * wall clock, so a session replaying 2024 has a cooldown measured in 2024. */
-  onEvent(sourceId: string, target: string, at: number, observation: Observation): WatchFiring[] {
+   * wall clock, so a session replaying 2024 has a cooldown measured in 2024.
+   *
+   * A watch `held` answers true for is not listening at this instant (a replay's quiet hours): it
+   * reads the observation -- the crossing baseline and the edge's memory move on, so what happened
+   * meanwhile never fires later as if it had just happened -- but it cannot fire, and nothing of
+   * its firing policy (a one-shot spent, a cooldown started) moves. */
+  onEvent(
+    sourceId: string,
+    target: string,
+    at: number,
+    observation: Observation,
+    held?: (watch: Readonly<Omit<Watch, 'status'>>) => boolean
+  ): WatchFiring[] {
     const fired: WatchFiring[] = []
     for (const record of [...this.records.values()]) {
       if (record.wire.source !== sourceId || record.wire.target !== target) continue
       if (!record.wire.enabled || record.status !== 'armed') continue
+      if (held?.(record.wire)) {
+        this.listen(record, observation)
+        continue
+      }
       const firing = this.evaluate(record, at, observation)
       if (firing) fired.push(firing)
     }
@@ -253,6 +269,14 @@ export class LocalWatchRegistry implements WatchApi {
     record.previous = observation
     if (!decide(record, record.wire, result, at)) return null
     return this.fire(record, at, observation)
+  }
+
+  /** Read an observation without the policy: what a held watch does (`onEvent`). */
+  private listen(record: Record_, observation: Observation): void {
+    const result = evaluate(record.wire.condition, observation, record.previous)
+    record.previous = observation
+    // An unknowable answer changes nothing, as in `decide`.
+    if (result !== null) record.wasTrue = result
   }
 
   /** The firing's history fields and its wire form; `decide` has already moved the policy. */
@@ -274,6 +298,19 @@ export class LocalWatchRegistry implements WatchApi {
   get(id: string): Watch | null {
     const record = this.records.get(id)
     return record ? toWire(record) : null
+  }
+
+  /** Whether no armed watch on `target` could fire on any reading inside the span `summary`
+   * summarises (client/alerts/conditions.ts `neverWithin`) -- so the caller may hand `onEvent`
+   * the summary in place of every reading inside it. A watch that cannot fire at all (fired
+   * once, switched off) is quiet. */
+  quietOver(sourceId: string, target: string, summary: Observation): boolean {
+    for (const record of this.records.values()) {
+      if (record.wire.source !== sourceId || record.wire.target !== target) continue
+      if (!record.wire.enabled || record.status !== 'armed') continue
+      if (!neverWithin(record.wire.condition, summary, record.previous)) return false
+    }
+    return true
   }
 
   /** Every armed watch's `(source, target)`. What a replay asks to decide whether it must

@@ -53,6 +53,12 @@ export interface LevelsConfig {
     invalidations: Encoding
     age: Encoding
   }
+  alerts: {
+    /** The buffer a level is given when a click enables its alert, in the instrument's pips
+     * on EACH side of the level (its ticks where it has none, chartlayers/alerts/zone.ts), so
+     * the zone is twice this wide. Each alert then keeps its own, edited beside its bell. */
+    zonePips: number
+  }
 }
 
 // Dotted, 1px, the server's own advisory color, with both emphasis encodings turned on —
@@ -103,6 +109,10 @@ export const DEFAULT_LEVELS_CONFIG: LevelsConfig = {
       range: [1, 0.45],
       invert: false
     }
+  },
+  alerts: {
+    // Three pips each side, six wide (the user's default, 2026-10-30).
+    zonePips: 3
   }
 }
 
@@ -157,6 +167,22 @@ export const LEVELS_FIELDS: SettingsField[] = [
     }))
   },
   { kind: 'switch', key: 'showSpent', label: 'Show spent levels' },
+  // Near the top rather than after the styling: it is the one lever here that is about what
+  // a click does, and the panel runs several groups deep below it.
+  {
+    kind: 'group',
+    label: 'Alerts',
+    fields: [
+      {
+        kind: 'number',
+        key: 'alerts.zonePips',
+        label: 'Zone of a new alert, pips each side',
+        min: 0,
+        max: 10_000,
+        step: 0.5
+      }
+    ]
+  },
   {
     kind: 'group',
     label: 'Line',

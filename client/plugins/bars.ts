@@ -25,7 +25,7 @@ export const PAGE_BARS = 4000
  */
 export async function fetchClosedBars(vendorSymbol: string, resolution: string, from: number, to: number): Promise<KLineData[]> {
   const horizon = await readHorizon(vendorSymbol, resolution)
-  const end = horizon === null ? to : Math.min(to, horizon)
+  const end = horizon === null ? to : Math.min(to, horizon.at)
   return end > from ? fetchBars(vendorSymbol, resolution, from, end, null) : []
 }
 

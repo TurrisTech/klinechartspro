@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { Candle } from './calendar'
 import { atr, heathLevels, isLive, LOOKBACK, originOf, runStart, zoneOf, type HeathLevelSettings } from './heathlevels'
-import { emptyText, levelLabel, settingsOf, DEFAULT_PARAMS } from './heathtemplate'
+import { emptyText, levelLabel, settingsOf, zoneSettingsOf, DEFAULT_PARAMS } from './heathtemplate'
 
 const bar = (open: number, high: number, low: number, close: number): Candle => ({
   timestamp: 0,
@@ -17,7 +17,8 @@ const dated = (bars: Candle[]): Candle[] => bars.map((b, i) => ({ ...b, timestam
 // `maxRun: 1` keeps every case below on the single last opposite-colour candle, which is what
 // the erasure and freshness rules are about; the run is its own describe at the bottom. The
 // `minWidth` here is far larger than any fixture's ATR, so the zone is never "wide enough" and
-// the cap alone decides the run -- which is what those cases are about.
+// the cap alone decides the run -- which is what those cases are about. `maxCandle: 0` takes
+// every candle whatever its size; the limit has its own describe too.
 const SETTINGS: HeathLevelSettings = {
   left: 2,
   right: 2,
@@ -25,7 +26,8 @@ const SETTINGS: HeathLevelSettings = {
   freshOnly: false,
   stopLine: false,
   maxRun: 1,
-  minWidth: 99
+  minWidth: 99,
+  maxCandle: 0
 }
 
 // A rally whose last candle closes up, then a sell-off: index 3 is the swing top and its own
@@ -109,8 +111,10 @@ describe('the life of a level', () => {
     expect(heathLevels(bars, { ...SETTINGS, freshOnly: true, sides: 1 })).toHaveLength(0)
   })
 
-  test('one candle passing entirely through the area erases it', () => {
-    // The area is the body, 12.3 (open) to 12.9 (close). This candle's RANGE covers all of it.
+  test('a candle whose range covers the whole area but closes under the line leaves it standing', () => {
+    // The area is the body, 12.3 (open) to 12.9 (close). This candle's RANGE covers all of it,
+    // wick above the supply included, and it closes back under the line: a wick, not a break
+    // (user, 2026-10-27). Until 2026-11-21 this erased the level.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
@@ -118,12 +122,32 @@ describe('the life of a level', () => {
       bar(12, 12.3, 11.9, 12.1)
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level.brokenIndex).toBe(8)
-    expect(level.brokenBy).toBe('through')
-    expect(isLive(level, 7)).toBe(true)
-    expect(isLive(level, 8)).toBe(false)
-    // The candle that erased it also reached into it, which is the last thing recorded.
+    expect(level.brokenIndex).toBeNull()
+    expect(level.brokenBy).toBeNull()
+    expect(isLive(level, 8)).toBe(true)
+    expect(isLive(level, 9)).toBe(true)
+    // It did reach back into the area, so the level is tested.
     expect(level.testedIndex).toBe(8)
+  })
+
+  test('a demand survives a candle whose range covers it, and falls to the next close below its line', () => {
+    // Mirror of the supply case: the demand's area is the down-close candle's body, 10.2-11.1.
+    const bars = dated([
+      bar(13, 13.2, 12.5, 12.6),
+      bar(12.6, 12.8, 11.8, 11.9),
+      bar(11.9, 12, 11, 11.1),
+      bar(11.1, 11.2, 10, 10.2), // demand: body 10.2-11.1, stop 10
+      bar(10.2, 11.3, 10.1, 11.2),
+      bar(11.2, 12, 11.1, 11.9),
+      bar(11.9, 12.5, 11.8, 12.4),
+      bar(11.4, 11.5, 10.1, 11.3), // range covers 10.2-11.1, closes back above the 11.1 line
+      bar(11.3, 11.4, 10.8, 11) // closes at 11.0, under the line
+    ])
+    const [level] = heathLevels(bars, SETTINGS)
+    expect(level.side).toBe('demand')
+    expect(level.testedIndex).toBe(7)
+    expect(level.brokenIndex).toBe(8)
+    expect(level.brokenBy).toBe('closed')
   })
 
   test('a wick covering only part of the area leaves it live', () => {
@@ -267,17 +291,16 @@ describe('the life of a level', () => {
     expect(level.brokenBy).toBe('closed')
   })
 
-  test('a candle covering the body but not the wick still erases it', () => {
-    // High 12.95 clears the 12.9 body top but not the 13 wick: the area is the body, so
-    // this candle passed entirely through the level.
+  test('a candle covering the body but not the wick leaves it standing too', () => {
+    // High 12.95 clears the 12.9 body top but not the 13 wick, and the close is under the line.
     const bars = dated([
       ...RALLY,
       bar(10.9, 12, 10.8, 11.9),
       bar(11.9, 12.95, 11.8, 12)
     ])
     const [level] = heathLevels(bars, SETTINGS)
-    expect(level.brokenIndex).toBe(8)
-    expect(level.brokenBy).toBe('through')
+    expect(level.brokenIndex).toBeNull()
+    expect(level.testedIndex).toBe(8)
   })
 
   test('a level is not on the chart until price has traded away from it', () => {
@@ -353,10 +376,11 @@ describe('the chart half', () => {
       fill: 12,
       calendar: true,
       maxRun: 3,
-      minWidth: 0.5
+      minWidth: 0.5,
+      maxCandle: 2
     })
     expect(settingsOf(undefined)).toEqual(settingsOf(DEFAULT_PARAMS))
-    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99, 900])).toEqual({
+    expect(settingsOf([0, 999, 7, 1, 1, 200, 0, 99, 900, 9999])).toEqual({
       left: 1,
       right: 200,
       sides: 2,
@@ -365,13 +389,31 @@ describe('the chart half', () => {
       fill: 100,
       calendar: false,
       maxRun: 10,
-      minWidth: 5
+      minWidth: 5,
+      maxCandle: 10
     })
     // Layouts saved before the shading and calendar parameters existed read their defaults.
     expect(settingsOf([5, 5, 0, 0, 0]).fill).toBe(12)
     expect(settingsOf([5, 5, 0, 0, 0, 12]).calendar).toBe(true)
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1]).maxRun).toBe(3)
     expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3]).minWidth).toBe(0.5)
+    expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50]).maxCandle).toBe(2)
+    // 0 is a setting, not a missing value: no limit.
+    expect(settingsOf([5, 5, 0, 0, 0, 12, 1, 3, 50, 0]).maxCandle).toBe(0)
+  })
+
+  test('what TradeTalk entries takes from it is what shapes a zone, never what filters the drawing', () => {
+    // left, right, sides, fresh only, stop line, fill, calendar, max run, smallest, largest
+    expect(zoneSettingsOf([3, 4, 1, 1, 1, 50, 0, 2, 80, 150])).toEqual({
+      left: 3,
+      right: 4,
+      sides: 0,
+      freshOnly: false,
+      stopLine: false,
+      maxRun: 2,
+      minWidth: 0.8,
+      maxCandle: 1.5
+    })
   })
 
   test('a level says whether price has been back to it', () => {
@@ -453,14 +495,16 @@ describe('one or more candles', () => {
   })
 
   test('every prefix agrees about the runs it can already see', () => {
-    const settings = { ...SETTINGS, maxRun: 3 }
-    const full = heathLevels(RUN, settings)
-    for (let n = 1; n <= RUN.length; n++) {
-      const prefix = heathLevels(RUN.slice(0, n), settings)
-      const visible = full.filter((level) => level.confirmIndex <= n - 1)
-      expect(prefix.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])).toEqual(
-        visible.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])
-      )
+    for (const maxCandle of [0, 1.5]) {
+      const settings = { ...SETTINGS, maxRun: 3, maxCandle }
+      const full = heathLevels(RUN, settings)
+      for (let n = 1; n <= RUN.length; n++) {
+        const prefix = heathLevels(RUN.slice(0, n), settings)
+        const visible = full.filter((level) => level.confirmIndex <= n - 1)
+        expect(prefix.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])).toEqual(
+          visible.map((l) => [l.originIndex, l.price, l.low, l.high, l.stop])
+        )
+      }
     }
   })
 })
@@ -503,6 +547,37 @@ describe('the zone widens only while it is too small', () => {
     expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 3 })[0].originIndex).toBe(1)
     // 0 is "always the single last candle", whatever the cap allows.
     expect(heathLevels(RUN, { ...SETTINGS, maxRun: 3, minWidth: 0 })[0].originIndex).toBe(3)
+  })
+})
+
+describe('a candle too big is not part of a zone', () => {
+  // RUN's up-close candles against the ATR of the candles before each: index 2 is 1.4 tall
+  // against 0.85 (1.65x), index 3 is 1.4 against 1.033 (1.35x).
+  const supply = (maxCandle: number) =>
+    heathLevels(RUN, { ...SETTINGS, maxRun: 3, maxCandle }).filter((level) => level.side === 'supply')
+
+  test('a big candle before the last one stops the run', () => {
+    expect(supply(0)[0].originIndex).toBe(1) // no limit: the whole run, 1-3
+    expect(supply(1.5)[0]).toMatchObject({ originIndex: 3, originEnd: 3, price: 11.3, low: 11.3, high: 12.4 })
+    expect(supply(1.7)[0].originIndex).toBe(1) // both fit under 1.7x
+  })
+
+  test('a big LAST candle means that turn has no level, not one drawn from further back', () => {
+    expect(supply(1.3)).toEqual([])
+  })
+
+  test('the yardstick is the ATR of the candles BEFORE it, so a big candle is not its own', () => {
+    // Index 3 is 1.4 tall. With its own range in the average the ATR is 1.125 and it would be
+    // 1.24x -- inside a 1.3x limit. Against the three candles before it, it is 1.35x and out.
+    expect(atr(RUN)[3]).toBeCloseTo(1.125, 10)
+    expect(supply(1.3)).toEqual([])
+    expect(supply(1.36)).toHaveLength(1)
+  })
+
+  test('the walk-back takes a predicate for which candles may join', () => {
+    const steps = dated([bar(10, 10.25, 9.95, 10.2), bar(10.2, 10.45, 10.15, 10.4), bar(10.4, 10.65, 10.35, 10.6)])
+    expect(runStart(steps, 2, 5, 999, (i) => i !== 0)).toBe(1)
+    expect(runStart(steps, 2, 5, 999, (i) => i !== 1)).toBe(2)
   })
 })
 

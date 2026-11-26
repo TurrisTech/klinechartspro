@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync } from 'node:fs'
 import type { PluginFacilities } from '../plugins/types'
 import { nearSource, totalsSource } from './api'
 import { tilesUpTo } from '../tiles/manifest'
@@ -8,13 +7,11 @@ import { LAYOUT_VERSION, type BookTileManifest } from './tiles'
 // Two halves. The coverage arithmetic is pure and always runs -- it is where both of the
 // bar tiles' off-by-ones lived (chart-tiles.md, trap 2) and neither is visible to a check
 // that only asks whether the API's points appear in the tiles. The decode half needs a
-// built store named by TILES_ROOT (a local tree laid out like the bucket,
-// `<root>/books/v1/...`) and is skipped without one, the same way client/tiles/parity.test.ts
-// is. There is no default directory -- the one there used to be,
-// /mnt/d/marketdata/dev/tiles, is a damaged, ephemeral volume being retired.
+// store named by TILES_BASE_URL (anything serving the bucket's layout, `<base>/books/v1/...`)
+// and is skipped without one, the same way client/tiles/parity.test.ts is.
 
-const ROOT = process.env.TILES_ROOT?.trim().replace(/\/+$/, '') || undefined
-const SERIES = `${ROOT}/books/${LAYOUT_VERSION}/position/oanda/EURUSD/1h`
+const BASE = process.env.TILES_BASE_URL?.trim().replace(/\/+$/, '') || undefined
+const SERIES = `${BASE}/books/${LAYOUT_VERSION}/position/oanda/EURUSD/1h`
 
 function manifest(over: Partial<BookTileManifest> = {}): BookTileManifest {
   return {
@@ -80,11 +77,16 @@ describe('coverage', () => {
   })
 })
 
-const built = ROOT !== undefined && existsSync(`${SERIES}/manifest.json`)
+// At module load, not in beforeAll: `skipIf` is evaluated while the file is being collected.
+const built =
+  BASE !== undefined &&
+  (await Bun.fetch(`${SERIES}/manifest.json`)
+    .then((r) => r.ok)
+    .catch(() => false))
 if (!built) {
   console.warn(
-    ROOT === undefined
-      ? 'tiles.test: TILES_ROOT unset; skipping the decode cases'
+    BASE === undefined
+      ? 'tiles.test: TILES_BASE_URL unset; skipping the decode cases'
       : `tiles.test: no book tiles at ${SERIES}; skipping the decode cases`
   )
 }
@@ -93,20 +95,17 @@ describe.skipIf(!built)('decode', () => {
   test('a built tile decodes to points whose buckets sit on the vendor grid', async () => {
     const { pointsFromTiles, resetBookTileCaches } = await import('./tiles')
     resetBookTileCaches()
-    // The module fetches by URL; point it at the local tree through a file-reading fetch,
-    // which is what the dev server does for the bar tiles too.
+    // The module fetches by URL, under the page's own origin; point it at the store.
     const realFetch = Bun.fetch
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      const url = String(input)
-      const path = url.replace(/^https?:\/\/[^/]+\/tiles\/books/, `${ROOT}/books`)
-      if (!existsSync(path)) return new Response(null, { status: 404 })
-      return new Response(await Bun.file(path).arrayBuffer())
-    }) as typeof fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) =>
+      realFetch(
+        String(input).replace(/^https?:\/\/[^/]+\/tiles\/books/, `${BASE}/books`)
+      )) as typeof fetch
     globalThis.window = { location: { origin: 'http://localhost' } } as unknown as Window &
       typeof globalThis
 
     try {
-      const man = (await Bun.file(`${SERIES}/manifest.json`).json()) as BookTileManifest
+      const man = (await (await realFetch(`${SERIES}/manifest.json`)).json()) as BookTileManifest
       const first = man.tiles[0]
       const answer = await pointsFromTiles(
         'profile',
@@ -240,7 +239,7 @@ describe.skipIf(!built)('the tile/API join, against real tiles', () => {
     // between that point and the period boundary to nobody. Neither raises anything.
     const { resetBookTileCaches } = await import('./tiles')
     resetBookTileCaches()
-    const real = (await Bun.file(`${SERIES}/manifest.json`).json()) as BookTileManifest
+    const real = (await (await Bun.fetch(`${SERIES}/manifest.json`)).json()) as BookTileManifest
     // Cut coverage off mid-history so the window genuinely straddles the seam.
     const cut = real.tiles[3]
     const trimmed: BookTileManifest = {
@@ -252,9 +251,7 @@ describe.skipIf(!built)('the tile/API join, against real tiles', () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('manifest.json')) return new Response(JSON.stringify(trimmed))
-      const path = url.replace(/^https?:\/\/[^/]+\/tiles\/books/, `${ROOT}/books`)
-      if (!existsSync(path)) return new Response(null, { status: 404 })
-      return new Response(await Bun.file(path).arrayBuffer())
+      return realFetch(url.replace(/^https?:\/\/[^/]+\/tiles\/books/, `${BASE}/books`))
     }) as typeof fetch
     globalThis.window = { location: { origin: 'http://localhost' } } as unknown as Window &
       typeof globalThis

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimSnapshot, SimTrade } from './api'
 import type { InstrumentInfo } from './instrument'
+import { formatInstant } from './format'
 import { findInspected, type Inspected, positionStats } from './stats'
 
 const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
@@ -99,6 +100,10 @@ describe('position stats', () => {
     expect(stats.headline).toEqual({ text: '−20.00 USD realised', tone: 'down' })
     expect(row(stats, 'Exit')).toBe('1.09800 · Stop loss')
     expect(row(stats, 'Held')).toBe('2h 00m')
+    // Of the balance it was realised against: 10,000 now, so 10,020 before the −20.
+    expect(row(stats, 'Of balance')).toBe('−0.20%')
+    expect(row(stats, 'Opened')).toBe(formatInstant(0))
+    expect(row(stats, 'Opened')).toMatch(/:\d\d:\d\d$/)
   })
 
   test('nothing by that id, or an order no longer pending, is not found', () => {

@@ -3,7 +3,7 @@ import { installWindow } from '../plugins/testing'
 import type { ReplayAlertBook, SearchProgress } from './alerts'
 import type { BarSource, ReplayBar } from './cache'
 import type { AlertOccurrence } from './clock'
-import type { ReplayObserver } from './session'
+import type { ObserverStop, ReplayObserver } from './session'
 import { Engine } from './engine'
 import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from './timeframes'
 
@@ -104,7 +104,7 @@ function bucketLen(interval: string): number {
 class FakeAlerts implements ReplayAlertBook {
   asked: Array<{ after: number; until: number }> = []
   constructor(
-    private readonly at: number[],
+    protected readonly at: number[],
     private readonly enabled = 1,
     private readonly during?: (progress: SearchProgress) => void
   ) {}
@@ -116,7 +116,7 @@ class FakeAlerts implements ReplayAlertBook {
     this.during?.(progress)
     if (progress.shouldStop()) return null
     const effective = this.at.find((t) => t > after && t <= until)
-    return effective === undefined ? null : { alertId: 'a1', name: 'oversold', effective, readings: 'RSI(14) 1h 28.1' }
+    return effective === undefined ? null : { alertId: 'a1', name: 'oversold', symbol: SYM, effective, readings: 'RSI(14) 1h 28.1' }
   }
 }
 
@@ -134,10 +134,16 @@ function make(
     stored?: string[]
     alerts?: ReplayAlertBook
     observer?: ReplayObserver
+    warmLanding?: (at: number) => void
+    /** The viewer's quiet hours, as the session asks them. */
+    silenced?: (at: number) => boolean
+    /** Where the synthetic minutes begin, and how many there are. */
+    start?: number
+    minutes?: number
   } = {}
 ): Made {
-  const start = ny('2024-03-04 09:00')
-  const source = new SyntheticSource(start, 8 * 60)
+  const start = opts.start ?? ny('2024-03-04 09:00')
+  const source = new SyntheticSource(start, opts.minutes ?? 8 * 60)
   const saved: unknown[] = []
   const advanced: Array<{ from: number; to: number; reason: string }> = []
   const session = new ReplayTradingSession({
@@ -163,7 +169,9 @@ function make(
       advanced.push({ from: r.from, to: r.to, reason: r.reason })
     },
     alerts: opts.alerts,
-    observer: opts.observer
+    observer: opts.observer,
+    warmLanding: opts.warmLanding,
+    silenced: opts.silenced
   })
   session.setIntervalsInUse(['1h'])
   return { session, source, saved, advanced }
@@ -223,6 +231,296 @@ describe('ReplayTradingSession', () => {
     expect(advanced.map((a) => a.reason)).toEqual(['alert', 'alert'])
   })
 
+  test('the bar a press lands on is read while the look-ahead waits, so the press reads nothing', async () => {
+    const start = ny('2024-03-04 09:00')
+    class Ahead extends FakeAlerts {
+      async prefetch(after: number, until: number): Promise<number | null> {
+        return this.at.find((t) => t > after && t <= until) ?? null
+      }
+    }
+    // Inside a base bar: the press lands on that bar's close, and that bar is what is read ahead.
+    const { session, source } = make({ alerts: new Ahead([start + 3 * H + 20 * M]) })
+    session.warmAlerts()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const ahead = source.calls.length
+    expect(source.calls.some((c) => c.interval === '1h' && c.from <= start + 3 * H && c.to >= start + 4 * H)).toBe(true)
+    const r = await session.nextAlert()
+    expect(session.cursor).toBe(start + 4 * H)
+    expect(r?.walked).toBe(false)
+    expect(source.calls.length).toBe(ahead)
+    expect(session.snapshot.quotes[SYM].bid).toBeCloseTo(1.1 + 239 * 0.0001, 9)
+  })
+
+  test('the wall is told where a press would land -- the base bar\'s close -- but not while a press is landing there', async () => {
+    const start = ny('2024-03-04 09:00')
+    let release = (): void => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    class Gated extends FakeAlerts {
+      async prefetch(after: number, until: number): Promise<number | null> {
+        await gate
+        return this.at.find((t) => t > after && t <= until) ?? null
+      }
+      async next(after: number, until: number, progress: SearchProgress): Promise<AlertOccurrence | null> {
+        // The look-ahead finds its answer while the press is under way.
+        release()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        return super.next(after, until, progress)
+      }
+    }
+    const told: number[] = []
+    const made = make({ alerts: new Gated([start + 2 * H + 20 * M, start + 5 * H + 20 * M]), warmLanding: (at) => told.push(at) })
+    made.session.warmAlerts()
+    const r = await made.session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(made.session.cursor).toBe(start + 3 * H)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The first landing was the press's own; the next one is where the following press lands:
+    // inside the 14:00 base bar, so on its close.
+    expect(told).toEqual([start + 6 * H])
+  })
+
+  test("across a weekend, the quote is looked for from Friday's close, not back through it", async () => {
+    // Friday 2024-03-01 15:00 to 17:00 New York, then Sunday's open: the market-closed gap between.
+    const friday = ny('2024-03-01 15:00')
+    const { session, source } = make({ base: '1m', start: friday, minutes: 240 })
+    const sunday = ny('2024-03-03 17:00')
+    source.calls.length = 0
+    const bar = await session.barAt(sunday)
+    expect(bar?.open).toBe(ny('2024-03-01 16:59'))
+    // One probe back from Friday's 17:00, not widened through the weekend from Sunday's.
+    expect(source.calls).toHaveLength(1)
+    expect(source.calls[0].from).toBeGreaterThan(ny('2024-03-01 16:00'))
+    // Where a Step from the weekend really stops: inside Sunday's session, before its first bar
+    // has closed. That session holds nothing yet, so the probe goes to the one before it.
+    source.calls.length = 0
+    const justAfter = await session.barAt(sunday + 30_000)
+    expect(justAfter?.open).toBe(ny('2024-03-01 16:59'))
+    expect(source.calls).toHaveLength(2)
+    expect(source.calls.every((c) => c.from >= ny('2024-03-01 16:00'))).toBe(true)
+  })
+
+  // A stop loss or take profit hit is another Next alert (user, 2026-10-28). The synthetic bid
+  // rises a pip a minute from 09:00, its high half a pip above: a long's take profit just under
+  // minute 200's high is hit on the 12:20 bar, and a short's stop loss at minute 100's ask high
+  // on the 10:40 one.
+  const minute = (i: number) => ny('2024-03-04 09:00') + i * M
+  const takeProfitAt200 = 1.1 + 200 * 0.0001 + 0.00005 - 0.000001
+  async function withTrade(session: InstanceType<typeof ReplayTradingSession>, side: 'buy' | 'sell', protection: { takeProfit?: number; stopLoss?: number }) {
+    await session.step()
+    await session.placeOrder({ symbol: SYM, side, type: 'market', units: 1000 })
+    await session.modifyTrade(session.snapshot.trades[0].id, protection)
+  }
+
+  test('a stop loss hit before the alert is where Next alert stops; the alert is still next', async () => {
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]) })
+    await withTrade(session, 'sell', { stopLoss: 1.1 + 100 * 0.0001 + 0.00025 })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'close', reason: 'stop_loss' })
+    expect(session.cursor).toBe(minute(101))
+    const again = await session.nextAlert()
+    expect(again?.reason).toBe('alert')
+    expect(session.cursor).toBe(minute(300))
+  })
+
+  test('with no alert, a take profit is where Next alert runs to -- by the hour, then the minute', async () => {
+    const run = async (stored: string[]) => {
+      const { session } = make({ base: '1m', stored, alerts: new FakeAlerts([]) })
+      await withTrade(session, 'buy', { takeProfit: takeProfitAt200 })
+      return { r: await session.nextAlert(), cursor: session.cursor }
+    }
+    const skimmed = await run(['1m', '1h'])
+    const walked = await run(['1m'])
+    expect(skimmed.r?.reason).toBe('fill')
+    expect(skimmed.cursor).toBe(minute(201))
+    expect(skimmed.r?.events.at(-1)).toMatchObject({ kind: 'close', reason: 'take_profit', price: takeProfitAt200 })
+    // The same answer as the minute-by-minute walk, with the hours nothing could fill on whole.
+    expect(walked.cursor).toBe(skimmed.cursor)
+    expect(walked.r?.events).toEqual(skimmed.r?.events)
+    expect(skimmed.r?.bars.some((b) => b.end - b.open === H)).toBe(true)
+    expect(skimmed.r?.bars.length).toBeLessThan(walked.r?.bars.length ?? 0)
+  })
+
+  // Exit management (user, 2026-11-15: "make sure that these will stop at Next alert"): a milestone
+  // ends the run where a price reaches it, a trailing stop's hit is a close like any stop's, and a
+  // trade whose only protection is a trail still makes the run walk. A Step here is an hour: the
+  // trades fill at bar 59's close (bid 1.10590, ask 1.10610).
+  test('a milestone reached is where Next alert stops -- by the hour, then the minute -- and the alert is still next', async () => {
+    // A long at 1.10610 with a milestone 100 pips out (1.11610): bar 161's bid high reaches it.
+    const run = async (stored: string[]) => {
+      const { session } = make({ base: '1m', stored, alerts: new FakeAlerts([minute(300)]) })
+      await session.step()
+      await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000, milestones: [{ distance: 0.01, label: '+5R' }] })
+      expect(session.pendingMilestones).toBe(1)
+      return { session, r: await session.nextAlert() }
+    }
+    const skimmed = await run(['1m', '1h'])
+    const walked = await run(['1m'])
+    expect(skimmed.r?.reason).toBe('fill')
+    expect(skimmed.r?.events.at(-1)).toMatchObject({ kind: 'milestone', reason: '+5R' })
+    expect(skimmed.r?.events.at(-1)?.price).toBeCloseTo(1.1161, 9)
+    expect(skimmed.session.cursor).toBe(minute(162))
+    expect(walked.session.cursor).toBe(skimmed.session.cursor)
+    expect(walked.r?.events).toEqual(skimmed.r?.events)
+    expect(skimmed.session.snapshot.trades[0].closedAt).toBeNull()
+    expect(skimmed.session.pendingMilestones).toBe(0)
+    const again = await skimmed.session.nextAlert()
+    expect(again?.reason).toBe('alert')
+    expect(skimmed.session.cursor).toBe(minute(300))
+  })
+
+  // Quiet hours (user, 2026-11-26: "align notify at to be an alert, it stays silent during quiet
+  // hours and doesn't alert at the end. fills and exits should alert even during quiet hours").
+  // The +5R milestone above is reached at bar 161, a +7.5R one at bar 211; quiet until minute 200.
+  test('a milestone reached in quiet hours is passed over: recorded on the trade, never heard, then or after', async () => {
+    const run = async (stored: string[]) => {
+      const { session } = make({ base: '1m', stored, alerts: new FakeAlerts([minute(300)]), silenced: (at) => at < minute(200) })
+      await session.step()
+      await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000, milestones: [{ distance: 0.01, label: '+5R' }] })
+      const heard: string[] = []
+      session.subscribe((_snapshot, events) => heard.push(...events.map((e) => e.kind)))
+      return { session, heard, r: await session.nextAlert() }
+    }
+    const skimmed = await run(['1m', '1h'])
+    const walked = await run(['1m'])
+    for (const { session, heard, r } of [skimmed, walked]) {
+      // On to the alert: the milestone ended nothing, and nobody was told of it.
+      expect(r?.reason).toBe('alert')
+      expect(session.cursor).toBe(minute(300))
+      expect(r?.events.some((e) => e.kind === 'milestone')).toBe(false)
+      expect(heard).not.toContain('milestone')
+      // But the trade did get there, then: it is spent, so it is not told at the end either.
+      expect(session.pendingMilestones).toBe(0)
+      const reached = session.snapshot.trades[0].milestones?.[0]
+      expect(reached?.reachedAt).toBeGreaterThanOrEqual(minute(161))
+      expect(reached?.reachedAt).toBeLessThan(minute(162))
+    }
+  })
+
+  test('a milestone outside quiet hours still stops the run, past one inside them', async () => {
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]), silenced: (at) => at < minute(200) })
+    await session.step()
+    await session.placeOrder({
+      symbol: SYM,
+      side: 'buy',
+      type: 'market',
+      units: 1000,
+      milestones: [
+        { distance: 0.01, label: '+5R' },
+        { distance: 0.015, label: '+7.5R' }
+      ]
+    })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(session.cursor).toBe(minute(212))
+    expect(r?.events.filter((e) => e.kind === 'milestone').map((e) => e.reason)).toEqual(['+7.5R'])
+  })
+
+  test('fills and exits are heard in quiet hours: a take profit still stops the run there', async () => {
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]), silenced: () => true })
+    await withTrade(session, 'buy', { takeProfit: takeProfitAt200 })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(session.cursor).toBe(minute(201))
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'close', reason: 'take_profit' })
+  })
+
+  test("a trailing stop's hit is where Next alert stops, and says it was the trail", async () => {
+    // A short at 1.10590 trails 5 pips above the ask (1.10660); the ask only rises, so the trail
+    // never moves and bar 64's ask high (1.10665) reaches it.
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]) })
+    await session.step()
+    await session.placeOrder({ symbol: SYM, side: 'sell', type: 'market', units: 1000, trailingStop: { distance: 0.0005 } })
+    expect(session.snapshot.trades[0].stopLoss).toBeCloseTo(1.1066, 9)
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'close', reason: 'stop_loss' })
+    expect(session.cursor).toBe(minute(65))
+    expect(session.snapshot.trades[0].stopMovedBy).toBe('trail')
+  })
+
+  test('a trail that has not started yet still makes the run walk, and the stop follows the closes', async () => {
+    // Trailing 10 pips once 20 in profit: no stop at the fill, yet the run walks rather than seeks.
+    const { session } = make({ base: '1m', stored: ['1m'], alerts: new FakeAlerts([minute(120)]) })
+    await session.step()
+    await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000, trailingStop: { distance: 0.001, activation: 0.002 } })
+    expect(session.snapshot.trades[0].stopLoss).toBeNull()
+    expect(session.workingStops).toBe(1)
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('alert')
+    expect(r?.walked).toBe(true)
+    // Started once the bid was 1.10810 (bar 81); the last bar consumed, 119, closes on 1.11190.
+    expect(session.snapshot.trades[0].stopLoss).toBeCloseTo(1.1109, 9)
+    expect(session.snapshot.trades[0].stopMovedBy).toBe('trail')
+  })
+
+  test('a resting limit order filling is where Next alert stops', async () => {
+    // A sell limit at minute 150's bid high: the rising bid reaches it on the 11:30 bar.
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]) })
+    await session.step()
+    const limit = 1.1 + 150 * 0.0001 + 0.00005 - 0.000001
+    await session.placeOrder({ symbol: SYM, side: 'sell', type: 'limit', units: 1000, price: limit })
+    expect(session.workingStops).toBe(1)
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'fill', price: limit })
+    expect(session.cursor).toBe(minute(151))
+  })
+
+  test('a limit the price gaps through over the weekend fills at the open, and the run stops there', async () => {
+    // Friday 15:00-17:00 New York around 1.1000, then Sunday's open at 1.0800: a buy limit at
+    // 1.0900 is never inside a bar's range, and fills at Sunday's first ask open.
+    const friday = ny('2024-03-01 15:00')
+    const sunday = ny('2024-03-03 17:00')
+    const flat = (open: number, n: number, mid: number): ReplayBar[] =>
+      Array.from({ length: n }, (_, i) => {
+        const o = open + i * M
+        const bid = { o: mid, h: mid + 0.0001, l: mid - 0.0001, c: mid }
+        const ask = { o: mid + 0.0002, h: mid + 0.0003, l: mid + 0.0001, c: mid + 0.0002 }
+        return { open: o, end: o + M, date: o, o: mid + 0.0001, h: mid + 0.0002, l: mid, c: mid + 0.0001, v: 1, bid, ask }
+      })
+    const minutes = [...flat(friday, 120, 1.1), ...flat(sunday, 120, 1.08)]
+    const hours = (bars: ReplayBar[]): ReplayBar[] => {
+      const out: ReplayBar[] = []
+      for (let k = 0; k < bars.length; k += 60) {
+        const part = bars.slice(k, k + 60)
+        const side = (pick: (b: ReplayBar) => { o: number; h: number; l: number; c: number }) => ({ o: pick(part[0]).o, h: Math.max(...part.map((b) => pick(b).h)), l: Math.min(...part.map((b) => pick(b).l)), c: pick(part[part.length - 1]).c })
+        out.push({ open: part[0].open, end: part[0].open + H, date: part[0].open, o: part[0].o, h: Math.max(...part.map((b) => b.h)), l: Math.min(...part.map((b) => b.l)), c: part[part.length - 1].c, v: part.length, bid: side((b) => b.bid as never), ask: side((b) => b.ask as never) })
+      }
+      return out
+    }
+    const gapped: BarSource = {
+      fetch: async (_s, interval, from, to) => (interval === '1h' ? hours(minutes) : minutes).filter((b) => b.open >= from && b.open < to)
+    }
+    const session = new ReplayTradingSession({
+      id: 'g', name: 'g', createdAt: 0, vendor: 'oanda', grid: FX_GRID, symbol: SYM, cursor: friday, startedAt: friday, base: '1m',
+      advance: { interval: '1m', multiple: 1 }, pauseOnFill: false, storedIntervals: ['1m', '1h'], engine: new Engine(10_000),
+      barSource: gapped, dataEnd: () => sunday + 2 * H, save: async () => {}, onAdvanced: () => {}, alerts: new FakeAlerts([])
+    })
+    session.setIntervalsInUse(['1h'])
+    await session.step()
+    await session.placeOrder({ symbol: SYM, side: 'buy', type: 'limit', units: 1000, price: 1.09 })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'fill', price: 1.0802 })
+    expect(session.cursor).toBe(sunday + M)
+  })
+
+  test('with no alert and nothing that ever fills, Next alert is taken back -- the account too', async () => {
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([]) })
+    await withTrade(session, 'buy', { takeProfit: 2 })
+    const at = session.cursor
+    const quote = session.snapshot.quotes[SYM]
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('none')
+    expect(session.cursor).toBe(at)
+    expect(session.snapshot.quotes[SYM]).toEqual(quote)
+    expect(session.snapshot.trades).toHaveLength(1)
+    expect(session.workingStops).toBe(1)
+  })
+
   test('with nothing ahead, Next alert stays put rather than spend the replay', async () => {
     const start = ny('2024-03-04 09:00')
     const { session, advanced } = make({ alerts: new FakeAlerts([]) })
@@ -233,13 +531,30 @@ describe('ReplayTradingSession', () => {
     expect(advanced).toEqual([])
   })
 
-  test('with nothing ahead but a price watch armed, it runs on for the watch', async () => {
+  test('with nothing ahead and a price watch that never fires, it stays put too', async () => {
+    // It runs for the watch -- and, nothing having fired by the end of the data and nothing
+    // being able to fill, takes the run back: the cursor where it was, the watches as they were.
     const start = ny('2024-03-04 09:00')
-    const { session } = make({ alerts: new FakeAlerts([]), observer: { ...observer(), armedStops: () => 1 } })
+    const restored: unknown[] = []
+    const watching = { ...observer(), armedStops: () => 1, restoreState: (rows: unknown) => restored.push(rows) }
+    const { session, advanced } = make({ alerts: new FakeAlerts([]), observer: watching })
     const r = await session.nextAlert()
-    expect(r?.reason).toBe('end')
+    expect(r?.reason).toBe('none')
+    expect(r?.seeking).toBe('alerts')
     expect(r?.walked).toBe(true)
-    expect(session.cursor).toBe(start + 8 * H)
+    expect(watching.seen.length).toBeGreaterThan(0)
+    expect(restored).toHaveLength(1)
+    expect(session.cursor).toBe(start)
+    expect(advanced).toEqual([])
+  })
+
+  test('with nothing ahead but a price watch that fires, it runs to the watch', async () => {
+    const start = ny('2024-03-04 09:00')
+    const watching = { ...observer((_bar, n) => (n === 3 ? [{ label: 'touch' }] : [])), armedStops: () => 1 }
+    const { session } = make({ alerts: new FakeAlerts([]), observer: watching })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('watch')
+    expect(session.cursor).toBe(start + 3 * H)
   })
 
   test('an alert finer than the base stops at the close of the base bar it falls in', async () => {
@@ -353,7 +668,8 @@ describe('ReplayTradingSession', () => {
 
 /** An observer that forces the walk and can act on each bar -- the deterministic stand-in for
  * a click that lands mid-walk. */
-function observer(onBar: (bar: ReplayBar, n: number) => void = () => {}): ReplayObserver & { seen: ReplayBar[] } {
+/** An observer that sees every bar; `onBar` may return what it raises on one. */
+function observer(onBar: (bar: ReplayBar, n: number) => unknown = () => undefined): ReplayObserver & { seen: ReplayBar[] } {
   const seen: ReplayBar[] = []
   return {
     seen,
@@ -361,8 +677,8 @@ function observer(onBar: (bar: ReplayBar, n: number) => void = () => {}): Replay
     armedStops: () => 0,
     onBar: (bar) => {
       seen.push(bar)
-      onBar(bar, seen.length)
-      return []
+      const raised = onBar(bar, seen.length)
+      return Array.isArray(raised) ? (raised as ObserverStop[]) : []
     },
     seeked: () => {},
     toState: () => []

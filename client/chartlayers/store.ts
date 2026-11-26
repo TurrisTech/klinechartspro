@@ -5,8 +5,8 @@ import { loadPreferences } from '../preferences'
 // 2026-10-03 a layer is an indicator and each pane keeps its own settings in the wall
 // document (controller.ts); what a user chose here before that is where every pane of theirs
 // that was never configured starts, and nothing writes it any more. `/preferences`
-// (client/preferences.ts) is dev-only — it requires the `auth` feature, which prod does not
-// advertise (client/capabilities.ts) — so prod's copy is in localStorage.
+// (client/preferences.ts) exists only where the server has the dashboard login (the `auth`
+// feature, client/capabilities.ts); a server without it kept this in localStorage.
 
 const STORAGE_PREFIX = 'wd.layer.'
 

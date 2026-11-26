@@ -26,9 +26,15 @@ describe('chartBarAt', () => {
     expect(chartBarAt(at('2026-10-01T07:30Z'), chart, '1h')).toBe(2)
   })
 
-  test('nothing once the last bar has closed, nor before the first opened', () => {
-    expect(chartBarAt(at('2026-10-01T10:00Z'), chart, '1h')).toBe(-1)
+  test('nothing after the last bar has closed, nor before the first opened', () => {
+    expect(chartBarAt(at('2026-10-01T10:00:01Z'), chart, '1h')).toBe(-1)
+    expect(chartBarAt(at('2026-10-01T11:00Z'), chart, '1h')).toBe(-1)
     expect(chartBarAt(at('2026-10-01T04:00Z'), chart, '1h')).toBe(-1)
+  })
+
+  test("the last bar's own close goes to the slot the next bar will take", () => {
+    // A replay standing on 10:00Z: the 09:00Z bar has closed and the 10:00Z one has not printed.
+    expect(chartBarAt(at('2026-10-01T10:00Z'), chart, '1h')).toBe(5)
   })
 
   test('an instant in a gap goes to the next bar to open, never the one that closed before it', () => {
@@ -36,10 +42,10 @@ describe('chartBarAt', () => {
     expect(chartBarAt(at('2026-10-01T07:00Z'), gapped, '1h')).toBe(2)
   })
 
-  test("a close into the weekend lands on Sunday's first bar, and on nothing until it opens", () => {
+  test("a close into the weekend lands on Sunday's first bar, and in the slot it will take until it opens", () => {
     // Friday 2026-10-02 closes 17:00 New York (21:00Z); the week reopens Sunday 21:00Z.
     const friday = [at('2026-10-02T19:00Z'), at('2026-10-02T20:00Z')]
-    expect(chartBarAt(at('2026-10-02T21:00Z'), friday, '1h')).toBe(-1)
+    expect(chartBarAt(at('2026-10-02T21:00Z'), friday, '1h')).toBe(2)
     expect(chartBarAt(at('2026-10-02T21:00Z'), [...friday, at('2026-10-04T21:00Z')], '1h')).toBe(2)
   })
 })
@@ -53,9 +59,11 @@ describe('a signal at its close, on the chart', () => {
     expect(chartBarAt(knownAt, chartOpens('1h', bars(chart), FX_GRID), '1h')).toBe(4)
   })
 
-  test('and on nothing while the chart has no bar at or after that close', () => {
-    const chart = hourly(at('2026-10-01T05:00Z'), 4) // through the 08:00Z bar
-    expect(chartBarAt(knownAt, chartOpens('1h', bars(chart), FX_GRID), '1h')).toBe(-1)
+  test('and in the slot after the last bar while the chart ends at that close', () => {
+    const chart = hourly(at('2026-10-01T05:00Z'), 4) // through the 08:00Z bar, closing 09:00Z
+    expect(chartBarAt(knownAt, chartOpens('1h', bars(chart), FX_GRID), '1h')).toBe(4)
+    // ...and on nothing while it ends before it.
+    expect(chartBarAt(knownAt, chartOpens('1h', bars(hourly(at('2026-10-01T05:00Z'), 3)), FX_GRID), '1h')).toBe(-1)
   })
 
   test('on its own timeframe, one bar forward, onto the forming bar', () => {
