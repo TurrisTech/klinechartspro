@@ -98,7 +98,7 @@ export function markToMarket(trade: SimTrade, mark: number): number {
  * or null when none had. */
 export type MarkAt = (symbol: string, t: number) => number | null
 
-export interface EquityPoint {
+interface EquityPoint {
   equity: number
   /** Open trades at that instant with no bar to mark them by, counted at their entry. */
   unmarked: number

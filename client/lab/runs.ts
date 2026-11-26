@@ -31,7 +31,7 @@ export interface RunRecord {
 }
 
 /** Runs kept per strategy; older ones go first, but never the baseline. */
-export const HISTORY_LIMIT = 40
+const HISTORY_LIMIT = 40
 
 export class RunHistory {
   private readonly records = new Map<string, RunRecord[]>()
@@ -88,7 +88,7 @@ export class RunHistory {
   }
 }
 
-export interface RunsPanel {
+interface RunsPanel {
   readonly element: HTMLElement
   /** Show `records` (oldest first), marking the baseline and the run on the chart. */
   render(records: readonly RunRecord[], baseline: RunRecord | null, current: number | null): void

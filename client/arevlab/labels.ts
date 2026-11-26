@@ -22,7 +22,7 @@ export interface LabBar {
   close: number
 }
 
-export interface Labels {
+interface Labels {
   /** Stamps ascending. */
   stamps: number[]
   /** 1 where the label is up. */

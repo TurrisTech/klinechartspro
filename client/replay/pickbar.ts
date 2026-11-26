@@ -17,7 +17,7 @@ import { gridFor } from './timeframes'
 // than klinecharts' 5px of travel) picks, and that click is kept from the chart, whose own
 // click would re-centre the rest of the wall on it.
 
-export interface BarPick {
+interface BarPick {
   /** The replay's start: the close of the bar clicked. */
   startAt: number
   /** The interval of the pane it was clicked on. */

@@ -34,7 +34,7 @@ export function isDivergenceIndicator(name: string): boolean {
 const P_COLOR = '#426EFF'
 const NEUTRAL_COLOR = '#787B86'
 
-export interface ExtendData {
+interface ExtendData {
   seriesKey: string
   rev: number
   config: DivConfig
@@ -42,14 +42,14 @@ export interface ExtendData {
 
 /** One divergence on the bar that confirmed it: which kind, and the two swings as (bar index,
  * value) -- p in the sub-pane, the low or high in the price pane. */
-export interface DivMark {
+interface DivMark {
   side: Side
   label: Label
   from: { index: number; value: number }
   to: { index: number; value: number }
 }
 
-export type DivValue = { p?: number; mid?: number; __div?: DivMark[] }
+type DivValue = { p?: number; mid?: number; __div?: DivMark[] }
 
 type Kind = 'sub' | 'price'
 

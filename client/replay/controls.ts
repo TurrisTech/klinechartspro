@@ -74,7 +74,7 @@ type PanelId = 'goto' | 'settings' | 'results' | 'sessions' | 'quiet' | null
 /** The step picker's last option: type a step of your own. */
 const CUSTOM_STEP = 'custom'
 
-export interface ReplayControlsOptions {
+interface ReplayControlsOptions {
   controller: ReplayController
   /** The wall's pane intervals, for the advance picker and the base validation. */
   intervalsInUse: () => string[]
@@ -110,7 +110,7 @@ export interface ReplayControlsOptions {
 }
 
 /** The one price watch the controls own. */
-export interface PriceStop {
+interface PriceStop {
   /** The price it stops at while armed, or null when there is none (or it has fired). */
   get(): number | null
   set(price: number): Promise<void>
@@ -123,7 +123,7 @@ export interface QuietHoursControl {
   set(next: QuietSetting): void
 }
 
-export interface ReplayControls {
+interface ReplayControls {
   readonly element: HTMLElement
   /** Re-render: the intervals in use changed, or the dock was opened from outside. */
   refresh(): void
@@ -1076,7 +1076,7 @@ function describeAdvance(advance: { interval: string; multiple: number }): strin
 }
 
 /** "¼ s", "1 s": the pace picker's labels. */
-export function delayLabel(ms: number): string {
+function delayLabel(ms: number): string {
   const fractions: Record<number, string> = { 250: '¼ s', 500: '½ s' }
   return fractions[ms] ?? `${ms / 1000} s`
 }
@@ -1196,7 +1196,7 @@ interface StartDialogBase {
   intervalsInUse: string[]
 }
 
-export interface StartDialogOptions extends StartDialogBase {
+interface StartDialogOptions extends StartDialogBase {
   /** The intervals the store holds for this instrument (probed by the caller). */
   stored: string[]
   /** Newest instant the store has for the instrument (the latest a replay can start). */
@@ -1216,7 +1216,7 @@ export interface StartDialogOptions extends StartDialogBase {
 /** The active pane's instrument cannot start a replay -- no market hours, nothing stored. The
  * dialog opens anyway, on Sessions, so every other replay stays one press away instead of out of
  * reach until the pane is moved; its New replay tab says why in place of the form. */
-export interface RefusedDialogOptions extends StartDialogBase {
+interface RefusedDialogOptions extends StartDialogBase {
   /** Why, in a few words: "No market hours for GBPUSD". */
   refusal: string
   sessions: SessionsSource
@@ -1240,7 +1240,7 @@ export interface SessionsSource {
   remove(id: string): Promise<void>
 }
 
-export interface StartDialog {
+interface StartDialog {
   close(): void
 }
 

@@ -54,7 +54,7 @@ const LEGEND_ROW_HEIGHT = 24
 /** How long a range a page answered only partly (`Page.problem`) waits before it is read again.
  * The fault behind one can last days (2026-11-02..04: one unreadable index file), so the retry is
  * slow; a whole answer ends it. */
-export const PARTIAL_RETRY_MS = 60_000
+const PARTIAL_RETRY_MS = 60_000
 
 interface Binding {
   plugin: IndicatorPlugin
@@ -126,7 +126,7 @@ export interface PluginHost {
   teardown(): void
 }
 
-export interface CreateHostOptions {
+interface CreateHostOptions {
   plugins: IndicatorPlugin[]
   facilities: PluginFacilities
   /** Each pane's plugin settings as the wall document stored them, by pane index. */

@@ -24,10 +24,10 @@ export interface StepSetting {
   multiple: number
 }
 
-export type StepParse = { ok: true; step: StepSetting } | { ok: false; reason: string }
+type StepParse = { ok: true; step: StepSetting } | { ok: false; reason: string }
 
 /** The longest step a field accepts, in candles: a typo of an extra digit should not walk a year. */
-export const MAX_STEP_MULTIPLE = 10_000
+const MAX_STEP_MULTIPLE = 10_000
 
 /** How many typed steps the picker remembers, most recent first. */
 export const MAX_SAVED_STEPS = 8

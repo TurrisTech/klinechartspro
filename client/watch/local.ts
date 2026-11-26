@@ -37,8 +37,8 @@ import type { Condition, SourceField, Watch, WatchDraft, WatchSource } from './t
 // `local.test.ts`.
 
 /** Ceiling per replay, mirroring the server's per-owner limit. */
-export const MAX_WATCHES = 200
-export const DEFAULT_COOLDOWN_MS = 60_000
+const MAX_WATCHES = 200
+const DEFAULT_COOLDOWN_MS = 60_000
 
 /** What a local source is: something that can be watched during a replay. The shape mirrors
  * `wdashboard_server/watch/api.py`'s `WatchSource`, minus subscribe/unsubscribe -- a replay
@@ -70,7 +70,7 @@ export interface WatchFiring {
   body: string
 }
 
-export interface LocalWatchOptions {
+interface LocalWatchOptions {
   sources: LocalWatchSource[]
   onFire?: (firing: WatchFiring) => void
   /** Anything that changed a watch without a call through `WatchApi` -- i.e. a firing. The
@@ -105,7 +105,7 @@ export interface LocalWatchState {
   firedSinceArm: number | null
 }
 
-export class LocalWatchError extends Error {
+class LocalWatchError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'LocalWatchError'

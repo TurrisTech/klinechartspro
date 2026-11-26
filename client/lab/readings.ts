@@ -25,7 +25,7 @@ export type ReadingNeed =
   | { kind: 'atr'; period: number; interval: string }
   | { kind: 'ind'; name: string; output: string; interval: string; params: number[] }
 
-export function needKey(need: ReadingNeed): string {
+function needKey(need: ReadingNeed): string {
   return need.kind === 'atr' ? `atr:${need.period}@${need.interval}` : `ind:${need.name}(${need.params.join(',')}).${need.output}@${need.interval}`
 }
 

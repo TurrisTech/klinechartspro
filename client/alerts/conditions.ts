@@ -43,7 +43,7 @@ export interface Sample {
 /** field -> Sample: what a source hands the evaluator for one event. */
 export type Observation = Record<string, Sample>
 
-export const MAX_DEPTH = 8
+const MAX_DEPTH = 8
 
 const NUMERIC_OPS: Record<string, 'high' | 'low'> = { '>': 'high', '>=': 'high', '<': 'low', '<=': 'low' }
 const CROSS_OPS = ['crosses', 'crosses_above', 'crosses_below', 'changed']
@@ -89,12 +89,12 @@ export function sample(value: FieldValue, low?: number, high?: number): Sample {
 }
 
 /** The top of the band this sample covered, or null when the value is not a number. */
-export function reachHigh(s: Sample): number | null {
+function reachHigh(s: Sample): number | null {
   if (typeof s.value === 'string') return null
   return s.high !== undefined ? Math.max(s.value, s.high) : s.value
 }
 
-export function reachLow(s: Sample): number | null {
+function reachLow(s: Sample): number | null {
   if (typeof s.value === 'string') return null
   return s.low !== undefined ? Math.min(s.value, s.low) : s.value
 }
@@ -270,7 +270,7 @@ export function evaluate(document: Condition, now: Observation, previous?: Obser
  * the level: a coarse candle stored a tick short of the finer ones inside it must not be what
  * steps over a level. About a quarter of a pip on EURUSD's 1.16; it costs nothing but a
  * descent into a candle that did come close. */
-export const SUMMARY_SLACK = 2e-5
+const SUMMARY_SLACK = 2e-5
 
 /**
  * Whether the condition is CERTAINLY not true at any reading taken inside a span that `summary`

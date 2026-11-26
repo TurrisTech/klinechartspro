@@ -24,7 +24,7 @@ export interface SourceBar {
 }
 
 /** The four prices and the volume -- what spreading reads off either kind of bar. */
-export interface Spreadable {
+interface Spreadable {
   open: number
   high: number
   low: number
@@ -54,7 +54,7 @@ export interface Atoms {
 export const REMAINDER_TOLERANCE = 0.02
 
 /** The atom a price falls in. */
-export function atomOf(price: number, q: number): number {
+function atomOf(price: number, q: number): number {
   return Math.floor(price / q)
 }
 
@@ -140,7 +140,7 @@ export function lowerBound(n: number, target: number, key: (i: number) => number
 
 /** The chart as the index sees it: each bar's OPEN INSTANT (a session-dated bar's wire date
  * with the schedule's shift taken off), the bars themselves, and where the last one ends. */
-export interface ChartSlots {
+interface ChartSlots {
   starts: readonly number[]
   bars: readonly Spreadable[]
   lastEnd: number
@@ -149,7 +149,7 @@ export interface ChartSlots {
 /** The source as the index sees it: ascending bars, and the shift from their dates to open
  * instants (non-zero only for a session-dated source). Null when the chart's own bars are
  * the source. */
-export interface SourceSlice {
+interface SourceSlice {
   bars: readonly SourceBar[]
   shift: number
 }

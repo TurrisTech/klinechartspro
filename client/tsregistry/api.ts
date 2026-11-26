@@ -39,7 +39,7 @@ export interface RegistryWire {
  * them must all hold. A missing or null field fails every comparison, so "no vote on this
  * bar" is never drawn as a vote of zero. */
 export type Predicate = PredicateTerm | PredicateTerm[]
-export interface PredicateTerm {
+interface PredicateTerm {
   field: string
   eq?: unknown
   ne?: unknown
@@ -129,7 +129,7 @@ export interface RegistryIndicator {
   series: RegistrySeries[]
 }
 
-export interface RegistryResponse {
+interface RegistryResponse {
   indicators: RegistryIndicator[]
   serverTime: number
 }

@@ -5,16 +5,3 @@
 
 export { HttpChannelsApi } from './api'
 export { createChannelSettings } from './dialog'
-export type { ChannelSettingsOptions, ChannelSettingsWindow } from './dialog'
-export { configOf, describeDelivery, draftOf, missing } from './form'
-export type { Draft } from './form'
-export type {
-  ChannelAnswer,
-  ChannelChoice,
-  ChannelDelivery,
-  ChannelEntry,
-  ChannelField,
-  ChannelSetting,
-  ChannelsApi,
-  DiscoverAnswer
-} from './types'

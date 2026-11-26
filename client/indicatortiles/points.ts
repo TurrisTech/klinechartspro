@@ -13,7 +13,7 @@
 
 import type { SeriesRows, TileHint } from './index'
 
-export interface ArevPoint {
+interface ArevPoint {
   date: number
   prediction: number
   n: number

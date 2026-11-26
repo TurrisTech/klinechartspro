@@ -27,7 +27,7 @@ export const RANGE_LABEL: Record<PerfRange, string> = { '1M': '1M', '3M': '3M', 
 const MONTHS: Record<Exclude<PerfRange, 'all'>, number> = { '1M': 1, '3M': 3, '6M': 6, '1Y': 12 }
 
 /** The period lengths a window may be cut into, finest first. */
-export const STEP_LADDER: readonly string[] = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M']
+const STEP_LADDER: readonly string[] = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M']
 
 /** At most this many bars: a thin bar per period still reads in a window 380px wide. */
 export const MAX_BUCKETS = 120

@@ -209,8 +209,7 @@ export interface PluginFacilities {
   }
   stream: PluginStream
   hasFeature(feature: Feature): boolean
-  /** The unified server wire: `GET /plugins/{id}/values`, or the plugin's legacy path on a
-   * server without the plugin host. */
+  /** The unified server wire: `GET /plugins/{id}/values`. */
   points<P extends { date: number }>(request: PointsRequest): Promise<Page<P>>
   periodToResolution(period: Period): string
   resolutionDurationMs(code: string): number
@@ -240,8 +239,6 @@ export interface SignalCatalogueEntry extends SignalSpec {
 
 export interface PointsRequest {
   pluginId: string
-  /** The path a server without `plugins` serves the same thing on. */
-  legacyPath?: string
   vendorSymbol: string
   resolution: string
   from: number
@@ -249,8 +246,6 @@ export interface PointsRequest {
   limit: number
   variant?: string
   params?: Record<string, unknown>
-  /** The legacy path's query, when it differs from the unified one. */
-  legacyQuery?: Record<string, string | number | undefined>
   /** Auxiliary arrays to read out of the response beside `points`, by the names the
    * plugin declares in its catalogue entry (`arrays`). A plugin whose read produces a
    * second KIND of row -- mtf01's trades beside its cascade events -- names them here and

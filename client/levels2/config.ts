@@ -3,7 +3,7 @@ import type { SettingsField } from '../chartlayers/settings'
 
 // Display order for the intervals zones are computed on (wdashboard-server levels2.py:
 // LEVELS2_INTERVAL_ALLOWLIST), short-to-long -- a UI reading order, not the wire order.
-export const LEVELS2_INTERVAL_ORDER = ['1h', '4h', '1D', '1W']
+const LEVELS2_INTERVAL_ORDER = ['1h', '4h', '1D', '1W']
 
 // Metric names an emphasis encoding can be pointed at; client/levels2/layer.ts's METRICS
 // implements exactly these.

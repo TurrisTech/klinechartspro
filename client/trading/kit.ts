@@ -25,7 +25,7 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, className = '',
   return node
 }
 
-export type ButtonVariant = 'primary' | 'buy' | 'sell' | 'danger' | 'chip' | 'icon' | 'quiet' | 'armed'
+type ButtonVariant = 'primary' | 'buy' | 'sell' | 'danger' | 'chip' | 'icon' | 'quiet' | 'armed'
 
 /** A kit button. Its click never reaches anything under it -- on the pane that would be the chart. */
 export function kbtn(text: string, onClick: (event: MouseEvent) => void, variants: ButtonVariant[] = [], title?: string): HTMLButtonElement {
@@ -50,7 +50,7 @@ export function allow(b: HTMLButtonElement, refusal: string | null, title = ''):
 
 // -- two presses -------------------------------------------------------------------------------
 
-export const CONFIRM_MS = 3_000
+const CONFIRM_MS = 3_000
 
 /** The keys a pending second press is held under, one spelling for every surface. */
 export const armKey = {
@@ -93,7 +93,7 @@ export class Arming {
 
 // -- a number with steps -----------------------------------------------------------------------
 
-export interface NumberFieldOptions {
+interface NumberFieldOptions {
   label: string
   /** Every keystroke. The trade box re-prices as you type. */
   onInput?: (text: string) => void
@@ -235,7 +235,7 @@ export class NumberField {
 
 // -- a level: stop loss, take profit, resting price --------------------------------------------
 
-export const PROTECT_UNITS: Array<[ProtectMode, string]> = [
+const PROTECT_UNITS: Array<[ProtectMode, string]> = [
   ['pips', 'pips'],
   ['price', 'price'],
   ['percent', '% bal']
@@ -248,7 +248,7 @@ export interface PresetView {
   active?: boolean
 }
 
-export interface LevelFieldView {
+interface LevelFieldView {
   /** What the field states while it is not being typed in; '' is no level. */
   text: string
   placeholder: string
@@ -264,7 +264,7 @@ export interface LevelFieldView {
   stepRefusal?: string | null
 }
 
-export interface LevelFieldOptions {
+interface LevelFieldOptions {
   role: 'entry' | 'stop' | 'target'
   label: string
   /** Stops and targets take a unit; a resting price is always a price. */
@@ -368,12 +368,12 @@ export class LevelField {
 
 // -- exit management: a trailing stop, a breakeven, milestones ----------------------------------
 
-export interface ExitExtraView {
+interface ExitExtraView {
   text: string
   placeholder: string
 }
 
-export interface ExitFieldView {
+interface ExitFieldView {
   text: string
   placeholder: string
   unit: ExitUnit
@@ -389,7 +389,7 @@ export interface ExitFieldView {
   extras?: ExitExtraView[]
 }
 
-export interface ExitFieldOptions {
+interface ExitFieldOptions {
   role: 'trail' | 'breakeven' | 'notify'
   label: string
   /** A list of numbers rather than one: no steps. */

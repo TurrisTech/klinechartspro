@@ -26,7 +26,7 @@ export interface IndicatorPoint {
   value: number | null
 }
 
-export interface ResolveResult {
+interface ResolveResult {
   seriesKey: string
   describe: string
   name: string
@@ -46,10 +46,11 @@ export interface ResolveResult {
 // within a session. Bounded by how many distinct combinations one session actually visits.
 const resolveCache = new Map<string, Promise<ResolveResult | null>>()
 
-/** Resolve one series, or `null` when the server cannot answer the question.
+/** Resolve one series, or `null` when the server cannot answer the question. Asked only of a
+ * server that advertises `indicators.resolve` (tsregistry/plugin.ts `validateParams`).
  *
- * `null` is deliberately not "unservable": a server without `indicators.resolve` (404), or
- * an unreachable one, must leave the picker exactly as usable as it was before this existed.
+ * `null` is deliberately not "unservable": an unreachable server, or an error that says nothing
+ * about the series, must leave the picker exactly as usable as it was before this existed.
  * Only an explicit `servable: false` refuses anything. A 4xx that IS about the series --
  * an unknown indicator, a bad param, a levels series asked for as a scalar -- is a real
  * answer, so it is returned as an unservable result rather than swallowed.
@@ -69,7 +70,6 @@ export async function resolveSeries(
       series: JSON.stringify(series)
     })
     const response = await serverFetch(url)
-    if (response.status === 404) return null // older server: question unavailable, not "no"
     const body: unknown = await response.json().catch(() => null)
     if (!response.ok) {
       const b = body as { code?: string; detail?: string } | null

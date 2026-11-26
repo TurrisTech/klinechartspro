@@ -37,7 +37,7 @@ export function focusCenter(): number | null {
 
 /** The left edge for a floating window `width` wide inside [left, right], over the focus;
  * null when there is no focus and the caller's own default applies. */
-export function focusLeft(width: number, left: number, right: number): number | null {
+function focusLeft(width: number, left: number, right: number): number | null {
   const center = focusCenter()
   return center === null ? null : centreWithin(center, width, left, right, EDGE)
 }

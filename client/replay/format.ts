@@ -43,7 +43,7 @@ const dated = new Map<string, Intl.DateTimeFormat>()
 
 /** "Tue, Jan 03, 2023, 17:00:00" on `timezone`: `formatClock` with the year, for an instant that
  * may be any year back -- a past replay's start and end in the Sessions list. */
-export function formatDate(ms: number, timezone: string): string {
+function formatDate(ms: number, timezone: string): string {
   let f = dated.get(timezone)
   if (!f) {
     f = new Intl.DateTimeFormat('en-US', {

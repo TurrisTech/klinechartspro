@@ -20,7 +20,7 @@ export interface ClipboardEnv {
   fallback(text: string): boolean
 }
 
-export function browserClipboard(): ClipboardEnv {
+function browserClipboard(): ClipboardEnv {
   return {
     clipboard: typeof navigator === 'undefined' ? undefined : navigator.clipboard,
     ClipboardItem: typeof ClipboardItem === 'undefined' ? undefined : ClipboardItem,

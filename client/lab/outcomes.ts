@@ -37,7 +37,7 @@ export interface EntryOutcome {
   touches: Array<{ k: number; result: Touch }>
 }
 
-export interface PathIndex {
+interface PathIndex {
   bars: readonly ReplayBar[]
   ends: number[]
   /** Nominal length of one path bar. */

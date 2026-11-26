@@ -16,8 +16,7 @@ The "super indicators" are plugins on the same host, not a second system: the MT
 per pane), and Levels and Zones (price-anchored overlays drawn by a binding's own `attach`).
 
 The server has the same shape (`wdashboard-server/docs/plugins.md`); the two meet on
-`GET /plugins/{id}/values` (`api.ts`), with each plugin's legacy path as the fallback on a
-server without the `plugins` feature.
+`GET /plugins/{id}/values` (`api.ts`).
 
 ## What a plugin implements
 
@@ -32,7 +31,7 @@ const plugin: IndicatorPlugin = {
       id: 'v',
       key: `mine|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,   // shared across panes
       resolution: ctx.interval,                                  // what its points are dated on
-      fetch: (range, limit) => facilities.points({ pluginId: 'mine', legacyPath: '/mine/values', ... }),
+      fetch: (range, limit) => facilities.points({ pluginId: 'mine', ... }),
       // optional: window(chartRange), createStore(key), subscribe(store, notify), warm
     }],
     label: (state) => phaseLabel('MINE', [state.sources[0]?.store]) ?? 'MINE',   // legend.ts

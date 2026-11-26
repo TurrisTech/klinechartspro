@@ -22,7 +22,7 @@ import type { LayerController } from './controller'
 // source cannot express -- so a binding has no sources, names the layer in the legend, and
 // attaches the view.
 
-export interface LayerIndicator {
+interface LayerIndicator {
   controller: LayerController
   /** The picker's hover text. */
   description: string

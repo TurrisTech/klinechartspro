@@ -36,7 +36,7 @@ export const HISTORY_WINDOW_BARS = 500
  * across the panes stopped in 1.26 s, about 0.8 s of it handing bars over. A reload is one read of the
  * pane's window and one recalculation; with the threshold at 60 the same jump stopped in 0.34 s.
  * 100 sits about where the two cost the same on that wall with prod's round trip; it was 300. */
-export const SEEK_THRESHOLD_BARS = 100
+const SEEK_THRESHOLD_BARS = 100
 
 /** Whether a push from `previous` to `cursor` reloads a pane whose last bar opened at `lastOpen`,
  * rather than appending to it: the jump, from the later of the two, is longer than the append
@@ -47,7 +47,7 @@ function reloads(interval: string, lastOpen: number, previous: number, cursor: n
   return nominal > SEEK_THRESHOLD_BARS
 }
 
-export class ReplayDatafeed implements Datafeed {
+class ReplayDatafeed implements Datafeed {
   private readonly callbacks = new Map<string, DatafeedSubscribeCallback>()
 
   constructor(private readonly hub: ReplayFeedHub) {}
@@ -105,11 +105,11 @@ export class ReplayDatafeed implements Datafeed {
   }
 }
 
-export function feedKey(vendor: string, ticker: string, interval: string): string {
+function feedKey(vendor: string, ticker: string, interval: string): string {
   return `${vendor}:${ticker}|${interval}`
 }
 
-export interface PushReport {
+interface PushReport {
   paneId: string
   key: string
   /** Whole bars appended (or replaced) on the chart. */
@@ -123,7 +123,7 @@ export interface PushReport {
 }
 
 /** Which of the stored ladder the store holds for an instrument around `at`. */
-export type StoredProbe = (symbol: string, at: number, grid: CandleGrid) => Promise<string[]>
+type StoredProbe = (symbol: string, at: number, grid: CandleGrid) => Promise<string[]>
 
 /** Owns the pane caches and the per-symbol caches the forming bars are composed from, and
  * pushes stepped bars into the wall's panes. */
@@ -438,7 +438,7 @@ export class ReplayFeedHub {
   }
 }
 
-export function toKLine(bar: ReplayBar): KLineData {
+function toKLine(bar: ReplayBar): KLineData {
   return { timestamp: bar.date, open: bar.o, high: bar.h, low: bar.l, close: bar.c, volume: bar.v }
 }
 

@@ -25,7 +25,7 @@ const CANDLE_PANE = 'candle_pane'
  * a few pips apart on a zoomed-in pane are still separable. */
 const HIT_TOLERANCE_PX = 6
 
-export interface WatchColors {
+interface WatchColors {
   armed: string
   fired: string
   disabled: string
@@ -39,7 +39,7 @@ export const DEFAULT_WATCH_COLORS: WatchColors = {
   disabled: '#4a4d57'
 }
 
-export interface WatchOverlayHandlers {
+interface WatchOverlayHandlers {
   /** A line was dropped at `price`. Nothing is committed yet -- the caller opens the dialog,
    * and the store re-emits whatever the user decides (which is what puts a cancelled drag
    * back where it was). */

@@ -40,7 +40,7 @@ import type { SettingsField } from '../chartlayers/settings'
 // lever's range.
 
 export type LabRule = 'none' | 'fixed' | 'rank' | 'median' | 'prior'
-export const LAB_RULES: readonly LabRule[] = ['none', 'fixed', 'rank', 'median', 'prior']
+const LAB_RULES: readonly LabRule[] = ['none', 'fixed', 'rank', 'median', 'prior']
 
 export interface LabGeneration {
   /** Whether this generation's line is drawn at all. */
@@ -271,7 +271,7 @@ export function enabledGenerations(config: LabConfig | undefined): ArevGeneratio
 }
 
 /** What the wall document stores: only what differs from LAB_DEFAULTS, by lever path. */
-export type StoredLabConfig = Partial<Record<ArevGeneration, Record<string, unknown>>>
+type StoredLabConfig = Partial<Record<ArevGeneration, Record<string, unknown>>>
 
 const STORED_PATHS: readonly Lever[] = [{ path: 'enabled', kind: 'bool', label: 'Show' }, ...LEVERS]
 

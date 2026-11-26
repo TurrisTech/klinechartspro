@@ -24,12 +24,12 @@ const ASK = '#EF5350'
 const BID = '#2962FF'
 const BAND = '120, 123, 134'
 
-export interface ExtendData {
+interface ExtendData {
   seriesKey: string
   rev: number
 }
 
-export interface QuoteValue {
+interface QuoteValue {
   ask?: number
   bid?: number
 }

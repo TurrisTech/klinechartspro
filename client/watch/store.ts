@@ -14,7 +14,7 @@ import { instrumentTarget } from './types'
 // `subscribe` reports the current list immediately, then every change, so the overlays never
 // have to render once before subscribing (the same contract `stream.onStatus` has).
 
-export type WatchesListener = (watches: Watch[]) => void
+type WatchesListener = (watches: Watch[]) => void
 
 /** The half of the wire the store uses. Named so a test can hand in a fake without a
  * network, a window, or a running server. */

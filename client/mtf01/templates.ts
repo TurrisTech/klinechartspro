@@ -32,9 +32,9 @@ import { timestampCalc } from '../plugins/calc'
 // figures only `if (!isCover)`, where `isCover` is what `draw` returned — klinechartspro
 // #6 is that bug, which cost the AREV panes all of their lines.
 
-export const TEMPLATE_NAME = `MTF01:${MTF01_GENERATION}`
+const TEMPLATE_NAME = `MTF01:${MTF01_GENERATION}`
 
-export interface ExtendData {
+interface ExtendData {
   seriesKey: string
   rev: number
   /** One pip in price units, for the P&L label. From the instrument's own precision. */
@@ -54,7 +54,7 @@ export function isMtf01Indicator(name: string): boolean {
   return name === TEMPLATE_NAME
 }
 
-export interface Value {
+interface Value {
   /** The cascade's depth at this bar: 0 idle, 1 armed, 2 confirmed, 3 in a trade. */
   stage?: number
   /** This bar's rows, for `draw`. Deliberately not figures: they are not numbers, and

@@ -41,7 +41,7 @@ export interface WorkspaceSaveControls {
   close(): void
 }
 
-export interface WorkspaceSaveControlsOptions {
+interface WorkspaceSaveControlsOptions {
   store: WorkspaceStore
   /** True while the wall on screen belongs to no workspace -- the `?symbol=` scratch wall,
    * which saves nothing -- and the controls are hidden. Read on every refresh. */

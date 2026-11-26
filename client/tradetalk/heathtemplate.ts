@@ -48,7 +48,7 @@ function numberAt(calcParams: unknown[] | undefined, at: number, fallback: numbe
   return Number.isFinite(value) ? value : fallback
 }
 
-export interface ChartSettings extends HeathLevelSettings {
+interface ChartSettings extends HeathLevelSettings {
   /** Opacity of the shaded area, in percent. 0 draws the edges only. */
   fill: number
   /** Lay the objective calendar levels under the supply and demand. */
@@ -82,7 +82,7 @@ export function zoneSettingsOf(calcParams: unknown[] | undefined): HeathLevelSet
   return { left, right, sides: 0, freshOnly: false, stopLine: false, maxRun, minWidth, maxCandle }
 }
 
-export interface HeathValue {
+interface HeathValue {
   [key: string]: unknown
   /** Attached to the last bar only: every supply and demand, which `draw` reads back. */
   heath?: HeathLevel[]

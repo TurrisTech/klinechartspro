@@ -34,7 +34,7 @@ export interface StatRow {
   tone?: StatTone
 }
 
-export interface PositionStats {
+interface PositionStats {
   kind: 'trade' | 'order' | 'closed'
   /** 'Long 10K EURUSD', 'Buy limit 10K EURUSD'. */
   title: string

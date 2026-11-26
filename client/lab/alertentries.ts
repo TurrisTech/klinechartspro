@@ -22,12 +22,12 @@ import { HttpLabData, type LabData } from './data'
 import { runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'
 
-export type StrategyOperand = Extract<Operand, { kind: 'strategy' }>
+type StrategyOperand = Extract<Operand, { kind: 'strategy' }>
 
 /** How long after a bar's close a strategy's answer on it is taken as final. */
 export const LATE_MS = 2 * 60_000
 
-export interface StrategyEntries {
+interface StrategyEntries {
   points: Point[]
   /** The newest wire date on the operand's timeframe whose answer is final, or null. */
   through: number | null

@@ -14,7 +14,7 @@ import type { Range } from './types'
 /** `/getbars` is bounded by range and 413s past the server's per-request cap, so a page is at
  * most this many NOMINAL bars -- which overcounts (the market is shut about a third of the
  * week), keeping the real reply comfortably under the 5000 cap. */
-export const PAGE_BARS = 4000
+const PAGE_BARS = 4000
 
 /**
  * The CLOSED bars of `[from, to)`. Live that is every bar `/getbars` serves -- the forming one

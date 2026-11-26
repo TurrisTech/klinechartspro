@@ -28,7 +28,7 @@ export const MAX_NOTIFICATIONS = 100
  * beyond what a round trip could leave outstanding). */
 const REMEMBERED = 500
 
-export type NotificationListener = (list: Notification[]) => void
+type NotificationListener = (list: Notification[]) => void
 
 export class NotificationCenter implements NotificationSink {
   private rows: Notification[] = []

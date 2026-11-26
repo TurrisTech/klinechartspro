@@ -26,7 +26,7 @@ import type { Point } from './data'
 import type { Operand } from './types'
 
 /** The longest timeframe an entry may be cast on (the server's `ENTRY_MAX_INTERVAL`). */
-export const ENTRY_MAX_INTERVAL = '5m'
+const ENTRY_MAX_INTERVAL = '5m'
 
 /** The most pages one read follows: a runaway `nextFrom` must not turn one alert into a crawl. */
 const MAX_PAGES = 200
@@ -45,7 +45,7 @@ export interface GraphData {
   graph(request: MtfGraphRequest): Promise<MtfGraphAnswer>
 }
 
-export interface GraphEntries {
+interface GraphEntries {
   /** One per entry on the operand's timeframe: the bar's wire date and the graph's side. */
   points: Point[]
   /** The newest wire date on the operand's timeframe whose answer is final: every timeframe

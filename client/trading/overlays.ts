@@ -78,13 +78,13 @@ import type { TradingSession } from './session'
 // pane puts a Tuesday 03:00 fill on Tuesday's session, not seven hours off. A click selects it and
 // opens its popup; a closed trade is selectable only while it is drawn.
 
-export { DEFAULT_COLORS, linesFor, type LineSpec, type OverlayColors } from './lines'
+export { DEFAULT_COLORS, linesFor } from './lines'
 
 const GROUP = 'wd-paper'
 const CANDLE_PANE = 'candle_pane'
 
 /** The oldest and newest loaded bar, which every point on the pane is clamped between. */
-export interface DataSpan {
+interface DataSpan {
   first: number
   last: number
 }
@@ -174,7 +174,7 @@ function bracketOverlay(
 }
 
 /** How a pane draws the closed trades, when it does. */
-export interface HistoryOptions {
+interface HistoryOptions {
   /** A real instant -> the timestamp of this pane's bar that was open then. */
   toBar(ms: number): number
   /** What is written beside a closed trade's exit. */
@@ -254,7 +254,7 @@ export function overlaysFor(
   return out
 }
 
-export interface TradingOverlayContext {
+interface TradingOverlayContext {
   session: TradingSession
   instrumentFor: (key: string) => InstrumentInfo
   /** Console-prefix tag ('paper', 'replay'). */

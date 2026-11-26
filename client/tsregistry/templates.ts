@@ -35,7 +35,7 @@ export function figureKey(seriesKey: string): string {
   return seriesKey.replace(/\./g, '_')
 }
 
-export interface ExtendData {
+interface ExtendData {
   seriesKey: string
   rev: number
 }
@@ -177,7 +177,7 @@ function makeDraw(entry: RegistryIndicator) {
  * params come first, in order, then -- for a default input that is a single-`window` node
  * (the crossover's two SMAs) -- that window, so "cross of SMA 10 / SMA 20" stays a
  * two-number edit. Anything richer belongs in the config UI, not in this dialog. */
-export interface TemplateParam {
+interface TemplateParam {
   label: string
   kind: 'param' | 'input-window'
   name: string

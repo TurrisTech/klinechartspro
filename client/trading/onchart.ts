@@ -88,7 +88,7 @@ const CONFIRM_MS = 3_000
 const DEFAULT_DISTANCE_FRACTION = 0.12
 const STOPPED_EVENTS = ['pointerdown', 'mousedown', 'touchstart', 'touchmove', 'touchend', 'click', 'dblclick', 'contextmenu', 'wheel']
 
-export interface LayerHost {
+interface LayerHost {
   readonly tag: string
   readonly session: TradingSession
   readonly colors: OverlayColors

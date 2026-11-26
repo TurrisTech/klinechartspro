@@ -406,7 +406,7 @@ export const ROOT_TIMEFRAMES = ['1D', '8h', '4h', '2h', '1h']
 /** The longest timeframe the overlay enters on: its stars are 5m and 3m steps. */
 const ENTRY_LONGEST = '5m'
 
-export function rank85Source(): PublishedSource {
+function rank85Source(): PublishedSource {
   return {
     kind: 'published',
     id: 'rank85',
@@ -436,14 +436,14 @@ export function defaultGraph(): GraphSpec {
   }
 }
 
-export function defaultEnd(): GraphEnd {
+function defaultEnd(): GraphEnd {
   return { rootBars: null, when: '', watch: null }
 }
 
 /** How far back the lab READS, in the browser: 300 root bars to find a run's start, 10,000 of each
  * lower timeframe's bars. The server reads every run whole; a run longer than these is cut here
  * (the overlay's own bounds until wdashboard-server 0.56.0). */
-export function defaultLookback(): Lookback {
+function defaultLookback(): Lookback {
   return { rootBars: 300, maxBars: 10_000 }
 }
 
@@ -529,11 +529,11 @@ export function defaultSizing(): Sizing {
   return { balance: 100_000, mode: 'risk', units: 10_000, riskPercent: 1, maxOpen: 1, maxLeverage: 50 }
 }
 
-export function defaultCosts(): CostSpec {
+function defaultCosts(): CostSpec {
   return { commission: 0, slippagePips: 0, financing: null }
 }
 
-export function defaultOutcomes(): OutcomeSpec {
+function defaultOutcomes(): OutcomeSpec {
   return { horizons: [1, 3, 12, 48], touches: [0.5, 1, 2], atrPeriod: 14 }
 }
 

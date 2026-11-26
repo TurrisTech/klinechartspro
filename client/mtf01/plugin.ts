@@ -18,7 +18,7 @@ import { phaseLabel } from '../plugins/legend'
 // parameter sweep is exactly that). It is part of the source key: switching cascade is
 // looking at different data, not a redraw of the same data.
 
-export function mtf01SourceKey(vendor: string, ticker: string, interval: string, cascade: string | null): string {
+function mtf01SourceKey(vendor: string, ticker: string, interval: string, cascade: string | null): string {
   return `${MTF01_GENERATION}|${vendor}:${ticker}|${interval}|${cascade ?? 'default'}`
 }
 

@@ -58,7 +58,7 @@ import {
 // screen -- each with the count of problems in it, so a problem in a closed section is not hidden.
 // `reveal` takes the page to one problem's slot (the results' problem list links there).
 
-export interface EditorContext {
+interface EditorContext {
   catalogue: LabCatalogue | null
   /** The timeframes offered for the strategy's instrument, shortest first. */
   intervals(): string[]
@@ -66,7 +66,7 @@ export interface EditorContext {
   counts(): Map<string, number> | null
 }
 
-export interface StrategyEditor {
+interface StrategyEditor {
   readonly element: HTMLElement
   render(): void
   /** Edit another strategy (or a reverted one). */
@@ -1199,7 +1199,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
 }
 
 /** A published source reading `family` with its registry defaults and default sides. */
-export function publishedFromFamily(family: LabSignalFamily | null, id: string): PublishedSource {
+function publishedFromFamily(family: LabSignalFamily | null, id: string): PublishedSource {
   if (!family) return { kind: 'published', id, title: 'Signal', plugin: '', variant: '', params: {}, sides: {}, price: 'body' }
   const params: Record<string, number> = {}
   for (const p of family.params) params[p.name] = p.default

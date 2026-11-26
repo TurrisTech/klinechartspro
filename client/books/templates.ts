@@ -41,7 +41,7 @@ import {
 // figures only `if (!isCover)` — klinechartspro #6).
 
 
-export type BookDisplay = 'depth' | 'view' | 'sentiment' | 'flow'
+type BookDisplay = 'depth' | 'view' | 'sentiment' | 'flow'
 
 const LONG = '#26A69A'
 const SHORT = '#EF5350'
@@ -75,7 +75,7 @@ export function parseTemplateName(
  * (plugin.ts) and read by its `draw`: null means "not over a candle". */
 export const hoverIndex = new WeakMap<object, number | null>()
 
-export interface ExtendData {
+interface ExtendData {
   seriesKey: string
   rev: number
   /** The chart's own interval — half of the `ts`-to-x placement; klinecharts hands a
@@ -85,7 +85,7 @@ export interface ExtendData {
 
 // -- sentiment --------------------------------------------------------------------------
 
-export interface SentimentValue {
+interface SentimentValue {
   pctLong?: number
   mid?: number
 }
@@ -111,7 +111,7 @@ const sentimentCalc = timestampCalc((dataList: KLineData[], indicator: Indicator
 
 // -- flow -------------------------------------------------------------------------------
 
-export interface FlowValue {
+interface FlowValue {
   limitBuy?: number
   limitSell?: number
   stopBuy?: number
@@ -141,7 +141,7 @@ const flowCalc = timestampCalc((dataList: KLineData[], indicator: Indicator<Flow
 
 // -- profiles (depth overlay + hover view) ----------------------------------------------
 
-export interface ProfileValue {
+interface ProfileValue {
   snap?: BookProfilePoint
 }
 
@@ -174,7 +174,7 @@ function formatTs(ts: number): string {
  * with bars clamped at full length above it. A book's mass sits in a handful of dominant
  * buckets (round numbers, catch-alls), and a linear scale off the raw maximum drew
  * everything else as a hairline. */
-export function robustScale(values: number[]): number {
+function robustScale(values: number[]): number {
   const nonzero = values.filter((v) => v > 0).sort((a, b) => a - b)
   if (nonzero.length === 0) return 0
   return nonzero[Math.min(nonzero.length - 1, Math.floor(nonzero.length * 0.95))]
@@ -183,7 +183,7 @@ export function robustScale(values: number[]): number {
 /** Bar length as a fraction of the lane: square-root against the robust scale, clamped.
  * The square root keeps the long tail of small buckets visible beside the dominant ones
  * without letting an outlier flatten everything (linear did exactly that). */
-export function barLength(value: number, scale: number): number {
+function barLength(value: number, scale: number): number {
   if (!(value > 0) || !(scale > 0)) return 0
   return Math.sqrt(Math.min(1, value / scale))
 }

@@ -30,7 +30,7 @@ const UNIT_TIMESPAN: Record<string, string> = {
 // every candle boundary (weekly Sunday 17:00 -> Friday 17:00 New York, monthly/yearly from
 // the evening before the first market day) is computed by the server, which also derives
 // any interval it does not store from the nearest one it does. The client never buckets.
-export const UNIT_MS: Record<string, number> = {
+const UNIT_MS: Record<string, number> = {
   s: 1_000,
   m: 60_000,
   h: 3_600_000,

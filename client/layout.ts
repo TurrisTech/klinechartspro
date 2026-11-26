@@ -101,7 +101,7 @@ export interface PersistedLayout {
   sync: { crosshair: boolean; time: boolean; auto?: boolean; symbol?: boolean; period?: boolean }
 }
 
-export interface HydratedPane {
+interface HydratedPane {
   symbol: SymbolInfo
   period: Period
   mainIndicators: string[]
@@ -119,7 +119,7 @@ export interface HydratedPane {
   styleOverrides?: PaneStyleOverrides
 }
 
-export interface HydratedLayout {
+interface HydratedLayout {
   preset: string
   active: number
   panes: HydratedPane[]

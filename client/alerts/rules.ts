@@ -97,7 +97,7 @@ export function isLabelOperand(operand: Operand): boolean {
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
 
 /** What each time field is called. */
-export const TIME_FIELD_NAMES: Record<TimeField, string> = { minute: 'time of day', weekday: 'weekday', datetime: 'date and time' }
+const TIME_FIELD_NAMES: Record<TimeField, string> = { minute: 'time of day', weekday: 'weekday', datetime: 'date and time' }
 
 /** `2026-11-03 09:30` for an instant, on `zone`'s wall clock. */
 export function formatDateTime(at: number, zone: string): string {
@@ -251,7 +251,7 @@ function checkOperand(operand: Operand): void {
  * which knows the titles; the fallback here is the operand's own spelling. */
 export type Labeller = (operand: Operand) => string
 
-export function plainLabel(operand: Operand): string {
+function plainLabel(operand: Operand): string {
   switch (operand.kind) {
     case 'bar':
       return operand.field
@@ -285,7 +285,7 @@ export function describeRule(rule: Rule, label: Labeller = plainLabel): string {
   return walk(rule, true)
 }
 
-export function describeLeaf(node: RuleLeaf, label: Labeller = plainLabel): string {
+function describeLeaf(node: RuleLeaf, label: Labeller = plainLabel): string {
   // A clock reading is read at each bar close of its timeframe: "at 5m closes" says so where
   // a bare "5m" after a time of day would read as a duration.
   const left = node.left.kind === 'time' ? `${label(node.left)} at ${node.left.interval} closes` : `${label(node.left)} ${node.left.interval}`

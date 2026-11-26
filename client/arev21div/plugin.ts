@@ -19,7 +19,7 @@ import { phaseLabel } from '../plugins/legend'
 // both templates the new config through extendData.
 
 /** The registry row whose p this reads. */
-export const SOURCE_NAME = 'arev21'
+const SOURCE_NAME = 'arev21'
 
 export const DIV_PANE_CONFIG = paneConfig<DivConfig>({
   templates: [SUB_TEMPLATE, PRICE_TEMPLATE],

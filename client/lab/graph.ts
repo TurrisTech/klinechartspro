@@ -81,7 +81,7 @@ export interface Readings {
 }
 
 /** One closed bar of the timeframe an end rule watches. */
-export interface WatchBar {
+interface WatchBar {
   /** Its close (absolute). */
   end: number
   o: number
@@ -90,7 +90,7 @@ export interface WatchBar {
   c: number
 }
 
-export interface GraphInput {
+interface GraphInput {
   signals: readonly LabSignal[]
   spec: GraphSpec
   /** The entry test, read as each node joins. Empty: no node is an entry. */
@@ -178,7 +178,7 @@ export interface GraphState {
   startedAt: number | null
 }
 
-export interface EnvParts {
+interface EnvParts {
   nodes: Record<string, NodeView | null>
   graph: GraphState | null
   /** The node whose timeframe and instant `atr()` and `ind()` default to. */
@@ -264,7 +264,7 @@ function further(side: Side, price: number, than: number): boolean {
  * The graphs one root grows, oldest first: `buildGraphs` in client/mtf/graph.ts, with the
  * strategy's slots where that file has its own rules.
  */
-export function buildGraphs(
+function buildGraphs(
   input: GraphInput,
   root: string,
   from: number,

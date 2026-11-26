@@ -8,7 +8,7 @@ import type { Phase, Range, SourceStore } from './types'
 // `index` decides what a bar holds: the point itself (a scalar series, an AREV vote), or a
 // fold of several points that share a bar (krev's top and bottom candidates).
 
-export type IndexFn<P, V> = (point: P, existing: V | undefined) => V
+type IndexFn<P, V> = (point: P, existing: V | undefined) => V
 
 export class WindowStore<P extends { date: number }, V = P> implements SourceStore<P> {
   readonly values = new Map<number, V>()

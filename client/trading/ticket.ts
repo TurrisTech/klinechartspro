@@ -114,7 +114,7 @@ import { sizeRows, type StatRow } from './stats'
 // two seconds while anything is working; a ticket rebuilt each time took the focus (and a
 // half-typed price) away from whoever was typing in it.
 
-export interface TicketContext {
+interface TicketContext {
   activeSymbol: () => SymbolInfo
   instrumentFor: (key: string) => InstrumentInfo
   /** The active pane's ATR(14) on its own timeframe, for distances stated in ATR; null without

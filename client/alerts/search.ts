@@ -29,7 +29,7 @@ export const SEARCH_CHUNK_BARS = 3000
  * is answered by the first chunk; one that next holds in two months -- a rare star -- would
  * otherwise cost a round of reads per six days of 3m bars. Each chunk is one round of reads
  * however long it is, so the doubling is what keeps a long search to a handful of rounds. */
-export const SEARCH_CHUNK_GROWTH = 3
+const SEARCH_CHUNK_GROWTH = 3
 
 /** Rows held per series before a search trims what it has walked past. */
 const MAX_HELD_ROWS = 60_000

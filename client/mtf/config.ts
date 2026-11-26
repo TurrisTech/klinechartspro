@@ -32,9 +32,9 @@ export interface MtfTimeframeStyle {
 
 /** The timeframes a signal graph may start from (user, 2026-09-21). */
 export const GRAPH_ROOTS = ['1D', '8h', '4h', '2h', '1h'] as const satisfies readonly MtfInterval[]
-export type GraphRoot = (typeof GRAPH_ROOTS)[number]
+type GraphRoot = (typeof GRAPH_ROOTS)[number]
 
-export function isGraphRoot(code: unknown): code is GraphRoot {
+function isGraphRoot(code: unknown): code is GraphRoot {
   return (GRAPH_ROOTS as readonly unknown[]).includes(code)
 }
 
@@ -255,7 +255,7 @@ export function enabledIntervals(config: MtfConfig | undefined): MtfInterval[] {
  * market pane at thirty bytes. Storing the whole object per pane would be the largest thing
  * in that document by an order of magnitude, for a user who typically changes one colour.
  * A diff makes the common case a few dozen bytes and costs one merge on the way back in. */
-export type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeStyle>>> & {
+type StoredMtfConfig = Partial<Record<MtfInterval, Partial<MtfTimeframeStyle>>> & {
   graph?: StoredGraphConfig
 }
 

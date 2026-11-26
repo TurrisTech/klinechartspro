@@ -21,8 +21,8 @@ export interface MeanStats {
   ci: [number, number] | null
 }
 
-export const BOOTSTRAP_RESAMPLES = 2000
-export const CI_LEVEL = 0.95
+const BOOTSTRAP_RESAMPLES = 2000
+const CI_LEVEL = 0.95
 
 /** mulberry32: a small, fast, seeded generator in [0, 1). */
 export function seeded(seed: number): () => number {

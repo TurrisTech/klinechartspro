@@ -3,22 +3,16 @@ import { attachToSlot } from '../chrome/slot'
 import { notifications } from './center'
 import { type BellAction, createNotificationBell } from './bell'
 
-export { NotificationCenter, notifications, MAX_NOTIFICATIONS } from './center'
-export { createNotificationBell, relativeTime } from './bell'
-export type { BellAction } from './bell'
+export { notifications } from './center'
 export { durableSink } from './durable'
-export type { RaiseRemote } from './durable'
-export { LOCAL_ONLY_SOURCES } from './types'
 export type {
-  Notification,
   NotificationBackend,
-  NotificationLevel,
   NotificationSink,
   NotificationSpec,
   RemoteNotification
 } from './types'
 
-export interface MountedNotificationCenter {
+interface MountedNotificationCenter {
   teardown(): void
 }
 

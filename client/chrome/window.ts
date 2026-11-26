@@ -25,13 +25,13 @@ export interface Point {
   y: number
 }
 
-export interface Size {
+interface Size {
   width: number
   height: number
 }
 
 /** A viewport-space rectangle. A `DOMRect` satisfies it. */
-export interface Bounds {
+interface Bounds {
   left: number
   top: number
   right: number
@@ -74,7 +74,7 @@ export function clampPosition(pos: Point, size: Size, bounds: Bounds, margin = E
  *
  * `centerX`, when given, replaces the bounds' own horizontal centre: on a page spanning
  * displays that is the active pane's (./focus.ts), not the bezel between two monitors. */
-export type FloatAnchor = 'bottom' | 'center' | 'right'
+type FloatAnchor = 'bottom' | 'center' | 'right'
 
 /** Room left right of a `right`-anchored window for the chart's price axis. */
 export const PRICE_AXIS_CLEARANCE = 80
@@ -129,7 +129,7 @@ export function inDropZone(pointerY: number, bounds: Bounds, zone = DOCK_ZONE): 
 
 // -- what survives a reload -------------------------------------------------------------------
 
-export interface WindowPlacement {
+interface WindowPlacement {
   mode?: WindowMode
   /** The floating position; absent while the user has never dragged the window. */
   x?: number
@@ -142,7 +142,7 @@ export interface WindowPlacement {
 
 const STORAGE_PREFIX = 'wd.window.'
 
-export function readPlacement(key: string): WindowPlacement | null {
+function readPlacement(key: string): WindowPlacement | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_PREFIX + key)
     if (!raw) return null
@@ -179,7 +179,7 @@ function writePlacement(key: string, placement: WindowPlacement): void {
 /** The column of docked windows below the chart. One per page, shared by every window, and
  * removed from the layout entirely (`display: none`) while nothing visible is in it — that is
  * what gives the chart the whole page when everything is floating or hidden. */
-export interface DockHost {
+interface DockHost {
   readonly element: HTMLElement
   add(win: HTMLElement, order: number): void
   remove(win: HTMLElement): void
@@ -203,11 +203,11 @@ function layoutChanged(): void {
 
 /** The column, if there is one. Callers hold NO reference: it is removed from the page when
  * the last window leaves it, and a stale one would append into a detached element. */
-export function currentDockHost(): DockHost | null {
+function currentDockHost(): DockHost | null {
   return host?.element.isConnected ? host : null
 }
 
-export function dockHost(anchor: HTMLElement, theme = ''): DockHost {
+function dockHost(anchor: HTMLElement, theme = ''): DockHost {
   const existing = currentDockHost()
   if (existing) return existing
   const element = document.createElement('div')
@@ -250,7 +250,7 @@ export function dockHost(anchor: HTMLElement, theme = ''): DockHost {
 
 // -- the window ---------------------------------------------------------------------------------
 
-export interface DockableWindowOptions {
+interface DockableWindowOptions {
   /** Identity: the storage key, and `data-window` on the element. */
   key: string
   /** Extra class on the card: the caller's styling hook. */

@@ -10,7 +10,7 @@ import type { LabRun } from './runner'
 // "Open" takes the lab to an instrument. Money is each instrument's own quote currency, so the
 // rows compare in R and pips.
 
-export interface BasketContext {
+interface BasketContext {
   strategy(): Strategy
   /** Instruments the server offers, `vendor:TICKER`, for the add field. */
   symbols(): Promise<string[]>
@@ -20,7 +20,7 @@ export interface BasketContext {
   open(symbol: string): void
 }
 
-export interface BasketPanel {
+interface BasketPanel {
   readonly element: HTMLElement
   refresh(): void
 }

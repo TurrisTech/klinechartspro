@@ -55,8 +55,6 @@ import type { ProtectMode } from './prefs'
 import { sizeRows, type StatRow } from './stats'
 
 export { h } from './kit'
-export { amountText } from './levels'
-
 // The order card: the collapsible widget in the candle pane's lower left that lists what is
 // working on the pane's instrument -- every open trade and pending order -- with the figures behind
 // each and the controls that manage them. Rolled up, its header still answers the question it is
@@ -114,7 +112,7 @@ export type CardAction =
   /** A field held something that is not a level. */
   | { kind: 'error'; message: string }
 
-export interface CardModel {
+interface CardModel {
   symbol: string
   ctx: PricingContext
   trades: SimTrade[]
@@ -140,7 +138,7 @@ export interface CardModel {
   confirm: ConfirmView | null
 }
 
-export const REWARD_RATIOS = [1, 2, 3]
+const REWARD_RATIOS = [1, 2, 3]
 
 function tone(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value === 0) return ''

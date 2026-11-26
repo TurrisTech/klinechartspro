@@ -31,7 +31,7 @@ import { type PriceAnchor, type PublishedSource, type RuleSource, type Side, wit
 export type SignalPoint = { date: number; signal?: unknown } & Record<string, unknown>
 
 /** Where a signal of `side` sits on its candle. */
-export function anchorPrice(anchor: PriceAnchor, side: Side, bar: { o: number; h: number; l: number; c: number }): number {
+function anchorPrice(anchor: PriceAnchor, side: Side, bar: { o: number; h: number; l: number; c: number }): number {
   if (anchor === 'close') return bar.c
   if (anchor === 'wick') return side === 'top' ? bar.h : bar.l
   return side === 'top' ? Math.max(bar.o, bar.c) : Math.min(bar.o, bar.c)
@@ -72,7 +72,7 @@ export function publishedSignals(source: PublishedSource, interval: string, poin
   return out
 }
 
-export interface RuleEventInput {
+interface RuleEventInput {
   source: RuleSource
   interval: string
   /** Bars of every timeframe the rules read, store clock, ascending, with their lead-in. */

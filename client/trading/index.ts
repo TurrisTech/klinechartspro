@@ -79,4 +79,3 @@ export function mountPaperTrading(chartPro: KLineChartPro, container: HTMLElemen
   }
 }
 
-export { mountTradingDock, type TradingDock } from './dock'

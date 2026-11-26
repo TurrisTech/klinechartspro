@@ -10,9 +10,7 @@ import { apiSend, OhlcvApiError } from './config'
 // (objectstore.ts). The token itself, and what the page does when the server refuses it, live
 // in authtoken.ts.
 
-export { authHeaders, getToken } from './authtoken'
-
-export interface SessionUser {
+interface SessionUser {
   id: number
   username: string
 }
@@ -23,7 +21,7 @@ interface LoginResult {
   user: SessionUser
 }
 
-export interface SessionInfo {
+interface SessionInfo {
   user: SessionUser
   expiresAt: number
 }

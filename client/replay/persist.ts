@@ -10,7 +10,7 @@ import type { EngineState } from './engine'
 // signal pause points). Not a version bump: `restore` ignores them, so a replay in progress
 // opens with its account and watches and simply has no signal stops.
 
-export const REPLAY_STATE_VERSION = 1
+const REPLAY_STATE_VERSION = 1
 
 export interface AdvanceSetting {
   interval: string
@@ -41,7 +41,7 @@ export interface ReplayState {
   savedAt?: number
 }
 
-export interface ReplayStateInput {
+interface ReplayStateInput {
   vendor: string
   symbol: string
   cursor: number

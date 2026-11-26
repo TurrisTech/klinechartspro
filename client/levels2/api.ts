@@ -30,7 +30,7 @@ export interface Zone {
   color: string
 }
 
-export interface FetchZonesParams {
+interface FetchZonesParams {
   vendor: string
   symbol: string
   priceMin: number

@@ -37,12 +37,12 @@ import { freshRun, type Instant, instants, type RunState, spend, stepInstant, ty
 import type { Alert, Operand } from './types'
 
 /** The stream, as much of it as the monitor uses -- the page's `stream` is one. */
-export interface BarStream {
+interface BarStream {
   subscribe(vendor: string, symbol: string, interval: string, listener: StreamListener): void
   unsubscribe(vendor: string, symbol: string, interval: string, listener: StreamListener): void
 }
 
-export interface MonitorOptions {
+interface MonitorOptions {
   store: ClientAlertStore
   notify: NotificationSink
   data: AlertData

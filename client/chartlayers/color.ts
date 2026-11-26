@@ -3,7 +3,7 @@
 // than a stylesheet construct like `color-mix()` — klinecharts' canvas renderer never touches
 // CSS, so a value it can't hand straight to the 2D context is not usable here.
 
-export interface Rgb {
+interface Rgb {
   r: number
   g: number
   b: number
@@ -13,7 +13,7 @@ export interface Rgb {
 // CSS color, an unparseable string) falls back to opaque black rather than throwing — a
 // server-supplied or hand-typed color the client can't parse should degrade visibly, not
 // crash the draw.
-export function parseColor(color: string): Rgb {
+function parseColor(color: string): Rgb {
   const hex = color.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)
   if (hex) {
     const value = hex[1]
@@ -29,7 +29,7 @@ export function parseColor(color: string): Rgb {
   return { r: 0, g: 0, b: 0 }
 }
 
-export function toCssRgba({ r, g, b }: Rgb, alpha: number): string {
+function toCssRgba({ r, g, b }: Rgb, alpha: number): string {
   const a = Math.min(1, Math.max(0, alpha))
   return `rgba(${r}, ${g}, ${b}, ${a})`
 }

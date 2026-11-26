@@ -25,7 +25,7 @@ import { findInspected, type Inspected, positionStats } from './stats'
 // Close ¼ ½ ¾ All -- with the same two-press rule (or one press, one-click), and a breakeven it
 // proposes asks the same question in the same bar, here as well as on the pane.
 
-export interface InspectorContext {
+interface InspectorContext {
   session: TradingSession
   instrumentFor: (key: string) => InstrumentInfo
   /** The chart's container, which the popup stays inside. */

@@ -41,14 +41,14 @@ export interface Pick {
   at: number
 }
 
-export interface ResultsHandlers {
+interface ResultsHandlers {
   /** A row (or the stepper, or the equity curve) chose an entry: take the chart there. */
   onPick(pick: Pick): void
   /** A problem in the banner was clicked: show its slot. */
   onProblem?(problem: Problem): void
 }
 
-export interface ResultsView {
+interface ResultsView {
   readonly element: HTMLElement
   showRun(run: LabRun): void
   /** Problems (or a failure, with none) that stop the draft running. The last run stays shown,
@@ -74,7 +74,7 @@ export interface ResultsView {
   setBaseline(baseline: { figures: Figures; label: string } | null): void
 }
 
-export interface ResultsPanel {
+interface ResultsPanel {
   id: string
   label(): string
   element: HTMLElement

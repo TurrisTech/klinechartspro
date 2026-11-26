@@ -17,13 +17,13 @@ export const PRICE_ALERT_ZONE = 'wdPriceAlertZone'
 
 /** The bell's badge -- a pill, ICON_WIDTH x ICON_SIZE -- and its gap from the pane's right edge,
  * in px. The editor is anchored from the right edge (view.ts), the zone's caption from the width. */
-export const ICON_SIZE = 16
-export const ICON_WIDTH = 30
+const ICON_SIZE = 16
+const ICON_WIDTH = 30
 export const ICON_INSET = 4
 
 /** What the pill says beside its bell: how the alert is armed. `once` is a 1, `always` (every
  * time) a repeat arrow, and `off` (switched off) a struck-through bell with nothing beside it. */
-export type BellMark = 'once' | 'always' | 'off'
+type BellMark = 'once' | 'always' | 'off'
 
 // A bell in a 10 x 10 box: the body, then the clapper.
 const BELL =

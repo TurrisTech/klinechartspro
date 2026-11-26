@@ -56,7 +56,7 @@ export class RunCancelled extends Error {
   }
 }
 
-export interface RunOptions {
+interface RunOptions {
   /** Run on this instrument instead of the strategy's own (a wall pane's). */
   symbol?: string
   /** The window, absolute; defaults to the strategy's. */

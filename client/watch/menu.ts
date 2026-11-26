@@ -17,7 +17,7 @@ export interface MenuItem {
   onSelect(): void
 }
 
-export interface ContextMenuOptions {
+interface ContextMenuOptions {
   /** Viewport coordinates — an event's clientX/clientY. */
   x: number
   y: number
