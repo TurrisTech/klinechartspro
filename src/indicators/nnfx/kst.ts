@@ -63,7 +63,7 @@ function roc(x: readonly number[], r: number): number[] {
 
 const DEFAULTS = [10, 15, 40, 15, 11, 5, 6, 30, 4, 3, 0]
 
-export function kstRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Kst[] {
+function kstRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Kst[] {
   const p = DEFAULTS.map((d, i) => (i < 10 ? Math.min(100000, countParam(calcParams[i], d, 1)) : countParam(calcParams[i], d, 0)))
   const close = bars.map((b) => b.close)
   const rocma = [0, 1, 2, 3].map((k) => mean(roc(close, p[k]), p[k + 4]))

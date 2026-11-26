@@ -52,9 +52,9 @@ export interface Swing {
 const DEFAULT_LEFT = 10
 const DEFAULT_RIGHT = 10
 
-export const SWING_MARKER_CIRCLE = 0
-export const SWING_MARKER_SIGNAL = 1
-export const SWING_MARKER_BOTH = 2
+const SWING_MARKER_CIRCLE = 0
+const SWING_MARKER_SIGNAL = 1
+const SWING_MARKER_BOTH = 2
 
 function windowParam(value: unknown, fallback: number): number {
   // A settings field left blank arrives as undefined.

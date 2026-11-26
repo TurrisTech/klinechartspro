@@ -26,7 +26,7 @@ export interface IndicatorRow {
 }
 
 /** What a column needs from a pane -- PaneState satisfies it. */
-export interface IndicatorHolder {
+interface IndicatorHolder {
   mainIndicators: readonly string[]
   subIndicatorNames: readonly string[]
 }
@@ -91,7 +91,7 @@ export type ParamProblem =
   | { kind: 'empty' }
 
 /** What resolveParams needs of a parameter's setting -- IndicatorParamSetting satisfies it. */
-export interface ParamBounds {
+interface ParamBounds {
   precision: number
   min: number
   max?: number

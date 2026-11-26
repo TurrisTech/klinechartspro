@@ -58,7 +58,7 @@ function lowest(x: readonly number[], t: number, count: number): number {
   return m
 }
 
-export function ptlRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Ptl[] {
+function ptlRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Ptl[] {
   const slowLength = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1))
   const fastLength = Math.min(100000, countParam(calcParams[1], DEFAULTS[1], 1))
   const dir = countParam(calcParams[2], 1, 0) >= 1 ? -1 : 1

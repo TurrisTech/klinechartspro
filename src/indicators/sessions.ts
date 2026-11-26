@@ -134,7 +134,7 @@ export function zoneOffsetMinutes(timezone: string, ms: number): number {
   return offset
 }
 
-export interface WallClock {
+interface WallClock {
   /** Days since 1970-01-01 on the zone's calendar. */
   day: number
   /** 0 Sunday .. 6 Saturday. */

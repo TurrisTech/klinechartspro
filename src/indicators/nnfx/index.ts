@@ -59,10 +59,10 @@ import vwmacd from './vwmacd'
 // 2026-10-15 the indicators the scan ranked best once windicators round 3 was added (its 1D C1 top
 // 20, and its best systems' band-stop baseline and polynomial-regression C2), computed in the
 // browser from the bars the pane holds.
-export const nnfxPriceIndicators = [
+const nnfxPriceIndicators = [
   haSmoothed, chandelier, trendAkkam, keltner, linReg, hwma, hwc, kalman, turtle, ptl, vpPoc, bandStop, prc, ichimoku
 ]
-export const nnfxSubIndicators = [
+const nnfxSubIndicators = [
   doda, bandPass, corrTrend, oscar, ttf, rsx, smi, atr, hwcPct, macdext, kst, tcf, vwmacd, bandPassJ, bandPassJRaw, isCalc, voss,
   swamiSwing, truncBp, adaptiveBp, adaptiveBpCube, adaptiveRsi, micd, rccd, macdBb, tmo, trendilo, stcNlma, metro
 ]

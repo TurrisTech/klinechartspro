@@ -50,7 +50,7 @@ export { numpySum }
 const SQRT2 = Math.sqrt(2)
 
 /** `c1, c2, c3` as `processLowPass` and every `compute*` function compute them. */
-export function superSmootherCoefficients(lpPeriod: number): [number, number, number] {
+function superSmootherCoefficients(lpPeriod: number): [number, number, number] {
   const a1 = Math.exp((-1 * SQRT2 * Math.PI) / lpPeriod)
   const b1 = 2 * a1 * Math.cos((SQRT2 * Math.PI) / lpPeriod)
   const c2 = b1

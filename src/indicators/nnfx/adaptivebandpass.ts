@@ -106,7 +106,7 @@ export interface AdaptiveBandPassRow {
 const BP_DEFAULTS = [0.3, 6, 24, 15, 8, 1, 1]
 const CUBE_DEFAULTS = [0.1608, 6, 24, 15, 1, 1]
 
-export interface AdaptiveBandPassSettings {
+interface AdaptiveBandPassSettings {
   bandwidth: number
   avgLength: number
   hpPeriod: number
@@ -157,7 +157,7 @@ function lines(bars: readonly KLineData[], s: AdaptiveBandPassSettings, cube: bo
   }
 }
 
-export function adaptiveBpRows(bars: readonly KLineData[], calcParams: readonly unknown[]): AdaptiveBandPassRow[] {
+function adaptiveBpRows(bars: readonly KLineData[], calcParams: readonly unknown[]): AdaptiveBandPassRow[] {
   const s = adaptiveBpSettings(calcParams)
   const { line, signal } = lines(bars, s, false)
   const { ma, vs } = versusMean(signal, s.ma)
@@ -170,7 +170,7 @@ export function adaptiveBpRows(bars: readonly KLineData[], calcParams: readonly 
   })
 }
 
-export function adaptiveBpCubeRows(bars: readonly KLineData[], calcParams: readonly unknown[]): AdaptiveBandPassRow[] {
+function adaptiveBpCubeRows(bars: readonly KLineData[], calcParams: readonly unknown[]): AdaptiveBandPassRow[] {
   const s = adaptiveBpCubeSettings(calcParams)
   const { line, signal } = lines(bars, s, true)
   const from = Math.max(s.hpPeriod + 2, s.warm)
@@ -231,4 +231,3 @@ const adaptiveBpCube: IndicatorTemplate<AdaptiveBandPassRow, number> = {
 }
 
 export { adaptiveBp, adaptiveBpCube }
-export default adaptiveBp

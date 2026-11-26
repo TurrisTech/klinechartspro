@@ -93,7 +93,7 @@ export function adaptiveRsiSettings(calcParams: readonly unknown[]): {
   return { avgLength, hpPeriod, lpPeriod, ma, dir, warm }
 }
 
-export function adaptiveRsiRows(bars: readonly KLineData[], calcParams: readonly unknown[]): AdaptiveRsiRow[] {
+function adaptiveRsiRows(bars: readonly KLineData[], calcParams: readonly unknown[]): AdaptiveRsiRow[] {
   const s = adaptiveRsiSettings(calcParams)
   const filt = roofing(
     bars.map((b) => b.close),

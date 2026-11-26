@@ -54,7 +54,7 @@ function usable(pos: number, vel: number, pp: number, pv: number, vv: number): b
   return pp * vv >= pv * pv
 }
 
-export function kalmanRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Kalman[] {
+function kalmanRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Kalman[] {
   const q = realParam(calcParams[0], 0.00015, 1e-15)
   const r = realParam(calcParams[1], 0.00067, 1e-15)
   const h = Math.min(100000, countParam(calcParams[2], 2, 1))

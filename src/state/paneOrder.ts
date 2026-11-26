@@ -29,7 +29,7 @@
 
 /** One chart pane in a wall pane's vertical stack: a sub-indicator's template name, or null
  * for the price pane. Null rather than a sentinel string, which a template could be named. */
-export type ChartPaneSlot = string | null
+type ChartPaneSlot = string | null
 
 /** Where the price pane may sit: anywhere from above every sub-pane (0) to below all of them.
  * A stored value outside that, or not a whole number, reads as the default -- the top. */
@@ -44,7 +44,7 @@ export function chartPaneStack(subIndicators: readonly string[], above: number):
   return [...subIndicators.slice(0, at), null, ...subIndicators.slice(at)]
 }
 
-export interface SubPaneOrder {
+interface SubPaneOrder {
   subIndicators: string[]
   above: number
 }

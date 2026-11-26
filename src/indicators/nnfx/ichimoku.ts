@@ -72,7 +72,7 @@ export interface Ichimoku {
 
 const DEFAULTS = [4, 20, 21, 1]
 
-export function ichimokuSettings(calcParams: readonly unknown[]): { tenkan: number; kijun: number; senkou: number; dir: number } {
+function ichimokuSettings(calcParams: readonly unknown[]): { tenkan: number; kijun: number; senkou: number; dir: number } {
   const tenkan = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1))
   const kijun = Math.min(100000, countParam(calcParams[1], DEFAULTS[1], 1))
   const senkou = Math.min(100000, countParam(calcParams[2], DEFAULTS[2], 1))
@@ -91,7 +91,7 @@ function midpoint(high: readonly number[], low: readonly number[], range: number
   return (hi + lo) / 2
 }
 
-export function ichimokuRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Ichimoku[] {
+function ichimokuRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Ichimoku[] {
   const { tenkan, kijun, senkou, dir } = ichimokuSettings(calcParams)
   const high = bars.map((b) => b.high)
   const low = bars.map((b) => b.low)

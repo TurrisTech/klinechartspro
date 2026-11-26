@@ -74,7 +74,7 @@ function vwma(price: readonly number[], volume: readonly number[], n: number): n
   return pv.map((x, i) => x / v[i])
 }
 
-export function vwmacdRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Vwmacd[] {
+function vwmacdRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Vwmacd[] {
   let fast = Math.min(100000, countParam(calcParams[0], 9, 1))
   let slow = Math.min(100000, countParam(calcParams[1], 20, 1))
   const signal = Math.min(100000, countParam(calcParams[2], 9, 1))

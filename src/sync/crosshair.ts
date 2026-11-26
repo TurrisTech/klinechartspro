@@ -21,7 +21,7 @@ import type { Chart, Coordinate, Crosshair, PaneOptions, Point } from 'klinechar
 // `paneId === pane.getId()`, which this never matches). `ChartImp.executeAction` only
 // backfills a missing paneId (`crosshair.paneId ??= 'candle_pane'`), so this explicit value is
 // never overwritten.
-export const SYNC_PANE_ID = '__sync__'
+const SYNC_PANE_ID = '__sync__'
 
 // The instant, and -- only when the hover was over the main price pane -- the price, under
 // the pointer on the SOURCE pane. `onCrosshairChange` subscribers receive the raw
@@ -140,7 +140,7 @@ export type CrosshairReason = 'not-loaded' | 'off-screen' | 'after-latest'
 
 export type CrosshairReach = { kind: 'shown' } | { kind: 'away'; side: 'left' | 'right'; reason: CrosshairReason }
 
-export interface CrosshairReachInput {
+interface CrosshairReachInput {
   /** The synced instant. */
   timestamp: number
   /** The first and the last loaded bar's timestamp. */

@@ -49,14 +49,14 @@ export interface Chandelier {
   age?: number
 }
 
-export interface ChandelierOptions {
+interface ChandelierOptions {
   range: number
   atr: number
   mult: number
   shift: number
 }
 
-export function chandelierOptions(calcParams: readonly unknown[]): ChandelierOptions {
+function chandelierOptions(calcParams: readonly unknown[]): ChandelierOptions {
   return {
     range: countParam(calcParams[0], 6, 1),
     atr: countParam(calcParams[1], 7, 1),
@@ -66,7 +66,7 @@ export function chandelierOptions(calcParams: readonly unknown[]): ChandelierOpt
 }
 
 /** The active stop and direction per bar, as the source's two colour buffers merged. */
-export function chandelierExit(bars: readonly KLineData[], options: ChandelierOptions): Chandelier[] {
+function chandelierExit(bars: readonly KLineData[], options: ChandelierOptions): Chandelier[] {
   const { range, shift, mult } = options
   const a = atr(bars, options.atr)
   const n = bars.length

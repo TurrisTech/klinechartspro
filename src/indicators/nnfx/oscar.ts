@@ -36,7 +36,7 @@ import { arrow, arrowSize, drawRange, guide, guideColor, signColors } from './pa
  * the state latches from one trigger to the next. 35 and 65 are drawn as guides, 50 faintly.
  */
 
-export const OSCAR_SMOOTHING = ['RMA', 'SMA', 'EMA', 'WMA', 'NONE'] as const
+const OSCAR_SMOOTHING = ['RMA', 'SMA', 'EMA', 'WMA', 'NONE'] as const
 
 const SENSITIVITY = 0.5
 const BOTTOM = 35
@@ -52,12 +52,12 @@ export interface Oscar {
   trend?: number
 }
 
-export interface OscarOptions {
+interface OscarOptions {
   length: number
   smoothing: number
 }
 
-export function oscarOptions(calcParams: readonly unknown[]): OscarOptions {
+function oscarOptions(calcParams: readonly unknown[]): OscarOptions {
   return {
     length: countParam(calcParams[0], 20, 2),
     smoothing: Math.min(OSCAR_SMOOTHING.length - 1, countParam(calcParams[1], 0, 0))
@@ -101,7 +101,7 @@ function smooth(kind: number, x: readonly number[], n: number): number[] {
   }
 }
 
-export function oscar(bars: readonly KLineData[], options: OscarOptions): Oscar[] {
+function oscar(bars: readonly KLineData[], options: OscarOptions): Oscar[] {
   const { length: n, smoothing } = options
   const close = bars.map((b) => b.close)
   const rough = close.map((c, i) => {

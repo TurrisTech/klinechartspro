@@ -39,7 +39,7 @@ import { drawRange, flipArrows, signColors, trendAges } from './paint'
  * zero stop does. A bar's stop needs its open and its own ATR, so it is final at its close.
  */
 
-export interface TrendAkkam {
+interface TrendAkkam {
   [key: string]: number | undefined
   long?: number
   short?: number
@@ -48,17 +48,17 @@ export interface TrendAkkam {
   age?: number
 }
 
-export interface TrendAkkamOptions {
+interface TrendAkkamOptions {
   atr: number
   factor: number
 }
 
-export function trendAkkamOptions(calcParams: readonly unknown[]): TrendAkkamOptions {
+function trendAkkamOptions(calcParams: readonly unknown[]): TrendAkkamOptions {
   return { atr: countParam(calcParams[0], 150, 1), factor: realParam(calcParams[1], 6, 0) }
 }
 
 /** The stop per bar, NaN until the ATR has a value. */
-export function trendAkkamStop(bars: readonly KLineData[], options: TrendAkkamOptions): number[] {
+function trendAkkamStop(bars: readonly KLineData[], options: TrendAkkamOptions): number[] {
   const a = atr(bars, options.atr)
   const out = new Array<number>(bars.length).fill(Number.NaN)
   let prev = 0
@@ -83,7 +83,7 @@ export function trendAkkamStop(bars: readonly KLineData[], options: TrendAkkamOp
   return out
 }
 
-export function trendAkkam(bars: readonly KLineData[], options: TrendAkkamOptions): TrendAkkam[] {
+function trendAkkam(bars: readonly KLineData[], options: TrendAkkamOptions): TrendAkkam[] {
   const stop = trendAkkamStop(bars, options)
   let side = 0
   const rows = stop.map((s, t): TrendAkkam => {

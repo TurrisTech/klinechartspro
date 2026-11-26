@@ -15,7 +15,7 @@
 import i18n from '../i18n'
 
 /** One row of the settings dialog: a style the chart draws by, and how it is picked. */
-export interface SettingOption {
+interface SettingOption {
   /** The dotted path into klinecharts' `Styles`, except the two `yAxis.` ones -- those are
    * taken through `overrideYAxis` instead (see STYLE_SETTING_KEYS). */
   key: string

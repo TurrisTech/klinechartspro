@@ -86,7 +86,7 @@ export function asRatio(x: number): [number, number] {
 }
 
 /** The integer m with m x tick = the close rounded up to the tick grid, snapped within a few ulps. */
-export function priceBin(price: number, tickNum: number, tickDen: number): number {
+function priceBin(price: number, tickNum: number, tickDen: number): number {
   const y = (price * tickDen) / tickNum
   const r = Math.floor(y + 0.5)
   if (Math.abs(y - r) <= 16 * EPS * Math.abs(y)) return r
@@ -103,7 +103,7 @@ function windowSum(bins: readonly number[], weight: readonly number[], valid: re
 type Profile = Record<'poc' | 'poc_volume' | 'profile_high' | 'profile_low' | 'value_area_volume' | 'value_area_high' | 'value_area_low', number[]>
 
 /** windicators' `market_profile` over bars that start finite. */
-export function marketProfile(close: readonly number[], weight: readonly number[], period: number, pct: [number, number], tick: [number, number]): Profile {
+function marketProfile(close: readonly number[], weight: readonly number[], period: number, pct: [number, number], tick: [number, number]): Profile {
   const [pctNum, pctDen] = pct
   const [tickNum, tickDen] = tick
   const n = close.length
@@ -203,7 +203,7 @@ export function marketProfile(close: readonly number[], weight: readonly number[
   return out
 }
 
-export function vpPocSettings(calcParams: readonly unknown[]): { period: number; pct: number; tick: number; dir: number } {
+function vpPocSettings(calcParams: readonly unknown[]): { period: number; pct: number; tick: number; dir: number } {
   return {
     period: Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1)),
     pct: Math.min(1, realParam(calcParams[1], DEFAULTS[1], 0)),
@@ -212,7 +212,7 @@ export function vpPocSettings(calcParams: readonly unknown[]): { period: number;
   }
 }
 
-export function vpPocRows(bars: readonly KLineData[], calcParams: readonly unknown[]): VpPoc[] {
+function vpPocRows(bars: readonly KLineData[], calcParams: readonly unknown[]): VpPoc[] {
   const { period, pct, tick, dir } = vpPocSettings(calcParams)
   const close = bars.map((b) => b.close)
   const volume = bars.map((b) => b.volume ?? Number.NaN)

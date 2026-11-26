@@ -107,7 +107,7 @@ export function metroWarmup(period: number, minMax: number): number {
   return period - 1 + Math.ceil(Math.log(1e-4) / Math.log(1 - 1 / period)) + (minMax - 1)
 }
 
-export function metroSettings(calcParams: readonly unknown[]): {
+function metroSettings(calcParams: readonly unknown[]): {
   period: number
   fast: number
   slow: number
@@ -127,7 +127,7 @@ export function metroSettings(calcParams: readonly unknown[]): {
 }
 
 /** mladen's regular iRsi from bar 1 (bar 0 is never computed; its price reads as 0). */
-export function mladenRsi(price: readonly number[], period: number): number[] {
+function mladenRsi(price: readonly number[], period: number): number[] {
   const n = price.length
   const out = new Array<number>(n).fill(Number.NaN)
   const w = price.map((p, r) => (r === 0 ? 0 : p))
@@ -171,7 +171,7 @@ const OUTPUTS = [
 ] as const
 
 /** windicators' thirteen outputs from the first bar, NaN where the source leaves EMPTY_VALUE. */
-export function metroAdvanced(
+function metroAdvanced(
   close: readonly number[],
   period: number,
   fast: number,
@@ -240,7 +240,7 @@ export function metroAdvanced(
   return out
 }
 
-export function metroRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Metro[] {
+function metroRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Metro[] {
   const { period, fast, slow, minMax, ma, dir, warm } = metroSettings(calcParams)
   const out = metroAdvanced(
     bars.map((b) => b.close),

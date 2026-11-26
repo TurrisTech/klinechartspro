@@ -29,14 +29,14 @@
 export const NARROW_SHELL_WIDTH = 640
 
 /** Below this height a dialog cannot sit centred with room around it. */
-export const SHORT_SHELL_HEIGHT = 480
+const SHORT_SHELL_HEIGHT = 480
 
 /** At or above this width the shell is taken to span displays (or one very large one):
  * dialogs and floating windows open over the ACTIVE pane rather than the middle of the
  * window, which on two side-by-side monitors is the bezel between them. */
 export const WIDE_SHELL_WIDTH = 2400
 
-export type ShellSize = 'phone' | 'regular' | 'wide'
+type ShellSize = 'phone' | 'regular' | 'wide'
 
 export function shellSize(width: number, height: number): ShellSize {
   // Unmeasured is regular: nothing is restyled on the first frame.

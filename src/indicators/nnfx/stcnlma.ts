@@ -80,7 +80,7 @@ export function stcNlmaWarmup(schaff: number, fast: number, slow: number, smooth
   return exact + 2 * (schaff - 1) + 2 * seed
 }
 
-export function stcNlmaSettings(calcParams: readonly unknown[]): {
+function stcNlmaSettings(calcParams: readonly unknown[]): {
   schaff: number
   fast: number
   slow: number
@@ -96,7 +96,7 @@ export function stcNlmaSettings(calcParams: readonly unknown[]): {
 }
 
 /** mladen's iNonLagMa (windicators `_kernels.mladen.nonlag`, min length 5, from bar 0). */
-export function nonLagMa(x: readonly number[], length: number): number[] {
+function nonLagMa(x: readonly number[], length: number): number[] {
   const n = x.length
   if (length < 5) return x.slice()
   const out = new Array<number>(n).fill(Number.NaN)
@@ -144,7 +144,7 @@ function windowRange(x: readonly number[], i: number, period: number): [number, 
 }
 
 /** windicators' stc and trend from the first bar. */
-export function schaffNlma(close: readonly number[], schaff: number, fast: number, slow: number, smooth: number): { stc: number[]; trend: number[] } {
+function schaffNlma(close: readonly number[], schaff: number, fast: number, slow: number, smooth: number): { stc: number[]; trend: number[] } {
   const nf = nonLagMa(close, fast)
   const ns = nonLagMa(close, slow)
   const macd = nf.map((f, i) => f - ns[i])
@@ -169,7 +169,7 @@ export function schaffNlma(close: readonly number[], schaff: number, fast: numbe
   return { stc: val, trend }
 }
 
-export function stcNlmaRows(bars: readonly KLineData[], calcParams: readonly unknown[]): StcNlma[] {
+function stcNlmaRows(bars: readonly KLineData[], calcParams: readonly unknown[]): StcNlma[] {
   const { schaff, fast, slow, smooth, warm } = stcNlmaSettings(calcParams)
   const { stc, trend } = schaffNlma(
     bars.map((b) => b.close),

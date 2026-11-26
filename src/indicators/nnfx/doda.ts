@@ -41,13 +41,13 @@ export interface DodaStoch {
   signal?: number
 }
 
-export interface DodaOptions {
+interface DodaOptions {
   slw: number
   pds: number
   signal: number
 }
 
-export function dodaOptions(calcParams: readonly unknown[]): DodaOptions {
+function dodaOptions(calcParams: readonly unknown[]): DodaOptions {
   return {
     slw: countParam(calcParams[0], 12, 1),
     pds: countParam(calcParams[1], 20, 1),
@@ -70,7 +70,7 @@ function rawStochastic(x: readonly number[], pds: number): number[] {
   })
 }
 
-export function dodaStochastic(bars: readonly KLineData[], options: DodaOptions): DodaStoch[] {
+function dodaStochastic(bars: readonly KLineData[], options: DodaOptions): DodaStoch[] {
   const smoothed = ema(bars.map((bar) => bar.close), options.slw)
   const main = ema(rawStochastic(smoothed, options.pds), options.slw)
   const signal = ema(main, options.signal)

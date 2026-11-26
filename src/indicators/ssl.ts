@@ -68,7 +68,7 @@ export interface Ssl {
 export const SSL_MA = ['SMA', 'EMA', 'WMA', 'VWMA', 'ALMA', 'HMA'] as const
 export type SslMa = (typeof SSL_MA)[number]
 
-export interface SslOptions {
+interface SslOptions {
   length: number
   ma: SslMa
   shift: number
@@ -164,7 +164,7 @@ function alma(x: readonly number[], n: number): number[] {
   return out
 }
 
-export function movingAverage(kind: SslMa, x: readonly number[], volume: readonly number[], n: number): number[] {
+function movingAverage(kind: SslMa, x: readonly number[], volume: readonly number[], n: number): number[] {
   switch (kind) {
     case 'SMA':
       return sma(x, n)

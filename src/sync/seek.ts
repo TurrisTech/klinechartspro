@@ -43,7 +43,7 @@ export function seekToTimestamp(
   chart.scrollByDistance(main.width * fraction - x, animationMs)
 }
 
-export interface SeekTarget {
+interface SeekTarget {
   // Where to scroll (or reload-anchor) the target pane, and at what on-screen fraction --
   // hand these straight to seekToTimestamp. For the "align a span" case this is the span's
   // MIDPOINT, not the instant that was actually clicked -- see crosshairTimestamp.
@@ -172,7 +172,7 @@ export function visibleMidpointTimestamp(chart: Chart): number | null {
 //   Anywhere left of that, including a pane already sitting in exactly the jammed state this
 //   is meant to prevent, comes back to the live edge ('live-edge'), which is as far forward as
 //   the pane can meaningfully go.
-export type SeekReach = 'reload' | 'stay' | 'live-edge'
+type SeekReach = 'reload' | 'stay' | 'live-edge'
 
 export function resolveSeekReach(
   target: number,

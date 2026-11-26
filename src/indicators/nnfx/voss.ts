@@ -77,7 +77,7 @@ export function vossWarmup(period: number, predict: number, bandwidth: number): 
   return start + Math.ceil(Math.log(1e-4) / Math.log(radius))
 }
 
-export function vossSettings(calcParams: readonly unknown[]): { period: number; predict: number; bandwidth: number; dir: number; warm: number } {
+function vossSettings(calcParams: readonly unknown[]): { period: number; predict: number; bandwidth: number; dir: number; warm: number } {
   const period = Math.min(100000, countParam(calcParams[0], DEFAULTS[0], 1))
   const predict = Math.min(10000, countParam(calcParams[1], DEFAULTS[1], 0))
   const bandwidth = Math.min(period / 4 - 1e-9, realParam(calcParams[2], DEFAULTS[2], 1e-6))
@@ -86,7 +86,7 @@ export function vossSettings(calcParams: readonly unknown[]): { period: number; 
   return { period, predict, bandwidth, dir, warm }
 }
 
-export function vossRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Voss[] {
+function vossRows(bars: readonly KLineData[], calcParams: readonly unknown[]): Voss[] {
   const { period, predict, bandwidth, dir, warm } = vossSettings(calcParams)
   const n = bars.length
   const order = 3 * predict
