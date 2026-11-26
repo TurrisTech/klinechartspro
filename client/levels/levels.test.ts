@@ -301,6 +301,59 @@ describe('alerts', () => {
     }
   })
 
+  test('an alert armed once that has fired is stale too, on a level still live', async () => {
+    servedBook = [level({ interval: '1W', price: 1.085 })]
+    const on = { enabled: true }
+    try {
+      const stale = await staleLevelAlerts(
+        [
+          priceAlert('once-fired', 'EURUSD 1W level 1.08500', 1.085, { ...on, repeat: 'once', status: 'fired' }),
+          priceAlert('once-armed', 'EURUSD 1W level 1.08500', 1.085, { ...on, repeat: 'once', status: 'armed' }),
+          priceAlert('always-fired', 'EURUSD 1W level 1.08500', 1.085, { ...on, repeat: 'always', status: 'fired' }),
+          // Switched off after it fired: off, not done, and its level is live.
+          priceAlert('off', 'EURUSD 1W level 1.08500', 1.085, { enabled: false, repeat: 'once', status: 'fired' })
+        ],
+        context(VIEW)
+      )
+      expect(stale).toEqual(['once-fired'])
+    } finally {
+      servedBook = null
+    }
+  })
+
+  test('fired once-alerts and spent levels together keep the alerts\' order, and the read skips the fired', async () => {
+    servedBook = [level({ interval: '1W', price: 1.085 })]
+    requests.length = 0
+    try {
+      const stale = await staleLevelAlerts(
+        [
+          priceAlert('gone', 'EURUSD 1W level 1.12000', 1.12),
+          priceAlert('done', 'EURUSD 1W level 1.20000', 1.2, { enabled: true, repeat: 'once', status: 'fired' }),
+          priceAlert('live', 'EURUSD 1W level 1.08500', 1.085)
+        ],
+        context(VIEW)
+      )
+      expect(stale).toEqual(['gone', 'done'])
+      // The fired one's price is not asked about: the band is the others'.
+      const q = requests.find((url) => url.pathname.endsWith('/levels'))?.searchParams
+      expect(Number(q?.get('price_max'))).toBeLessThan(1.2)
+    } finally {
+      servedBook = null
+    }
+  })
+
+  test('when every alert has fired once it asks nothing', async () => {
+    requests.length = 0
+    const done = { enabled: true, repeat: 'once', status: 'fired' } as const
+    expect(
+      await staleLevelAlerts(
+        [priceAlert('a', 'EURUSD 1W level 1.08500', 1.085, done), priceAlert('b', 'EURUSD 1M level 1.09000', 1.09, done)],
+        context(VIEW)
+      )
+    ).toEqual(['a', 'b'])
+    expect(requests).toHaveLength(0)
+  })
+
   test('a level born after the pane\'s last bar still counts as live', async () => {
     servedBook = [level({ interval: '1W', price: 1.085, bornAt: Date.now() - 1000, effectiveAt: Date.now() })]
     try {
@@ -849,11 +902,11 @@ function levelsUrl(window: { priceMin: number; priceMax: number; dateFrom: numbe
   return url
 }
 
-/** A price alert on EURUSD as the alert hub holds it: its watch's id and name, and its zone,
- * 3 pips each side of `price`. */
-function priceAlert(id: string, name: string, price: number) {
+/** A price alert on EURUSD as the alert hub holds it: its watch's id and name (and whatever
+ * else of the watch a test says), and its zone, 3 pips each side of `price`. */
+function priceAlert(id: string, name: string, price: number, watch: Partial<Watch> = {}) {
   return {
-    watch: { id, name, target: 'oanda:EURUSD' } as Watch,
+    watch: { id, name, target: 'oanda:EURUSD', ...watch } as Watch,
     zone: zoneAround(price, 3, { size: 0.0001, label: 'pips' }, 5)
   }
 }

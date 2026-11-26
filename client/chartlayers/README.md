@@ -59,9 +59,11 @@ levels alerts and all stale levels alerts"): "Levels alerts on EURUSD: 5", **Rem
 **Remove all (n)**, the second asking first. Both act on the instrument in view and say what went at
 the foot of the pane. Which alerts are the layer's is its `owns`, and which are stale its `stale`
 (types.ts): for Levels, an alert is known by its name (`EURUSD 1W level 1.08500`) and is stale
-when no LIVE level of its timeframe sits at its price any more -- spent since, or gone from the
-book -- found with one `/levels` read of the live levels at every timeframe (not only the ones
-the pane shows) across the alerts' prices, under the wall's read clock, as the dialog opens.
+when it was armed once and has fired, so is done (user, 2026-11-26: "make fired once alerts count
+as stale too"; `firedOnce`, hub.ts -- a switched-off one is off, not done), or when no LIVE level
+of its timeframe sits at its price any more -- spent since, or gone from the book -- found with
+one `/levels` read of the live levels at every timeframe (not only the ones the pane shows)
+across the other alerts' prices, under the wall's read clock, as the dialog opens.
 **Hovering** a line or a bell draws the zone across the pane with its width, how the alert
 is armed and what a click on that thing does; on a line not yet alerted, the zone a click would
 give it, fainter. Levels is the one layer that offers it so far: a live level, by its price and

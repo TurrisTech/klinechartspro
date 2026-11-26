@@ -29,6 +29,12 @@ export interface PriceAlert {
   zone: Zone
 }
 
+/** An alert armed once that has fired, and so is done: the grey pill with the 1. It waits on
+ * nothing until a click takes it round again. A switched-off alert is not one -- it is off. */
+export function firedOnce(watch: Pick<Watch, 'enabled' | 'repeat' | 'status'>): boolean {
+  return watch.enabled && watch.repeat === 'once' && watch.status === 'fired'
+}
+
 /** The quiet spell after an alert fires. An alert on a line keeps watching (`repeat:
  * 'always'`: the line is ENABLED, not set once), and entering the zone needs leaving it first
  * -- but a price that chops across the zone's edge would still raise one a minute on the

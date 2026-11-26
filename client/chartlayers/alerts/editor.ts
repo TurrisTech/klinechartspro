@@ -4,8 +4,9 @@
 //
 // Its foot removes many at once (user, 2026-11-24: "an option to remove all levels alerts and
 // all stale levels alerts"): every alert of the layer on the instrument, or the stale ones --
-// those whose line could no longer have one, a level spent since. Remove all asks first, in the
-// card; Remove stale says how many it will take and does not.
+// those armed once that have fired (user, 2026-11-26: "make fired once alerts count as stale
+// too"), and those whose line could no longer have one, a level spent since. Remove all asks
+// first, in the card; Remove stale says how many it will take and does not.
 //
 // A popover rather than a modal: it belongs to one line on one pane and should not hide the
 // chart it describes. Appended into the themed chart root and `position: fixed`, for the reason
@@ -100,8 +101,8 @@ function bulkFoot(bulk: PriceAlertBulk, close: () => void): HTMLElement {
   void bulk.stale?.then((count) => {
     staleCount = count
     if (count === null) showStale('Stale: could not check', 'Which are stale could not be read; try again later', false)
-    else if (count === 0) showStale('None stale', 'Every one of them is on a line still live', false)
-    else showStale(`Remove stale (${count})`, `Remove the ${count} stale ${count === 1 ? 'alert: its line is' : 'alerts: their lines are'} no longer live`, true)
+    else if (count === 0) showStale('None stale', 'None has fired once and finished, and every one is on a line still live', false)
+    else showStale(`Remove stale (${count})`, `Remove the ${count} stale ${count === 1 ? 'alert' : 'alerts'}: fired once and done, or on a line no longer live`, true)
   })
   stale.addEventListener('click', () => {
     if (!staleCount) return
