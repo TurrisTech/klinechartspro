@@ -3,9 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from '
 // WS /stream presents the session in its FIRST frame, `{"action": "auth", "token": ...}` (a
 // browser cannot set a header on a WebSocket handshake, and a token in the URL ends up in
 // access logs), and sends its subscribes right behind it without waiting for the answer. A
-// server from before the stream login answers that frame with an `Unknown action 'auth'`
-// error and keeps the connection open, which must be invisible. A close with code 4401 is
-// the server saying the session is gone.
+// close with code 4401 is the server saying the session is gone.
 
 const pristine = {
   WebSocket: globalThis.WebSocket,
@@ -117,7 +115,7 @@ describe('the auth frame', () => {
     const client = new StreamClient()
     client.subscribe('oanda', 'EURUSD', '1h', barListener().listener)
     client.subscribePlugin('arev', null, 'oanda', 'EURUSD', '1h', { onPoint: () => {} })
-    client.subscribeNotifications({ owner: 'owner-1', token: 'tok-1' }, () => {})
+    client.subscribeNotifications({ owner: 'owner-1' }, () => {})
     expect(sockets).toHaveLength(1)
     sockets[0].open()
     const sent = sockets[0].sent
@@ -149,40 +147,7 @@ describe('the auth frame', () => {
     expect(sockets[0].sent.map((f) => f.action)).toEqual(['subscribe'])
   })
 
-  test("today's server's Unknown action 'auth' error is swallowed and changes nothing", () => {
-    storage.set(TOKEN_KEY, 'tok-1')
-    const errors = spyOn(console, 'error').mockImplementation(() => {})
-    const warnings = spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      let rejected = 0
-      authtoken.whenSessionRejected(() => {
-        rejected += 1
-      })
-      const statuses: string[] = []
-      const client = new StreamClient()
-      client.onStatus((s) => statuses.push(s))
-      const { bars, listener } = barListener()
-      client.subscribe('oanda', 'EURUSD', '1h', listener)
-      sockets[0].open()
-      // The wire as wdashboard-server <= 0.56 sends it (`errmsg`), and as ErrorBody spells it.
-      sockets[0].receive({ type: 'error', code: 'invalid_request', errmsg: "Unknown action 'auth'" })
-      sockets[0].receive({ type: 'error', code: 'invalid_request', detail: "Unknown action 'auth'" })
-      sockets[0].receive({ type: 'subscribed', vendor: 'oanda', symbol: 'EURUSD', interval: '1h', formingSupported: true })
-      sockets[0].receive({ type: 'bar', vendor: 'oanda', symbol: 'EURUSD', interval: '1h', closed: false, bar: { date: 1 } })
-      expect(bars).toEqual([{ date: 1 }])
-      expect(sockets[0].readyState).toBe(FakeSocket.OPEN)
-      expect(statuses.at(-1)).toBe('connected')
-      expect(errors).not.toHaveBeenCalled()
-      expect(warnings).not.toHaveBeenCalled()
-      expect(rejected).toBe(0)
-      expect(storage.get(TOKEN_KEY)).toBe('tok-1')
-    } finally {
-      errors.mockRestore()
-      warnings.mockRestore()
-    }
-  })
-
-  test('another error is still reported', () => {
+  test('an error frame is reported', () => {
     const errors = spyOn(console, 'error').mockImplementation(() => {})
     try {
       const client = new StreamClient()

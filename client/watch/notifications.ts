@@ -1,4 +1,3 @@
-import { getToken } from '../auth'
 import { apiSend } from '../config'
 import type { NotificationBackend, NotificationSpec, RemoteNotification } from '../notifications'
 import type { NotificationWire } from '../ohlcv'
@@ -72,11 +71,10 @@ export interface RemoteNotifications extends NotificationBackend {
 export function createRemoteNotifications(
   onPush: (row: RemoteNotification) => void
 ): RemoteNotifications {
-  // Both identities: the bearer where the user is signed in (dev and prod), the owner token
-  // where the login is off. The server resolves them in that order, exactly as the REST routes
-  // do -- see stream.ts's subscribeNotifications for why the bearer rides in this frame too.
+  // The owner token where the login is off; where it is on (dev and prod) the server takes the
+  // signed-in user from the socket's auth frame, as the REST routes take it from the bearer.
   const unsubscribe = stream.subscribeNotifications(
-    { owner: ownerToken(), token: getToken() },
+    { owner: ownerToken() },
     (row) => onPush(toRemote(row))
   )
 

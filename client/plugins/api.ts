@@ -11,9 +11,7 @@ import type { Page, PointsRequest, SignalCatalogueEntry, SignalSpec } from './ty
 //   GET /plugins/{id}/signals?...[&signal]  only the labelled points, each with `effective`
 //
 // with the `{ s: 'ok' | 'no_data' | 'replaying', points, ... }` envelope every values route
-// on this server shares. A server from before the host (no `plugins` feature) is asked on
-// the plugin's legacy path instead, with the same envelope -- the paths are aliases of
-// each other server-side, so a client gets one fetch whichever it is talking to.
+// on this server shares.
 
 export interface PluginCatalogueEntry {
   id: string
@@ -122,26 +120,15 @@ function readArray(envelope: PointsEnvelope<unknown>, name: string): { date: num
 }
 
 export function pointsUrl(request: PointsRequest): URL {
-  const unified = hasFeature('plugins') || !request.legacyPath
-  if (unified) {
-    return apiUrl(`/plugins/${request.pluginId}/values`, {
-      symbol: request.vendorSymbol,
-      resolution: request.resolution,
-      from: request.from,
-      to: request.to,
-      limit: request.limit,
-      variant: request.variant,
-      params: request.params ? JSON.stringify(request.params) : undefined,
-      ...(request.asof !== undefined ? { asof: request.asof } : {})
-    })
-  }
-  return apiUrl(request.legacyPath as string, {
+  return apiUrl(`/plugins/${request.pluginId}/values`, {
     symbol: request.vendorSymbol,
     resolution: request.resolution,
     from: request.from,
     to: request.to,
     limit: request.limit,
-    ...(request.legacyQuery ?? {})
+    variant: request.variant,
+    params: request.params ? JSON.stringify(request.params) : undefined,
+    ...(request.asof !== undefined ? { asof: request.asof } : {})
   })
 }
 

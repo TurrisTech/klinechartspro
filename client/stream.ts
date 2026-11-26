@@ -32,14 +32,6 @@ const PONG_TIMEOUT_MS = 10_000
 // nothing.
 const UNAUTHORIZED_CLOSE_CODE = 4401
 
-// A server from before the stream login (wdashboard-server <= 0.56, and its Rust twin) does not
-// know the auth frame: it answers this error and keeps the connection open, exactly as for any
-// unknown action, and serves the subscribes behind it as it always has. Expected, harmless, and
-// never shown.
-function isUnknownAuthAction(message: { code: string; errmsg?: string; detail?: string }): boolean {
-  return message.code === 'invalid_request' && /Unknown action 'auth'/.test(message.errmsg ?? message.detail ?? '')
-}
-
 // Bars requested on subscribe to bridge the gap between the history load and the first
 // live push. Server default is 200 and its ceiling is advertised in limits.
 const BACKFILL_BAR_COUNT = 200
@@ -152,7 +144,7 @@ export class StreamClient {
   private readonly lingering = new Map<string, ReturnType<typeof setTimeout>>()
   //: Who this connection has asked for notifications as, and who wants them. One
   //: subscription per socket, not per listener: the server keys delivery by connection.
-  private notificationsIdentity: { owner: string; token?: string | null } | null = null
+  private notificationsIdentity: { owner: string } | null = null
   private readonly notificationListeners = new Set<NotificationListener>()
   private status: StreamStatus = 'offline'
   private readonly statusListeners = new Set<StatusListener>()
@@ -231,14 +223,11 @@ export class StreamClient {
 
   /** Ask for this owner's notifications on this socket. Returns an unsubscribe.
    *
-   * `token` is the session bearer, when there is one. It rides in this FRAME as well as in the
-   * socket's auth frame because a server from before the stream login knows only this one:
-   * without it there, on a deployment with auth on, this client's REST calls resolve to the
-   * signed-in user while its socket resolves to the anonymous owner token, the two never
-   * match, and every live push is delivered to nobody -- notifications then appear only on the
-   * next page load. A server with the stream login takes the session from the auth frame. */
+   * `owner` is the identity where the login is off. Where it is on, the server takes the
+   * signed-in user from the socket's auth frame instead, as the REST routes take it from the
+   * bearer. */
   subscribeNotifications(
-    identity: { owner: string; token?: string | null },
+    identity: { owner: string },
     listener: NotificationListener
   ): () => void {
     this.notificationListeners.add(listener)
@@ -255,16 +244,8 @@ export class StreamClient {
     }
   }
 
-  private notificationsFrame(identity: {
-    owner: string
-    token?: string | null
-  }): StreamClientMessage {
-    return {
-      action: 'subscribe',
-      notifications: true,
-      owner: identity.owner,
-      ...(identity.token ? { token: identity.token } : {})
-    }
+  private notificationsFrame(identity: { owner: string }): StreamClientMessage {
+    return { action: 'subscribe', notifications: true, owner: identity.owner }
   }
 
   subscribeIndicator(
@@ -570,7 +551,6 @@ export class StreamClient {
       case 'auth_ok':
         return
       case 'error':
-        if (isUnknownAuthAction(message)) return
         if (message.code === 'unauthorized') {
           // The 4401 close follows, and is what acts (see the 'close' listener).
           console.warn(`[stream] session refused: ${message.errmsg ?? message.detail}`)

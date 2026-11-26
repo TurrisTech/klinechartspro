@@ -29,8 +29,8 @@ export type Feature =
   | 'indicators.resolve'
   // GET /plugins and GET /plugins/{id}/values — the indicator plugin host
   // (wdashboard_server/plugins). Every plugin's points come through one route body; the
-  // `plugins` table names what is mounted. Absent (an older server), the client's plugins
-  // fetch on their legacy paths instead (client/plugins/api.ts).
+  // `plugins` table names what is mounted. Informational: every server since the host has it,
+  // and the client reads the unified route without asking (client/plugins/api.ts).
   | 'plugins'
   // GET /plugins/signals and /plugins/{id}/signals -- the published signal labels
   // (client/plugins/README.md "Signals"). With it, a labelling plugin's points carry

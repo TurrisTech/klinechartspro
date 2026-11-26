@@ -275,11 +275,9 @@ export type StreamClientMessage =
     }
   | { action: 'unsubscribe'; vendor: string; symbol: string; interval: string; indicator?: SeriesDoc }
   | { action: 'subscribe' | 'unsubscribe'; plugin: string; variant: string | null; vendor: string; symbol: string; interval: string }
-  // The notifications subscribe carries both identities: `token` (the session bearer, when
-  // signed in) for a server from before the stream login, which takes the session from no
-  // other frame, and `owner`, the identity where the login is off. A server with the stream
-  // login takes the session from the auth frame instead.
-  | { action: 'subscribe'; notifications: true; owner: string; token?: string }
+  // The notifications subscribe carries `owner`, the identity where the login is off; where it
+  // is on, the server takes the session from the socket's auth frame.
+  | { action: 'subscribe'; notifications: true; owner: string }
   | { action: 'unsubscribe'; notifications: true }
   | { action: 'ping'; id?: string }
 
