@@ -58,8 +58,8 @@ function setup() {
   const store = new WorkspaceStore(
     remote,
     [
-      { id: 'a', name: 'Majors', updatedAt: 1, layout: layout(), indicatorParams: {} },
-      { id: 'b', name: 'Metals', updatedAt: 1, layout: layout({ preset: '2h' }), indicatorParams: {} }
+      { id: 'a', name: 'Majors', updatedAt: 1, layout: layout() },
+      { id: 'b', name: 'Metals', updatedAt: 1, layout: layout({ preset: '2h' }) }
     ],
     'a'
   )

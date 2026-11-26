@@ -7,9 +7,9 @@ import type { SettingsField } from '../chartlayers/settings'
 //
 // 1D was dropped 2026-09-08: no levels have been computed on it since the indicator feed
 // took over (wtradingindicators feeds/levels_declare.py pins 1W and 1M), so a 1D toggle
-// asked for something the server silently ignored. Saved preferences may still carry
-// `intervals.1D` and `base.intervalColors.1D` — chartlayers/store.ts's mergeDefaults only
-// copies keys the defaults have, so those are dropped on load rather than resurrected.
+// asked for something the server silently ignored. A saved pane setting that still carries
+// `intervals.1D` or `base.intervalColors.1D` loses it on load: the layer codec
+// (chartlayers/persist.ts) drops a path the defaults do not have.
 export const LEVELS_INTERVAL_ORDER = ['1W', '1M']
 
 // Metric names a Levels emphasis encoding can be pointed at (client/levels/layer.ts's

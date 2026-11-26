@@ -6,7 +6,6 @@ import type { PriceAlerts } from './alerts/hub'
 import { LayerAlertView } from './alerts/view'
 import { overlaySignature } from './paint'
 import { type LayerConfigCodec, layerConfigCodec } from './persist'
-import { loadLayerConfig } from './store'
 import type { ChartLayer, LayerContext, LayerWindow } from './types'
 import { contains, missingWindows, PRICE_WINDOW_FRACTION, targetWindow } from './window'
 
@@ -130,13 +129,6 @@ export interface LayerController<TConfig extends object = object> {
   readonly template: string
   /** The layer's settings as the wall document stores them (persist.ts). */
   readonly codec: LayerConfigCodec<TConfig>
-  /** What a pane never configured draws with: the wall-wide settings of the toolbar era
-   * (store.ts) once `ready`, the defaults before. */
-  baseline(): TConfig
-  /** Resolves once the baseline is read; never rejects. Nothing should draw before it, or a
-   * pane drawn with the defaults first fetches twice whenever the baseline asks for different
-   * timeframes. */
-  readonly ready: Promise<void>
   /** Draws the layer on `pane` with `config` while the binding of `indicatorId` lives there.
    * `editConfig` changes one of the pane's settings for the layer, as its panel would (the
    * binding's `BindContext.editConfig`). Returns the release. */
@@ -178,14 +170,6 @@ export function createLayerController<TDatum, TConfig extends object>(
   alerts?: PriceAlerts
 ): LayerController<TConfig> {
   const codec = layerConfigCodec(layer.defaults, layer.fields)
-  // What a pane never configured draws with. Until the layers became indicators their
-  // settings were one wall-wide document (store.ts), and the settings a user chose there are
-  // where every pane of theirs starts -- read once, never written again.
-  let baseline: TConfig = layer.defaults
-  // Never throws (loadLayerConfig's own contract).
-  const ready = loadLayerConfig(layer.id, layer.defaults).then((stored) => {
-    baseline = codec.normalise(stored)
-  })
   const holds = new WeakMap<Chart, PaneHold<TDatum>>()
   const views = new Set<{ invalidate(): void; repaint(): void }>()
   // The clicks, hovers and bells of the layer's price alerts (alerts/view.ts), added to what
@@ -427,8 +411,6 @@ export function createLayerController<TDatum, TConfig extends object>(
     layer: layer as ChartLayer<unknown, TConfig>,
     template,
     codec,
-    baseline: () => baseline,
-    ready,
     attach,
     invalidate(): void {
       for (const view of views) view.invalidate()

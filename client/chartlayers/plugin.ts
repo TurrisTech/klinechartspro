@@ -87,8 +87,8 @@ export function createLayerPlugin(options: { id: string; group: string; layers: 
     // `/levels` is as old as the chart; a layer that needs more says so in its legend.
     feature: null,
     // Per pane and per layer, as the pane's `ly` stores them: `{ levels: {...}, levels2: {...} }`,
-    // each the differences from the layer's defaults (persist.ts). A pane never configured starts
-    // from what the user last chose under the old toolbar button (store.ts).
+    // each the differences from the layer's defaults (persist.ts). A pane never configured draws
+    // with the defaults.
     paneConfigs: options.layers.map(({ controller }) =>
       paneConfig<object>({
         templates: [controller.template],
@@ -98,14 +98,11 @@ export function createLayerPlugin(options: { id: string; group: string; layers: 
         defaults: controller.layer.defaults,
         normalise: (config) => controller.codec.normalise(config),
         toStored: (config) => controller.codec.toStored(config),
-        fromStored: (stored) => controller.codec.fromStored(stored),
-        fallback: () => controller.baseline()
+        fromStored: (stored) => controller.codec.fromStored(stored)
       })
     ),
     async register(f: PluginFacilities): Promise<IndicatorGroup[]> {
       facilities = f
-      // A pane is drawn only once the baseline its unconfigured panes start from is known.
-      await Promise.all(options.layers.map(({ controller }) => controller.ready))
       const items = options.layers.map(({ controller, description }) => {
         registerTemplate(controller.template, controller.layer.label)
         return { name: controller.template, label: controller.layer.label, description }

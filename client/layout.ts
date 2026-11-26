@@ -194,35 +194,11 @@ export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): Persisted
   }
 }
 
-// Templates that were once picked and no longer exist. A layout is persisted per user and
-// outlives the code that wrote it, so a name retired here would otherwise be handed to
-// klinecharts forever -- warning on every pane mount, and unremovable, since a name the
-// picker no longer offers has no checkbox to untick.
-//
-// 'KREV:krev01' was the price-pane half of the KREV indicator, folded into the sub-pane
-// template 'KREV:krev01:p' (the registry row's `template`, client/tsregistry/).
-const RETIRED_INDICATORS = new Set(['KREV:krev01'])
-
-// Templates that were replaced rather than retired, and whose saved names are MIGRATED so
-// the pane keeps the overlay it had. 'MTF:arev21:<timeframe>' was one price-pane template
-// per timeframe, ticked from the picker; they are now a single 'MTF:arev21' whose
-// timeframes are a setting (client/mtf/templates.ts), so several saved names can collapse
-// onto one and the result has to be deduplicated -- klinecharts keys an indicator by name
-// per pane, and handing it the same one three times creates one and warns twice.
-//
-// What does NOT survive is WHICH timeframes were ticked: the eight names carried that, and
-// the one template carries it in the pane's `mtf` field instead, which a layout written
-// against the eight has nothing to put in. Such a pane comes back on the defaults.
-const MTF_LEGACY_PREFIX = 'MTF:arev21:'
-const MTF_TEMPLATE = 'MTF:arev21'
-
+// A pane's saved indicator names, each once: klinecharts keys an indicator by name per pane,
+// and handing it the same one twice creates one and warns.
 const live = (names: string[]): string[] => {
   const kept: string[] = []
-  for (const name of names) {
-    if (RETIRED_INDICATORS.has(name)) continue
-    const mapped = name.startsWith(MTF_LEGACY_PREFIX) ? MTF_TEMPLATE : name
-    if (!kept.includes(mapped)) kept.push(mapped)
-  }
+  for (const name of names) if (!kept.includes(name)) kept.push(name)
   return kept
 }
 
@@ -230,15 +206,15 @@ function isNumberArray(value: unknown): value is number[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'number' && Number.isFinite(item))
 }
 
-// Indicator parameters for templates the pane still carries. A name the picker retired, or a
-// value that is not a finite number, is dropped rather than handed to klinecharts -- calcParams
-// go straight into an indicator's own calculation, where a NaN silently produces an empty line.
+// Indicator parameters for the pane's templates. A value that is not a finite number is dropped
+// rather than handed to klinecharts -- calcParams go straight into an indicator's own
+// calculation, where a NaN silently produces an empty line.
 function hydrateIndicatorParams(pane: PersistedPane): Record<string, number[]> {
   const stored = pane.ip
   if (!stored || typeof stored !== 'object') return {}
   const params: Record<string, number[]> = {}
   for (const [name, value] of Object.entries(stored)) {
-    if (RETIRED_INDICATORS.has(name) || !isNumberArray(value)) continue
+    if (!isNumberArray(value)) continue
     params[name] = [...value]
   }
   return params
