@@ -1106,6 +1106,41 @@
 	opacity: 0.92;
 }
 
+/* The legend's warning card (ChartPane's problemCard): opened from the amber warning beside an
+   indicator's close icon, under the press that opened it; why that indicator's data is incomplete. */
+.klinecharts-pro-problem-card {
+	position: absolute;
+	z-index: 6;
+	width: max-content;
+	max-width: min(20rem, calc(100% - 0.5rem));
+	padding: 0.375rem 0.5rem 0.5rem;
+	border: 1px solid #e8a317;
+	border-radius: var(--radius-md, 0.5rem);
+	background: var(--background);
+	color: var(--foreground);
+	box-shadow: 0 2px 8px rgb(0 0 0 / 0.24);
+	font-size: 0.75rem;
+	line-height: 1.35;
+}
+
+.klinecharts-pro-problem-card-head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+}
+
+.klinecharts-pro-problem-card-title {
+	color: #e8a317;
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.klinecharts-pro-problem-card p {
+	margin: 0.25rem 0 0;
+	overflow-wrap: anywhere;
+}
+
 /* The touch drawing bar (ChartPane's touchDrawing): foot of the price area, centred, over the canvas,
    at a fingertip's size -- it only ever appears for a finger. */
 .klinecharts-pro-drawing-bar {

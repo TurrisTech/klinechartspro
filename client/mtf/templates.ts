@@ -142,7 +142,9 @@ export function computeValues(dataList: KLineData[], extend: ExtendData): Value[
   const chartAbs = chartOpens(extend.chartInterval, dataList, clock)
   const lanes = new Map<string, number>((extend.intervals ?? []).map((interval, lane) => [interval, lane]))
   const graphOn = (extend.graphRoots?.length ?? 0) > 0
-  const onlyGraph = graphOn && graphConfig(extend.config).onlyGraph
+  // Not while a timeframe could not be read: the server then sends no graph, so every mark
+  // reads as outside it, and the filter would empty the pane of the marks it could send.
+  const onlyGraph = graphOn && graphConfig(extend.config).onlyGraph && !store.problem
   const values: Value[] = dataList.map(() => ({}))
   // One past the last bar too, when something became knowable at its close (`chartBarAt`).
   const valueAt = (i: number): Value => {

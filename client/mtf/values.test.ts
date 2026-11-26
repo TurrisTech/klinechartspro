@@ -103,6 +103,16 @@ describe('one calc, from the store to the markers', () => {
     expect(dotsOf(rootless)).toEqual([])
   })
 
+  // A timeframe the server could not read (user, 2026-11-26: "marks only"): no graph comes, so
+  // every mark reads as outside one, and the filter would leave the pane empty.
+  test('while a timeframe cannot be read, "hide signals outside the graph" hides nothing', () => {
+    seed([ROOT, signal('1h', 5 * H, 6 * H, 1.12, 'long'), OUTSIDE], [])
+    storeFor(KEY, createMtfGraphStore).setProblem('4h could not be read')
+    const values = computeValues(chartBars(12), extend(config((c) => (c.graph.onlyGraph = true))))
+    expect(marksOf(values)).toEqual(['4h@bar4', '1h@bar6', '1h@bar8'])
+    expect(dotsOf(values)).toEqual([])
+  })
+
   test("a bar's marks stack shortest timeframe first, whatever order they were known in", () => {
     // Both known at 4h, so both on bar 4: the 1h one is the nearer to the candle.
     seed([ROOT, signal('1h', 3 * H, 4 * H, 1.105, 'long')], [])

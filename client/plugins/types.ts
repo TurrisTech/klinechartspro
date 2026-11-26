@@ -45,6 +45,10 @@ export interface Page<P> {
   /** Where a tiered series' closed partitions can be read straight from the bucket, when the
    * server says so (`client/indicatortiles/`). Absent for everything else. */
   tiles?: TileHint
+  /** Why this page holds less than was asked -- a timeframe of an MTF overlay the server could
+   * not read. Its points are drawn, its range is read again until a page comes back without one
+   * (host.ts `degraded`), and the legend's warning says this (`SourceStore.problem`). */
+  problem?: string
 }
 
 /** What the host needs from a store. `WindowStore` (store.ts) is the implementation
@@ -69,6 +73,10 @@ export interface SourceStore<P = unknown> {
    * whatever it fetched. */
   forgetAfter?(from: number): void
   setPhase(phase: Phase, progress?: number | null, error?: string | null): void
+  /** Why what is held is incomplete though it loaded (`Page.problem`), or null. Optional: a
+   * store without it never says so. */
+  problem?: string | null
+  setProblem?(problem: string | null): void
 }
 
 export interface SourceNotify {

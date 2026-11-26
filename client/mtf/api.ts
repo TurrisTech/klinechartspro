@@ -92,9 +92,21 @@ export interface MtfGraphRequest {
   asof?: number | null
 }
 
+/** A timeframe the server could not read, and why (wdashboard-server 0.60.0). */
+export interface MtfUnavailable {
+  interval: string
+  detail: string
+}
+
 export interface MtfGraphAnswer {
   signals: MtfSignalRow[]
   nodes: MtfNodeRow[]
+  /** The timeframes the server could not read (user, 2026-11-26: "marks only"). When any is
+   * named, `signals` are the other timeframes' and `nodes` is empty: a graph with a timeframe
+   * missing can be cut, or join timeframes it would not, so the server sends none. Absent or
+   * empty when nothing was left out -- always, from a server before 0.60.0, which failed the
+   * whole read instead. */
+  unavailable?: MtfUnavailable[]
   /** Where a capped answer continues, or null. */
   nextFrom: number | null
   /** The last instant at which every timeframe's answer is final -- nothing knowable at or
@@ -106,6 +118,7 @@ interface Envelope {
   s: 'ok' | 'no_data'
   signals?: MtfSignalRow[]
   nodes?: MtfNodeRow[]
+  unavailable?: MtfUnavailable[]
   nextFrom?: number | null
   computedThrough?: number | null
 }
@@ -138,9 +151,20 @@ export async function fetchMtfGraph(request: MtfGraphRequest): Promise<MtfGraphA
   return {
     signals: body.signals ?? [],
     nodes: body.nodes ?? [],
+    unavailable: body.unavailable ?? [],
     nextFrom: body.nextFrom ?? null,
     computedThrough: body.computedThrough ?? null
   }
+}
+
+/** What a pane says about a partial answer: which timeframes could not be read and why, and what
+ * is drawn meanwhile. Null when nothing was left out. */
+export function describeUnavailable(unavailable: readonly MtfUnavailable[] | undefined): string | null {
+  if (!unavailable || unavailable.length === 0) return null
+  const which = unavailable.map((u) => u.interval).join(', ')
+  const why = unavailable.map((u) => (unavailable.length > 1 ? `${u.interval}: ${u.detail}` : u.detail)).join('; ')
+  const verb = unavailable.length > 1 ? 'are' : 'is'
+  return `${which} could not be read (${why}). The marks of the other timeframes are drawn; entry stars and graph lines are hidden until ${which} ${verb} read again.`
 }
 
 /**

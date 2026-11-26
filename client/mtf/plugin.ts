@@ -14,7 +14,7 @@ import type {
   SourceStore
 } from '../plugins/types'
 import type { PluginPointListener } from '../stream'
-import { fetchMtfGraph, type MtfInterval, type MtfSignalRow, warmMtfGraph } from './api'
+import { describeUnavailable, fetchMtfGraph, type MtfInterval, type MtfSignalRow, warmMtfGraph } from './api'
 import {
   MTF_DEFAULTS,
   MTF_FIELDS,
@@ -243,7 +243,15 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       window: (chartRange: Range): Range => windowAt(chartRange, getReadClock()),
       fetch: async (range, limit) => {
         const answer = await fetchMtfGraph({ ...request, from: range.from, to: range.to, limit })
-        return { points: answer.signals, nextFrom: answer.nextFrom, arrays: { [NODES_ARRAY]: answer.nodes } }
+        // A timeframe the server could not read (user, 2026-11-26: "marks only"): the other
+        // timeframes' marks are drawn, no graph, and the legend's warning says which and why.
+        const problem = describeUnavailable(answer.unavailable)
+        return {
+          points: answer.signals,
+          nextFrom: answer.nextFrom,
+          arrays: { [NODES_ARRAY]: answer.nodes },
+          ...(problem ? { problem } : {})
+        }
       },
       subscribe: graphSubscribe(f, ctx, overlay, shown, clock, load),
       // A bar replay's next landing, read by the server before the press (wdashboard-server

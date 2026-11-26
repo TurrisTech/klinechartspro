@@ -77,6 +77,33 @@ describe('each overlay', () => {
     })
   }
 
+  // A timeframe the server could not read (wdashboard-server 0.60.0): the page carries the other
+  // timeframes' marks and says why it is short, which the host turns into the legend's warning.
+  test('a timeframe the server could not read is the page\'s problem, named with why', async () => {
+    const { spec } = bound(2, '5m')
+    const source = spec?.sources[0]
+    if (!source) throw new Error('no source')
+    const mark = { interval: '1h', date: 1_500, knownAt: 1_600, price: 1.1, signal: 'long', side: 'top', p: 0.7, inGraph: false }
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          s: 'ok',
+          signals: [mark],
+          nodes: [],
+          unavailable: [{ interval: '4h', detail: 'OSError: 4h: index file read back empty' }],
+          nextFrom: null,
+          computedThrough: null
+        }),
+        { status: 200 }
+      )) as unknown as typeof fetch
+    const page = await source.fetch({ from: 1_000, to: 2_000 }, 500)
+    expect(page.points).toEqual([mark])
+    expect(page.arrays).toEqual({ nodes: [] })
+    expect(page.problem).toBe(
+      '4h could not be read (OSError: 4h: index file read back empty). The marks of the other timeframes are drawn; entry stars and graph lines are hidden until 4h is read again.'
+    )
+  })
+
   test('the window is the chart\'s loaded bars as instants, from the gap before the first', () => {
     const { spec } = bound(2, '1h')
     const t = Date.parse('2026-10-05T13:00Z')

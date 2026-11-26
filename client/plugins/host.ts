@@ -5,7 +5,7 @@ import { onViewMoved } from '../chartview'
 import { gridFor } from '../replay/timeframes'
 import { knownThrough } from './horizon'
 import { type PaneConfig, PaneConfigStore, type PaneDoc } from './paneconfig'
-import { dropStore, liveStores, missingRanges, storeFor, WindowStore } from './store'
+import { dropStore, liveStores, mergeRange, missingRanges, storeFor, WindowStore } from './store'
 import type {
   BindContext,
   BindingSpec,
@@ -50,6 +50,11 @@ const APPLY_FALLBACK_MS = 100
 /** Rough height of one klinecharts legend row: a settings panel hangs just below the legend
  * the gear sits in. */
 const LEGEND_ROW_HEIGHT = 24
+
+/** How long a range a page answered only partly (`Page.problem`) waits before it is read again.
+ * The fault behind one can last days (2026-11-02..04: one unreadable index file), so the retry is
+ * slow; a whole answer ends it. */
+export const PARTIAL_RETRY_MS = 60_000
 
 interface Binding {
   plugin: IndicatorPlugin
@@ -130,6 +135,8 @@ export interface CreateHostOptions {
   requestPersist?: () => void
   /** The settings panel; a test passes a recorder. */
   openSettingsPanel?: typeof openPanel
+  /** How long a partly answered range waits to be read again; a test shortens it. */
+  partialRetryMs?: number
 }
 
 export async function createPluginHost(options: CreateHostOptions): Promise<PluginHost> {
@@ -253,7 +260,10 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       seriesKey: b.sources[0]?.key ?? '',
       seriesKeys,
       rev,
-      ...(b.spec.extendData?.(b.state) ?? {})
+      ...(b.spec.extendData?.(b.state) ?? {}),
+      // The legend's warning icon and its card (src/ChartPane.svelte): set by the host for every
+      // plugin indicator, after the plugin's own keys so none can hide it.
+      problem: problemOf(b)
     }
     try {
       // klinecharts MERGES an override's extendData into the indicator's own, deeply: an array
@@ -371,6 +381,48 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
   // One entry per store, so the next landing replaces the last.
   const warmed = new Map<string, { at: number; window: Range }>()
 
+  // The ranges of each store a page answered only partly (`Page.problem`), and when they may be
+  // read again. They are drawn and counted as fetched -- so nothing reads them on every scroll --
+  // but `ensureCoverage` reads them again once due, and a page without a problem over a range
+  // takes it out. The store's problem, which the legend's warning shows, goes with the last one.
+  const degraded = new Map<string, { ranges: Range[]; due: number }>()
+  const partialRetryMs = options.partialRetryMs ?? PARTIAL_RETRY_MS
+
+  const noteProblem = (entry: WiredPane, b: Binding, source: Binding['sources'][number], range: Range, problem: string | null): void => {
+    const held = degraded.get(source.key)
+    if (problem) {
+      degraded.set(source.key, { ranges: mergeRange(held?.ranges ?? [], range), due: Date.now() + partialRetryMs })
+      source.store.setProblem?.(problem)
+      scheduleRetry(entry, b, partialRetryMs)
+      return
+    }
+    if (!held) return
+    const ranges = held.ranges.flatMap((r) => missingRanges([range], r))
+    if (ranges.length > 0) {
+      degraded.set(source.key, { ...held, ranges })
+    } else {
+      degraded.delete(source.key)
+      source.store.setProblem?.(null)
+    }
+  }
+
+  /** The partly answered ranges of a store inside `window` that are due to be read again. */
+  const degradedDue = (key: string, window: Range): Range[] => {
+    const held = degraded.get(key)
+    if (!held || Date.now() < held.due) return []
+    return held.ranges
+      .map((r) => ({ from: Math.max(r.from, window.from), to: Math.min(r.to, window.to) }))
+      .filter((r) => r.from < r.to)
+  }
+
+  /** What the legend's warning says for a binding: a source that failed to load, else one that
+   * loaded only partly (`SourceStore.problem`), else null. */
+  const problemOf = (b: Binding): string | null => {
+    for (const s of b.sources) if (s.store.phase === 'error') return `Could not be loaded: ${s.store.error ?? 'unknown error'}`
+    for (const s of b.sources) if (s.store.problem) return s.store.problem
+    return null
+  }
+
   const scheduleRetry = (entry: WiredPane, b: Binding, afterMs: number): void => {
     if (b.retryTimer) clearTimeout(b.retryTimer)
     b.retryTimer = setTimeout(() => {
@@ -410,6 +462,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         store.ingest(page.points, { from, to }, page.arrays)
         filed = true
         store.setPhase('ready')
+        noteProblem(entry, b, source, { from, to }, page.problem ?? null)
         applyReaders(source.key)
         if (page.nextFrom === null) return
         from = page.nextFrom
@@ -443,7 +496,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // or the server is still building the series -- and what it left is then this one's.
       for (let pass = 0; pass < 2 && !b.disposed; pass++) {
         const waits = new Set<Promise<void>>()
-        for (const gap of source.store.missing(window)) {
+        for (const gap of [...source.store.missing(window), ...degradedDue(source.key, window)]) {
           const running = [...(storeFetches.get(source.key) ?? [])].filter((f) => f.range.from < gap.to && f.range.to > gap.from)
           for (const f of running) waits.add(f.done)
           for (const free of missingRanges(running.map((f) => f.range), gap)) await fetchGap(entry, b, source, free)
@@ -481,7 +534,10 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     for (const s of b.sources) {
       s.unsubscribe?.()
       s.unsubscribe = null
-      if (!storeInUse(s.key, b)) dropStore(s.key)
+      if (!storeInUse(s.key, b)) {
+        dropStore(s.key)
+        degraded.delete(s.key)
+      }
     }
   }
 
