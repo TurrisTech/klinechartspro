@@ -171,11 +171,6 @@ export function loadServerCatalogue(): Promise<ServerCatalogue> {
   return server
 }
 
-/** For tests. */
-export function resetServerCatalogue(): void {
-  server = null
-}
-
 // -- names -------------------------------------------------------------------------------------
 
 /** How an operand reads in a sentence and in the list: "RSI(14)", "MACD(12,26,9) DEA",

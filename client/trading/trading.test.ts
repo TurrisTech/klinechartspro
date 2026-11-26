@@ -6,7 +6,7 @@ import type { DraftOrder } from './lines'
 // format.ts -> symbols.ts -> config.ts reads `window` at import, so the DOM stub has to exist
 // before those load -- hence installWindow() then the dynamic imports (same as api.test.ts).
 installWindow()
-const { pipsToPrice, toPips, tradePips, tradePnl } = await import('./format')
+const { toPips, tradePips, tradePnl } = await import('./format')
 const { DEFAULT_COLORS, linesFor, overlaysFor } = await import('./overlays')
 const { applyAmendment, bracketFigures, currentLevel, historyFigures, isComposing } = await import('./lines')
 const { formatInstant, formatShare } = await import('./format')
@@ -207,12 +207,6 @@ describe('amendments waiting for confirmation', () => {
 })
 
 describe('pip math', () => {
-  test('pipsToPrice puts a stop below a long and a target above', () => {
-    // EURUSD pip = 0.0001; 10 pips from 1.1000
-    expect(pipsToPrice(1.1, 10, 0.0001, true)).toBeCloseTo(1.099, 10) // below
-    expect(pipsToPrice(1.1, 10, 0.0001, false)).toBeCloseTo(1.101, 10) // above
-  })
-
   test('toPips expresses a price delta in pips, or null off-pip', () => {
     expect(toPips(0.0005, 0.0001)).toBeCloseTo(5, 10)
     expect(toPips(0.0005, null)).toBeNull()

@@ -2766,10 +2766,6 @@ body.wd-has-dock > #app {
   border-top: 1px solid var(--border);
 }
 
-.wd-replay-times {
-  color: var(--muted-foreground);
-}
-
 .wd-replay-stop-reason,
 .wd-replay-walk {
   /* Shrinks beside Next alert (with an ellipsis) instead of pushing the row wider. */

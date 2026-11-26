@@ -1,4 +1,4 @@
-import type { IndicatorSettingField, IndicatorSettingFieldCondition } from '../../src'
+import type { IndicatorSettingField } from '../../src'
 
 // A declarative settings field schema and a plain-DOM renderer for it — deliberately the
 // same shape as the library's own src/config/settings.ts (dotted `key` path + a component
@@ -8,17 +8,17 @@ import type { IndicatorSettingField, IndicatorSettingFieldCondition } from '../.
 // went dark under the dev server in d382ce5 — pulling that chain into client/ would risk
 // the same failure mode for a feature with no test coverage to catch it.
 
-/** Show a field only while another field's value is one of `is` -- the levers of the one rule
- * a select has chosen, say. Evaluated against the live config: a `switch` or `select` change
- * re-renders the panel, so a dependent field appears or disappears as its condition flips. A
- * `number` edit does not re-render (it would steal the input's focus mid-keystroke), which is
- * why a condition should name a switch or a select. */
-export type SettingsFieldCondition = IndicatorSettingFieldCondition
-
 /** The library's own type, not a copy of it: the indicator manager draws a plugin's fields
  * inline (IndicatorSettingsModel), so a field a panel can show is one the manager can too. A
  * `number` field's `integer` means the consumer keeps that lever whole (the lab's `coerce`
- * rounds it), so the box settles on a whole number too -- see `settleNumber`. */
+ * rounds it), so the box settles on a whole number too -- see `settleNumber`.
+ *
+ * A field's condition (the library's `IndicatorSettingFieldCondition`) shows it only while
+ * another field's value is one of `is` -- the levers of the one rule a select has chosen, say.
+ * Evaluated against the live config: a `switch` or `select` change re-renders the panel, so a
+ * dependent field appears or disappears as its condition flips. A `number` edit does not
+ * re-render (it would steal the input's focus mid-keystroke), which is why a condition should
+ * name a switch or a select. */
 export type SettingsField = IndicatorSettingField
 
 // Both assume `source`/`target` are a complete, already-valid config (every intermediate

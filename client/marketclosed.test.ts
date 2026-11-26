@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { KLineData } from 'klinecharts'
-import { isLegalCandleOpen, legalCandleOpens } from './marketclosed'
-import { dayGeometryOf } from './daygeometry'
+import { legalCandleOpens } from './marketclosed'
 import type { MarketHours } from './symbols'
 
 const session = (openDay: string, openTime: string, closeDay: string, closeTime: string) => ({
@@ -42,12 +41,12 @@ const EDT = '-04:00'
 const UTC = 'Z'
 
 const legal = (resolution: string, wireMs: number, hours: MarketHours) => {
-  const day = dayGeometryOf(hours)
-  if (day === null) throw new Error('fixture has no geometry')
-  return isLegalCandleOpen(resolution, wireMs, hours.timezone, day)
+  const admit = legalCandleOpens(resolution, hours)
+  if (admit === null) throw new Error('fixture has no geometry')
+  return admit(bar(wireMs))
 }
 
-describe('isLegalCandleOpen — forex', () => {
+describe('a legal candle open — forex', () => {
   // The two kinds measured on prod oanda:EURUSD:1D, and the ordinary weekdays around them.
   test('a weekday daily label is legal', () => {
     expect(legal('1D', wireDay('2019-10-10', EDT), FOREX)).toBe(true)
@@ -80,7 +79,7 @@ describe('isLegalCandleOpen — forex', () => {
   })
 })
 
-describe('isLegalCandleOpen — crypto', () => {
+describe('a legal candle open — crypto', () => {
   // The regression the bare `isMarketOpen` would have caused: a continuous schedule trades
   // every calendar day, so both weekend days are legal candle opens.
   test('both weekend days are legal daily opens', () => {
@@ -101,7 +100,7 @@ describe('isLegalCandleOpen — crypto', () => {
   })
 })
 
-describe('isLegalCandleOpen — US equities', () => {
+describe('a legal candle open — US equities', () => {
   // The anchor is 09:00 while the session opens 09:30: the boundary rule, not the filtering
   // rule. So 09:00 is a legal hourly open and 08:00 is not.
   test('a weekday daily label is legal and a weekend one is not', () => {

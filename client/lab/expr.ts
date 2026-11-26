@@ -373,21 +373,6 @@ export function callsOf(ast: Ast, name: string): Array<Array<number | string | b
   return out
 }
 
-/** Every name `ast` reads. */
-export function namesOf(ast: Ast): Set<string> {
-  const out = new Set<string>()
-  const walk = (node: Ast): void => {
-    if (node.k === 'id') out.add(node.name)
-    else if (node.k === 'un') walk(node.a)
-    else if (node.k === 'bin') {
-      walk(node.a)
-      walk(node.b)
-    } else if (node.k === 'call') node.args.forEach(walk)
-  }
-  walk(ast)
-  return out
-}
-
 // -- evaluation --------------------------------------------------------------------------------
 
 function isNum(v: ExprValue): v is number {

@@ -35,7 +35,7 @@ export type Feature =
   // GET /plugins/signals and /plugins/{id}/signals -- the published signal labels
   // (client/plugins/README.md "Signals"). With it, a labelling plugin's points carry
   // `signal` as the label id (`'long'`, `'top'`) rather than a boolean; without it the
-  // client's plugins normalise the old boolean themselves (arev/api.ts `arevSignal`).
+  // catalogue is not asked for (client/plugins/api.ts `loadSignalCatalogue`).
   | 'plugins.signals'
   // WS /stream `subscribe {plugin, variant, vendor, symbol, interval}` -- a plugin's points
   // pushed as the research feed writes them (wdashboard-server services/framerelay.py). The
@@ -240,11 +240,6 @@ export function levelsCoverageFor(vendor: string, symbol: string): LevelsCoverag
       entry.vendor.toLowerCase() === vendor.toLowerCase() &&
       entry.symbol.toUpperCase() === symbol.toUpperCase()
   )
-}
-
-// The server's plugin table, empty on a server from before the host.
-export function serverPlugins(): PluginInfo[] {
-  return cached.plugins ?? []
 }
 
 // Whether the server advertises stored levels2 zone documents for this instrument.

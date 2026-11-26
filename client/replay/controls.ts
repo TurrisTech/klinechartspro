@@ -5,7 +5,7 @@ import { formatClock, formatSpan, zoneName } from './format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import { replayResults, resultHeadline, resultRows } from './results'
-import { describeQuiet, localZone, type QuietSetting } from './quiet'
+import { describeQuiet, hhmm, localZone, parseHhmm, type QuietSetting } from './quiet'
 import { lastPlayed, type ReplaySessionSummary, resumable, sessionFacts } from './sessions'
 import type { AdvanceResult, ReplayController } from './session'
 import { describeStep, forgetStep, parseStep, readSavedSteps, rememberStep, sameStep, type StepSetting, stepKey } from './steps'
@@ -646,10 +646,10 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       const input = document.createElement('input')
       input.type = 'time'
       input.className = 'kc-input wd-replay-input wd-replay-quiet-time'
-      input.value = minuteValue(value)
+      input.value = hhmm(value)
       input.setAttribute('aria-label', aria)
       input.addEventListener('change', () => {
-        const minute = minuteOf(input.value)
+        const minute = parseHhmm(input.value)
         if (minute !== null) quiet.set(apply(minute))
       })
       return input
@@ -876,11 +876,11 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const time = document.createElement('input')
     time.type = 'time'
     time.className = 'kc-input wd-replay-input wd-replay-goto-time'
-    time.value = minuteValue(goTo.minute)
+    time.value = hhmm(goTo.minute)
     time.title = `A time of day on ${controller.symbol.split(':')[1] ?? controller.symbol}'s clock (${zoneName(zone)})`
     time.setAttribute('aria-label', 'Go to time')
     time.addEventListener('change', () => {
-      const minute = minuteOf(time.value)
+      const minute = parseHhmm(time.value)
       if (minute === null) return
       goTo = { ...goTo, minute }
       writeGoTo(goTo)
@@ -888,7 +888,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     })
     time.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return
-      const minute = minuteOf(time.value)
+      const minute = parseHhmm(time.value)
       if (minute !== null) goTo = { ...goTo, minute }
       pressGoTo()
     })
@@ -1110,19 +1110,6 @@ function writeGoTo(spec: GoToSpec): void {
   } catch {
     // Not remembered.
   }
-}
-
-/** `HH:MM` for a minute of the day. */
-function minuteValue(minute: number): string {
-  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`
-}
-
-/** The minute of the day a `HH:MM` reading names, or null. */
-function minuteOf(value: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})/.exec(value)
-  if (!m) return null
-  const minute = Number(m[1]) * 60 + Number(m[2])
-  return minute >= 0 && minute < 1440 ? minute : null
 }
 
 /** The calendar day after `ms`'s on `zone`'s clock, as its wall-clock midnight. */

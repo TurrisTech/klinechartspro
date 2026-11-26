@@ -223,9 +223,9 @@ jumps to one). The alerts read the catalogue through `loadSignalCatalogue` (`api
 plugin-facing `facilities.signals` that once let one plugin read another's labelled points was
 never used by any plugin and was removed on 2026-10-11, along with `client/krev/api.ts`.
 
-The catalogue is gated on the `plugins.signals` feature (empty on an older server, whose points
-carry the old boolean -- `arevSignal` in `client/arev/api.ts` normalises it with the server's own
-rule). Tests: `signals.test.ts`.
+The catalogue is gated on the `plugins.signals` feature (empty on an older server). A server
+from before it sent `signal` as a boolean, which the client no longer reads: every deployed
+server publishes the label. Tests: `signals.test.ts`.
 
 ## Built-ins
 

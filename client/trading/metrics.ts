@@ -327,15 +327,6 @@ export function restingPriceValid(
   return side === 'buy' ? price > quote.ask : price < quote.bid
 }
 
-/** Whether moving a pending order to `price` would be accepted: the resting rule, AND its own
- * stop and target still on the right sides of the new price (`modify_order` checks both). */
-export function orderPriceValid(order: SimOrder, price: number, quote: SimQuote | undefined): boolean {
-  if (!restingPriceValid(order.side, order.type, price, quote)) return false
-  if (order.stopLoss !== null && !protectionValid(order.side, 'stop', order.stopLoss, price)) return false
-  if (order.takeProfit !== null && !protectionValid(order.side, 'target', order.takeProfit, price)) return false
-  return true
-}
-
 /** A starting stop or target for the "+SL"/"+TP" buttons: `distance` beyond whichever of the
  * reference and the entry is further on that side, so it is valid the moment it is placed even
  * when the trade is already under water. Rounded to the instrument's precision.

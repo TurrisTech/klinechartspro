@@ -154,8 +154,6 @@ export interface TradeTalkResult {
   skips: Skips
 }
 
-export type SkipReason = keyof Skips
-
 /** What a candle's sweep came to: an order to work, or the reason there is none. */
 export interface SignalResult {
   order: Omit<Pending, 'signalIndex'> | null

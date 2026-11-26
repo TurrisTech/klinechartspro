@@ -2,11 +2,9 @@ import { describe, expect, test } from 'bun:test'
 import { installWindow } from './testing'
 
 // The published-signals contract as the client consumes it: the AREV pane reads the server's
-// label rather than restating its rule -- except where a pre-`plugins.signals` server sends the
-// old boolean, which `arevSignal` maps with that rule, once. (The MTF overlays read the label off
-// `GET /mtf/graph`, where the server put it: client/mtf/values.test.ts.)
+// label rather than restating its rule. (The MTF overlays read the label off `GET /mtf/graph`,
+// where the server put it: client/mtf/values.test.ts.)
 installWindow()
-const { arevSignal } = await import('../arev/api')
 const { matches } = await import('../tsregistry/api')
 
 import type { ArevPoint } from '../arev/api'
@@ -23,14 +21,6 @@ const point = (over: Partial<ArevPoint>): ArevPoint => ({
 })
 
 describe('the label is read, not re-derived', () => {
-  test('arevSignal passes a published label through and maps the old boolean by the server rule', () => {
-    expect(arevSignal({ signal: 'long', p: 0.3 })).toBe('long')
-    expect(arevSignal({ signal: 'short', p: 0.9 })).toBe('short')
-    expect(arevSignal({ signal: null, p: 0.9 })).toBeNull()
-    expect(arevSignal({ signal: false, p: 0.9 })).toBeNull()
-    expect(arevSignal({ signal: true, p: 0.6 })).toBe('long')
-    expect(arevSignal({ signal: true, p: 0.4 })).toBe('short')
-  })
   test('the AREV pane marks exactly the labelled bars, whatever p did between them', () => {
     // The registry row's marks, as wtradingindicators declares them: each selects on the
     // server's published label, never on where p happens to sit. p is above the band on
@@ -44,5 +34,4 @@ describe('the label is read, not re-derived', () => {
     expect(matches(down, point({ p: 0.4, signal: 'short' }))).toBe(true)
     expect(matches(up, undefined)).toBe(false)
   })
-
 })

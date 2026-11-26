@@ -103,6 +103,10 @@ describe('ReplayQuiet', () => {
   test('the hours read as a span', () => {
     expect(describeQuiet({ from: 22 * 60, to: 6 * 60 })).toBe('22:00–06:00')
     expect(parseHhmm('6:30')).toBe(390)
+    expect(parseHhmm('22:00:00')).toBe(1320) // a time input's value with seconds
+    expect(parseHhmm('22:00:59.5')).toBe(1320)
     expect(parseHhmm('24:00')).toBeNull()
+    expect(parseHhmm('10:75')).toBeNull()
+    expect(parseHhmm('22:00x')).toBeNull()
   })
 })

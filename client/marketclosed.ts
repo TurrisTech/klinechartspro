@@ -1,11 +1,6 @@
 import type { KLineData } from 'klinecharts'
 import { dayGeometryOf } from './daygeometry'
-import {
-  type DayGeometry,
-  scheduleIntervalStart,
-  scheduleIsMarketOpen,
-  scheduleWireShift
-} from './replay/timeframes'
+import { scheduleIntervalStart, scheduleIsMarketOpen, scheduleWireShift } from './replay/timeframes'
 import type { MarketHours } from './symbols'
 
 // PURE. Drop bars the chart must not draw: rows whose label is not a legal candle open for
@@ -45,8 +40,8 @@ import type { MarketHours } from './symbols'
 // instrument's resolved `MarketHours`, via the `schedule*` family, which is parity-tested
 // against wmarkettypes for all three schedules (`replay/timeframes.test.ts`).
 
-/** Is `wireMs` -- a bar label on the WIRE clock -- a legal candle open of `resolution` under
- * this geometry? Two conditions, and both are load-bearing:
+/** A test of one bar of `resolution` under `hours`: is its label -- on the WIRE clock -- a legal
+ * candle open? Two conditions, and both are load-bearing:
  *
  * - on the grid: the label is its own interval start. This is the only one that catches a
  *   misaligned label on a continuous market, where `scheduleIsMarketOpen` is unconditionally
@@ -56,23 +51,13 @@ import type { MarketHours } from './symbols'
  *
  * The wire shift is undone first. Daily-and-coarser bars are session-dated on the wire (+7h
  * forex, 0 crypto, -9h equities), so testing the label as it arrives would be 7 or 9 hours off
- * its true open and would reject everything. */
-export function isLegalCandleOpen(
-  resolution: string,
-  wireMs: number,
-  tz: string,
-  day: DayGeometry
-): boolean {
-  const at = wireMs - scheduleWireShift(resolution, day)
-  return scheduleIsMarketOpen(at, tz, day) && scheduleIntervalStart(resolution, at, tz, day) === at
-}
-
-/** `isLegalCandleOpen` as a test of one bar of `resolution` under `hours`, built once per window
- * rather than per row (the wire shift parses the interval code). `history.ts` hands it to the tile
- * join as `admit`, which applies it to both halves of a window before `limit`'s tail -- walking
- * back from the end, so a widened window does not pay to test every row it will discard: at 5s a
- * week of tile rows is ~70k bars and each test is a timezone conversion, ~220 ms on the main
- * thread to keep 500 of them.
+ * its true open and would reject everything.
+ *
+ * Built once per window rather than per row (the wire shift parses the interval code).
+ * `history.ts` hands it to the tile join as `admit`, which applies it to both halves of a window
+ * before `limit`'s tail -- walking back from the end, so a widened window does not pay to test
+ * every row it will discard: at 5s a week of tile rows is ~70k bars and each test is a timezone
+ * conversion, ~220 ms on the main thread to keep 500 of them.
  *
  * FAILS OPEN: null, keeping every bar, for an instrument with no schedule -- `/instrument`
  * unreachable, an unknown symbol, a schedule with no sessions. Dropping bars on a guess about the
