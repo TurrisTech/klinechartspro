@@ -137,9 +137,17 @@ export interface StreamError {
    * moves to it. */
   errmsg?: string
   detail?: string
+  // Since wdashboard-server 0.60.3 an error about a subscription names it (docs/stream.md,
+  // "Errors"): the bar key, a plugin's plugin/variant beside it, an indicator's seriesKey -- or,
+  // for one whose series did not resolve, the `indicator` document as it was sent.
   vendor?: string | null
   symbol?: string | null
   interval?: string | null
+  plugin?: string
+  variant?: string | null
+  seriesKey?: string
+  indicator?: unknown
+  notifications?: boolean
 }
 
 // Server-computed indicator frames (wdashboard-server services/indicators.py). `seriesKey`

@@ -16,7 +16,7 @@ import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
 import { availablePeriods, periodToResolution } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
-import { stream, type StreamStatus } from './stream'
+import { stream, type StreamRefusal, type StreamStatus } from './stream'
 import {
   type BarReplayController,
   bootReplay,
@@ -814,18 +814,43 @@ function mountChartExtras(
   }
   // Disposed on teardown: `stream` is a page-lifetime singleton, so a listener left behind by
   // each workspace switch would accumulate, each writing into a detached footer.
-  const unsubscribeStatus = stream.onStatus((value: StreamStatus) => {
+  let streamStatus: StreamStatus = 'offline'
+  let refusals: StreamRefusal[] = []
+  const renderStatus = () => {
     // A replay wall is not live, whatever the socket is doing (it still carries notifications):
     // a green "live" under a chart frozen in 2024 was the one thing on screen that lied.
     if (replay.inReplay) {
       status.dataset.stream = 'replay'
+      delete status.dataset.refused
       statusText.textContent = 'replay'
       statusText.title = 'Bar replay: the chart shows stored history up to the replay clock, not the live market'
       return
     }
-    status.dataset.stream = value
-    statusText.textContent = STATUS_LABELS[value]
-    statusText.title = value
+    status.dataset.stream = streamStatus
+    if (refusals.length === 0) {
+      delete status.dataset.refused
+      statusText.textContent = STATUS_LABELS[streamStatus]
+      statusText.title = streamStatus
+      return
+    }
+    // A pane whose live bars (or live plugin points) the server refused goes quiet with nothing
+    // else on screen to say why: the warning, and the server's own reasons on hover.
+    status.dataset.refused = String(refusals.length)
+    statusText.textContent = `${STATUS_LABELS[streamStatus]}⚠`
+    statusText.title = [
+      streamStatus,
+      '',
+      `The server refused ${refusals.length === 1 ? 'one live subscription' : `${refusals.length} live subscriptions`}:`,
+      ...refusals.map((r) => `${r.label} -- ${r.code}: ${r.errmsg}`)
+    ].join('\n')
+  }
+  const unsubscribeStatus = stream.onStatus((value: StreamStatus) => {
+    streamStatus = value
+    renderStatus()
+  })
+  const unsubscribeRefusals = stream.onRefusals((value: StreamRefusal[]) => {
+    refusals = value
+    renderStatus()
   })
 
   // First in the toolbar slot: which wall you are on is the outermost thing about it, and it
@@ -839,6 +864,7 @@ function mountChartExtras(
     switcher.close()
     saveControls.close()
     unsubscribeStatus()
+    unsubscribeRefusals()
     detachSwitcher()
     detachSaveControls()
     detachFooter()
