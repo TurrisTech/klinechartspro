@@ -203,6 +203,69 @@ describe('drafts across the set', () => {
   })
 })
 
+// Opening the dashboard. `indexWrites` records every write of the shared index to the remote
+// backend: a boot over a set whose stored index already describes it must send none -- each one
+// is a PUT /preferences on the way to drawing the chart.
+function bootSetup(activeId = 'a') {
+  local.clear()
+  const indexWrites: unknown[] = []
+  const remote = {
+    readAll: async () => ({}),
+    write: (key: string, value: unknown) => {
+      if (key === 'workspaces') indexWrites.push(value)
+    },
+    remove: () => {}
+  }
+  const store = new WorkspaceStore(
+    remote,
+    [
+      { id: 'a', name: 'Majors', updatedAt: 1, layout: layout() },
+      { id: 'b', name: 'Metals', updatedAt: 1, layout: layout({ preset: '2h' }) }
+    ],
+    activeId
+  )
+  return { store, indexWrites }
+}
+
+describe('boot', () => {
+  test('over a set its stored index describes, writes nothing and remembers the choice here', () => {
+    const { store, indexWrites } = bootSetup('a')
+    store.boot({ version: 1, order: ['a', 'b'], lastActive: 'a' })
+    expect(indexWrites).toEqual([])
+    expect(local.get('wd.activeWorkspace')).toBe('a')
+  })
+
+  test("a device with a choice of its own does not move the shared lastActive", () => {
+    const { store, indexWrites } = bootSetup('b')
+    store.boot({ version: 1, order: ['a', 'b'], lastActive: 'a' })
+    expect(indexWrites).toEqual([])
+    expect(store.getActiveId()).toBe('b')
+  })
+
+  test('writes the index once when it is missing or no longer describes the set', () => {
+    const stale = [
+      null,
+      { version: 1, order: ['b', 'a'], lastActive: 'a' },
+      { version: 1, order: ['a'], lastActive: 'a' },
+      { version: 1, order: ['a', 'b', 'gone'], lastActive: 'a' },
+      { version: 1, order: ['a', 'b'], lastActive: 'gone' },
+      { version: 2, order: ['a', 'b'], lastActive: 'a' }
+    ]
+    for (const stored of stale) {
+      const { store, indexWrites } = bootSetup('a')
+      store.boot(stored)
+      expect(indexWrites, JSON.stringify(stored)).toEqual([{ version: 1, order: ['a', 'b'], lastActive: 'a' }])
+    }
+  })
+
+  test('a switch still writes the index', () => {
+    const { store, indexWrites } = bootSetup('a')
+    store.boot({ version: 1, order: ['a', 'b'], lastActive: 'a' })
+    store.setActive('b')
+    expect(indexWrites).toEqual([{ version: 1, order: ['a', 'b'], lastActive: 'b' }])
+  })
+})
+
 describe('layoutSettingsSignature', () => {
   test('ignores key order, the active pane and where the panes look', () => {
     const a = layout({ active: 0 })

@@ -328,13 +328,35 @@ export class WorkspaceStore {
   /** Per-device, never part of the shared document -- see this module's header. */
   setActive(id: string): void {
     if (!this.get(id)) return
+    this.remember(id)
+    this.writeIndex()
+  }
+
+  /** At boot: this device's choice is remembered locally, and the shared index is written only
+   * when the one read back (`stored`) no longer describes the set -- missing, another version,
+   * an id gone or added or moved, or a `lastActive` that names no workspace. Opening the
+   * dashboard writes nothing otherwise: `lastActive` is the seed for a device with no choice of
+   * its own, and moves when the user switches (`setActive`), not when a device merely opens the
+   * workspace it last chose. */
+  boot(stored: WorkspaceIndex | null): void {
+    this.remember(this.activeId)
+    const order = this.workspaces.map((w) => w.id)
+    const describes =
+      stored !== null &&
+      stored.version === WORKSPACES_VERSION &&
+      stored.order.length === order.length &&
+      stored.order.every((id, i) => id === order[i]) &&
+      this.get(stored.lastActive) !== null
+    if (!describes) this.writeIndex()
+  }
+
+  private remember(id: string): void {
     this.activeId = id
     try {
       window.localStorage.setItem(ACTIVE_LOCAL_KEY, id)
     } catch (err) {
       console.warn('[workspaces] could not remember the active workspace', err)
     }
-    this.writeIndex()
   }
 
   canCreate(): boolean {
@@ -493,11 +515,11 @@ async function build(): Promise<WorkspaceStore> {
   }
 
   const store = new WorkspaceStore(remote, workspaces, activeId)
-  store.setActive(activeId)
-  // Only when there was nothing to read: an existing set is already stored, and rewriting it
-  // at every boot would put a PUT /preferences on the critical path of simply opening the
-  // dashboard. A migrated or defaulted set has to be written, or it would be re-derived (with
-  // a different id, so a second device would see a duplicate) on every visit.
+  // An existing set is already stored, and rewriting it at every boot would put a PUT
+  // /preferences on the critical path of simply opening the dashboard: `boot` writes the index
+  // only where the one read back is stale. A defaulted set has to be written whole, or it would
+  // be re-derived (with a different id, so a second device would see a duplicate) on every visit.
+  store.boot(index)
   if (fresh) store.persistAll()
   return store
 }
