@@ -22,9 +22,7 @@ import { loadPreferences, removePreference, savePreference } from '../preference
 // feature exists for.
 //
 //   workspaces          -> { version, order: string[], lastActive: string }   (the index)
-//   workspace.<id>      -> { id, name, updatedAt, layout, indicatorParams }   (one per workspace)
-//
-// `indicatorParams` is legacy and read-only -- see ServerIndicatorPrefs below.
+//   workspace.<id>      -> { id, name, updatedAt, layout }   (one per workspace)
 //
 // WHICH workspace this device is looking at is deliberately NOT part of the shared document:
 // it lives in localStorage, so opening the dashboard on a second screen doesn't yank the
@@ -47,9 +45,6 @@ const DOC_PREFIX = 'workspace.'
 // as a (malformed) workspace.
 const ACTIVE_LOCAL_KEY = 'wd.activeWorkspace'
 const LOCAL_PREFIX = 'wd.'
-// The single `layout` preference the client wrote before workspaces existed. Read once, at
-// first boot after the upgrade, and turned into the user's first workspace.
-const LEGACY_KEY = 'layout'
 
 const WORKSPACES_VERSION = 1
 
@@ -58,17 +53,6 @@ const WORKSPACES_VERSION = 1
 // user gets a clear "you have enough" instead of a 413 from a PUT they can't see.
 export const MAX_WORKSPACES = 12
 
-/** paneIndex -> template name -> calcParams. LEGACY: indicator parameters are part of the
- * layout's own panes now (client/layout.ts's `ip`), where they are keyed by the pane they
- * belong to rather than by that pane's position, and where the library applies them as it
- * creates each indicator instead of overriding it afterwards.
- *
- * Kept only to be read: `toWorkspace` folds a document written before that into its layout,
- * once, and nothing writes this field again. Left in the stored document rather than deleted,
- * for the same reason the legacy `layout` key is (see LEGACY_KEY): a client from before the
- * change still reads it, and it costs a few hundred bytes. */
-export type ServerIndicatorPrefs = Record<string, Record<string, number[]>>
-
 export interface Workspace {
   id: string
   name: string
@@ -76,9 +60,6 @@ export interface Workspace {
    * "which of these did I touch on the other machine" answerable. */
   updatedAt: number
   layout: PersistedLayout
-  /** Legacy, read-only -- see ServerIndicatorPrefs. Carried so that a document written before
-   * parameters moved into the layout keeps them for any older client still reading it. */
-  indicatorParams: ServerIndicatorPrefs
 }
 
 interface WorkspaceIndex {
@@ -105,33 +86,11 @@ function toWorkspace(value: unknown): Workspace | null {
   const doc = value as Record<string, unknown>
   if (typeof doc.id !== 'string' || typeof doc.name !== 'string') return null
   if (!isPersistedLayout(doc.layout)) return null
-  const params = doc.indicatorParams
-  const indicatorParams = params && typeof params === 'object' ? (params as ServerIndicatorPrefs) : {}
   return {
     id: doc.id,
     name: doc.name,
     updatedAt: typeof doc.updatedAt === 'number' ? doc.updatedAt : 0,
-    layout: adoptLegacyIndicatorParams(doc.layout, indicatorParams),
-    indicatorParams
-  }
-}
-
-// One upgrade path, taken once per workspace: the pane-index-keyed `indicatorParams` a
-// document may carry from before parameters lived in the layout are folded onto the panes
-// they index into. Only where the pane has none of its own -- the layout is the authority the
-// moment it says anything, since it is the only one of the two that is still written.
-function adoptLegacyIndicatorParams(
-  layout: PersistedLayout,
-  legacy: ServerIndicatorPrefs
-): PersistedLayout {
-  if (Object.keys(legacy).length === 0) return layout
-  return {
-    ...layout,
-    panes: layout.panes.map((pane, index) => {
-      const saved = legacy[String(index)]
-      if (!saved || pane.ip) return pane
-      return { ...pane, ip: { ...saved } }
-    })
+    layout: doc.layout
   }
 }
 
@@ -167,7 +126,7 @@ const localBackend: Backend = {
     for (const raw of keys) {
       if (!raw.startsWith(LOCAL_PREFIX)) continue
       const key = raw.slice(LOCAL_PREFIX.length)
-      if (key !== INDEX_KEY && key !== LEGACY_KEY && !key.startsWith(DOC_PREFIX)) continue
+      if (key !== INDEX_KEY && !key.startsWith(DOC_PREFIX)) continue
       // Per entry, not around the loop: one unparseable value -- a half-written document, or
       // a key some other build of this client left in the same namespace -- must cost that
       // one workspace, not every workspace enumerated after it.
@@ -259,9 +218,9 @@ export class WorkspaceStore {
     localBackend.write(key, workspace)
   }
 
-  /** Writes every workspace document. Used once at boot when the set was just migrated from
-   * the legacy `layout` key or defaulted into existence, so that a user who only ever looks
-   * at the dashboard still finds the same named workspace on their next visit. */
+  /** Writes every workspace document. Used once at boot when the set was just defaulted into
+   * existence, so that a user who only ever looks at the dashboard still finds the same named
+   * workspace on their next visit. */
   persistAll(): void {
     for (const workspace of this.workspaces) this.writeDoc(workspace)
     this.writeIndex()
@@ -390,8 +349,7 @@ export class WorkspaceStore {
       id: newId(),
       name: uniqueName(this.workspaces, name.trim() || 'Workspace'),
       updatedAt: Date.now(),
-      layout,
-      indicatorParams: {}
+      layout
     }
     this.workspaces.push(workspace)
     this.writeDoc(workspace)
@@ -400,8 +358,7 @@ export class WorkspaceStore {
   }
 
   /** A copy carries the whole layout, which is where a pane's indicator parameters and view
-   * now live; the legacy pane-index-keyed map is cloned with it so that duplicating a
-   * workspace an older client wrote doesn't strand that client's copy of them. */
+   * live. */
   duplicate(id: string): Workspace | null {
     const source = this.get(id)
     if (!source || !this.canCreate()) return null
@@ -409,8 +366,7 @@ export class WorkspaceStore {
       id: newId(),
       name: uniqueName(this.workspaces, `${source.name} copy`),
       updatedAt: Date.now(),
-      layout: structuredClone(source.layout),
-      indicatorParams: structuredClone(source.indicatorParams)
+      layout: structuredClone(source.layout)
     }
     this.workspaces.splice(this.workspaces.indexOf(source) + 1, 0, copy)
     this.writeDoc(copy)
@@ -502,8 +458,7 @@ async function build(): Promise<WorkspaceStore> {
   }
   let index = isWorkspaceIndex(data[INDEX_KEY]) ? data[INDEX_KEY] : null
   let found = collect(data)
-  // True when the set below was invented here (migrated from `layout`, or defaulted) rather
-  // than read back from storage.
+  // True when the set below was invented here (defaulted) rather than read back from storage.
   let fresh = false
   // The local mirror answers two cases with one branch: prod, where there is no server
   // document at all, and a dev boot where /preferences was unreachable or has not been
@@ -512,19 +467,6 @@ async function build(): Promise<WorkspaceStore> {
     const localData = await localBackend.readAll()
     found = collect(localData)
     if (!index && isWorkspaceIndex(localData[INDEX_KEY])) index = localData[INDEX_KEY]
-    if (found.length === 0) {
-      const legacy = data[LEGACY_KEY] ?? localData[LEGACY_KEY]
-      if (isPersistedLayout(legacy)) {
-        // One upgrade path, taken once: the single wall this user had before workspaces
-        // existed becomes their first workspace, under the name the switcher would have
-        // given it anyway. The legacy `layout` key is left where it is -- an older client
-        // still reads it, and it costs a few hundred bytes.
-        found = [
-          { id: newId(), name: 'Default', updatedAt: Date.now(), layout: legacy, indicatorParams: {} }
-        ]
-        fresh = true
-      }
-    }
   }
 
   const workspaces = ordered(found, index)
@@ -534,8 +476,7 @@ async function build(): Promise<WorkspaceStore> {
       id: newId(),
       name: 'Default',
       updatedAt: Date.now(),
-      layout: defaultLayout(),
-      indicatorParams: {}
+      layout: defaultLayout()
     })
   }
 

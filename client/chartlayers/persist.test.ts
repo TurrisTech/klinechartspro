@@ -57,7 +57,7 @@ describe('the stored form', () => {
 })
 
 describe('normalise', () => {
-  test("the toolbar-era preference: nested, whole, with a 1D toggle no server serves", () => {
+  test("a nested, whole config, with a 1D toggle no server serves", () => {
     const legacy = structuredClone(DEFAULT_LEVELS_CONFIG) as unknown as Record<string, unknown>
     ;(legacy.intervals as Record<string, boolean>)['1D'] = true
     ;(legacy.base as Record<string, unknown>).pattern = 'dashed'

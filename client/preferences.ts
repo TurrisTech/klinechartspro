@@ -1,11 +1,10 @@
 import { apiSend, OhlcvApiError } from './config'
 
 // GET/PUT /preferences — a single JSON blob per user, versioned by an integer `revision`
-// (wdashboard-server's appstate.py). Starred timeframes were the first key this held; per-
-// layer chart settings (client/chartlayers/store.ts) and the user's saved workspaces
-// (client/workspaces/store.ts — one key per workspace, plus an index) are the others — all go
-// through the generic loadPreferences/savePreference/removePreference below, so a further key
-// is no new code here.
+// (wdashboard-server's appstate.py). Starred timeframes were the first key this held; the
+// user's saved workspaces (client/workspaces/store.ts — one key per workspace, plus an index),
+// the alerts and the Strategy Lab's strategies are others — all go through the generic
+// loadPreferences/savePreference/removePreference below, so a further key is no new code here.
 
 const STARRED_TIMEFRAMES_KEY = 'starredTimeframes'
 
@@ -32,8 +31,7 @@ let inflight: Promise<Record<string, unknown>> | null = null
 
 // Called once at boot, after login, before the chart mounts (mirrors how
 // loadCapabilities() is awaited before mounting today), and again by any later caller that
-// needs the current document (client/chartlayers/store.ts on every layer mount,
-// client/layout.ts on boot). Never throws: a fetch failure here should degrade to per-key
+// needs the current document (the workspace, alert and Strategy Lab stores). Never throws: a fetch failure here should degrade to per-key
 // defaults, not block the chart from opening.
 export async function loadPreferences(): Promise<Record<string, unknown>> {
   if (known) return known.data

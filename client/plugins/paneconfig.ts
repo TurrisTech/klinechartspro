@@ -40,8 +40,6 @@ export interface PaneConfig<T extends object = object> {
   /** The document's form read back, every value validated; `undefined` when nothing usable is
    * there, which reads as "never configured". */
   fromStored(stored: unknown): T | undefined
-  /** What a pane never configured draws with. Omitted: the defaults. */
-  fallback?(): T
 }
 
 /** A typed `PaneConfig`, widened to the host's view of it. */
@@ -95,10 +93,10 @@ export class PaneConfigStore {
     }
   }
 
-  /** The pane's config: its own, else what an unconfigured pane draws with. */
+  /** The pane's config: its own, else the defaults. */
   read<T extends object>(config: PaneConfig<T>, paneIndex: number): T {
     const own = this.configs.get(config as PaneConfig)?.[paneIndex] as T | undefined
-    return own ?? config.fallback?.() ?? config.defaults
+    return own ?? config.defaults
   }
 
   /** Bumped whenever the pane's config may have changed; part of every binding's signature. */

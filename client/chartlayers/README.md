@@ -18,8 +18,7 @@ pane like anything else, and a settings edit, a symbol change or the pane moving
 rebind. Settings are per pane and kept by the host (`client/plugins/paneconfig.ts`): the legend's
 gear opens the panel, the indicator manager edits the same fields inline, and the wall document
 keeps each pane's differences from the defaults under `ly.<layer id>` (`persist.ts` is the codec,
-and validates them on the way back in). A pane never configured starts from what the user last
-chose under the old toolbar button (`store.ts`, read only, awaited before the plugin registers).
+and validates them on the way back in). A pane never configured draws with the defaults.
 The legend names the timeframes drawn, or why nothing is (`none for <ticker>`, `not served here`
 for Zones while no server advertises `levels2`).
 
@@ -36,7 +35,6 @@ samples only its own pane, and only while its binding lives.
 | `persist.ts` | a layer config's stored form (diff from defaults, flat by path) and its validation against the fields |
 | `window.ts` | **pure**: what a pane has covered and what it still needs |
 | `paint.ts` | **pure**: whether a redraw would change the picture |
-| `store.ts` | the toolbar-era wall-wide settings, read once as the starting point of an unconfigured pane |
 | `settings.ts` | the declarative field schema and its plain-DOM renderer |
 | `encoding.ts`, `color.ts` | metrics → line width/opacity/colour |
 | `alerts/` | price alerts on a layer's lines -- see below |

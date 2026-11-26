@@ -775,7 +775,7 @@ describe('createPluginHost', () => {
 interface Size {
   size: number
 }
-function SIZE_CONFIG(template: string, fallback?: () => Size) {
+function SIZE_CONFIG(template: string) {
   return paneConfig<Size>({
     templates: [template],
     doc: 'sz',
@@ -787,8 +787,7 @@ function SIZE_CONFIG(template: string, fallback?: () => Size) {
     fromStored: (stored) => {
       const size = (stored as Partial<Size> | undefined)?.size
       return typeof size === 'number' ? { size } : undefined
-    },
-    ...(fallback ? { fallback } : {})
+    }
   })
 }
 
@@ -948,15 +947,15 @@ describe('per-pane settings', () => {
     expect(host.paneDocs()).toEqual({ 0: { sz: 'not even an object' }, 2: { sz: { size: 3 } } })
   })
 
-  test('a pane never configured reads the fallback, and stores nothing', async () => {
+  test('a pane never configured reads the defaults, and stores nothing', async () => {
     const plugin: IndicatorPlugin = {
       ...sized().plugin,
-      paneConfigs: [SIZE_CONFIG('SZ', () => ({ size: 6 }))]
+      paneConfigs: [SIZE_CONFIG('SZ')]
     }
     const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
     hosts.push(host)
     host.sync([fakePane('p1', fakeChart().chart)])
-    expect(host.settingsModel('SZ')?.read('p1')).toEqual({ size: 6 })
+    expect(host.settingsModel('SZ')?.read('p1')).toEqual({ size: 1 })
     expect(host.paneDocs()).toEqual({})
   })
 })
