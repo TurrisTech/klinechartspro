@@ -2096,6 +2096,14 @@ describe('quiet hours', () => {
     m.controller.alertCount = 1
     m.emit()
     expect(m.button('Next alert').title).toBe('Advance to where the next of 1 alert triggers, outside quiet hours (21:30–07:00) (Shift+↑)')
+    // They silence the price watches and a trade's "Notify at" too, but never a fill.
+    m.controller.armedStops = 1
+    m.controller.workingStops = 1
+    m.controller.pendingMilestones = 1
+    m.emit()
+    expect(m.button('Next alert').title).toBe(
+      'Advance to where the next of 1 alert triggers, or a price watch fires, or a trade reaches a "Notify at", outside quiet hours (21:30–07:00), or an order, stop loss or take profit fills (Shift+↑)'
+    )
   })
 
   test('without quiet hours wired there is no moon', () => {

@@ -20,7 +20,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `pick.ts` | PURE. `randomStart`: a uniform instant out of a range, snapped down to a base candle open. The rng is injected. |
 | `results.ts` | PURE. `replayResults`: the session's score from its snapshot -- net and realised P&L, win rate, averages, profit factor, expectancy, best/worst, the max drawdown of the realised curve -- and the rows the Results panel draws. |
 | `steps.ts` | PURE (plus a localStorage pair). A step typed in words (`15h`, `90m`, `2D`, `3 × 4h`) as the session's `{ interval, multiple }` on a given base, and back (`parseStep`, `describeStep`); the typed steps this browser remembers. |
-| `quiet.ts` | PURE (plus a localStorage pair). Quiet hours: `inWindow`, `QuietWindow` (is an instant inside `[from, to)` on a zone, cached per stretch), `ReplayQuiet` (the viewer's setting, read by the alert look-ahead and the watches). |
+| `quiet.ts` | PURE (plus a localStorage pair). Quiet hours: `inWindow`, `QuietWindow` (is an instant inside `[from, to)` on a zone, cached per stretch), `ReplayQuiet` (the viewer's setting, read by the alert look-ahead, the watches and the session's milestones). |
 | `player.ts` | PURE. `ReplayPlayer`: Play/Pause -- the Step pressed again and again at a pace, stopping on any stop that is not the target. The step, the sleep and the "has the wall caught up" wait are injected. |
 | `format.ts` | PURE. `formatClock`: an instant on the New York clock WITH its weekday ("Sat, Sep 26, 20:00"). |
 | `persist.ts` | The state blob (`serialize`/`restore`) and the page-level replay intent. |
@@ -81,10 +81,15 @@ reads the hours. Per browser (`wd.replay.quiet`), like the pace. `quiet.ts` says
   (`alerts.ts`), never stopped at -- so Next alert runs on to the first one outside them;
 - a price watch (a level alert, a line from the chart) is HELD then (`LocalWatchRegistry.onEvent`
   `held`): it reads each bar, so its crossing baseline and edge memory move on and a 3am crossing
-  never fires at 6:00 as if new, but it cannot fire, ring, spend a one-shot or start a cooldown;
-- NOT the account: fills, stop losses, take profits, trail and breakeven stops and "Notify at"
-  still stop a run at night, as they would on a real account; nor the Go to stop price, which is a
-  destination, not an alert.
+  never fires at 6:00 as if new, but it cannot fire, ring, spend a one-shot or start a cooldown
+  (user, 2026-11-26: "levels alerts on quiet hours shouldn't alert when quiet hours end");
+- a trade's "Notify at" is an alert too (user, 2026-11-26: "align notify at to be an alert, it
+  stays silent during quiet hours and doesn't alert at the end"): the engine records it reached,
+  at the instant it was, but the session does not hear it (`session.ts` `heard`) -- it ends no
+  run, rings nothing, opens no panel, and being spent it is not told when the hours end;
+- NOT the account ("fills and exits should alert even during quiet hours"): fills, stop losses,
+  take profits, trail and breakeven stops still stop a run at night, as they would on a real
+  account; nor the Go to stop price, which is a destination, not an alert.
 The window is `[from, to)` on the wall clock, over midnight when from > to. `QuietWindow` answers
 per base bar from a cached stretch up to the next edge, worked out again at a clock change (a
 fall-back hour can re-enter the window); `quiet.test.ts` sweeps both 2024 DST weeks minute by minute.

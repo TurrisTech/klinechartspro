@@ -11,12 +11,17 @@ import { fromWall, toWall } from './timeframes'
 //   - a price watch -- a level alert, a line placed from the chart -- does not fire in quiet hours:
 //     it neither stops the advance nor rings, and one set to fire ONCE is still armed when they end
 //     (watches.ts). It keeps reading the bars meanwhile, so a crossing that happened at 3am does
-//     not fire at 6:00 as if it had just happened.
+//     not fire at 6:00 as if it had just happened (user, 2026-11-26: "levels alerts on quiet hours
+//     shouldn't alert when quiet hours end");
+//   - a trade's "Notify at" is an alert too (user, 2026-11-26: "align notify at to be an alert, it
+//     stays silent during quiet hours and doesn't alert at the end"): reached in quiet hours, it is
+//     recorded on the trade as reached then, and neither stops the advance, rings, nor rings later
+//     (session.ts `heard`).
 //
-// What it does not silence: the account. An order filling, a stop loss, a take profit, a trail or
-// breakeven stop and a trade's "Notify at" happen at night as they would on a real account, and
-// still end a run there. Nor the Go to panel's stop price, which is where the user asked the run to
-// go, not an alert.
+// What it does not silence: the account (user, 2026-11-26: "fills and exits should alert even
+// during quiet hours"). An order filling, a stop loss, a take profit, a trail or breakeven stop
+// happen at night as they would on a real account, and still end a run there. Nor the Go to
+// panel's stop price, which is where the user asked the run to go, not an alert.
 //
 // The hours are on ONE clock for every alert, whatever instrument it watches: the replay's (the
 // title bar's), or the browser's own zone. A habit of the viewer, like the play pace, so it is kept

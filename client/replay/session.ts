@@ -212,6 +212,10 @@ export interface ReplaySessionOptions {
   observer?: ReplayObserver
   /** Where the client alerts next trigger: what Next alert runs to. */
   alerts?: ReplayAlertBook
+  /** Whether an instant is in the viewer's quiet hours (quiet.ts). A trade's "Notify at" reached
+   * then is an alert silenced: the engine records it reached, but the run does not hear it
+   * (`heard`). Absent: nothing is silenced. */
+  silenced?: (at: number) => boolean
   /** Told where a Next alert press would land, once the look-ahead has found it and while no
    * advance is running: the instant the cursor -- and the read clock -- will stand at. For the
    * wall to have the server compute ahead what its panes will read there (client/replay/index.ts,
@@ -701,7 +705,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
             this.baseCache.take(bar.end)
             consumed.push(bar)
             trail.last = bar
-            const produced = fillable ? await this.consume(bar, this.base) : []
+            const produced = this.heard(fillable ? await this.consume(bar, this.base) : [])
             events.push(...produced)
             // After the engine, so anything an observer raises sees the account as this bar
             // left it -- and the BASE bar, not the refinement's parts.
@@ -996,7 +1000,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
       for (const bar of await this.opts.barSource.fetch(this.symbol, this.base, from, to, 'all', this.grid)) {
         if (bar.open < from || bar.end > to) continue
         if (await this.breathe(trail)) return true
-        const produced = trail.fillable ? await this.consume(bar, this.base) : []
+        const produced = this.heard(trail.fillable ? await this.consume(bar, this.base) : [])
         trail.events.push(...produced)
         const raised = observer?.onBar(bar) ?? []
         trail.consumed.push(bar)
@@ -1022,7 +1026,7 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
         // Nothing can happen on it, so nothing does: the watches' baseline moves on, and the
         // engine takes its quote and clock. Whatever it reports all the same is kept, and ends the
         // run as a fill on a base bar would -- never dropped.
-        const produced = trail.fillable ? this.engine.onBar(toBidAsk(candle, this.symbol)) : []
+        const produced = this.heard(trail.fillable ? this.engine.onBar(toBidAsk(candle, this.symbol)) : [])
         trail.events.push(...produced)
         observer?.onBar(candle)
         trail.consumed.push(candle)
@@ -1037,6 +1041,18 @@ export class ReplayTradingSession implements TradingSession, ReplayController {
     }
     if (at < to && !this.closedThroughout(at, to)) return this.skim(level + 1, at, to, levels, trail)
     return false
+  }
+
+  /** What of the events a bar produced the run HEARS: every one, but a milestone -- a trade's
+   * "Notify at" -- reached in quiet hours (user, 2026-11-26: "align notify at to be an alert, it
+   * stays silent during quiet hours and doesn't alert at the end"). The engine has recorded it
+   * reached -- the trade did get there, at that instant -- so it is not told later either; but it
+   * ends no run, rings nothing and opens no panel. Fills and closes are the account, and are
+   * always heard ("fills and exits should alert even during quiet hours"). */
+  private heard(produced: SimEvent[]): SimEvent[] {
+    const silenced = this.opts.silenced
+    if (!silenced || produced.length === 0) return produced
+    return produced.filter((event) => event.kind !== 'milestone' || !silenced(event.time))
   }
 
   /** Whether nothing could happen on `candle`: no watch could fire on it, and -- when something
@@ -1200,7 +1216,8 @@ export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
 export type { SimAnswer }
 
 /** What ends a run to the next event (and a Step or Play with Pause on fill): a fill, a close --
- * a stop loss, take profit, trailing or breakeven stop hit -- or a milestone reached. */
+ * a stop loss, take profit, trailing or breakeven stop hit -- or a milestone reached (outside
+ * quiet hours: one reached inside them is never heard, `heard`). */
 function stopsARun(event: SimEvent): boolean {
   return event.kind === 'fill' || event.kind === 'close' || event.kind === 'milestone'
 }

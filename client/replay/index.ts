@@ -355,7 +355,8 @@ export async function mountBarReplay(
   // observer, and bound to the session (`attach`) straight after -- the two cannot both be
   // constructed first.
   // The viewer's quiet hours (quiet.ts): on the replay's clock -- the walked instrument's zone,
-  // the title bar's -- or the browser's. The watches and Next alert's search both ask it.
+  // the title bar's -- or the browser's. The watches, Next alert's search and the session (for a
+  // trade's "Notify at") all ask it.
   const quiet = new ReplayQuiet(() => grid.schedule.timezone)
   const silenced = (at: number): boolean => quiet.isQuiet(at)
   const watches = new ReplayWatches({ symbol: stored.symbol, notify: ctx.notify, silenced })
@@ -389,6 +390,7 @@ export async function mountBarReplay(
     engine: Engine.fromState(stored.engine),
     observer: watches,
     alerts: ctx.alerts ? new ReplayAlerts(() => ctx.alerts?.enabled() ?? [], ctx.alerts.search, ctx.alerts.catalogue, silenced) : undefined,
+    silenced,
     warmLanding: (at) => void landings.warm(at),
     barSource: replayBars,
     dataEnd: () => latest,
@@ -488,7 +490,8 @@ export async function mountBarReplay(
 
   // A milestone a replay trade reaches is told the way the server tells a paper one -- but here, in
   // the bell, tagged `replay` and dated when raised with the replay instant in the body: the engine
-  // that reached it is this page's (trading/exits.ts `milestoneNotice`).
+  // that reached it is this page's (trading/exits.ts `milestoneNotice`). One reached in quiet hours
+  // never arrives here: the session does not hear it (session.ts `heard`).
   const unsubscribeMilestones = session.subscribe((snapshot, events) => {
     for (const event of events) {
       if (event.kind !== 'milestone' || event.tradeId === null) continue
