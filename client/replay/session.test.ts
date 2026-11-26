@@ -135,6 +135,8 @@ function make(
     alerts?: ReplayAlertBook
     observer?: ReplayObserver
     warmLanding?: (at: number) => void
+    /** The viewer's quiet hours, as the session asks them. */
+    silenced?: (at: number) => boolean
     /** Where the synthetic minutes begin, and how many there are. */
     start?: number
     minutes?: number
@@ -168,7 +170,8 @@ function make(
     },
     alerts: opts.alerts,
     observer: opts.observer,
-    warmLanding: opts.warmLanding
+    warmLanding: opts.warmLanding,
+    silenced: opts.silenced
   })
   session.setIntervalsInUse(['1h'])
   return { session, source, saved, advanced }
@@ -366,6 +369,62 @@ describe('ReplayTradingSession', () => {
     const again = await skimmed.session.nextAlert()
     expect(again?.reason).toBe('alert')
     expect(skimmed.session.cursor).toBe(minute(300))
+  })
+
+  // Quiet hours (user, 2026-11-26: "align notify at to be an alert, it stays silent during quiet
+  // hours and doesn't alert at the end. fills and exits should alert even during quiet hours").
+  // The +5R milestone above is reached at bar 161, a +7.5R one at bar 211; quiet until minute 200.
+  test('a milestone reached in quiet hours is passed over: recorded on the trade, never heard, then or after', async () => {
+    const run = async (stored: string[]) => {
+      const { session } = make({ base: '1m', stored, alerts: new FakeAlerts([minute(300)]), silenced: (at) => at < minute(200) })
+      await session.step()
+      await session.placeOrder({ symbol: SYM, side: 'buy', type: 'market', units: 1000, milestones: [{ distance: 0.01, label: '+5R' }] })
+      const heard: string[] = []
+      session.subscribe((_snapshot, events) => heard.push(...events.map((e) => e.kind)))
+      return { session, heard, r: await session.nextAlert() }
+    }
+    const skimmed = await run(['1m', '1h'])
+    const walked = await run(['1m'])
+    for (const { session, heard, r } of [skimmed, walked]) {
+      // On to the alert: the milestone ended nothing, and nobody was told of it.
+      expect(r?.reason).toBe('alert')
+      expect(session.cursor).toBe(minute(300))
+      expect(r?.events.some((e) => e.kind === 'milestone')).toBe(false)
+      expect(heard).not.toContain('milestone')
+      // But the trade did get there, then: it is spent, so it is not told at the end either.
+      expect(session.pendingMilestones).toBe(0)
+      const reached = session.snapshot.trades[0].milestones?.[0]
+      expect(reached?.reachedAt).toBeGreaterThanOrEqual(minute(161))
+      expect(reached?.reachedAt).toBeLessThan(minute(162))
+    }
+  })
+
+  test('a milestone outside quiet hours still stops the run, past one inside them', async () => {
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]), silenced: (at) => at < minute(200) })
+    await session.step()
+    await session.placeOrder({
+      symbol: SYM,
+      side: 'buy',
+      type: 'market',
+      units: 1000,
+      milestones: [
+        { distance: 0.01, label: '+5R' },
+        { distance: 0.015, label: '+7.5R' }
+      ]
+    })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(session.cursor).toBe(minute(212))
+    expect(r?.events.filter((e) => e.kind === 'milestone').map((e) => e.reason)).toEqual(['+7.5R'])
+  })
+
+  test('fills and exits are heard in quiet hours: a take profit still stops the run there', async () => {
+    const { session } = make({ base: '1m', stored: ['1m', '1h'], alerts: new FakeAlerts([minute(300)]), silenced: () => true })
+    await withTrade(session, 'buy', { takeProfit: takeProfitAt200 })
+    const r = await session.nextAlert()
+    expect(r?.reason).toBe('fill')
+    expect(session.cursor).toBe(minute(201))
+    expect(r?.events.at(-1)).toMatchObject({ kind: 'close', reason: 'take_profit' })
   })
 
   test("a trailing stop's hit is where Next alert stops, and says it was the trail", async () => {

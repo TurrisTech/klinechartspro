@@ -568,18 +568,20 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const milestones = controller.pendingMilestones ?? 0
     const stops = nextStops()
     next.disabled = stopping ? cancelling : busy || stops === 0
-    const also = [
-      controller.armedStops > 0 ? 'a price watch fires' : null,
-      working > 0 ? 'an order, stop loss or take profit fills' : null,
-      milestones > 0 ? 'a trade reaches a "Notify at"' : null
-    ].filter((part) => part !== null)
+    // Quiet hours silence the alerts, the price watches and a trade's "Notify at", so the note
+    // follows those; the account -- a fill, a stop loss, a take profit -- is heard whenever.
+    const silenceable = [controller.armedStops > 0 ? 'a price watch fires' : null, milestones > 0 ? 'a trade reaches a "Notify at"' : null].filter(
+      (part) => part !== null
+    )
+    const account = working > 0 ? ['an order, stop loss or take profit fills'] : []
     const quiet = options.quiet?.value
     const quietNote = quiet?.on ? `, outside quiet hours (${describeQuiet(quiet)})` : ''
+    const or = (parts: string[]): string => parts.map((part) => `, or ${part}`).join('')
     next.title = stopping
       ? 'Stop the run where it has got to (Shift+↑)'
       : stops === 0
         ? 'Enable an alert (Alerts), place a price watch, or rest an order or a stop first'
-        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} triggers${quietNote}${also.map((part) => `, or ${part}`).join('')} (Shift+↑)`
+        : `Advance to where the next of ${alerts} alert${alerts === 1 ? '' : 's'} triggers${or(silenceable)}${quietNote}${or(account)} (Shift+↑)`
     row.appendChild(next)
     if (options.quiet) row.appendChild(quietToggle(options.quiet.value))
 
