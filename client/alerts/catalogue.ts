@@ -56,12 +56,12 @@ const ALERT_DEFAULT_PARAMS: Record<string, number[]> = {
   BIAS: [12]
 }
 
-export interface IndicatorOutput {
+interface IndicatorOutput {
   key: string
   title: string
 }
 
-export interface BuiltinInfo {
+interface BuiltinInfo {
   name: string
   /** `price` draws over the candles; `normal` and `volume` are sub-pane oscillators. */
   series: string
@@ -117,7 +117,7 @@ export interface ServerCatalogue {
 }
 
 /** The stored registry rows: everything but the computed library (`plugin: indicators`). */
-export function storedIndicators(registry: readonly RegistryIndicator[]): StoredIndicator[] {
+function storedIndicators(registry: readonly RegistryIndicator[]): StoredIndicator[] {
   return registry
     .filter((entry) => entry.enabled && entry.wire.plugin !== 'indicators' && (entry.feature == null || hasFeature(entry.feature as Feature)))
     .map((entry) => ({
@@ -133,7 +133,7 @@ export function storedIndicators(registry: readonly RegistryIndicator[]): Stored
 
 /** The signal catalogue grouped by plugin and variant -- one operand per family, its labels
  * the choices. */
-export function signalFamilies(entries: readonly SignalCatalogueEntry[]): SignalFamily[] {
+function signalFamilies(entries: readonly SignalCatalogueEntry[]): SignalFamily[] {
   const families = new Map<string, SignalFamily>()
   for (const entry of entries) {
     if (!entry.available) continue
@@ -220,7 +220,7 @@ export const TIME_ZONES: ReadonlyArray<{ zone: string; label: string }> = [
   { zone: 'UTC', label: 'UTC' }
 ]
 
-export function zoneLabel(zone: string): string {
+function zoneLabel(zone: string): string {
   return TIME_ZONES.find((z) => z.zone === zone)?.label ?? zone
 }
 
@@ -228,7 +228,7 @@ export function zoneLabel(zone: string): string {
  * indicator (an EMA, Wilder's RSI) to forget where it started, to well under a part in ten
  * thousand. A bar field or a stored series needs one bar before -- for a crossing to have
  * something to cross from. */
-export function leadInBars(operand: Operand): number {
+function leadInBars(operand: Operand): number {
   if (operand.kind !== 'indicator') return 2
   const longest = Math.max(1, ...operand.params.filter((p) => Number.isFinite(p)))
   return Math.min(1200, Math.max(60, Math.ceil(longest * 5 + 50)))

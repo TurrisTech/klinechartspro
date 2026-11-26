@@ -18,7 +18,7 @@ import type { NotificationCenter } from './center'
 import { LOCAL_ONLY_SOURCES, type Notification, type NotificationSink, type NotificationSpec, type RemoteNotification } from './types'
 
 /** Raise `spec` on the server; resolves with the row it holds (the same row for the same key). */
-export type RaiseRemote = (spec: NotificationSpec) => Promise<RemoteNotification>
+type RaiseRemote = (spec: NotificationSpec) => Promise<RemoteNotification>
 
 export function durableSink(center: NotificationCenter, raise: RaiseRemote): NotificationSink {
   return {

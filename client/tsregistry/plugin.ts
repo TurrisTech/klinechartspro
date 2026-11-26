@@ -45,7 +45,7 @@ import { phaseLabel } from '../plugins/legend'
 
 /** Store identity for a `computed` entry. The params are part of it -- a params change is a
  * different series and therefore a different store, not a refetch of the same one. */
-export function seriesSourceKey(
+function seriesSourceKey(
   vendor: string,
   ticker: string,
   interval: string,
@@ -167,7 +167,7 @@ export function storedSubscribe(
 /** `storedSubscribe` for a source that is not one registry entry at the chart's interval --
  * the MTF overlay's, which reads one at each of several SOURCE intervals: `ctx.interval` is
  * the interval subscribed, and `name` only labels a failure. */
-export function subscribeLive(
+function subscribeLive(
   f: PluginFacilities,
   ctx: Pick<BindContext, 'vendor' | 'ticker' | 'interval'>,
   name: string,

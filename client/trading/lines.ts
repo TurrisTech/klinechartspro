@@ -368,7 +368,7 @@ export interface Amendment {
 
 /** A record with `patch` applied, as the engine would leave it before any price: a new trail or
  * breakeven not yet priced, new milestones not yet reached. Pure. */
-export function withManagement<T extends SimTrade | SimOrder>(record: T, patch: ManagementPatch): T {
+function withManagement<T extends SimTrade | SimOrder>(record: T, patch: ManagementPatch): T {
   const next = { ...record }
   if (patch.trailingStop !== undefined) {
     const t = patch.trailingStop

@@ -33,7 +33,7 @@ export interface BasketRow {
   error: string | null
 }
 
-export interface BasketPool {
+interface BasketPool {
   instruments: number
   /** Instruments whose total R is above zero, of those with trades. */
   positive: number

@@ -45,7 +45,7 @@ export interface LevelBasis {
 }
 
 /** Whether `role` lies below the entry for `side`: a long's stop, a short's target. */
-export function lies(side: SimSide, role: LevelRole): 'below' | 'above' {
+function lies(side: SimSide, role: LevelRole): 'below' | 'above' {
   return (role === 'stop') === (side === 'buy') ? 'below' : 'above'
 }
 

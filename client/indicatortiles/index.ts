@@ -41,7 +41,7 @@ export interface SeriesManifest {
   staleFrom: number | null
 }
 
-export interface SeriesTileEntry {
+interface SeriesTileEntry {
   key: string
   /** The partition's own bounds, `[start, end)`, store clock. */
   start: number
@@ -77,7 +77,7 @@ const CACHE_NAME = 'indicator-tiles-v1'
 const DECODED_LIMIT = 32
 
 const base = bucketBase(() => window.INDICATOR_TILES_BASE_URL ?? `${window.location.origin}/indicator-tiles`)
-export function indicatorTilesBaseUrl(): string {
+function indicatorTilesBaseUrl(): string {
   return base.get()
 }
 
@@ -141,7 +141,7 @@ const bytesFor = tileBytes(CACHE_NAME)
 
 /** Every column of one tile, as numbers where they are numeric (hyparquet hands INT64 back as
  * BigInt, which no arithmetic downstream expects). */
-export async function decodeSeriesTile(bytes: ArrayBuffer): Promise<SeriesRows> {
+async function decodeSeriesTile(bytes: ArrayBuffer): Promise<SeriesRows> {
   const columns: Record<string, unknown[]> = {}
   await parquetRead({
     file: bytes,

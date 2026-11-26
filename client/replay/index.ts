@@ -39,7 +39,7 @@ import { type CandleGrid, gridOf, scheduleOf, sortByLength } from './timeframes'
 // (client/index.ts) reads it before mounting: a replay wall gets the replay datafeed and an
 // inert stream, and the read clock is set before the first history load.
 
-export const REPLAY_LOG = '[replay]'
+const REPLAY_LOG = '[replay]'
 
 /** On the wall's container while a replay is mounted: what draws the replay edge. */
 export const REPLAY_WALL_CLASS = 'wd-replay-wall'
@@ -63,7 +63,7 @@ export interface BarReplayController {
 
 /** The alert manager, as a replay uses it: the alerts Next alert stops at, the search that
  * finds them, and the window the controls' Alerts toggle opens. */
-export interface ReplayAlertsContext {
+interface ReplayAlertsContext {
   /** The enabled alerts, on every instrument: Next alert stops at the next of any of them. */
   enabled(): Alert[]
   subscribe(listener: () => void): () => void
@@ -72,7 +72,7 @@ export interface ReplayAlertsContext {
   manager: { isOpen: () => boolean; toggle: () => void }
 }
 
-export interface ReplayWallContext {
+interface ReplayWallContext {
   pluginHost: PluginHost
   /** Levels are computed on 1W/1M; a day boundary is when one can appear or be spent. */
   levelsController: { invalidate(): void }

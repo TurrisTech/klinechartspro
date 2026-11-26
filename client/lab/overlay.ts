@@ -99,7 +99,7 @@ interface TradeMark {
   selected: boolean
 }
 
-export interface Value {
+interface Value {
   dots?: Dot[]
   edges?: Edge[]
   marks?: Mark[]
@@ -107,7 +107,7 @@ export interface Value {
 }
 
 /** Every element of the run on the chart bar it belongs to. Exported for its test. */
-export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendData): Value[] {
+function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendData): Value[] {
   const values: Value[] = dataList.map(() => ({}))
   if (dataList.length === 0) return values
   // One past the last bar too, for what became knowable at its close (mtf/shift.ts `chartBarAt`).
@@ -230,7 +230,7 @@ export function placeRun(dataList: KLineData[], run: LabRun, extend: LabExtendDa
 }
 
 /** A timeframe's colour: the MTF overlay's, so a 5m node is the same indigo in both. */
-export function timeframeColor(interval: string): string {
+function timeframeColor(interval: string): string {
   const style = (MTF_DEFAULTS.timeframes as Record<string, { color: string } | undefined>)[interval]
   if (style) return style.color
   return FALLBACK[Math.abs(hashCode(interval)) % FALLBACK.length]

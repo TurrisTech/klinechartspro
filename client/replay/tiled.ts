@@ -42,7 +42,7 @@ import { nextTask } from './yield'
 // 5s, 9,708 bars, no difference.
 
 /** What a TiledBarSource reads tiles with -- the bucket by default, a fake in a test. */
-export interface TileLayer {
+interface TileLayer {
   /** Mid bars, wire-dated, for as much of `[from, to)` (wire) as tiles cover -- folded out of a
    * stored interval's tiles where `interval` has none of its own; null when tiles cannot help. */
   mid(vendorSymbol: string, interval: string, from: number, to: number): Promise<{ items: KLineData[]; coveredTo: number } | null>
@@ -55,7 +55,7 @@ export interface TileLayer {
 
 /** A tile's mid and bid/ask columns, row for row: `ts` (wire, ascending), `o h l c v`, and
  * `bo bh bl bc ao ah al ac`. */
-export type HeldTile = TileColumns
+type HeldTile = TileColumns
 
 const MID_COLUMNS = ['ts', 'o', 'h', 'l', 'c', 'v'] as const
 const QUOTE_COLUMNS = ['ts', 'bo', 'bh', 'bl', 'bc', 'ao', 'ah', 'al', 'ac'] as const
@@ -66,7 +66,7 @@ const PRICES = new Set(['o', 'h', 'l', 'c', 'bo', 'bh', 'bl', 'bc', 'ao', 'ah', 
 const midBytes = tileBytes('ohlcv-tiles-v1')
 const quoteBytes = tileBytes('ohlcv-tiles-bidask-v1')
 
-export const HTTP_TILES: TileLayer = {
+const HTTP_TILES: TileLayer = {
   mid: (vendorSymbol, interval, from, to) => barsFromTiles(vendorSymbol, interval, from, to),
   manifest: (vendor, symbol, interval) => {
     // Only what the server lists as tiled has a tree; anything else is a certain 404.
@@ -95,7 +95,7 @@ export function pairColumns(mid: TileColumns, quote: TileColumns): HeldTile | nu
 
 /** How many bid/ask rows are held decoded, least recently used tile out first: a 5s week of an
  * FX major is 55-85k rows (~8 MB of columns), so a few weeks of 5s, or years of 1m and coarser. */
-export const MAX_HELD_BARS = 400_000
+const MAX_HELD_BARS = 400_000
 
 export class TiledBarSource implements BarSource {
   private readonly held = new Map<string, HeldTile>()

@@ -22,7 +22,7 @@ import type { Alert, AlertKind, AlertSource } from './types'
 const WINDOW_KEY = 'alerts'
 const DOCK_ORDER = 30
 
-export interface AlertManagerOptions {
+interface AlertManagerOptions {
   store: ClientAlertStore
   /** The server's half, when there is one. Absent: the Server tab explains that it is not
    * built yet. */

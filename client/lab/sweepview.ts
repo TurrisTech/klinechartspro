@@ -11,7 +11,7 @@ import { defaultRange, formatNumber, type ParamInfo, runSweep, type SweepRow, ty
 
 const signed = (v: number | null | undefined, digits: number): string => (v === null || v === undefined || !Number.isFinite(v) ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(digits)}`)
 
-export interface SweepContext {
+interface SweepContext {
   /** The draft, as it is now. */
   strategy(): Strategy
   paramInfo: ParamInfo
@@ -21,7 +21,7 @@ export interface SweepContext {
   use(target: SweepTarget, value: number): void
 }
 
-export interface SweepPanel {
+interface SweepPanel {
   readonly element: HTMLElement
   /** The draft changed: list its numbers again, keeping the choice. */
   refresh(): void

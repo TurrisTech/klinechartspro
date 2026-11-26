@@ -11,7 +11,7 @@ import { PRICE_DIRECTIONS, type PriceDirection } from './types'
 // only if it carries that class itself (client/replay/controls.ts's start dialog has the same
 // note). Plain DOM, like every control in client/.
 
-export interface WatchDialogResult {
+interface WatchDialogResult {
   price: number
   direction: PriceDirection
   note?: string
@@ -19,7 +19,7 @@ export interface WatchDialogResult {
   repeat: boolean
 }
 
-export interface WatchDialogOptions {
+interface WatchDialogOptions {
   title: string
   /** `EURUSD` — shown so a wall of panes cannot leave you guessing which one this is. */
   instrument: string
@@ -42,7 +42,7 @@ export interface WatchDialogOptions {
   onCancel?: () => void
 }
 
-export interface WatchDialog {
+interface WatchDialog {
   close(): void
 }
 

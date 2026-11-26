@@ -22,10 +22,7 @@ import { ClientAlertStore, defaultPersistence } from './store'
 // client/index.ts is the one module that knows the alerts, the Notification Center and the
 // replay exist together.
 
-export type { Alert, AlertDefinition, AlertSource, Operand, Rule } from './types'
-export type { AlertManager } from './manager'
-
-export interface AlertsRuntime {
+interface AlertsRuntime {
   store: ClientAlertStore
   monitor: AlertMonitor
   search: AlertSearch
@@ -63,7 +60,7 @@ export function startAlerts(notify: NotificationSink): Promise<AlertsRuntime> {
   return runtime
 }
 
-export interface MountedAlertManager {
+interface MountedAlertManager {
   readonly manager: AlertManager
   /** Told when the alerts change or the window opens or closes -- what a toggle elsewhere (the
    * replay's Alerts) redraws on. */

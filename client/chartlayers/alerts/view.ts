@@ -75,20 +75,20 @@ function colorFor(watch: Watch): string {
 }
 
 /** How a line's alert is armed, as the pane and its dialog say it. */
-export function repeatLabel(repeat: WatchRepeat): string {
+function repeatLabel(repeat: WatchRepeat): string {
   return repeat === 'once' ? 'once' : 'every time'
 }
 
 /** Where a click on a line takes its alert: off -> every time -> once -> off. A switched-off alert
  * counts as off; a one-shot that has fired is still once, so the next click turns it off. */
-export type LineStage = 'off' | WatchRepeat
+type LineStage = 'off' | WatchRepeat
 
-export function stageOf(watch: Watch | null): LineStage {
+function stageOf(watch: Watch | null): LineStage {
   if (!watch?.enabled || watch.status === 'disabled') return 'off'
   return watch.repeat
 }
 
-export function nextStage(watch: Watch | null): LineStage {
+function nextStage(watch: Watch | null): LineStage {
   const stage = stageOf(watch)
   return stage === 'off' ? 'always' : stage === 'always' ? 'once' : 'off'
 }

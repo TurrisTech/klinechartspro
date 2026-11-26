@@ -29,7 +29,7 @@ export interface AlertOccurrence {
   readings: string
 }
 
-export interface AdvancePlan {
+interface AdvancePlan {
   /** Where the user asked to land. */
   target: number
   /** Where the walk stops: the target, or the alert's effective instant before it. */
@@ -58,7 +58,7 @@ export function planAdvance(cursor: number, request: AdvanceRequest, grid: Candl
 }
 
 /** A candle's price band on both sides. */
-export interface Band {
+interface Band {
   bidLow: number
   bidHigh: number
   askLow: number

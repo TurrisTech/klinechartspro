@@ -27,8 +27,6 @@ import { fold, foldedCoveredTo, manifestDay, manifestTz, sourceInterval, sourceW
 import type { Tiled } from './join'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
 
-export { tilesBaseUrl } from './manifest'
-
 /** Every bar the manifest's tiles hold in `[from, to)`, or null if any of them will not load.
  * Null is never "no bars": a tile that will not load must fall back for the whole window
  * rather than leave a hole in the middle of one. */

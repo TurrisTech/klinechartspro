@@ -90,7 +90,7 @@ export function unitSize(unit: ExitUnit, basis: ExitBasis): number | null {
 }
 
 /** Decimals a number in `unit` is written with. */
-export function unitDigits(unit: ExitUnit, info: InstrumentInfo): number {
+function unitDigits(unit: ExitUnit, info: InstrumentInfo): number {
   if (unit === 'pips') return 1
   if (unit === 'price') return info.precision
   if (unit === 'percent') return 3
@@ -125,7 +125,7 @@ export function parseDistance(raw: string, unit: ExitUnit, basis: ExitBasis, wha
 }
 
 /** One step of a field in `unit`; `big` is ten. */
-export function exitStep(unit: ExitUnit, info: InstrumentInfo, big: boolean): number {
+function exitStep(unit: ExitUnit, info: InstrumentInfo, big: boolean): number {
   const one = unit === 'pips' ? 1 : unit === 'price' ? (info.pipSize ?? 10 ** -info.precision) : unit === 'percent' ? 0.01 : unit === 'atr' ? 0.25 : 0.25
   return one * (big ? 10 : 1)
 }
@@ -159,7 +159,7 @@ export function distanceWords(distance: number, info: InstrumentInfo): string {
 
 // -- the three fields --------------------------------------------------------------------------
 
-export interface TrailFields {
+interface TrailFields {
   /** Behind the best price. */
   distance: string
   /** In profit before it trails; '' from the fill. */
@@ -177,7 +177,7 @@ export function parseTrail(fields: TrailFields, unit: ExitUnit, basis: ExitBasis
   return { distance, activation, step }
 }
 
-export interface BreakevenFields {
+interface BreakevenFields {
   /** In profit before the stop moves to the entry. */
   trigger: string
   /** Beyond the entry, in the trade's favour; '' is the entry itself. */
@@ -249,11 +249,6 @@ export function toggleMilestone(text: string, value: number): string {
 
 // -- readouts -------------------------------------------------------------------------------------
 
-/** The closing side now: what a stop follows and a milestone is measured on. */
-function closingSide(side: SimSide, quote: { bid: number; ask: number } | undefined): number | null {
-  return quote ? (side === 'buy' ? quote.bid : quote.ask) : null
-}
-
 /** What a trail comes to: its distance in pips (when stated otherwise), where the stop goes --
  * now, or the price at which the trail takes over (where it starts, or where it passes a tighter
  * stop loss already set) -- and its step. `mark` is the closing side for an order that fills now
@@ -304,7 +299,7 @@ export function milestonesReadout(milestones: readonly MilestoneRequest[], basis
 
 // -- a working order's or trade's management, in words ----------------------------------------------
 
-export interface ManagementLine {
+interface ManagementLine {
   label: string
   value: string
   title?: string
@@ -389,9 +384,6 @@ export function milestoneNotice(trade: SimTrade, event: SimEvent, info: Instrume
   }
 }
 
-/** The closing-side price now, for a readout. */
-export { closingSide }
-
 /** One R for a working position: the stop loss's distance from the entry WHEN IT WAS PLACED -- the
  * order's own stop -- so a trailed stop does not shrink it. Without one, the trail's distance (a
  * trail from the fill is the first stop), then the stop it has now. */
@@ -411,7 +403,7 @@ export function initialRisk(record: SimTrade | SimOrder, orders: readonly SimOrd
 
 // -- ATR -------------------------------------------------------------------------------------------
 
-export const ATR_PERIOD = 14
+const ATR_PERIOD = 14
 /** The closed bars an ATR is read over. */
 const ATR_BARS = 200
 

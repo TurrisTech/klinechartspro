@@ -30,7 +30,7 @@ export function isLabIndicator(name: string): boolean {
   return name === LAB_TEMPLATE_NAME
 }
 
-export interface ExtendData {
+interface ExtendData {
   /** Store key per source id: a generation's name, or BARS_SOURCE_ID. */
   seriesKeys: Record<string, string>
   rev: number

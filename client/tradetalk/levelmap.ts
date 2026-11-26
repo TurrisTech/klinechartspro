@@ -26,7 +26,7 @@ export interface ExtendData {
 /** The daily feed's bars as sessions. Their dates are canonical -- midnight on the
  * instrument's own clock, of the session -- so they are read `sessionDated`, whatever the
  * chart's own bars are dated by. */
-export function sessionsFromDaily(store: WindowStore<DailyPoint> | undefined, clock: SessionClock): SessionBar[] {
+function sessionsFromDaily(store: WindowStore<DailyPoint> | undefined, clock: SessionClock): SessionBar[] {
   if (!store) return []
   const dailyClock: SessionClock = { ...clock, sessionDated: true }
   const points = [...store.values.values()].sort((a, b) => a.date - b.date)
@@ -74,7 +74,7 @@ export const LABEL_GAP = 11
 export type Axis = { convertToPixel(value: number): number }
 
 /** Values a template's calc hands back: `levels` is the map in force on the bar, when drawn. */
-export interface LevelValue {
+interface LevelValue {
   levels?: readonly Level[]
 }
 
@@ -174,7 +174,7 @@ export function drawLevelLabels(
 
 /** Supply and demand take the candles' own colours, so a line the method would trade reads as
  * the side it argues; a calendar level takes its unit's. */
-export interface LevelTone {
+interface LevelTone {
   supply: string
   demand: string
 }

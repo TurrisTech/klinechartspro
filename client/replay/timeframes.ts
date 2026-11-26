@@ -16,7 +16,7 @@
 
 export type Unit = 's' | 'm' | 'h' | 'D' | 'W' | 'M' | 'Y'
 
-export interface IntervalSpec {
+interface IntervalSpec {
   number: number
   unit: Unit
   code: string
@@ -64,7 +64,7 @@ export function isIntraday(code: string): boolean {
  * its open (0h) and a US equity day opens 9h into its date (-9h). `scheduleWireShift` is the
  * schedule-aware form, and what a `CandleGrid`'s `toWire`/`fromWire` and the tile fold use;
  * `toWireDate` is left for the tests' FX fixtures. */
-export const SESSION_DATE_OFFSET_MS = 7 * 3_600_000
+const SESSION_DATE_OFFSET_MS = 7 * 3_600_000
 
 export function sessionDated(code: string): boolean {
   return !isIntraday(code)
@@ -105,7 +105,7 @@ export function divides(a: string, b: string): boolean {
 
 /** The grid every base candidate is drawn from: the intraday lengths that tile a day, and
  * the calendar units. Coarsest last. */
-export const CANDIDATE_LADDER: readonly string[] = [
+const CANDIDATE_LADDER: readonly string[] = [
   '1s',
   '5s',
   '10s',
@@ -239,7 +239,7 @@ export function finerStored(code: string, stored: readonly string[]): string[] {
 
 // --- the wall clock ---------------------------------------------------------------------------
 
-export const MARKET_TZ = 'America/New_York'
+const MARKET_TZ = 'America/New_York'
 const SESSION_ANCHOR_HOUR = 17
 const HOUR = 3_600_000
 const DAY = 86_400_000

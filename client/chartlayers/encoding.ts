@@ -10,7 +10,7 @@ export type LinePattern = 'solid' | 'dashed' | 'dotted' | 'dashDot'
 
 // klinecharts' LineType is only 'dashed' | 'solid' (index.d.ts:51) — richer patterns come
 // from dashedValue, not from a richer style enum.
-export const LINE_PATTERNS: Record<LinePattern, { style: LineType; dashedValue: number[] }> = {
+const LINE_PATTERNS: Record<LinePattern, { style: LineType; dashedValue: number[] }> = {
   solid: { style: 'solid', dashedValue: [] },
   dashed: { style: 'dashed', dashedValue: [6, 4] },
   dotted: { style: 'dashed', dashedValue: [1, 3] },

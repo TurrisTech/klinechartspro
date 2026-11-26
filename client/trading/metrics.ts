@@ -62,7 +62,7 @@ export function pricingContext(
   }
 }
 
-export function midPrice(quote: SimQuote | undefined): number | null {
+function midPrice(quote: SimQuote | undefined): number | null {
   return quote ? (quote.bid + quote.ask) / 2 : null
 }
 
@@ -99,7 +99,7 @@ export function quoteToAccountRate(ctx: PricingContext): number | null {
 }
 
 /** The result of the position reaching one price, seen from where it started. */
-export interface Outcome {
+interface Outcome {
   price: number
   /** The price move in the position's favour: positive is profit. */
   move: number
@@ -138,7 +138,7 @@ export function outcome(
   }
 }
 
-export interface SizeFigures {
+interface SizeFigures {
   units: number
   /** Standard lots (100,000 units) -- a forex convention, so null for anything else. */
   lots: number | null
@@ -177,7 +177,7 @@ export function rewardToRisk(stop: Outcome | null, target: Outcome | null): numb
   return target.amount / -stop.amount
 }
 
-export interface TradeFigures extends SizeFigures {
+interface TradeFigures extends SizeFigures {
   /** The closing-side price now. */
   mark: number | null
   /** Open P&L: entry to mark. */
@@ -204,7 +204,7 @@ export function tradeFigures(trade: SimTrade, ctx: PricingContext): TradeFigures
   }
 }
 
-export interface OrderFigures extends SizeFigures {
+interface OrderFigures extends SizeFigures {
   /** The price the order would fill at if it were a market order now. */
   fill: number | null
   /** How far the market has to travel to reach the order, always non-negative. */
@@ -241,7 +241,7 @@ export function orderFigures(order: SimOrder, ctx: PricingContext): OrderFigures
   }
 }
 
-export interface PositionSummary {
+interface PositionSummary {
   openTrades: number
   pendingOrders: number
   /** Long units minus short units. */
@@ -362,7 +362,7 @@ export function roundTo(value: number, precision: number): number {
 
 /** Rounded to `precision` in the direction of `anchor`: a level computed from a budget never
  * lands a pip beyond it. The epsilon keeps an exact grid value where it is. */
-export function roundToward(value: number, anchor: number, precision: number): number {
+function roundToward(value: number, anchor: number, precision: number): number {
   const factor = 10 ** Math.max(0, Math.min(precision, 12))
   const scaled = value * factor
   const snapped = value < anchor ? Math.ceil(scaled - 1e-6) : Math.floor(scaled + 1e-6)

@@ -23,7 +23,7 @@ import { ANY_LABEL } from './types'
 // tree and calls `onChange`; a typed number moves the model as it is typed and dispatches
 // `wd-alert-edited` from the field, so a keystroke never takes the focus away.
 
-export interface RuleTreeOptions {
+interface RuleTreeOptions {
   /** The rule, as an editable tree. Edited in place. */
   root: GroupNode
   catalogue: ServerCatalogue | null
@@ -46,7 +46,7 @@ export interface RuleTreeOptions {
   onChange(): void
 }
 
-export interface RuleTree {
+interface RuleTree {
   readonly element: HTMLElement
   render(): void
 }

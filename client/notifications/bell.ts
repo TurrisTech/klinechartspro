@@ -19,7 +19,7 @@ import type { Notification } from './types'
 const PANEL_WIDTH = 320
 const PANEL_MARGIN = 8
 
-export interface NotificationBell {
+interface NotificationBell {
   readonly element: HTMLElement
   /** Close the panel without unmounting — a workspace switch, a teardown. */
   close(): void

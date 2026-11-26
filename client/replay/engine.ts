@@ -38,11 +38,11 @@ import type {
 // a bar's CLOSE for the trail and breakeven, and a bar's range for a milestone on a trade open
 // before the bar. Thresholds and stop/target hits compare within one part in 1e9 of the price.
 
-export type CloseReason = 'manual' | 'stop_loss' | 'take_profit' | 'flatten'
+type CloseReason = 'manual' | 'stop_loss' | 'take_profit' | 'flatten'
 
 /** At most this many milestones on an order or trade, and a label at most this long. */
-export const MAX_MILESTONES = 12
-export const MAX_MILESTONE_LABEL = 24
+const MAX_MILESTONES = 12
+const MAX_MILESTONE_LABEL = 24
 const REL_TOL = 1e-9
 
 function tolerance(price: number): number {
@@ -85,11 +85,11 @@ export type Trade = SimTrade
 export type Event = SimEvent
 
 /** The tri-state an amendment uses: `undefined` leaves a field alone, `null` clears it. */
-export type Amend = number | null | undefined
+type Amend = number | null | undefined
 
 export type { BreakevenRequest, ManagementPatch, MilestoneRequest, TrailRequest }
 
-export interface SubmitRequest {
+interface SubmitRequest {
   symbol: string
   side: SimSide
   type: SimOrderType

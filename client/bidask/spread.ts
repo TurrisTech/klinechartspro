@@ -30,14 +30,14 @@ const UNIT_LABEL = ['price', 'points', 'bp'] as const
 
 const LINE = '#FF9800'
 
-export interface SpreadExtendData {
+interface SpreadExtendData {
   seriesKey: string
   rev: number
   /** 10^-pricePrecision of the instrument, set by the binding; what one point is worth. */
   pointSize: number
 }
 
-export interface SpreadValue {
+interface SpreadValue {
   spread?: number
 }
 

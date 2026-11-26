@@ -26,7 +26,7 @@ export interface IndicatorPoint {
   value: number | null
 }
 
-export interface ResolveResult {
+interface ResolveResult {
   seriesKey: string
   describe: string
   name: string

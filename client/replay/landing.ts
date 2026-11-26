@@ -41,10 +41,10 @@ export interface LandingWall {
 
 /** The longest a warm-up waits for the wall to go quiet. Past it, it is sent anyway: a wall still
  * reading after this long is itself reading a cold region, and the next press would be another. */
-export const LANDING_QUIET_TIMEOUT_MS = 5_000
+const LANDING_QUIET_TIMEOUT_MS = 5_000
 
 /** Between two looks at whether the wall is quiet. */
-export const LANDING_QUIET_POLL_MS = 50
+const LANDING_QUIET_POLL_MS = 50
 
 export class LandingWarmer {
   private ticket = 0

@@ -13,12 +13,12 @@ import type { MtfNodeRow, MtfSignalRow } from './api'
 // lagging timeframe's signal arriving late resets one), and a merge would keep it.
 
 /** A marker's identity: its timeframe and its candle's date on that timeframe. */
-export function markKey(row: { interval: string; date: number }): string {
+function markKey(row: { interval: string; date: number }): string {
   return `${row.interval}|${row.date}`
 }
 
 /** A node's identity: the same signal is a node of each root's graph that holds it. */
-export function nodeKey(row: MtfNodeRow): string {
+function nodeKey(row: MtfNodeRow): string {
   return `${row.root}|${row.interval}|${row.date}`
 }
 

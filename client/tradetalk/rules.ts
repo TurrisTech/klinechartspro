@@ -69,7 +69,7 @@ export interface Settings {
   minUnit: Unit
 }
 
-export interface TradeTalkInput {
+interface TradeTalkInput {
   bars: readonly Candle[]
   /** Supply and demand zones to trade from as well as the calendar levels -- each one a line
    * from the bar its swing was confirmed on until the bar that erased it, so nothing here is
@@ -146,7 +146,7 @@ export interface Skips {
   expired: number
 }
 
-export interface TradeTalkResult {
+interface TradeTalkResult {
   values: BarValue[]
   trades: Trade[]
   /** The units the map could actually be drawn from on this chart. */
@@ -155,7 +155,7 @@ export interface TradeTalkResult {
 }
 
 /** What a candle's sweep came to: an order to work, or the reason there is none. */
-export interface SignalResult {
+interface SignalResult {
   order: Omit<Pending, 'signalIndex'> | null
   skip: 'bias' | 'rr' | null
 }
@@ -326,7 +326,7 @@ export function inTradingWindow(ms: number, mode: WindowMode, barMs: number): bo
   return clock.minuteOfDay >= from && clock.minuteOfDay < 11 * 60
 }
 
-export interface Pending {
+interface Pending {
   side: 'long' | 'short'
   signalIndex: number
   planned: number
@@ -345,7 +345,7 @@ export function unitsFor(minUnit: Unit, barMs: number): Unit[] {
 }
 
 /** The calendar level map over a run of bars: what every bar has in force. */
-export interface LevelMap {
+interface LevelMap {
   /** One array per bar, SHARED by reference between bars with the same map (cached per
    * session and exclusion mask) -- which is what lets a drawer group bars into runs. */
   levels: Level[][]
@@ -627,7 +627,7 @@ interface SignalContext {
 
 /** Whether any of `levels` -- highest price first, as a bar's lines always are -- lies strictly
  * between `low` and `high`. */
-export function anyWithin(levels: readonly Level[], low: number, high: number): boolean {
+function anyWithin(levels: readonly Level[], low: number, high: number): boolean {
   let lo = 0
   let hi = levels.length
   while (lo < hi) {

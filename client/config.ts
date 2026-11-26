@@ -69,7 +69,7 @@ export type QueryParams = Record<string, string | number | null | undefined>
 // because the base may be relative (`window.OHLCV_BASE_URL = '/api'`).
 const SERVER_ROOT: string = new URL(`${DATASOURCE_BASE_URL}/`, window.location.href).href
 
-export interface ServerFetchInit extends RequestInit {
+interface ServerFetchInit extends RequestInit {
   /** This call's 401 answers a question about the credentials it sends, not about the session
    * the page holds: the sign-in itself (a wrong password is a 401) and the boot-time session
    * check, which handles its own. Such a 401 is returned to the caller and nothing else. */
@@ -158,7 +158,7 @@ export async function apiGetResponse<T>(
   return { data: body as T, response }
 }
 
-export interface ApiSendResult<T> {
+interface ApiSendResult<T> {
   data: T
   response: Response
 }

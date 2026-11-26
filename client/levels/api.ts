@@ -21,7 +21,7 @@ export interface Level {
  * `expose_headers`, without which a cross-origin `fetch` could not read it. */
 const COMPUTED_THROUGH_HEADER = 'X-Levels-Computed-Through'
 
-export interface FetchLevelsParams {
+interface FetchLevelsParams {
   vendor: string
   symbol: string
   priceMin: number
@@ -69,7 +69,7 @@ export interface FetchLevelsParams {
 // whether it has actually changed to the server's ETag.
 
 /** The rectangle of the price/time plane a `/levels` read covers, on the wire's clock. */
-export interface LevelsWindow {
+interface LevelsWindow {
   priceMin: number
   priceMax: number
   dateFrom: number

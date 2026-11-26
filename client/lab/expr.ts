@@ -34,7 +34,7 @@ export type Ast =
 
 export type BinOp = 'or' | 'and' | '<' | '<=' | '>' | '>=' | '==' | '!=' | '+' | '-' | '*' | '/' | '%'
 
-export class ExprError extends Error {
+class ExprError extends Error {
   constructor(
     message: string,
     /** Character offset the problem was found at. */
@@ -350,7 +350,7 @@ export function checkExpr(ast: Ast, scope: ExprScope): ExprError[] {
 }
 
 /** A literal argument's value (a negative number is a literal too), or undefined. */
-export function literalOf(node: Ast): number | string | boolean | undefined {
+function literalOf(node: Ast): number | string | boolean | undefined {
   if (node.k === 'num' || node.k === 'str' || node.k === 'bool') return node.v
   if (node.k === 'un' && node.op === '-' && node.a.k === 'num') return -node.a.v
   return undefined

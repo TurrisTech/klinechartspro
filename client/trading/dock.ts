@@ -33,7 +33,7 @@ import { OrderTicket } from './ticket'
 //   drawn on the chart as the draft;
 // - the POSITION popup (inspector.ts): opened by a click on a position, beside the click.
 
-export interface DockOptions {
+interface DockOptions {
   chartPro: KLineChartPro
   /** The chart's container: what a floating window is clamped into, and what the dock column
    * is inserted after. */

@@ -26,7 +26,7 @@ import { objectStoreFetch } from '../objectstore'
 import { bucketBase, tileBytes } from '../tiles/cachestore'
 import type { Tiled } from '../tiles/join'
 import { tilesUpTo } from '../tiles/manifest'
-import type { BookBucket, BookKind, BookNearPoint, BookProfilePoint, BookTotalsPoint } from './api'
+import type { BookBucket, BookKind, BookProfilePoint, BookTotalsPoint } from './api'
 
 /** Bumped when the tile layout changes: a closed tile is served `immutable` for a year, so
  * refiling has to change the URL rather than the bytes under a cached one. */
@@ -67,7 +67,7 @@ export interface BookTileManifest {
 }
 
 const base = bucketBase(() => `${(window.BOOK_TILES_BASE_URL ?? `${window.location.origin}/tiles`).replace(/\/+$/, '')}/books`)
-export function bookTilesBaseUrl(): string {
+function bookTilesBaseUrl(): string {
   return base.get()
 }
 
@@ -212,7 +212,7 @@ async function profilesOf(
 
 /** Which metrics tiles can answer. `near` is a sum over a radius the tile does not carry,
  * so it stays on the API -- and says so here rather than failing quietly somewhere. */
-export type TiledMetric = 'totals' | 'profile'
+type TiledMetric = 'totals' | 'profile'
 
 export function isTiledMetric(metric: string): metric is TiledMetric {
   return metric === 'totals' || metric === 'profile'
@@ -263,8 +263,6 @@ export function resetBookTileCaches(): void {
   inflight.clear()
   base.set(null)
 }
-
-export type { BookNearPoint }
 
 declare global {
   interface Window {

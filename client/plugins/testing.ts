@@ -14,7 +14,7 @@ export function installWindow(): void {
   g.window = { location: { origin: 'http://test', href: 'http://test/' }, navigator: { userAgent: 'test' } }
 }
 
-export interface FakeChart {
+interface FakeChart {
   chart: Chart
   indicators: Indicator[]
   data: Array<{ timestamp: number }>

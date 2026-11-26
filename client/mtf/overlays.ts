@@ -76,7 +76,7 @@ const OUTLIER_RANK = 'arev21_outlier_rank'
  * for the two this overlay does not vary, so the answer does not move if the server's defaults
  * ever do.
  */
-export function outlierRankMtf(
+function outlierRankMtf(
   percent: number,
   placement: MtfOverlay['placement'] = 'direction',
   graph = false
@@ -99,7 +99,7 @@ export function outlierRankMtf(
   }
 }
 
-export const AREV21_OUTLIER_RANK_90_MTF = outlierRankMtf(90)
+const AREV21_OUTLIER_RANK_90_MTF = outlierRankMtf(90)
 /** Top-zone signals over the price, bottom-zone ones under it (user, 2026-09-19), and the
  * signal graph between them (user, 2026-09-21). */
 export const AREV21_OUTLIER_RANK_85_MTF = outlierRankMtf(85, 'zone', true)

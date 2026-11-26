@@ -14,7 +14,7 @@ import { type CandleGrid, nominalMs, storedLadderFor } from './timeframes'
 
 /** How far back the stored-ladder probe looks: a store's finest series may lag the newest
  * bar by days (a 5s backfill that stopped), and `limit=1` keeps the read to one bar. */
-export const PROBE_WINDOW_MS = 10 * 86_400_000
+const PROBE_WINDOW_MS = 10 * 86_400_000
 
 /** What the probe reads with -- the server and `/capabilities` by default, fakes in a test. */
 export interface StoredProbeDeps {

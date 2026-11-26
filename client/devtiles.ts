@@ -22,7 +22,7 @@
 //
 // If both are set the upstream wins: it is the real data.
 
-export type TileSource =
+type TileSource =
   | { kind: 'upstream'; base: string }
   | { kind: 'root'; root: string }
   | { kind: 'none' }

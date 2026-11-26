@@ -1,6 +1,6 @@
 import { OhlcvApiError } from '../config'
 import type { LocalWatchState } from '../watch/local'
-import type { OrderPatch, OrderRequest, SimAnswer, SimEvent, SimSnapshot, TradePatch } from '../trading/api'
+import type { OrderPatch, OrderRequest, SimEvent, SimSnapshot, TradePatch } from '../trading/api'
 import type { SessionListener, TradingSession } from '../trading/session'
 import { BarCache, type BarSource, type ReplayBar } from './cache'
 import type { ReplayAlertBook } from './alerts'
@@ -28,7 +28,7 @@ export const WALK_CHUNK_BARS = 4000
 /** Longest a walk runs without handing the event loop back, in ms. Once its bars are cached a
  * walk is synchronous work end to end, so without this a Stop click could not even be
  * DELIVERED until the walk had finished. */
-export const WALK_YIELD_MS = 50
+const WALK_YIELD_MS = 50
 
 /** Least time between two reports of how far a walk has got, in ms. Four a second is as fast as
  * anyone reads a date; a report at every yield (WALK_YIELD_MS) would be twenty. */
@@ -186,7 +186,7 @@ export interface ReplayController {
  * withdrawn before it was made (`withdrawn`: the pane went back, or the notice was dismissed). */
 export type FollowOutcome = 'followed' | 'blocked' | 'refused' | 'withdrawn'
 
-export interface ReplaySessionOptions {
+interface ReplaySessionOptions {
   id: string
   name: string
   createdAt: number
@@ -1183,7 +1183,7 @@ interface WalkState {
 
 /** An engine refusal, as the server's `invalid_request` would arrive (the panel shows an
  * `OhlcvApiError`'s message and a generic line for anything else). */
-export class ReplayRequestError extends OhlcvApiError {
+class ReplayRequestError extends OhlcvApiError {
   constructor(message: string) {
     super(400, 'invalid_request', message)
     this.name = 'ReplayRequestError'
@@ -1195,7 +1195,7 @@ function tickerOf(symbol: string): string {
   return symbol.split(':').pop() ?? symbol
 }
 
-export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
+function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
   const bid = bar.bid ?? { o: bar.o, h: bar.h, l: bar.l, c: bar.c }
   const ask = bar.ask ?? { o: bar.o, h: bar.h, l: bar.l, c: bar.c }
   return {
@@ -1212,8 +1212,6 @@ export function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
     askClose: ask.c
   }
 }
-
-export type { SimAnswer }
 
 /** What ends a run to the next event (and a Step or Play with Pause on fill): a fill, a close --
  * a stop loss, take profit, trailing or breakeven stop hit -- or a milestone reached (outside

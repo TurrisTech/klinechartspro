@@ -29,14 +29,14 @@ export const GRID_ARRAY = 'grid'
 /** One row of that grid: the bar's wire date, and its open and close when the source sent them
  * (the MTF overlay read its grid this way, and priced each signal at a bar's body, until
  * wdashboard-server 0.56.0 built its graph). */
-export interface GridRow {
+interface GridRow {
   date: number
   open?: number
   close?: number
 }
 
 /** A grid bar's body: the higher and the lower of its open and close. */
-export interface GridBody {
+interface GridBody {
   top: number
   bottom: number
 }

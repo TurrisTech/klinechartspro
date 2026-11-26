@@ -19,7 +19,7 @@ export const PLAY_DELAYS_MS = [250, 500, 1000, 2000, 5000] as const
 
 export const DEFAULT_PLAY_DELAY_MS = 1000
 
-export interface PlayerOptions {
+interface PlayerOptions {
   /** One step, exactly as the Step button takes it. Null when it could not start (busy). */
   step: () => Promise<AdvanceResult | null>
   /** Resolves once the wall has loaded what the last step invalidated. Bounded by the caller

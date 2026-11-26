@@ -19,14 +19,14 @@ const WINDOW_KEY = 'notification-delivery'
 /** How long Remove waits for its second press. */
 const CONFIRM_MS = 4_000
 
-export interface ChannelSettingsOptions {
+interface ChannelSettingsOptions {
   api: ChannelsApi
   /** The element the window floats inside: `#app`. */
   bounds: HTMLElement
   now?: () => number
 }
 
-export interface ChannelSettingsWindow {
+interface ChannelSettingsWindow {
   open(): void
   close(): void
   readonly visible: boolean

@@ -17,18 +17,7 @@ import {
   type Watch
 } from './types'
 
-export { watchApi } from './api'
-export { loadWatches, WatchStore } from './store'
-export {
-  instrumentTarget,
-  PRICE_DIRECTIONS,
-  PRICE_SOURCE,
-  priceCondition,
-  priceDirection,
-  priceLevel
-} from './types'
-export type { Condition, PriceDirection, Watch, WatchDraft, WatchSource } from './types'
-
+export { loadWatches } from './store'
 // PRICE WATCHES on the chart: a line per level, right-click (or, on a touch screen, a
 // long-press) to place one, drag to move it.
 //
@@ -60,7 +49,7 @@ export type { Condition, PriceDirection, Watch, WatchDraft, WatchSource } from '
 
 const CANDLE_PANE = 'candle_pane'
 
-export interface PriceWatchesOptions {
+interface PriceWatchesOptions {
   /** The watches to draw. Default: this browser's view of the SERVER's (`loadWatches`). */
   store?: WatchStore
   /** Why this instrument cannot be watched on this wall, or null when it can. A replay walks

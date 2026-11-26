@@ -60,7 +60,7 @@ import type { TradingSession } from './session'
 // Hand-built plain DOM, the house style for app-side chrome (client/chartlayers/settings.ts):
 // the library owns Svelte, the app owns the chrome around it.
 
-export interface PanelContext {
+interface PanelContext {
   /** Instrument facts (precision + pip size) for a key, from the config cache. */
   instrumentFor: (key: string) => InstrumentInfo
   /** The waiting change shared with the chart (TradingOverlays). */

@@ -62,7 +62,7 @@ export function loadSignalCatalogue(): Promise<SignalCatalogueEntry[]> {
   return signalCatalogue
 }
 
-export type PointsEnvelope<P> =
+type PointsEnvelope<P> =
   | { s: 'ok'; points: P[]; [extra: string]: unknown }
   | { s: 'no_data'; [extra: string]: unknown }
   | { s: 'replaying'; phase?: string; progress: number | null; retryAfterMs: number; [extra: string]: unknown }
@@ -119,7 +119,7 @@ function readArray(envelope: PointsEnvelope<unknown>, name: string): { date: num
   return value.filter((row): row is { date: number } => typeof (row as { date?: unknown })?.date === 'number')
 }
 
-export function pointsUrl(request: PointsRequest): URL {
+function pointsUrl(request: PointsRequest): URL {
   return apiUrl(`/plugins/${request.pluginId}/values`, {
     symbol: request.vendorSymbol,
     resolution: request.resolution,

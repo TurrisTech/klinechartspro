@@ -25,9 +25,9 @@ const DOC_PREFIX = 'strategy.'
 const LOCAL_PREFIX = 'wd.lab.'
 const INDEX_VERSION = 1
 
-export const MAX_STRATEGIES = 24
+const MAX_STRATEGIES = 24
 /** A strategy larger than this is refused: a handful of them would fill the shared document. */
-export const MAX_STRATEGY_BYTES = 12_000
+const MAX_STRATEGY_BYTES = 12_000
 
 /** Where the set lives. */
 export interface StrategyPersistence {
@@ -37,7 +37,7 @@ export interface StrategyPersistence {
   remove(key: string): void
 }
 
-export function preferencesPersistence(): StrategyPersistence {
+function preferencesPersistence(): StrategyPersistence {
   return {
     load: async (fresh) => {
       const data = fresh ? await refreshPreferences() : await loadPreferences()
@@ -97,14 +97,14 @@ export function localPersistence(storage: () => Storage | null = () => window.lo
   }
 }
 
-export function defaultPersistence(): StrategyPersistence {
+function defaultPersistence(): StrategyPersistence {
   return hasFeature('preferences') ? preferencesPersistence() : localPersistence()
 }
 
 /** The channel a save is announced on, to other tabs of this browser. */
-export const CHANNEL = 'wd-strategy-lab'
+const CHANNEL = 'wd-strategy-lab'
 
-export interface SavedMessage {
+interface SavedMessage {
   kind: 'saved' | 'removed'
   id: string
 }

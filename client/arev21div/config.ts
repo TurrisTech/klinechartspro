@@ -11,7 +11,7 @@ import { AREV21_LOOKBACK, type Rule } from './divergence'
 // the whole reason this indicator has a settings panel of its own, as the AREV lab does.
 
 export type LineStyle = 'dotted' | 'dashed' | 'solid'
-export const LINE_STYLES: readonly LineStyle[] = ['dotted', 'dashed', 'solid']
+const LINE_STYLES: readonly LineStyle[] = ['dotted', 'dashed', 'solid']
 
 export interface DivConfig {
   rule: Rule
@@ -100,7 +100,7 @@ export function normaliseDivConfig(value: unknown): DivConfig {
 
 /** What a pane stores: only what differs from the defaults, flat by path; undefined when nothing
  * does, so an untouched pane adds nothing to the (size-capped) wall document. */
-export type StoredDivConfig = Record<string, unknown>
+type StoredDivConfig = Record<string, unknown>
 
 export function toStoredDivConfig(config: DivConfig): StoredDivConfig | undefined {
   return CODEC.toStored(config)

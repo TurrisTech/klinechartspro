@@ -30,9 +30,9 @@ import type { ObserverStop, ReplayObserver } from './session'
  * session does not have to exist to exercise any of this. */
 /** The note that marks the replay controls' own stop price among the watches: the one watch the
  * Go to panel sets, moves and removes. Every other watch is the chart's. */
-export const STOP_PRICE_NOTE = 'Bar replay stop price'
+const STOP_PRICE_NOTE = 'Bar replay stop price'
 
-export interface ReplayWatchHost {
+interface ReplayWatchHost {
   readonly cursor: number
   /** The last base bar that closed at or before `at`. */
   barAt(at: number): Promise<ReplayBar | null>
@@ -40,7 +40,7 @@ export interface ReplayWatchHost {
   persist(): void
 }
 
-export interface ReplayWatchesOptions {
+interface ReplayWatchesOptions {
   /** The replay's instrument, `vendor:TICKER` — the only one it walks. */
   symbol: string
   notify: NotificationSink

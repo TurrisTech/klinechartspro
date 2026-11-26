@@ -74,7 +74,7 @@ export interface PluginPointListener {
 /** The server's cap on live plugin subscriptions per connection (framerelay.MAX_LIVE_SUBSCRIPTIONS). */
 const MAX_PLUGIN_SUBSCRIPTIONS = 64
 
-export function pluginSubscriptionKey(
+function pluginSubscriptionKey(
   plugin: string,
   variant: string | null,
   vendor: string,
@@ -91,10 +91,10 @@ const INDICATOR_BACKFILL_COUNT = 200
 // is a fast path and never the record: the row is stored before it is sent, so a tab that was
 // closed catches up from `GET /notifications` on its next boot and nothing here has to queue,
 // retry, or survive a reconnect gap.
-export type NotificationListener = (notification: NotificationWire) => void
+type NotificationListener = (notification: NotificationWire) => void
 
 export type StreamStatus = 'connected' | 'connecting' | 'offline'
-export type StatusListener = (status: StreamStatus) => void
+type StatusListener = (status: StreamStatus) => void
 
 export function subscriptionKey(vendor: string, symbol: string, interval: string): string {
   return `${vendor} ${symbol} ${interval}`

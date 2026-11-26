@@ -17,7 +17,7 @@ import { alertName, alertNote, centredOn, type Zone, zoneAround, zoneCondition, 
 // are simply not clickable. Nothing here evaluates anything or persists anything; every change
 // is a call, and the store's answer is what is drawn (client/watch/store.ts).
 
-export interface PriceAlertBackend {
+interface PriceAlertBackend {
   store: WatchStore
   /** Why an instrument cannot be watched on this wall, or null when it can -- a replay walks
    * one instrument. */
@@ -41,7 +41,7 @@ export function firedOnce(watch: Pick<Watch, 'enabled' | 'repeat' | 'status'>): 
  * server's default. */
 export const PRICE_ALERT_COOLDOWN_MS = 5 * 60_000
 
-export type PriceAlertsListener = () => void
+type PriceAlertsListener = () => void
 
 export class PriceAlerts {
   private backend: PriceAlertBackend | null = null

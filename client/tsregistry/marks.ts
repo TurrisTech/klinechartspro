@@ -108,7 +108,7 @@ export function drawLabel(ctx: CanvasRenderingContext2D, x: number, y: number, t
 
 /** How a link is stroked. `dotted` is round dots as wide as the line, so a thick dotted line
  * reads as a row of beads rather than a dash pattern. */
-export interface LinkStyle {
+interface LinkStyle {
   style: 'solid' | 'dashed' | 'dotted'
   width: number
   /** 0..1; a fainter line for a weaker reading. */

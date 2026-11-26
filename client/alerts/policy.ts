@@ -66,7 +66,7 @@ export function decide(state: PolicyState, settings: PolicySettings, result: boo
 /** Whether a firing is too soon after the last one. Only for a REPEATING watch (a one-shot
  * fires once, so a cooldown could only ever suppress the one firing it exists for) and only
  * for a firing since the current arm. */
-export function cooling(state: PolicyState, settings: PolicySettings, at: number): boolean {
+function cooling(state: PolicyState, settings: PolicySettings, at: number): boolean {
   if (settings.repeat !== 'always' || settings.cooldownMs <= 0) return false
   if (state.firedSinceArm === null) return false
   return at - state.firedSinceArm < settings.cooldownMs

@@ -49,7 +49,7 @@ function numberAt(calcParams: unknown[] | undefined, at: number, fallback: numbe
   return Number.isFinite(value) ? value : fallback
 }
 
-export interface ChartSettings extends Settings {
+interface ChartSettings extends Settings {
   lines: boolean
   /** Trade from supply and demand zones as well as the calendar levels. */
   heath: boolean
@@ -72,7 +72,7 @@ export function settingsOf(calcParams: unknown[] | undefined): ChartSettings {
 
 /** What the pane says about itself in the corner: the trades over the loaded bars, and why
  * there are none when there are none. */
-export interface Summary {
+interface Summary {
   entries: number
   target: number
   stop: number
@@ -82,11 +82,11 @@ export interface Summary {
   skips: Skips
 }
 
-export interface TradeTalkValue extends BarValue {
+interface TradeTalkValue extends BarValue {
   summary?: Summary
 }
 
-export interface EntriesExtendData extends ExtendData {
+interface EntriesExtendData extends ExtendData {
   /** The zone settings of the Heath levels indicator on this pane, or null for none. */
   heath?: HeathLevelSettings | null
 }

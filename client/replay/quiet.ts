@@ -38,7 +38,7 @@ export interface QuietSetting {
   zone: QuietZone
 }
 
-export const DEFAULT_QUIET: QuietSetting = { on: false, from: 22 * 60, to: 6 * 60, zone: 'replay' }
+const DEFAULT_QUIET: QuietSetting = { on: false, from: 22 * 60, to: 6 * 60, zone: 'replay' }
 
 const KEY = 'wd.replay.quiet'
 const MINUTE = 60_000

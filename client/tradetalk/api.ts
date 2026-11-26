@@ -23,14 +23,14 @@ export interface DailyPoint {
   close: number
 }
 
-export const DAILY_RESOLUTION = '1D'
+const DAILY_RESOLUTION = '1D'
 
 const DAY_MS = 86_400_000
 /** Slack on the left edge, so the first session of a year is never cut off by the hours
  * between a candle's open and the date it is filed under. */
 const MARGIN_MS = 7 * DAY_MS
 
-export function dailySourceKey(vendor: string, ticker: string): string {
+function dailySourceKey(vendor: string, ticker: string): string {
   return `tradetalk-daily|${vendor}:${ticker}|${DAILY_RESOLUTION}`
 }
 

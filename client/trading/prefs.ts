@@ -21,7 +21,7 @@ export type ProtectMode = 'pips' | 'price' | 'percent'
 /** How a trailing stop, a breakeven or a milestone states its distance (exits.ts): pips, a price
  * difference, a percentage of the price, a multiple of the ATR, or a multiple of R. */
 export type ExitUnit = 'pips' | 'price' | 'percent' | 'atr' | 'r'
-export const EXIT_UNIT_IDS: readonly ExitUnit[] = ['pips', 'price', 'percent', 'atr', 'r']
+const EXIT_UNIT_IDS: readonly ExitUnit[] = ['pips', 'price', 'percent', 'atr', 'r']
 export type PerfMetric = 'balance' | 'equity'
 export type PerfRange = '1M' | '3M' | '6M' | '1Y' | 'all'
 const PERF_RANGE_IDS: readonly PerfRange[] = ['1M', '3M', '6M', '1Y', 'all']

@@ -23,7 +23,7 @@ import { sharedStrategyStore, type StrategyStore } from './store'
 // One store per strategy and instrument, shared by every pane showing them whatever its
 // timeframe -- a run does not depend on the chart's interval; only where its nodes are drawn does.
 
-export interface LabPaneConfig extends ShowOptions {
+interface LabPaneConfig extends ShowOptions {
   /** The saved strategy's id; '' for the most recently saved. */
   strategy: string
 }
@@ -84,7 +84,7 @@ export class RunStore implements SourceStore<RunPoint> {
   }
 }
 
-export interface LabPluginOptions {
+interface LabPluginOptions {
   /** The saved strategies; the page's shared store by default. */
   store?: () => Promise<StrategyStore>
   data?: LabData

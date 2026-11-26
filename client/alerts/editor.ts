@@ -34,7 +34,7 @@ export interface EditorContext {
   graphSettings?: (overlayId: string) => GraphSettings
 }
 
-export interface AlertEditorOptions {
+interface AlertEditorOptions {
   /** The alert being edited, or null for a new one. */
   alert: Alert | null
   context: EditorContext
@@ -46,7 +46,7 @@ export interface AlertEditorOptions {
   onCancel(): void
 }
 
-export interface AlertEditor {
+interface AlertEditor {
   readonly element: HTMLElement
 }
 

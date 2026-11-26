@@ -45,7 +45,7 @@ export interface ExtendData {
 }
 
 /** One chart bar: its histogram, and the session it belongs to (NaN when none can be said). */
-export interface VpValue {
+interface VpValue {
   atoms: Atoms | null
   session: number
 }
@@ -277,7 +277,7 @@ function shouldUpdate(prev: Indicator<VpValue, number, ExtendData>, cur: Indicat
 }
 
 /** The klinecharts template. Exported for the tests. */
-export function buildTemplate(): IndicatorTemplate<VpValue, number, ExtendData> {
+function buildTemplate(): IndicatorTemplate<VpValue, number, ExtendData> {
   return {
     name: TEMPLATE_NAME,
     shortName: 'VP',

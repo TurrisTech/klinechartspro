@@ -63,7 +63,7 @@ export function cut(text: string, limit: number): string {
   return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`
 }
 
-export interface RemoteNotifications extends NotificationBackend {
+interface RemoteNotifications extends NotificationBackend {
   dispose(): void
 }
 

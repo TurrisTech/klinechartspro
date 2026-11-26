@@ -42,7 +42,7 @@ export interface Zone {
 
 /** What a buffer is counted in on one instrument: its pip where it is priced in pips (forex
  * and metals, `SymbolInfo.pipSize`), otherwise its smallest displayed increment. */
-export interface ZoneUnit {
+interface ZoneUnit {
   size: number
   label: 'pips' | 'ticks'
 }

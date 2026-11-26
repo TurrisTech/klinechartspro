@@ -13,7 +13,7 @@
 // client/watch/menu.ts gives (`.klinecharts-pro` clips its overflow and defines the `kc-*`
 // tokens). Plain DOM, like every control in client/.
 
-export interface PriceAlertEditorOptions {
+interface PriceAlertEditorOptions {
   /** An element inside the pane, whose themed root the card is appended into. */
   host: HTMLElement
   /** The bell, in viewport coordinates: the card hangs below it, right-aligned, or above it

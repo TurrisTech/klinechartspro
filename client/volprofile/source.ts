@@ -30,11 +30,11 @@ import { lowerBound, type SourceBar } from './atoms'
 
 /** How many bars a pane typically shows. Fixed rather than read off the zoom, so zooming does
  * not change the source and throw away what was fetched. */
-export const NOMINAL_VISIBLE_BARS = 150
+const NOMINAL_VISIBLE_BARS = 150
 
 /** At most this many source bars are held for one pane; older chart bars are spread from
  * themselves instead (atoms.ts's remainder), and the legend says from when the source runs. */
-export const MAX_SOURCE_BARS = 250_000
+const MAX_SOURCE_BARS = 250_000
 
 /** `/getbars` 413s past the server's cap (5000 by default); an API page stays under it. */
 const API_PAGE_BARS = 4000
@@ -182,7 +182,7 @@ export class BarStore implements SourceStore<SourceBar> {
 }
 
 /** The one factory for `vp-bars|` keys (plugins/README.md, "Two bindings on one key"). */
-export function barStore(key: string): BarStore {
+function barStore(key: string): BarStore {
   return new BarStore(key)
 }
 
@@ -190,7 +190,7 @@ export function barSourceKey(vendor: string, ticker: string, source: string): st
   return `vp-bars|${vendor}:${ticker}|${source}`
 }
 
-export interface BarSourceOptions {
+interface BarSourceOptions {
   stream: PluginStream
   vendor: string
   ticker: string

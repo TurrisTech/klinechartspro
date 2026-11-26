@@ -61,7 +61,7 @@ function ago(timestamp: number): string {
   return days < 30 ? `${days}d ago` : new Date(timestamp).toLocaleDateString()
 }
 
-export interface WorkspaceSwitcher {
+interface WorkspaceSwitcher {
   /** The toolbar button. Hand it to attachToSlot(chartPro, 'toolbar', …) on every mount --
    * the same element is re-attached to each freshly built chart rather than rebuilt. */
   element: HTMLElement
@@ -70,7 +70,7 @@ export interface WorkspaceSwitcher {
   close(): void
 }
 
-export interface WorkspaceSwitcherOptions {
+interface WorkspaceSwitcherOptions {
   store: WorkspaceStore
   /** Non-null while the wall on screen is NOT a workspace -- today only a `?symbol=` deep
    * link, which opens one instrument and deliberately saves nothing. The button says so, and

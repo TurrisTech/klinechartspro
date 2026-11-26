@@ -43,7 +43,7 @@ export interface SimMilestone {
 
 /** Exit management an order carries to its trade. Optional on the wire: a server before
  * 0.58.0, and a replay saved before it, have none. */
-export interface SimManagement {
+interface SimManagement {
   trailingStop?: SimTrailingStop | null
   breakeven?: SimBreakeven | null
   milestones?: SimMilestone[]

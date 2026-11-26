@@ -13,7 +13,7 @@ import { loadPreferences, preferencesLoaded, savePreference } from '../preferenc
 import { compile, describeRule, type Labeller, RuleError } from './rules'
 import { type Alert, type AlertDefinition, type AlertSource, DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
 
-export const MAX_ALERTS = 200
+const MAX_ALERTS = 200
 const PREFERENCE_KEY = 'alerts'
 const STORAGE_KEY = 'wd.alerts'
 const DOCUMENT_VERSION = 1
@@ -24,7 +24,7 @@ export interface AlertPersistence {
   save(document: unknown): void
 }
 
-export function preferencesPersistence(): AlertPersistence {
+function preferencesPersistence(): AlertPersistence {
   return {
     load: async () => {
       const data = await loadPreferences()
@@ -37,7 +37,7 @@ export function preferencesPersistence(): AlertPersistence {
   }
 }
 
-export function localPersistence(storage: () => Storage | null = () => window.localStorage): AlertPersistence {
+function localPersistence(storage: () => Storage | null = () => window.localStorage): AlertPersistence {
   return {
     load: async () => {
       try {

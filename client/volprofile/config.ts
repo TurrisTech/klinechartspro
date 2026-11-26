@@ -8,11 +8,11 @@ import type { Mode } from './source'
 // the same reason the AREV21 divergence and the AREV lab have panels of their own.
 
 export type SessionUnit = 'D' | 'W' | 'M'
-export const MODES: readonly Mode[] = ['visible', 'session']
-export const SESSION_UNITS: readonly SessionUnit[] = ['D', 'W', 'M']
+const MODES: readonly Mode[] = ['visible', 'session']
+const SESSION_UNITS: readonly SessionUnit[] = ['D', 'W', 'M']
 /** 'auto', or a stored interval the pane is pinned to (source.ts ignores one the vendor does
  * not store or that is coarser than the chart). */
-export const SOURCES: readonly string[] = ['auto', '1m', '30m', '1h', '1D']
+const SOURCES: readonly string[] = ['auto', '1m', '30m', '1h', '1D']
 
 export interface VpConfig {
   mode: Mode
@@ -125,7 +125,7 @@ export function normaliseVpConfig(value: unknown): VpConfig {
 
 /** What a pane stores: only what differs from the defaults, flat by path; undefined when nothing
  * does, so an untouched pane adds nothing to the (size-capped) wall document. */
-export type StoredVpConfig = Record<string, unknown>
+type StoredVpConfig = Record<string, unknown>
 
 export function toStoredVpConfig(config: VpConfig): StoredVpConfig | undefined {
   return CODEC.toStored(config)

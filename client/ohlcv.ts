@@ -5,7 +5,7 @@ import type { IndicatorPoint, SeriesDoc } from './indicators/api'
 // `wdashboard_server/services/schemas.py` field for field. Timestamps are always integer
 // Unix epoch milliseconds.
 
-export type ErrorCode =
+type ErrorCode =
   | 'invalid_request'
   | 'unsupported'
   // 401: a missing, invalid or expired session (config.ts serverFetch, stream.ts), or a wrong
@@ -20,7 +20,7 @@ export type ErrorCode =
 
 export type UpdatesMode = 'closed' | 'all'
 
-export interface ErrorBody {
+interface ErrorBody {
   code: ErrorCode
   detail: string
   field?: string | null

@@ -74,7 +74,7 @@ const WINDOW_BACK_PAD_MS = 4 * 86_400_000
  * pane's `mtf` for the original overlay -- its field since before there were others -- and under
  * `mx` by plugin id for the rest. The codec is hand-written (config.ts): it reads the single
  * graph root an older build stored, and its colour checks are not the fields'. */
-export function mtfPaneConfig(overlay: MtfOverlay): PaneConfig {
+function mtfPaneConfig(overlay: MtfOverlay): PaneConfig {
   return paneConfig<MtfConfig>({
     templates: [overlay.templateName],
     doc: overlay.id === AREV21_MTF.id ? 'mtf' : ['mx', overlay.id],
@@ -135,7 +135,7 @@ export function closeKnown(
 }
 
 /** The store identity: everything that decides the answer, and nothing else. */
-export function graphSourceKey(
+function graphSourceKey(
   overlay: MtfOverlay,
   symbol: string,
   timeframes: readonly string[],
@@ -152,7 +152,7 @@ export function graphSourceKey(
  * again. Each subscription's ack does the same from the newest row held, because a point sent
  * while the socket was down is not replayed.
  */
-export function graphSubscribe(
+function graphSubscribe(
   f: PluginFacilities,
   ctx: Pick<BindContext, 'vendor' | 'ticker'>,
   overlay: MtfOverlay,

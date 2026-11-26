@@ -260,7 +260,7 @@ export function composeForming(interval: string, bucketOpen: number, parts: read
   return bar
 }
 
-export interface Gap {
+interface Gap {
   after: number
   before: number
 }

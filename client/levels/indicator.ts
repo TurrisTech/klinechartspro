@@ -12,10 +12,10 @@ import { levelsLayer } from './layer'
 
 /** Saved walls name their indicators by template, so these names are a compatibility surface:
  * never rename one. The suffix is the layer id, which is also the server's route. */
-export const LEVELS_TEMPLATE = 'LEVELS:levels'
-export const ZONES_TEMPLATE = 'LEVELS:levels2'
+const LEVELS_TEMPLATE = 'LEVELS:levels'
+const ZONES_TEMPLATE = 'LEVELS:levels2'
 
-export interface LevelsIndicators {
+interface LevelsIndicators {
   plugin: IndicatorPlugin
   levels: LayerController
   zones: LayerController

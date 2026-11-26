@@ -16,20 +16,20 @@
 //  - a second menu. Android and Windows DO fire `contextmenu` for the same hold, at about the
 //    same moment; `cancel()` is for that listener, and `firedRecently()` for the other order.
 
-export const LONG_PRESS_MS = 500
-export const LONG_PRESS_SLOP = 10
+const LONG_PRESS_MS = 500
+const LONG_PRESS_SLOP = 10
 /** How long after the finger lifts a click is taken to be the hold's own release. A
  * deliberate tap on the opened menu takes longer than this to land. */
-export const RELEASE_CLICK_MS = 400
+const RELEASE_CLICK_MS = 400
 /** How long after a fired hold a native `contextmenu` is taken to be the same gesture. */
-export const SAME_GESTURE_MS = 1000
+const SAME_GESTURE_MS = 1000
 
 export interface LongPressPoint {
   clientX: number
   clientY: number
 }
 
-export interface LongPressOptions {
+interface LongPressOptions {
   onLongPress(point: LongPressPoint): void
   delayMs?: number
   slopPx?: number

@@ -185,7 +185,7 @@ interface Open {
 }
 
 /** A level's price for an entry at `reference`, or null (no level, or not computable). */
-export function levelPrice(
+function levelPrice(
   level: Level | null,
   role: 'stop' | 'target' | 'trail',
   entry: LabEntry,
