@@ -240,12 +240,12 @@ describe('the order of the panes', () => {
     expect(hydrated.panes.map((pane) => pane.subIndicatorsAbove)).toEqual([0, 0, 0, 1])
   })
 
-  test('a retired template that sat above the price pane does not pull the next one up', async () => {
+  test('a name saved twice above the price pane counts once there', async () => {
     const hydrated = await hydrateOffline({
       ...OLD_DOCUMENT,
-      panes: [{ s: 'EURUSD', p: '1h', si: ['KREV:krev01', 'RSI', 'VOL'], sa: 1 }]
+      panes: [{ s: 'EURUSD', p: '1h', si: ['RSI', 'RSI', 'VOL'], sa: 2 }]
     })
-    expect(hydrated.panes[0]).toMatchObject({ subIndicators: ['RSI', 'VOL'], subIndicatorsAbove: 0 })
+    expect(hydrated.panes[0]).toMatchObject({ subIndicators: ['RSI', 'VOL'], subIndicatorsAbove: 1 })
   })
 })
 

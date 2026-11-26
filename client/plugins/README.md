@@ -109,7 +109,6 @@ export const MINE_PANE_CONFIG = paneConfig<MineConfig>({
   fields: MINE_FIELDS,               // what the gear's panel and the indicator manager draw
   defaults: MINE_DEFAULTS,
   normalise, toStored, fromStored    // layerConfigCodec(defaults, fields) builds all three
-  // optional: fallback() -- what a pane never configured draws with
 })
 const plugin: IndicatorPlugin = { ..., paneConfigs: [MINE_PANE_CONFIG], bind: (ctx) => use(ctx.config as MineConfig) }
 ```
