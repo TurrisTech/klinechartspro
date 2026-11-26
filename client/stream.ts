@@ -6,6 +6,7 @@ import type {
   NotificationWire,
   OHLCVBar,
   StreamClientMessage,
+  StreamError,
   StreamServerMessage
 } from './ohlcv'
 
@@ -96,6 +97,18 @@ type NotificationListener = (notification: NotificationWire) => void
 export type StreamStatus = 'connected' | 'connecting' | 'offline'
 type StatusListener = (status: StreamStatus) => void
 
+/** A bar or plugin subscription the server refused: what it is, and the server's reason. An
+ * indicator's refusal goes to its own listener instead (`onStatus('error', ...)`), which draws
+ * it on the indicator. */
+export interface StreamRefusal {
+  kind: 'bars' | 'plugin'
+  /** `oanda EURUSD 7s`, or `arev:arev21 oanda EURUSD 1h` for a plugin. */
+  label: string
+  code: string
+  errmsg: string
+}
+type RefusalListener = (refusals: StreamRefusal[]) => void
+
 export function subscriptionKey(vendor: string, symbol: string, interval: string): string {
   return `${vendor} ${symbol} ${interval}`
 }
@@ -148,6 +161,11 @@ export class StreamClient {
   private readonly notificationListeners = new Set<NotificationListener>()
   private status: StreamStatus = 'offline'
   private readonly statusListeners = new Set<StatusListener>()
+  // Subscriptions the server refused, by `bars|<key>` / `plugin|<key>`: until it acks the key,
+  // the key leaves, or the socket reconnects (when every subscribe is sent again and refused
+  // again if it still should be).
+  private readonly refusals = new Map<string, StreamRefusal>()
+  private readonly refusalListeners = new Set<RefusalListener>()
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private pingTimer: ReturnType<typeof setInterval> | null = null
@@ -168,6 +186,69 @@ export class StreamClient {
     if (this.status === status) return
     this.status = status
     for (const listener of this.statusListeners) listener(status)
+  }
+
+  /** The subscriptions the server refused: reported at once, then on every change. */
+  onRefusals(listener: RefusalListener): () => void {
+    this.refusalListeners.add(listener)
+    listener([...this.refusals.values()])
+    return () => this.refusalListeners.delete(listener)
+  }
+
+  private setRefusal(id: string, refusal: StreamRefusal | null): void {
+    if (refusal === null && !this.refusals.has(id)) return
+    if (refusal === null) this.refusals.delete(id)
+    else this.refusals.set(id, refusal)
+    const all = [...this.refusals.values()]
+    for (const listener of this.refusalListeners) listener(all)
+  }
+
+  private clearRefusals(): void {
+    if (this.refusals.size === 0) return
+    this.refusals.clear()
+    for (const listener of this.refusalListeners) listener([])
+  }
+
+  /** An `error` frame naming the subscription it refuses (servers from 0.60.3), handed to that
+   * subscription. False when it names none this client holds -- an error about the connection,
+   * or from an older server -- which the caller only logs. */
+  private routeError(message: StreamError): boolean {
+    const text = message.errmsg ?? message.detail ?? ''
+    const { vendor, symbol, interval } = message
+    if (message.plugin !== undefined) {
+      if (!vendor || !symbol || !interval) return false
+      const variant = message.variant ?? null
+      const key = pluginSubscriptionKey(message.plugin, variant, vendor, symbol, interval)
+      if (!this.pluginSubscriptions.has(key)) return false
+      const label = `${message.plugin}${variant ? `:${variant}` : ''} ${vendor} ${symbol} ${interval}`
+      console.warn(`[stream] live ${label} refused: ${message.code}: ${text}`)
+      this.setRefusal(`plugin|${key}`, { kind: 'plugin', label, code: message.code, errmsg: text })
+      return true
+    }
+    const indicator =
+      message.seriesKey !== undefined
+        ? this.indicatorSubscriptions.get(message.seriesKey)
+        : message.indicator !== undefined
+          ? [...this.indicatorSubscriptions.values()].find(
+              (sub) =>
+                sub.vendor === vendor &&
+                sub.symbol === symbol &&
+                sub.interval === interval &&
+                JSON.stringify(sub.series) === JSON.stringify(message.indicator)
+            )
+          : undefined
+    if (indicator) {
+      console.warn(`[stream] indicator ${vendor} ${symbol} ${interval} refused: ${message.code}: ${text}`)
+      for (const listener of indicator.listeners) listener.onStatus?.('error', `${message.code}: ${text}`)
+      return true
+    }
+    if (message.seriesKey !== undefined || message.indicator !== undefined) return false
+    if (!vendor || !symbol || !interval) return false
+    const key = subscriptionKey(vendor, symbol, interval)
+    if (!this.subscriptions.has(key)) return false
+    console.warn(`[stream] live bars ${key} refused: ${message.code}: ${text}`)
+    this.setRefusal(`bars|${key}`, { kind: 'bars', label: key, code: message.code, errmsg: text })
+    return true
   }
 
   subscribe(vendor: string, symbol: string, interval: string, listener: StreamListener): void {
@@ -216,6 +297,7 @@ export class StreamClient {
     const timer = setTimeout(() => {
       this.lingering.delete(key)
       this.subscriptions.delete(key)
+      this.setRefusal(`bars|${key}`, null)
       this.send({ action: 'unsubscribe', vendor, symbol, interval })
     }, UNSUBSCRIBE_LINGER_MS)
     this.lingering.set(key, timer)
@@ -337,6 +419,7 @@ export class StreamClient {
     const timer = setTimeout(() => {
       this.pluginLingering.delete(key)
       this.pluginSubscriptions.delete(key)
+      this.setRefusal(`plugin|${key}`, null)
       this.send(this.pluginFrame('unsubscribe', sub))
     }, UNSUBSCRIBE_LINGER_MS)
     this.pluginLingering.set(key, timer)
@@ -375,6 +458,7 @@ export class StreamClient {
       clearTimeout(timer)
       const subscription = this.subscriptions.get(key)
       this.subscriptions.delete(key)
+      this.setRefusal(`bars|${key}`, null)
       if (subscription) {
         this.send({
           action: 'unsubscribe',
@@ -431,6 +515,8 @@ export class StreamClient {
       if (token) ws.send(JSON.stringify({ action: 'auth', token } satisfies StreamClientMessage))
       this.reconnectAttempts = 0
       this.setStatus('connected')
+      // Every subscribe goes again, and one the server still refuses is refused again.
+      this.clearRefusals()
       this.resubscribeAll()
       this.startKeepalive()
     })
@@ -556,13 +642,14 @@ export class StreamClient {
           console.warn(`[stream] session refused: ${message.errmsg ?? message.detail}`)
           return
         }
+        if (this.routeError(message)) return
         console.error(`[stream] ${message.code}: ${message.errmsg ?? message.detail}`)
         return
       case 'subscribed': {
-        const subscription = this.subscriptions.get(
-          subscriptionKey(message.vendor, message.symbol, message.interval)
-        )
+        const key = subscriptionKey(message.vendor, message.symbol, message.interval)
+        const subscription = this.subscriptions.get(key)
         if (subscription) subscription.formingSupported = message.formingSupported
+        this.setRefusal(`bars|${key}`, null)
         return
       }
       case 'backfill': {
@@ -600,9 +687,9 @@ export class StreamClient {
         return
       }
       case 'plugin_subscribed': {
-        const sub = this.pluginSubscriptions.get(
-          pluginSubscriptionKey(message.plugin, message.variant, message.vendor, message.symbol, message.interval)
-        )
+        const key = pluginSubscriptionKey(message.plugin, message.variant, message.vendor, message.symbol, message.interval)
+        this.setRefusal(`plugin|${key}`, null)
+        const sub = this.pluginSubscriptions.get(key)
         if (!sub) return
         for (const listener of sub.listeners) listener.onSubscribed?.()
         return

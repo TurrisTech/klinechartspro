@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import type { StreamRefusal } from './stream'
 
 // WS /stream presents the session in its FIRST frame, `{"action": "auth", "token": ...}` (a
 // browser cannot set a header on a WebSocket handshake, and a token in the URL ends up in
@@ -156,6 +157,154 @@ describe('the auth frame', () => {
       sockets[0].receive({ type: 'error', code: 'invalid_request', errmsg: "Unknown action 'bogus'" })
       expect(errors).toHaveBeenCalledTimes(1)
     } finally {
+      errors.mockRestore()
+    }
+  })
+})
+
+// Since wdashboard-server 0.60.3 an error about a subscription names it, so the client can say
+// which one the server refused instead of logging an error nobody can place.
+describe('a refused subscription', () => {
+  const quiet = () => [spyOn(console, 'warn').mockImplementation(() => {}), spyOn(console, 'error').mockImplementation(() => {})]
+
+  test('of bars is recorded with the server reason, and cleared once the key is acked', () => {
+    const [warnings, errors] = quiet()
+    try {
+      const client = new StreamClient()
+      const seen: StreamRefusal[][] = []
+      client.onRefusals((r) => seen.push(r))
+      client.subscribe('oanda', 'EURUSD', '7s', barListener().listener)
+      sockets[0].open()
+      sockets[0].receive({
+        type: 'error',
+        code: 'unsupported',
+        errmsg: 'Live bars are not available for oanda 7s; /getbars still serves its history',
+        vendor: 'oanda',
+        symbol: 'EURUSD',
+        interval: '7s'
+      })
+      expect(seen.at(-1)).toEqual([
+        {
+          kind: 'bars',
+          label: 'oanda EURUSD 7s',
+          code: 'unsupported',
+          errmsg: 'Live bars are not available for oanda 7s; /getbars still serves its history'
+        }
+      ])
+      expect(errors).not.toHaveBeenCalled()
+      sockets[0].receive({
+        type: 'subscribed',
+        vendor: 'oanda',
+        symbol: 'EURUSD',
+        interval: '7s',
+        updates: 'all',
+        formingSupported: false,
+        serverTime: 1
+      })
+      expect(seen.at(-1)).toEqual([])
+    } finally {
+      warnings.mockRestore()
+      errors.mockRestore()
+    }
+  })
+
+  test('of plugin points is recorded under the plugin and variant', () => {
+    const [warnings, errors] = quiet()
+    try {
+      const client = new StreamClient()
+      let last: { kind: string; label: string }[] = []
+      client.onRefusals((r) => {
+        last = r
+      })
+      client.subscribePlugin('arev', 'arev21', 'oanda', 'EURUSD', '1h', { onPoint: () => {} })
+      sockets[0].open()
+      sockets[0].receive({
+        type: 'error',
+        code: 'too_large',
+        errmsg: 'This connection already holds the maximum of 64 live plugin subscriptions',
+        plugin: 'arev',
+        variant: 'arev21',
+        vendor: 'oanda',
+        symbol: 'EURUSD',
+        interval: '1h'
+      })
+      expect(last.map((r) => [r.kind, r.label])).toEqual([['plugin', 'arev:arev21 oanda EURUSD 1h']])
+      expect(errors).not.toHaveBeenCalled()
+    } finally {
+      warnings.mockRestore()
+      errors.mockRestore()
+    }
+  })
+
+  test('of an indicator reaches its listener as an error status, by key or by document', () => {
+    const [warnings, errors] = quiet()
+    try {
+      const client = new StreamClient()
+      const statuses: [string, string | null][] = []
+      const series = { name: 'rsi', params: { window: 14 } } as never
+      client.subscribeIndicator('oanda', 'EURUSD', '1D', series, 'key-rsi', {
+        onPoint: () => {},
+        onStatus: (phase, error) => statuses.push([phase, error])
+      })
+      sockets[0].open()
+      sockets[0].receive({ type: 'error', code: 'invalid_request', errmsg: 'backfill must be an integer in 0..500', seriesKey: 'key-rsi' })
+      sockets[0].receive({
+        type: 'error',
+        code: 'not_found',
+        errmsg: 'no such indicator',
+        vendor: 'oanda',
+        symbol: 'EURUSD',
+        interval: '1D',
+        indicator: { name: 'rsi', params: { window: 14 } }
+      })
+      expect(statuses).toEqual([
+        ['error', 'invalid_request: backfill must be an integer in 0..500'],
+        ['error', 'not_found: no such indicator']
+      ])
+      expect(errors).not.toHaveBeenCalled()
+    } finally {
+      warnings.mockRestore()
+      errors.mockRestore()
+    }
+  })
+
+  test('is forgotten when the socket reconnects, since every subscribe is sent again', async () => {
+    const [warnings, errors] = quiet()
+    try {
+      const client = new StreamClient()
+      let last: unknown[] = []
+      client.onRefusals((r) => {
+        last = r
+      })
+      client.subscribe('oanda', 'EURUSD', '7s', barListener().listener)
+      sockets[0].open()
+      sockets[0].receive({ type: 'error', code: 'unsupported', errmsg: 'no', vendor: 'oanda', symbol: 'EURUSD', interval: '7s' })
+      expect(last).toHaveLength(1)
+      sockets[0].drop(1006)
+      await sleep(RECONNECT_WAIT_MS)
+      sockets[1].open()
+      expect(last).toEqual([])
+    } finally {
+      warnings.mockRestore()
+      errors.mockRestore()
+    }
+  })
+
+  test('an error naming no subscription this client holds is only logged', () => {
+    const [warnings, errors] = quiet()
+    try {
+      const client = new StreamClient()
+      let last: unknown[] = []
+      client.onRefusals((r) => {
+        last = r
+      })
+      client.subscribe('oanda', 'EURUSD', '1h', barListener().listener)
+      sockets[0].open()
+      sockets[0].receive({ type: 'error', code: 'unsupported', errmsg: 'no', vendor: 'oanda', symbol: 'GBPUSD', interval: '1h' })
+      expect(last).toEqual([])
+      expect(errors).toHaveBeenCalledTimes(1)
+    } finally {
+      warnings.mockRestore()
       errors.mockRestore()
     }
   })
