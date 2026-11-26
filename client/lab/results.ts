@@ -5,15 +5,16 @@ import { download, entriesCsv, fileStem, tradesCsv } from './export'
 import { figuresTable, type FigureRow } from './figtable'
 import { describeMean, type Figures, figuresOf } from './figures'
 import { meanStats } from './stats'
-import type { Problem } from './model'
+import { type Problem, ruleLabel } from './model'
 import type { EntryOutcome, OutcomeSummary } from './outcomes'
 import type { LabRun } from './runner'
 import type { ExitReason, LabTrade } from './trades'
 
 // GLUE (DOM). What a run found, in four views:
 //
-//   Summary   counts, what happened after the entries (the outcome measures, all / long /
-//             short), and the simulated account
+//   Summary   counts, then RULE BY RULE -- each rule alone on an account of its own, and all of
+//             them together -- and, under Details, what happened after the entries (the outcome
+//             measures, all / long / short), the simulated account and its months
 //   Entries   one row per entry, with its outcomes -- a click takes the chart there
 //   Trades    one row per simulated trade -- a click takes the chart there
 //   Equity    the closed-trade balance over time, with a crosshair; a click takes the chart to
@@ -85,6 +86,7 @@ type Sortable = 'entries' | 'trades'
 const RUN_TABS = new Set(['summary', 'entries', 'trades', 'equity'])
 
 const TAB_KEY = 'wd.lab.tab'
+const DETAILS_KEY = 'wd.lab.details'
 
 const REASON_WORDS: Record<ExitReason, string> = {
   stop: 'stop',
@@ -109,6 +111,14 @@ interface Row {
   muted?: boolean
   /** In the holdout. */
   holdout?: boolean
+}
+
+function storedDetails(): boolean {
+  try {
+    return window.localStorage.getItem(DETAILS_KEY) === '1'
+  } catch {
+    return false
+  }
 }
 
 function storedTab(): Tab {
@@ -378,52 +388,14 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
 
   // -- views --------------------------------------------------------------------------------------
 
-  function summaryView(r: LabRun): HTMLElement {
-    const box = el('div', 'wd-lab-summary')
-    const longs = r.entries.filter((e) => e.direction === 'long').length
-    const facts = el('div', 'wd-lab-facts')
-    const fact = (value: string, label: string, title = '', valueTone = ''): void => {
-      const f = el('div', 'wd-lab-fact')
-      const v = el('div', `wd-lab-fact-value ${valueTone}`)
-      v.textContent = value
-      const l = el('div', 'wd-lab-fact-label')
-      l.textContent = label
-      f.append(v, l)
-      if (title) f.title = title
-      facts.appendChild(f)
-    }
-    const inWindow = r.signals.filter((s) => s.knownAt >= r.from && s.knownAt <= r.to).length
-    fact(whole(inWindow), 'signals', 'Signals of the pool in the window (more are read before it, for the graphs in force at its start)')
-    if (r.strategy.graph.enabled) fact(String(r.graphs.length), 'graphs')
-    fact(String(r.entries.length), 'entries', `${longs} long, ${r.entries.length - longs} short`)
-    if (r.filtered.length > 0) fact(String(r.filtered.length), 'filtered out')
-    if (r.sim) {
-      fact(String(r.sim.stats.trades), 'trades')
-      fact(pct(r.sim.stats.winRate), 'won')
-      fact(signed(r.sim.stats.totalR, 1), 'R in all', '', tone(r.sim.stats.totalR))
-      fact(signed(r.sim.stats.netPips, 0), 'pips', '', tone(r.sim.stats.netPips))
-    }
-    box.appendChild(facts)
+  /** A rule's name in the run shown, by its id. */
+  function ruleName(id: string): string {
+    const rule = run?.strategy.rules.find((x) => x.id === id)
+    return rule && run ? ruleLabel(run.strategy, rule) : id
+  }
 
-    // The run beside its parts and the baseline.
-    const figureRows: FigureRow[] = []
-    const all = figuresOf(r)
-    if (r.split !== null || baseline) {
-      figureRows.push({ label: 'this run', figures: all, compareTo: baseline?.figures ?? null, className: 'is-current' })
-      if (r.split !== null) {
-        const at = time(r.split, zoneOf(r))
-        figureRows.push({ label: `fitting, to ${at}`, figures: figuresOf(r, 'fit'), className: 'is-part' })
-        figureRows.push({ label: `holdout, from ${at}`, figures: figuresOf(r, 'holdout'), className: 'is-part is-holdout' })
-      }
-      if (baseline) figureRows.push({ label: `baseline: ${baseline.label}`, figures: baseline.figures, className: 'is-baseline' })
-      box.appendChild(figuresTable(figureRows, { first: '' }))
-      if (baseline) {
-        const note = el('p', 'wd-lab-note')
-        note.textContent = 'Under each figure of this run: its change from the baseline, green where better. Pin a different baseline on the Runs tab.'
-        box.appendChild(note)
-      }
-    }
-
+  /** The Summary's detail: the outcome measures, the simulated account, its months. */
+  function summaryDetails(r: LabRun, box: HTMLElement): void {
     // Signals per source and timeframe.
     const counts = r.counts.filter((c) => c.signals >= 0)
     if (counts.length > 0) {
@@ -548,6 +520,74 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         box.appendChild(p)
       }
     }
+  }
+
+  function summaryView(r: LabRun): HTMLElement {
+    const box = el('div', 'wd-lab-summary')
+    const longs = r.entries.filter((e) => e.direction === 'long').length
+    const facts = el('div', 'wd-lab-facts')
+    const fact = (value: string, label: string, title = '', valueTone = ''): void => {
+      const f = el('div', 'wd-lab-fact')
+      const v = el('div', `wd-lab-fact-value ${valueTone}`)
+      v.textContent = value
+      const l = el('div', 'wd-lab-fact-label')
+      l.textContent = label
+      f.append(v, l)
+      if (title) f.title = title
+      facts.appendChild(f)
+    }
+    const inWindow = r.signals.filter((s) => s.knownAt >= r.from && s.knownAt <= r.to).length
+    fact(whole(inWindow), 'signals', 'Signals of the pool in the window (more are read before it, for the graphs in force at its start)')
+    if (r.strategy.rules.some((rule) => rule.enabled && rule.steps.length > 0)) fact(String(r.graphs.length), 'graphs')
+    fact(String(r.entries.length), 'entries', `${longs} long, ${r.entries.length - longs} short`)
+    if (r.filtered.length > 0) fact(String(r.filtered.length), 'filtered out')
+    if (r.sim) {
+      fact(String(r.sim.stats.trades), 'trades')
+      fact(pct(r.sim.stats.winRate), 'won')
+      fact(signed(r.sim.stats.totalR, 1), 'R in all', '', tone(r.sim.stats.totalR))
+      fact(signed(r.sim.stats.netPips, 0), 'pips', '', tone(r.sim.stats.netPips))
+    }
+    box.appendChild(facts)
+
+    // The run beside its parts and the baseline.
+    const figureRows: FigureRow[] = []
+    const all = figuresOf(r)
+    if (r.split !== null || baseline) {
+      figureRows.push({ label: 'this run', figures: all, compareTo: baseline?.figures ?? null, className: 'is-current' })
+      if (r.split !== null) {
+        const at = time(r.split, zoneOf(r))
+        figureRows.push({ label: `fitting, to ${at}`, figures: figuresOf(r, 'fit'), className: 'is-part' })
+        figureRows.push({ label: `holdout, from ${at}`, figures: figuresOf(r, 'holdout'), className: 'is-part is-holdout' })
+      }
+      if (baseline) figureRows.push({ label: `baseline: ${baseline.label}`, figures: baseline.figures, className: 'is-baseline' })
+      box.appendChild(figuresTable(figureRows, { first: '' }))
+      if (baseline) {
+        const note = el('p', 'wd-lab-note')
+        note.textContent = 'Under each figure of this run: its change from the baseline, green where better. Pin a different baseline on the Runs tab.'
+        box.appendChild(note)
+      }
+    }
+
+    // Rule by rule: each alone, then all of them on one account.
+    if (r.rules.length > 0) box.appendChild(ruleTable(r))
+
+    // Everything else, one click away.
+    const details = document.createElement('details')
+    details.className = 'wd-lab-details'
+    details.open = storedDetails()
+    details.addEventListener('toggle', () => {
+      try {
+        window.localStorage.setItem(DETAILS_KEY, details.open ? '1' : '0')
+      } catch {
+        // A per-device convenience only.
+      }
+    })
+    const detailsHead = document.createElement('summary')
+    detailsHead.textContent = 'Details: what price did after the entries, the simulated account, month by month'
+    details.appendChild(detailsHead)
+    box.appendChild(details)
+    summaryDetails(r, details)
+
     for (const warning of r.warnings) {
       const p = el('p', 'wd-lab-warning')
       p.textContent = warning
@@ -557,6 +597,36 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     timing.textContent = `${r.symbol} · ${time(r.from, zoneOf(r))} – ${time(r.to, zoneOf(r))} (${zoneOf(r)}) · ${r.timings.map((t) => `${t.stage} ${(t.ms / 1000).toFixed(2)} s`).join(', ')}`
     box.appendChild(timing)
     return box
+  }
+
+  /** Each rule alone, and the strategy: entries, trades, and what they earned. */
+  function ruleTable(r: LabRun): HTMLElement {
+    const wrap = el('div', 'wd-lab-rules-result')
+    const head = el('div', 'wd-lab-subhead')
+    head.textContent = r.rules.length > 1 ? 'By rule -- each alone, on an account of its own' : 'The rule'
+    wrap.appendChild(head)
+    const line = (label: string, entries: number, sim: LabRun['sim'], className = ''): { cells: string[]; tone: string[]; className: string } => {
+      const st = sim?.stats
+      const t = st ? meanStats(st.rs).t : null
+      return {
+        cells: [label, String(entries), st ? String(st.trades) : '–', st ? pct(st.winRate) : '–', st ? signed(st.avgR, 2) : '–', st ? signed(st.totalR, 1) : '–', st ? signed(st.netPips, 0) : '–', t === null ? '–' : signed(t, 1)],
+        tone: ['', '', '', '', tone(st?.avgR), tone(st?.totalR), tone(st?.netPips), Math.abs(t ?? 0) >= 2 ? tone(t) : ''],
+        className
+      }
+    }
+    const rows = r.rules.map((rr) => line(rr.label, rr.entries.length, rr.sim))
+    if (r.rules.length > 1) rows.push(line('All rules, one account', r.entries.length, r.sim, 'is-total'))
+    const t = table(['rule', 'entries', 'trades', 'won', 'avg R', 'R', 'pips', 't'], rows, 'is-rules')
+    rows.forEach((row, i) => {
+      if (row.className) t.querySelectorAll('tbody tr')[i]?.classList.add(row.className)
+    })
+    wrap.appendChild(t)
+    if (r.rules.length > 1) {
+      const note = el('p', 'wd-lab-note')
+      note.textContent = 'Together, a signal two rules enter on is taken once (by the rule listed first), and at most the account’s open trades run at once -- so the rules’ trades need not add up to the total. t: the mean R’s t-statistic; under 2 is noise.'
+      wrap.appendChild(note)
+    }
+    return wrap
   }
 
   /** Entries and the filter's rejects, in time. */
@@ -578,6 +648,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         cells: [
           String(i + 1),
           time(e.at, zone),
+          ruleName(e.rule),
           e.signal.interval,
           filtered ? `${e.direction} (filtered)` : e.direction,
           e.signal.price.toFixed(5),
@@ -593,6 +664,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         keys: [
           i,
           e.at,
+          ruleName(e.rule),
           resolutionDurationMs(e.signal.interval),
           `${filtered ? 'z' : ''}${e.direction}`,
           e.signal.price,
@@ -602,7 +674,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
           ...touches.map((_, t) => touchKey(o?.touches[t]?.result)),
           o?.mfeAtr !== undefined && o?.maeAtr !== undefined ? o.mfeAtr - o.maeAtr : null
         ],
-        tone: ['', '', '', filtered ? 'is-muted' : '', '', '', '', ...horizons.map((_, h) => tone(o?.forward[h]?.pips)), ...touches.map((_, t) => (o?.touches[t]?.result === 'win' ? 'is-up' : o?.touches[t]?.result === 'loss' ? 'is-down' : '')), '']
+        tone: ['', '', '', '', filtered ? 'is-muted' : '', '', '', '', ...horizons.map((_, h) => tone(o?.forward[h]?.pips)), ...touches.map((_, t) => (o?.touches[t]?.result === 'win' ? 'is-up' : o?.touches[t]?.result === 'loss' ? 'is-down' : '')), '']
       }
     })
   }
@@ -611,7 +683,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     if (r.entries.length === 0 && r.filtered.length === 0) return message('No entries in this window.')
     const horizons = [...r.strategy.outcomes.horizons].sort((a, b) => a - b)
     const touches = r.strategy.outcomes.touches
-    return pickTable('entries', ['#', 'at', 'tf', 'trade', 'price', 'root', 'depth', ...horizons.map((h) => `+${h}`), ...touches.map((k) => `±${k}`), 'MFE/MAE ATR'], entryRows(r), 'is-entries')
+    return pickTable('entries', ['#', 'at', 'rule', 'tf', 'trade', 'price', 'root', 'depth', ...horizons.map((h) => `+${h}`), ...touches.map((k) => `±${k}`), 'MFE/MAE ATR'], entryRows(r), 'is-entries')
   }
 
   function tradeRows(r: LabRun): Row[] {
@@ -624,6 +696,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
       cells: [
         String(i + 1),
         time(t.openedAt, zone),
+        ruleName(t.entry.rule),
         t.direction,
         t.capped ? `${whole(t.units)} (cap)` : whole(t.units),
         t.openPrice.toFixed(5),
@@ -638,15 +711,15 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         whole(t.commission + t.financing + t.slippage),
         String(t.barsHeld)
       ],
-      keys: [i, t.openedAt, t.direction, t.units, t.openPrice, t.stop, t.target, t.closedAt, t.reason, t.closePrice, t.pips, t.r, t.pnl, t.commission + t.financing + t.slippage, t.barsHeld],
-      tone: ['', '', '', '', '', '', '', '', '', '', tone(t.pips), tone(t.r), tone(t.pnl), '', '']
+      keys: [i, t.openedAt, ruleName(t.entry.rule), t.direction, t.units, t.openPrice, t.stop, t.target, t.closedAt, t.reason, t.closePrice, t.pips, t.r, t.pnl, t.commission + t.financing + t.slippage, t.barsHeld],
+      tone: ['', '', '', '', '', '', '', '', '', '', '', tone(t.pips), tone(t.r), tone(t.pnl), '', '']
     }))
   }
 
   function tradesView(r: LabRun): HTMLElement {
     if (!r.sim) return message(r.entries.length === 0 ? 'No entries, so no trades.' : 'No trades were simulated.')
     if (r.sim.trades.length === 0) return message('No trades: every entry was refused (see the Summary).')
-    return pickTable('trades', ['#', 'opened', 'trade', 'units', 'in', 'stop', 'target', 'closed', 'by', 'out', 'pips', 'R', `P&L (${quoteOf(r)})`, 'costs', 'bars'], tradeRows(r))
+    return pickTable('trades', ['#', 'opened', 'rule', 'trade', 'units', 'in', 'stop', 'target', 'closed', 'by', 'out', 'pips', 'R', `P&L (${quoteOf(r)})`, 'costs', 'bars'], tradeRows(r))
   }
 
   function equityView(r: LabRun): HTMLElement {

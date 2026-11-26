@@ -13,8 +13,8 @@ const { strategyChanges, describeChanges } = await import('./changes')
 const { entriesCsv, tradesCsv, readStrategyFile, strategyJson, ImportError } = await import('./export')
 const { RunHistory } = await import('./runs')
 const { runStrategy, holdoutStart } = await import('./runner')
-const { rank85Strategy, defaultStep, strategyProblems } = await import('./model')
-const { FakeData, NOW, D } = await import('./testdata')
+const { rank85Strategy, strategyProblems } = await import('./model')
+const { FakeData, NOW, D, withRules } = await import('./testdata')
 
 import type { Strategy } from './model'
 
@@ -28,8 +28,7 @@ function only<T>(found: T | undefined): T {
 
 function strategy(): Strategy {
   const s = rank85Strategy(NOW)
-  s.sources[0].timeframes = ['3m', '5m', '15m', '1h', '4h']
-  s.graph = { ...s.graph, roots: ['4h', '1h'], step: defaultStep(8) }
+  withRules(s, ['4h', '1h'], ['3m', '5m', '15m', '1h', '4h'])
   return s
 }
 
@@ -126,17 +125,27 @@ describe('sweeps', () => {
     const targets = sweepTargets(s)
     const ids = targets.map((t) => t.id)
     expect(ids).toContain('source:rank85:param:q')
-    expect(ids).toContain('step test:2:0') // the 8 of `parent.tf <= child.tf * 8`
+    expect(ids).toContain('rule:long4h:maxStep') // the 8 of `parent.tf <= child.tf * 8`
     expect(ids).toContain('exit:stop:mult')
     expect(ids).toContain('exit:target:r')
     expect(ids).toContain('exit:time')
     expect(ids).toContain('cost:slippage')
-    const eight = only(targets.find((t) => t.id === 'step test:2:0'))
+    // A rule's longest step, by the rule.
+    const eight = only(targets.find((t) => t.id === 'rule:long4h:maxStep'))
     expect(eight.value).toBe(8)
+    expect(eight.label).toBe('Long · 4h · at most N× shorter a step')
     const copy = structuredClone(s)
     eight.apply(copy, 4)
-    expect(copy.graph.step[2].expr).toBe('parent.tf <= child.tf * 4')
-    expect(s.graph.step[2].expr).toBe('parent.tf <= child.tf * 8')
+    expect(copy.rules[0].maxStep).toBe(4)
+    expect(s.rules[0].maxStep).toBe(8)
+    // A number written in a rule's own condition.
+    const withCondition = structuredClone(s)
+    withCondition.rules[1].entryIf = [{ id: 'c', expr: 'node.depth >= 2', enabled: true }]
+    const two = only(sweepTargets(withCondition).find((t) => t.id === 'rule:short4h:entry:0:0'))
+    expect(two.label).toBe('Short · 4h · entry condition 1 · 2 in node.depth >= 2')
+    const other = structuredClone(withCondition)
+    two.apply(other, 3)
+    expect(other.rules[1].entryIf[0].expr).toBe('node.depth >= 3')
     const q = only(targets.find((t) => t.id === 'source:rank85:param:q'))
     q.apply(copy, 0.9)
     expect(copy.sources[0].kind === 'published' && copy.sources[0].params.q).toBe(0.9)
@@ -191,12 +200,13 @@ describe('what an edit changed', () => {
   test("in the editor's words, each place once", () => {
     const a = strategy()
     const b = structuredClone(a)
-    b.graph.step[2].expr = 'parent.tf <= child.tf * 6'
+    b.rules[0].maxStep = 6
+    b.rules[2].steps = ['3m', '5m']
     if (b.exits.stop?.kind === 'atr') b.exits.stop.mult = 2
     b.costs.slippagePips = 0.3
     b.updatedAt += 1
     b.name = 'renamed'
-    expect(strategyChanges(a, b)).toEqual(['Graph · step test 3', 'Exits · stop', 'Costs · slippage'])
+    expect(strategyChanges(a, b)).toEqual(['Long · 4h · longest step', 'Long · 1h · steps', 'Exits · stop', 'Costs · slippage'])
     expect(describeChanges(['a', 'b', 'c', 'd', 'e'])).toBe('a, b, c and 2 more')
     expect(describeChanges([])).toBe('no change')
   })

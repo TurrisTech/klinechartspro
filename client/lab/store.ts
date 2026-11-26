@@ -55,17 +55,28 @@ export function localPersistence(storage: () => Storage | null = () => window.lo
   return {
     load: async () => {
       const out: Record<string, unknown> = {}
+      let s: Storage | null = null
       try {
-        const s = storage()
-        if (!s) return out
-        for (let i = 0; i < s.length; i++) {
-          const key = s.key(i)
-          if (!key?.startsWith(LOCAL_PREFIX)) continue
-          const raw = s.getItem(key)
-          if (raw) out[key.slice(LOCAL_PREFIX.length)] = JSON.parse(raw)
-        }
+        s = storage()
       } catch {
-        // An unreadable entry reads as absent.
+        return out
+      }
+      if (!s) return out
+      for (let i = 0; i < s.length; i++) {
+        const key = s.key(i)
+        if (!key?.startsWith(LOCAL_PREFIX)) continue
+        // Only the store's own keys: the page keeps its settings under the same prefix
+        // (`wd.lab.current`, `wd.lab.tab`...), plain strings that are not JSON. Each entry is read
+        // on its own, so one that does not parse cannot hide the rest -- which until 2026-10-20 it
+        // did, depending on the order the browser listed the keys in.
+        const name = key.slice(LOCAL_PREFIX.length)
+        if (name !== INDEX_KEY && !name.startsWith(DOC_PREFIX)) continue
+        try {
+          const raw = s.getItem(key)
+          if (raw) out[name] = JSON.parse(raw)
+        } catch {
+          // An unreadable entry reads as absent.
+        }
       }
       return out
     },

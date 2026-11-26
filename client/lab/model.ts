@@ -1,31 +1,35 @@
 // A STRATEGY, AS DATA: what the Strategy Lab edits, runs and saves, and what a wall pane or an
 // alert names when it reads a strategy's entries.
 //
-//   sources   the SIGNAL POOL: published signals (arev21_outlier rank, arev21, krev...) and
-//             events defined by a rule over indicators, each on the timeframes chosen
-//   graph     how signals join into graphs: roots, resets, the step test, which parent a
-//             signal hangs from, whether a graph only goes further, when it ends
-//   entry     which graph nodes (or, without a graph, which events) are entries, a filter rule
-//             read at the entry instant, and which way each side trades
+//   sources   the SIGNALS a rule can follow: published signals (arev21_outlier rank, arev21,
+//             krev...) and events defined by a rule over indicators
+//   rules     the RULES, each one cascade the simple way: one root timeframe, the side of the
+//             signals it follows, the shorter timeframes it steps down through, the ones it enters
+//             on, and which way its entries trade. Long rules and short rules are separate; each
+//             rule is measured on its own as well as with the others
 //   exits     stop, target, breakeven, trailing, rule exits, a time limit
 //   sizing    the simulated account, its leverage cap included
 //   costs     what a trade pays beyond the spread: commission, slippage, overnight financing
 //   outcomes  what is measured after every entry
 //   holdout   the end of the window kept back: the results show it beside the rest
 //
-// Every graph rule the AREV21 outlier rank 85 overlay applies (built by the server since
-// wdashboard-server 0.56.0, services/mtfgraph.py) is a SLOT here, with that overlay's rule as its
-// default, so `rank85Strategy()` draws the graphs the overlay draws (`graph.test.ts` holds the two
-// side by side, against the server's own output). A slot either picks a preset or
-// is written in the expression language (./expr.ts), checked against the fields that slot offers
-// (`SCOPES`).
+// A rule is the AREV21 outlier rank 85 overlay's graph with ONE root and ONE side (user,
+// 2026-10-20: "each root could be its own rule. the longs can be a separate set of rules from the
+// shorts"). Built by the slotted graph builder (./graph.ts) from the spec a rule compiles to
+// (./rules.ts `ruleGraphSpec`), so a rule at its defaults draws the overlay's graphs of that root
+// and side -- `graph.test.ts` holds the builder to the server's own output.
+//
+// Until 2026-10-20 (STRATEGY_VERSION 1) a strategy held one graph over several roots and both
+// sides, with the rules that make several roots share it; `readStrategy` turns such a document
+// into its rules (`migrateV1`).
 //
 // PURE: no fetch, no DOM.
 
 import type { Rule } from '../alerts/types'
+import { resolutionDurationMs } from '../periods'
 import { COMMON_FUNCTIONS, type ExprScope, exprProblem, type FieldSpec, type FnSpec } from './expr'
 
-export const STRATEGY_VERSION = 1
+export const STRATEGY_VERSION = 2
 
 /** Which way a graph runs: a TOP graph climbs over the price, a BOTTOM one falls under it. */
 export type Side = 'top' | 'bottom'
@@ -36,7 +40,7 @@ export type Direction = 'long' | 'short'
 export type PriceAnchor = 'body' | 'wick' | 'close'
 
 /** The interval a rule source's operands name to mean "the event's own timeframe": one rule is
- * written once and read on every timeframe the source is switched on for. Never stored in an
+ * written once and read on every timeframe a strategy rule follows it on. Never stored in an
  * alert -- `withInterval` replaces it before the rule is compiled. */
 export const SELF_INTERVAL = '*'
 
@@ -50,7 +54,6 @@ export interface PublishedSource {
   variant: string
   /** Sent as the read's `params`, in the registry's declared order. */
   params: Record<string, number>
-  timeframes: string[]
   /** A label's side in a graph. Labels left out are not read. */
   sides: Record<string, Side>
   price: PriceAnchor
@@ -62,7 +65,6 @@ export interface RuleSource {
   kind: 'rule'
   id: string
   title: string
-  timeframes: string[]
   /** Operands on `SELF_INTERVAL` read the event's own timeframe. Null: no events of that side. */
   top: Rule | null
   bottom: Rule | null
@@ -93,8 +95,10 @@ export type ParentRule = 'supersede' | 'recent' | 'nearest' | 'root'
  * overlay), start a NEW graph, or be IGNORED (the first root of a run is the only one). */
 export type RootJoin = 'join' | 'new' | 'ignore'
 
+/** The slotted graph builder's spec (./graph.ts): what a rule compiles to (./rules.ts). A
+ * strategy no longer holds one; a version-1 strategy did, over several roots at once. */
 export interface GraphSpec {
-  /** Off: entries come straight from the pool's events (`EntrySpec.when` reads each one). */
+  /** Off: entries come straight from the events (`entry` reads each one). */
   enabled: boolean
   roots: string[]
   /** The sources whose signals may root a graph; null for any. */
@@ -108,26 +112,62 @@ export interface GraphSpec {
   /** The step test, beyond the two that are not slots: the same side, and strictly later. */
   step: SlotCondition[]
   /** When a graph ends before its root switches side. */
-  end: {
-    /** After this many bars of the root's timeframe. */
-    rootBars: number | null
-    /** At the first close of `watch` where this holds (END scope). Empty: never. */
-    when: string
-    /** The timeframe `when` is read at; null for the pool's shortest. */
-    watch: string | null
-  }
-  /** How far back a root is read for the graph in force at the window's start, in its own
-   * bars, and the most any other timeframe reaches back -- read bounds, not rules. */
-  lookback: { rootBars: number; maxBars: number }
+  end: GraphEnd
+  lookback: Lookback
 }
 
-export interface EntrySpec {
-  /** Which nodes are entries (graph on) or which events (graph off); ENTRY scope, all hold. */
-  when: SlotCondition[]
+/** When a graph ends before its root switches side. */
+export interface GraphEnd {
+  /** After this many bars of the root's timeframe. */
+  rootBars: number | null
+  /** At the first close of `watch` where this holds (END scope). Empty: never. */
+  when: string
+  /** The timeframe `when` is read at; null for the rule's shortest. */
+  watch: string | null
+}
+
+/** How far back a root is read for the graph in force at the window's start, in its own bars, and
+ * the most any other timeframe reaches back -- read bounds, not rules. */
+export interface Lookback {
+  rootBars: number
+  maxBars: number
+}
+
+/**
+ * ONE RULE: the graphs that grow from one root timeframe's signals of one side, the entries they
+ * produce, and which way those trade. With no step timeframes it has no graph: every signal of its
+ * side on the root timeframe is an entry (an indicator event, say).
+ */
+export interface StrategyRule {
+  /** Unique in the strategy; what an entry names its rule by. */
+  id: string
+  enabled: boolean
+  /** Which way its entries trade. */
+  direction: Direction
+  /** The id of the source (`sources`) whose signals it follows. */
+  source: string
+  /** The side of the signals it follows. By default a rule trades AGAINST them (user,
+   * 2026-10-15): a long rule follows bottoms, a short rule tops (`followsFor`). */
+  follows: Side
+  /** The timeframe its graphs start from. */
+  root: string
+  /** The shorter timeframes a graph steps down through. Empty: no graph. */
+  steps: string[]
+  /** Of `steps`, the timeframes whose signals are entries (with no steps: the root). */
+  entryOn: string[]
+  /** A step goes to a timeframe at most this many times shorter than its parent's; null: any. */
+  maxStep: number | null
+  /** Every node goes beyond every node before it (the overlay); off: beyond its parent only. */
+  reach: boolean
   /** Read at the entry instant; null for none. An alert rule, operands on any timeframe. */
   filter: Rule | null
-  /** Which way an entry of each side trades. */
-  direction: Record<Side, Direction>
+  end: GraphEnd
+  parent: ParentRule
+  rootJoin: RootJoin
+  /** Further conditions, all of which must hold, written in the expression language: on a step
+   * (STEP scope), on an entry (ENTRY scope). */
+  stepIf: SlotCondition[]
+  entryIf: SlotCondition[]
 }
 
 /** A stop or target distance, or a level. */
@@ -210,8 +250,8 @@ export interface Strategy {
   instrument: string
   window: WindowSpec
   sources: SignalSource[]
-  graph: GraphSpec
-  entry: EntrySpec
+  rules: StrategyRule[]
+  lookback: Lookback
   exits: ExitSpec
   sizing: Sizing
   costs: CostSpec
@@ -341,7 +381,8 @@ export function scopeFunctions(scope: ExprScope): FnSpec[] {
 
 // -- presets -----------------------------------------------------------------------------------
 
-/** The overlay's step test, one condition per rule it states (the server's `can_step`). */
+/** The overlay's step test, one condition per rule it states (the server's `can_step`). A rule's
+ * own test is these with its `maxStep` (./rules.ts); the graph builder's tests read them. */
 export function defaultStep(maxStep = 8): SlotCondition[] {
   return [
     { id: 'further', label: "goes further its graph's way", expr: '(child.price - parent.price) * dir > 0', enabled: true },
@@ -361,6 +402,12 @@ export function defaultGraphEntry(): SlotCondition[] {
 /** The timeframes the outlier overlays read (mtf/api.ts MTF_INTERVALS). */
 export const RANK_TIMEFRAMES = ['3m', '5m', '15m', '20m', '30m', '1h', '2h', '4h', '8h', '1D']
 
+/** The overlay's roots, longest first: what "+ Long rule" offers in turn. */
+export const ROOT_TIMEFRAMES = ['1D', '8h', '4h', '2h', '1h']
+
+/** The longest timeframe the overlay enters on: its stars are 5m and 3m steps. */
+const ENTRY_LONGEST = '5m'
+
 export function rank85Source(): PublishedSource {
   return {
     kind: 'published',
@@ -370,12 +417,12 @@ export function rank85Source(): PublishedSource {
     variant: 'arev21_outlier_rank',
     // The overlay's params, in the registry's order (mtf/overlays.ts `outlierRankMtf`).
     params: { bars: 200, q: 0.85, samples_only: 0 },
-    timeframes: [...RANK_TIMEFRAMES],
     sides: { long: 'top', short: 'bottom' },
     price: 'body'
   }
 }
 
+/** The graph builder's spec at the overlay's settings, on the 1D root (./graph.ts's tests). */
 export function defaultGraph(): GraphSpec {
   return {
     enabled: true,
@@ -386,12 +433,85 @@ export function defaultGraph(): GraphSpec {
     reach: true,
     parent: 'supersede',
     step: defaultStep(),
-    end: { rootBars: null, when: '', watch: null },
-    // How far back the lab READS, in the browser: 300 root bars to find a run's start, 10,000 of
-    // each lower timeframe's bars. The server reads every run whole; a run longer than these is
-    // cut here (the overlay's own bounds until wdashboard-server 0.56.0).
-    lookback: { rootBars: 300, maxBars: 10_000 }
+    end: defaultEnd(),
+    lookback: defaultLookback()
   }
+}
+
+export function defaultEnd(): GraphEnd {
+  return { rootBars: null, when: '', watch: null }
+}
+
+/** How far back the lab READS, in the browser: 300 root bars to find a run's start, 10,000 of each
+ * lower timeframe's bars. The server reads every run whole; a run longer than these is cut here
+ * (the overlay's own bounds until wdashboard-server 0.56.0). */
+export function defaultLookback(): Lookback {
+  return { rootBars: 300, maxBars: 10_000 }
+}
+
+/** Timeframes shortest first, each once. */
+export function byLength(codes: Iterable<string>): string[] {
+  return [...new Set(codes)].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))
+}
+
+/** The side a rule of `direction` follows by default: AGAINST the signal (user, 2026-10-15) -- a
+ * long buys into bottoms, a short sells into tops. */
+export function followsFor(direction: Direction): Side {
+  return direction === 'long' ? 'bottom' : 'top'
+}
+
+/** The timeframes a rule on `root` may step through, of those `offered`: every shorter one. */
+export function stepsBelow(root: string, offered: readonly string[]): string[] {
+  const rootMs = resolutionDurationMs(root)
+  return byLength(offered).filter((tf) => resolutionDurationMs(tf) < rootMs)
+}
+
+/** Where a rule over `steps` enters by default: the overlay's, every step on 5m or shorter -- or
+ * its shortest step when it has none that short, or its root when it has no steps. */
+export function defaultEntryOn(root: string, steps: readonly string[]): string[] {
+  if (steps.length === 0) return [root]
+  const short = steps.filter((tf) => resolutionDurationMs(tf) <= resolutionDurationMs(ENTRY_LONGEST))
+  return short.length > 0 ? byLength(short) : [byLength(steps)[0]]
+}
+
+/** A rule at the overlay's settings: from `root`, through every shorter timeframe `offered`,
+ * entering on the overlay's, and trading against the signal. */
+export function defaultRule(direction: Direction, root: string, offered: readonly string[], source: string, id: string): StrategyRule {
+  const steps = stepsBelow(root, offered)
+  return {
+    id,
+    enabled: true,
+    direction,
+    source,
+    follows: followsFor(direction),
+    root,
+    steps,
+    entryOn: defaultEntryOn(root, steps),
+    maxStep: 8,
+    reach: true,
+    filter: null,
+    end: defaultEnd(),
+    parent: 'supersede',
+    rootJoin: 'join',
+    stepIf: [],
+    entryIf: []
+  }
+}
+
+/** A rule id not yet used in `strategy`. */
+export function newRuleId(strategy: Pick<Strategy, 'rules'>, direction: Direction, root: string): string {
+  const used = new Set(strategy.rules.map((r) => r.id))
+  const base = `${direction}${root}`
+  if (!used.has(base)) return base
+  for (let k = 2; ; k++) if (!used.has(`${base}_${k}`)) return `${base}_${k}`
+}
+
+/** What the page calls a rule: "Long · 1D", and "Long · 1D #2" for a second one like it. */
+export function ruleLabel(strategy: Pick<Strategy, 'rules'>, rule: StrategyRule): string {
+  const base = `${rule.direction === 'long' ? 'Long' : 'Short'} · ${rule.root}`
+  const alike = strategy.rules.filter((r) => r.direction === rule.direction && r.root === rule.root)
+  const k = alike.indexOf(rule)
+  return k > 0 ? `${base} #${k + 1}` : base
 }
 
 export function defaultExits(): ExitSpec {
@@ -425,20 +545,21 @@ export function newStrategyId(now = Date.now()): string {
   return `st${now.toString(36)}${counter.toString(36)}`
 }
 
-/** The AREV21 outlier rank 85 overlay's graph, every rule at the overlay's own setting: roots on
- * 1D, every timeframe it offers, entries where a 5m or 3m signal steps in. An entry trades
- * AGAINST its signal (user, 2026-10-15): a top -- a `long` label -- is sold, a bottom bought. */
+/** The AREV21 outlier rank 85 overlay's graph from its 1D root, as two rules: a long one that
+ * follows the bottoms and a short one that follows the tops -- every rule at the overlay's own
+ * setting, so together they draw the overlay's 1D graphs. Each trades AGAINST its signal (user,
+ * 2026-10-15): a top -- a `long` label -- is sold, a bottom bought. */
 export function rank85Strategy(now = Date.now()): Strategy {
   return {
     version: STRATEGY_VERSION,
     id: newStrategyId(now),
-    name: 'AREV21 rank 85 graph',
+    name: 'AREV21 rank 85 rules',
     notes: '',
     instrument: 'oanda:EURUSD',
     window: { kind: 'days', days: 30 },
     sources: [rank85Source()],
-    graph: defaultGraph(),
-    entry: { when: defaultGraphEntry(), filter: null, direction: { top: 'short', bottom: 'long' } },
+    rules: [defaultRule('long', '1D', RANK_TIMEFRAMES, 'rank85', 'long1D'), defaultRule('short', '1D', RANK_TIMEFRAMES, 'rank85', 'short1D')],
+    lookback: defaultLookback(),
     exits: defaultExits(),
     sizing: defaultSizing(),
     costs: defaultCosts(),
@@ -450,7 +571,7 @@ export function rank85Strategy(now = Date.now()): Strategy {
   }
 }
 
-/** A strategy with no graph: an indicator event straight to an entry. */
+/** A strategy with no graph: an indicator event straight to an entry, one rule each way. */
 export function ruleStrategy(now = Date.now()): Strategy {
   const base = rank85Strategy(now)
   return {
@@ -461,14 +582,12 @@ export function ruleStrategy(now = Date.now()): Strategy {
         kind: 'rule',
         id: 'rsi',
         title: 'RSI(14) leaves 30 / 70',
-        timeframes: ['1h'],
         top: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_below', right: { value: 70 } },
         bottom: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_above', right: { value: 30 } },
         price: 'close'
       }
     ],
-    graph: { ...defaultGraph(), enabled: false, roots: ['1h'] },
-    entry: { when: [], filter: null, direction: { top: 'short', bottom: 'long' } }
+    rules: [defaultRule('long', '1h', [], 'rsi', 'long1h'), defaultRule('short', '1h', [], 'rsi', 'short1h')]
   }
 }
 
@@ -509,50 +628,57 @@ export function strategyProblems(strategy: Strategy): Problem[] {
   if (strategy.window.kind === 'days' && !(strategy.window.days > 0)) add('Window', 'the window needs at least one day')
   if (strategy.window.kind === 'range' && !(strategy.window.to > strategy.window.from)) add('Window', 'the window ends before it starts')
 
-  // The pool.
-  if (strategy.sources.length === 0) add('Signals', 'the pool is empty: add a signal or a rule event')
+  // The signals.
+  if (strategy.sources.length === 0) add('Signals', 'there are no signals: add a published signal or a rule event')
   const ids = new Set<string>()
   for (const source of strategy.sources) {
     const where = `Signals · ${source.title || source.id}`
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(source.id)) add(where, `an id is a letter then letters, digits or _ (not '${source.id}')`)
     if (ids.has(source.id)) add(where, `two sources are called '${source.id}'`)
     ids.add(source.id)
-    if (source.timeframes.length === 0) add(where, 'switch on at least one timeframe')
-    for (const tf of source.timeframes) if (!INTERVAL.test(tf)) add(where, `not a timeframe: '${tf}'`)
     if (source.kind === 'published') {
       if (!source.plugin) add(where, 'choose a signal')
       if (Object.keys(source.sides).length === 0) add(where, 'map at least one label to a side')
       for (const [name, value] of Object.entries(source.params)) if (!Number.isFinite(value)) add(where, `parameter ${name} is not a number`)
     } else if (!source.top && !source.bottom) add(where, 'write a rule for tops, bottoms or both')
   }
-  const pooled = new Set(strategy.sources.flatMap((s) => s.timeframes))
 
-  const checkConditions = (section: string, conditions: SlotCondition[], scope: SlotScope): void => {
-    conditions.forEach((condition, i) => {
-      if (!condition.enabled) return
-      const problem = exprProblem(condition.expr, scope)
-      if (problem) add(`${section} ${i + 1}`, problem)
-    })
-  }
-
-  // The graph.
-  const graph = strategy.graph
-  if (graph.enabled) {
-    if (graph.roots.length === 0) add('Graph · roots', 'switch on a root timeframe')
-    for (const root of graph.roots) if (!pooled.has(root)) add('Graph · roots', `no source in the pool is on ${root}, so nothing can root a graph there`)
-    if (graph.rootSources) for (const id of graph.rootSources) if (!ids.has(id)) add('Graph · roots', `no source '${id}' in the pool`)
-    checkConditions('Graph · step test', graph.step, SCOPES.step)
-    if (graph.end.when.trim()) {
-      const problem = exprProblem(graph.end.when, SCOPES.end)
-      if (problem) add('Graph · ends when', problem)
+  // The rules: each one checked by its own name, so a problem takes the page to its card.
+  if (!strategy.rules.some((r) => r.enabled)) add('Rules', 'switch on at least one rule')
+  const ruleIds = new Set<string>()
+  for (const rule of strategy.rules) {
+    const name = ruleLabel(strategy, rule)
+    if (ruleIds.has(rule.id)) add(name, `two rules are called '${rule.id}'`)
+    ruleIds.add(rule.id)
+    if (!rule.enabled) continue
+    const checkConditions = (slot: string, conditions: SlotCondition[], scope: SlotScope): void => {
+      conditions.forEach((condition, i) => {
+        if (!condition.enabled) return
+        const problem = exprProblem(condition.expr, scope)
+        if (problem) add(`${name} · ${slot} ${i + 1}`, problem)
+      })
     }
-    if (graph.end.watch !== null && !INTERVAL.test(graph.end.watch)) add('Graph · ends when', `not a timeframe: '${graph.end.watch}'`)
-    if (graph.end.rootBars !== null && !(graph.end.rootBars >= 1)) add('Graph · ends', 'the root-bar limit is at least 1')
-    if (!(graph.lookback.rootBars >= 1) || !(graph.lookback.maxBars >= 1)) add('Graph · history', 'the read bounds are at least one bar')
+    if (!ids.has(rule.source)) add(`${name} · signal`, `no signal '${rule.source}' in Signals`)
+    if (!INTERVAL.test(rule.root)) add(`${name} · root`, `not a timeframe: '${rule.root}'`)
+    const rootMs = resolutionDurationMs(rule.root)
+    for (const tf of rule.steps) {
+      if (!INTERVAL.test(tf)) add(`${name} · steps`, `not a timeframe: '${tf}'`)
+      else if (!(resolutionDurationMs(tf) < rootMs)) add(`${name} · steps`, `${tf} is not shorter than the root, ${rule.root}`)
+    }
+    const enterable = rule.steps.length > 0 ? rule.steps : [rule.root]
+    if (rule.entryOn.length === 0) add(`${name} · entries`, 'choose the timeframes it enters on')
+    for (const tf of rule.entryOn) if (!enterable.includes(tf)) add(`${name} · entries`, rule.steps.length > 0 ? `${tf} is not one of the timeframes it steps through` : `with no steps it enters on its root, ${rule.root}`)
+    if (rule.maxStep !== null && !(rule.maxStep >= 1)) add(`${name} · steps`, 'a step is at most 1× shorter or more')
+    checkConditions('step condition', rule.stepIf, SCOPES.step)
+    checkConditions('entry condition', rule.entryIf, SCOPES.entry)
+    if (rule.end.when.trim()) {
+      const problem = exprProblem(rule.end.when, SCOPES.end)
+      if (problem) add(`${name} · ends when`, problem)
+    }
+    if (rule.end.watch !== null && !INTERVAL.test(rule.end.watch)) add(`${name} · ends when`, `not a timeframe: '${rule.end.watch}'`)
+    if (rule.end.rootBars !== null && !(rule.end.rootBars >= 1)) add(`${name} · ends`, 'the root-bar limit is at least 1')
   }
-
-  // Entries.
-  checkConditions('Entries · test', strategy.entry.when, SCOPES.entry)
+  if (!(strategy.lookback.rootBars >= 1) || !(strategy.lookback.maxBars >= 1)) add('Simulation', 'the read bounds are at least one bar')
 
   // Exits.
   const level = (where: string, value: Level | null, target: boolean): void => {
@@ -600,22 +726,116 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** A stored strategy, or null when it is not one. Missing sections take their defaults, so a
- * document written before a section existed still reads. */
-export function readStrategy(raw: unknown): Strategy | null {
-  if (!isRecord(raw) || raw.version !== STRATEGY_VERSION || typeof raw.id !== 'string' || !Array.isArray(raw.sources)) return null
+ * document written before a section existed still reads; a version-1 document becomes rules
+ * (`migrateV1`). */
+export function readStrategy(input: unknown): Strategy | null {
+  if (!isRecord(input) || typeof input.id !== 'string' || !Array.isArray(input.sources)) return null
+  const raw = input.version === 1 ? migrateV1(input) : input
+  if (raw.version !== STRATEGY_VERSION || !Array.isArray(raw.rules)) return null
   const base = rank85Strategy(typeof raw.createdAt === 'number' ? raw.createdAt : Date.now())
-  const merged = {
+  const ruleBase = defaultRule('long', '1D', RANK_TIMEFRAMES, 'rank85', 'rule')
+  const rules = (raw.rules as unknown[]).filter(isRecord).map((r) => {
+    const rule = { ...ruleBase, follows: followsFor(r.direction === 'short' ? 'short' : 'long'), ...r } as StrategyRule
+    rule.end = { ...defaultEnd(), ...(isRecord(r.end) ? r.end : {}) }
+    return rule
+  })
+  return {
     ...base,
     ...raw,
-    graph: { ...base.graph, ...(isRecord(raw.graph) ? raw.graph : {}) },
-    entry: { ...base.entry, ...(isRecord(raw.entry) ? raw.entry : {}) },
+    rules,
+    lookback: { ...base.lookback, ...(isRecord(raw.lookback) ? raw.lookback : {}) },
     exits: { ...base.exits, ...(isRecord(raw.exits) ? raw.exits : {}) },
     sizing: { ...base.sizing, ...(isRecord(raw.sizing) ? raw.sizing : {}) },
     costs: { ...base.costs, ...(isRecord(raw.costs) ? raw.costs : {}) },
     outcomes: { ...base.outcomes, ...(isRecord(raw.outcomes) ? raw.outcomes : {}) },
     holdout: isRecord(raw.holdout) ? (raw.holdout as HoldoutSpec) : null
   } as Strategy
-  merged.graph.end = { ...base.graph.end, ...(isRecord(merged.graph.end) ? merged.graph.end : {}) }
-  merged.graph.lookback = { ...base.graph.lookback, ...(isRecord(merged.graph.lookback) ? merged.graph.lookback : {}) }
-  return merged
+}
+
+/**
+ * A version-1 strategy -- one graph over several roots and both sides -- as rules: one per root
+ * and side, each with the graph's settings. Its sources' timeframes become each rule's steps (the
+ * pool's timeframes shorter than its root); its step and entry tests become a rule's own fields
+ * where they are the overlay's presets (the 8 of `parent.tf <= child.tf * 8` its `maxStep`,
+ * `node.tf <= tf('5m')` its entries on 5m and shorter) and its extra conditions otherwise.
+ *
+ * One thing has no rule: a version-1 graph with several roots let a signal stepping in a longer
+ * root's graph root nothing in a shorter one (`takenDontRoot`). Rules are independent, so a 1h rule
+ * now also roots where a 1D rule is stepping -- the point of splitting them.
+ */
+export function migrateV1(raw: Record<string, unknown>): Record<string, unknown> {
+  const graph = isRecord(raw.graph) ? raw.graph : {}
+  const entry = isRecord(raw.entry) ? raw.entry : {}
+  const sources = (raw.sources as unknown[]).filter(isRecord)
+  const tfsOf = (source: Record<string, unknown>): string[] => (Array.isArray(source.timeframes) ? source.timeframes.filter((t): t is string => typeof t === 'string') : [])
+  const pool = byLength(sources.flatMap(tfsOf))
+  const direction: Record<Side, Direction> = { top: 'short', bottom: 'long' }
+  if (isRecord(entry.direction)) for (const side of ['top', 'bottom'] as const) if (entry.direction[side] === 'long' || entry.direction[side] === 'short') direction[side] = entry.direction[side]
+  const rootSources = Array.isArray(graph.rootSources) ? graph.rootSources.filter((x): x is string => typeof x === 'string') : null
+  const sourceFor = (tf: string): string => {
+    const onIt = sources.filter((s) => tfsOf(s).includes(tf) && (!rootSources || rootSources.includes(String(s.id))))
+    return String((onIt[0] ?? sources[0])?.id ?? 'rank85')
+  }
+
+  // The step test: the presets become fields, anything else a condition of the rule's own.
+  const conditions = (value: unknown, fallback: SlotCondition[]): SlotCondition[] => (Array.isArray(value) ? (value.filter(isRecord) as unknown as SlotCondition[]) : fallback)
+  const step = conditions(graph.step, defaultStep())
+  let maxStep: number | null = null
+  const stepIf: SlotCondition[] = []
+  for (const c of step) {
+    if (!c.enabled) continue
+    const expr = c.expr.trim()
+    if (expr === '(child.price - parent.price) * dir > 0' || expr === 'child.tf <= parent.tf') continue
+    const max = /^parent\.tf <= child\.tf \* (\d+(?:\.\d+)?)$/.exec(expr)
+    if (max && maxStep === null) maxStep = Number(max[1])
+    else stepIf.push({ ...c })
+  }
+  const when = conditions(entry.when, defaultGraphEntry())
+  let shortOnly = false
+  const entryIf: SlotCondition[] = []
+  for (const c of when) {
+    if (!c.enabled) continue
+    const expr = c.expr.trim()
+    if (expr === 'not node.is_root') continue
+    if (expr === "node.tf <= tf('5m')") shortOnly = true
+    else entryIf.push({ ...c })
+  }
+
+  const enabled = graph.enabled !== false
+  const roots = enabled ? byLength(Array.isArray(graph.roots) ? graph.roots.filter((x): x is string => typeof x === 'string') : ['1D']).reverse() : pool
+  const end = { ...defaultEnd(), ...(isRecord(graph.end) ? graph.end : {}) } as GraphEnd
+  const rules: StrategyRule[] = []
+  for (const root of roots) {
+    for (const side of ['bottom', 'top'] as const) {
+      const steps = enabled ? stepsBelow(root, pool) : []
+      const entryOn = !enabled || steps.length === 0 ? [root] : shortOnly ? defaultEntryOn(root, steps) : steps
+      const dir = direction[side]
+      rules.push({
+        id: `${dir}${root}${rules.some((r) => r.id === `${dir}${root}`) ? `_${side}` : ''}`,
+        enabled: true,
+        direction: dir,
+        source: sourceFor(root),
+        follows: side,
+        root,
+        steps,
+        entryOn,
+        maxStep,
+        reach: graph.reach !== false,
+        filter: (entry.filter as Rule | null | undefined) ?? null,
+        end: { ...end },
+        parent: (graph.parent as ParentRule | undefined) ?? 'supersede',
+        rootJoin: (graph.rootJoin as RootJoin | undefined) ?? 'join',
+        stepIf: stepIf.map((c) => ({ ...c })),
+        entryIf: entryIf.map((c) => ({ ...c }))
+      })
+    }
+  }
+  const { graph: _graph, entry: _entry, ...rest } = raw
+  return {
+    ...rest,
+    version: STRATEGY_VERSION,
+    sources: sources.map(({ timeframes: _t, ...source }) => source),
+    rules,
+    lookback: { ...defaultLookback(), ...(isRecord(graph.lookback) ? graph.lookback : {}) }
+  }
 }

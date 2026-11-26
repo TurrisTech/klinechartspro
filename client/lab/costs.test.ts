@@ -37,7 +37,7 @@ function entry(at: number, direction: 'long' | 'short'): LabEntry {
     label: '',
     raw: {}
   }
-  return { id: signal.key, signal, at, side: signal.side, direction, graph: null, node: -1 }
+  return { id: signal.key, signal, at, side: signal.side, direction, rule: direction, graph: null, node: -1 }
 }
 
 const readings: Readings = { pip: PIP, atr: () => 0.001, ind: () => undefined }

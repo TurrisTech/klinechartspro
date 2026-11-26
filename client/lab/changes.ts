@@ -1,10 +1,29 @@
-// WHAT AN EDIT CHANGED, in the editor's words: "Entries · test 2", "Exits · stop". The run
+// WHAT AN EDIT CHANGED, in the editor's words: "Long · 1D · steps", "Exits · stop". The run
 // history (./runs.ts) says this beside each run, so a list of runs reads as a list of experiments
 // rather than of timestamps.
 //
 // PURE.
 
-import type { Strategy } from './model'
+import { ruleLabel, type Strategy } from './model'
+
+/** A rule's fields, in the editor's words. */
+const RULE_WORDS: Record<string, string> = {
+  enabled: 'on/off',
+  direction: 'direction',
+  source: 'signal',
+  follows: 'follows',
+  root: 'root',
+  steps: 'steps',
+  entryOn: 'entries',
+  maxStep: 'longest step',
+  reach: 'beyond all before',
+  filter: 'only when',
+  end: 'ends',
+  parent: 'hangs from',
+  rootJoin: 'same-side root',
+  stepIf: 'step conditions',
+  entryIf: 'entry conditions'
+}
 
 /** The dotted paths at which two JSON values differ (an array by index), down to a leaf. */
 function diffPaths(a: unknown, b: unknown, path: string, out: string[]): void {
@@ -41,16 +60,16 @@ function placeOf(path: string, strategy: Strategy): string | null {
       const source = strategy.sources[Number(second)]
       const name = source ? source.title || source.id : `source ${Number(second) + 1}`
       if (third === 'params' && fourth) return `Signals · ${name} · ${fourth}`
-      if (third === 'timeframes') return `Signals · ${name} · timeframes`
       return `Signals · ${name}`
     }
-    case 'graph':
-      if (second === 'step') return third === undefined ? 'Graph · step test' : `Graph · step test ${Number(third) + 1}`
-      if (second === 'end') return 'Graph · ends'
-      return `Graph · ${second ?? ''}`.trim()
-    case 'entry':
-      if (second === 'when') return third === undefined ? 'Entries · test' : `Entries · test ${Number(third) + 1}`
-      return second === 'filter' ? 'Entries · filter' : second === 'direction' ? 'Entries · direction' : 'Entries'
+    case 'rules': {
+      const rule = strategy.rules[Number(second)]
+      if (!rule) return 'Rules'
+      const name = ruleLabel(strategy, rule)
+      return third === undefined ? name : `${name} · ${RULE_WORDS[third] ?? third}`
+    }
+    case 'lookback':
+      return 'Simulation · read bounds'
     case 'exits':
       return `Exits · ${second === 'maxBars' ? 'time limit' : second === 'breakevenAtR' ? 'breakeven' : second === 'onOpposite' ? 'opposite entry' : second === 'ruleLong' || second === 'ruleShort' ? 'exit rule' : (second ?? '')}`
     case 'sizing':
