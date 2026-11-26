@@ -571,6 +571,86 @@ describe('createPluginHost', () => {
     expect(fc.overrides[fc.overrides.length - 1]?.shortName).toBe('SLOW · ready')
   })
 
+  // A page that answers only part of what was asked (`Page.problem`: an MTF overlay with a
+  // timeframe the server could not read, user 2026-11-26): its points are drawn, the legend's
+  // warning carries why (`extendData.problem`), and its range is read again until a page comes
+  // back whole -- not on every scroll, and not never, as a covered range otherwise would be.
+  test('a partly answered page is drawn, warns, and is read again until it comes back whole', async () => {
+    let calls = 0
+    const ranges: Range[] = []
+    const plugin: IndicatorPlugin = {
+      id: 'part',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'PART',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'part',
+            fetch: async (range): Promise<Page<Point>> => {
+              calls++
+              ranges.push({ ...range })
+              const points = [{ date: 1, v: calls }]
+              return calls === 1 ? { points, nextFrom: null, problem: '4h could not be read' } : { points, nextFrom: null }
+            }
+          }
+        ],
+        label: (state) => `PART · ${state.sources[0]?.store.phase}`
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities(), partialRetryMs: 1 })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [{ timestamp: 1 }]
+    fc.indicators = [fakeIndicator('PART', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    const first = fc.overrides[fc.overrides.length - 1]
+    expect(first?.shortName).toBe('PART · ready')
+    expect((first?.extendData as { problem?: unknown } | undefined)?.problem).toBe('4h could not be read')
+    expect(peekStore<SourceStore>('part')?.problem).toBe('4h could not be read')
+    await new Promise((r) => setTimeout(r, 700))
+    expect(calls).toBe(2)
+    expect(ranges[1]).toEqual(ranges[0])
+    const last = fc.overrides[fc.overrides.length - 1]
+    expect((last?.extendData as { problem?: unknown } | undefined)?.problem).toBeNull()
+    expect(peekStore<SourceStore>('part')?.problem).toBeNull()
+    // Whole now: nothing more is read.
+    await new Promise((r) => setTimeout(r, 700))
+    expect(calls).toBe(2)
+  })
+
+  test('a source that fails to load says why in the legend\'s warning', async () => {
+    const plugin: IndicatorPlugin = {
+      id: 'bad',
+      feature: null,
+      register: () => [],
+      matches: (name) => name === 'BAD',
+      bind: () => ({
+        sources: [
+          {
+            id: 'v',
+            key: 'bad',
+            fetch: async (): Promise<Page<Point>> => {
+              throw new Error('500 from /mtf/graph')
+            }
+          }
+        ],
+        label: () => 'BAD'
+      })
+    }
+    const host = await createPluginHost({ plugins: [plugin], facilities: facilities() })
+    hosts.push(host)
+    const fc = fakeChart()
+    fc.data = [{ timestamp: 1 }]
+    fc.indicators = [fakeIndicator('BAD', 'i1')]
+    host.sync([fakePane('p1', fc.chart)])
+    await flush()
+    const last = fc.overrides[fc.overrides.length - 1]
+    expect((last?.extendData as { problem?: unknown } | undefined)?.problem).toBe('Could not be loaded: 500 from /mtf/graph')
+  })
+
   // The replay's read clock (services/asof.py) answers only what had CLOSED by the cursor,
   // so an answer taken at the cursor is missing the bar each source still has forming. The
   // host has to forget that much and no less, PER SOURCE, or that bar stays filed as

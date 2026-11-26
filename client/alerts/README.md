@@ -46,7 +46,11 @@ stepped to, through the graph, from a root. Since wdashboard-server 0.56.0 the g
 server's (`GET /mtf/graph`, `services/mtfgraph.py`), built whole and cached there, and the alert
 asks for exactly what a pane asks for -- the overlay's own family and params, the timeframes, the
 roots, the largest step -- keeping the entries on its timeframe, so it stars the bars the chart
-stars by construction (`graphentry.test.ts` holds the request). What the alert keeps of its own is the graph's SETTINGS -- the timeframes it reads, its
+stars by construction (`graphentry.test.ts` holds the request). An answer the server could give
+only partly -- a timeframe it could not read, so no graph at all (wdashboard-server 0.60.0) -- is a
+failed read here (`data.ts` `graph`), not an answer with no entries: the engine keeps what it is
+told is final, and would otherwise hide that window's entries from every alert after the timeframe
+reads again. What the alert keeps of its own is the graph's SETTINGS -- the timeframes it reads, its
 roots, its largest step -- **copied from a pane when the condition is chosen** (the active pane
 if it carries the overlay, else the first that does; user's choice, so a later change to the
 pane does not change what the alert means), editable behind its Settings toggle, and copied

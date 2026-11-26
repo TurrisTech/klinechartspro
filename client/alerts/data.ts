@@ -11,7 +11,8 @@
 // fetch each bar once.
 
 import { capabilities } from '../capabilities'
-import { fetchMtfGraph, type MtfGraphAnswer, type MtfGraphRequest } from '../mtf/api'
+import { OhlcvApiError } from '../config'
+import { describeUnavailable, fetchMtfGraph, type MtfGraphAnswer, type MtfGraphRequest } from '../mtf/api'
 import { fetchPoints } from '../plugins/api'
 import { TiledBarSource } from '../replay/tiled'
 import { type CandleGrid, gridFor } from '../replay/timeframes'
@@ -85,9 +86,17 @@ export class HttpAlertData implements AlertData {
     return out
   }
 
-  graph(request: MtfGraphRequest): Promise<MtfGraphAnswer> {
+  async graph(request: MtfGraphRequest): Promise<MtfGraphAnswer> {
     // Past the read clock, like every read here: `asof: null` keeps the page-wide one off it.
-    return fetchMtfGraph({ ...request, asof: null })
+    const answer = await fetchMtfGraph({ ...request, asof: null })
+    // A partial answer has no entries at all, and the engine keeps what it is told is final
+    // (graphentry.ts): taken as it is, it would hide that window's entries from every alert after
+    // the timeframe reads again. So it fails here, as the whole read did before the server
+    // answered the other timeframes (wdashboard-server 0.60.0), and nothing is kept.
+    if (answer.unavailable && answer.unavailable.length > 0) {
+      throw new OhlcvApiError(200, 'unavailable', describeUnavailable(answer.unavailable) ?? 'a timeframe could not be read')
+    }
+    return answer
   }
 }
 

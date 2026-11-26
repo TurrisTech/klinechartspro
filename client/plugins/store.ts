@@ -17,6 +17,7 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
   phase: Phase = 'idle'
   progress: number | null = null
   error: string | null = null
+  problem: string | null = null
   rev = 0
 
   constructor(
@@ -75,6 +76,12 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
     this.phase = phase
     this.progress = progress
     this.error = error
+    this.rev++
+  }
+
+  setProblem(problem: string | null): void {
+    if (this.problem === problem) return
+    this.problem = problem
     this.rev++
   }
 }

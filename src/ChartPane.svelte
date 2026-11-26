@@ -154,6 +154,39 @@
   // the mousedown every pointer gesture produces, so it always describes the gesture in flight.
   let tooltipFeatureInteracted = false
 
+  // THE LEGEND'S WARNING (user, 2026-11-26: "an alert on the indicator entry in the top left of
+  // the pane ... it can blink if there is an issue", then "just put it once at the end next to the
+  // X. yes, it can show a card"): one amber ⚠ beside an indicator's ×, when whoever feeds it says
+  // what it holds is incomplete or did not load -- the plugin host's `extendData.problem`
+  // (client/plugins/host.ts `problemOf`): an MTF overlay with a timeframe the server could not
+  // read, a series that failed to load. It blinks until it is clicked, then stays until the
+  // problem goes; a click opens a card with the reason. Once, at the end: a narrow pane cuts the
+  // name, and the icons after it are drawn all the same.
+  const WARNING_BLINK_MS = 600
+  const WARNING_COLOR = '#e8a317'
+  const WARNING_DIM = 'rgba(232, 163, 23, 0.25)'
+  const WARNING_PATH = 'M7 1.5L13 12.5L1 12.5Z M7 5.5L7 8.5 M7 10.2L7 10.8'
+  let warningBlinkOn = true
+  /** Indicator id -> the problem its warning was clicked for: blinking stops for that problem. */
+  const acknowledgedProblems = new Map<string, string>()
+  let problemCard = $state<{ title: string; text: string; left: number; top: number } | null>(null)
+  /** Where the last press in the pane landed, relative to it: where the card opens, since
+   * klinecharts' feature click carries no coordinate. */
+  let lastPress = { x: 0, y: 0 }
+
+  function indicatorProblem(indicator: { extendData?: unknown }): string | null {
+    const problem = (indicator.extendData as { problem?: unknown } | null | undefined)?.problem
+    return typeof problem === 'string' && problem.length > 0 ? problem : null
+  }
+
+  /** Redraw the legends of `paneIds` alone: klinecharts draws them on a pane's overlay layer,
+   * which `updatePane(UpdateLevel.Overlay)` repaints without recalculating any indicator. Not in
+   * klinecharts' public types, hence the cast; absent, the warning simply does not blink. */
+  function redrawLegends(paneIds: Iterable<string>): void {
+    const chart = widget as unknown as { updatePane?: (level: number, paneId?: string) => void } | null
+    for (const paneId of paneIds) chart?.updatePane?.(1, paneId)
+  }
+
   // Set when a gesture's mousedown was the ruler's -- a Shift-press that started a measurement,
   // or the press that put the last one away (see onMeasureMouseDown) -- so its click does not
   // also seek the wall. Cleared, like the tooltip flag, by the pointerdown that opens every
@@ -226,6 +259,20 @@
           ...(moves.down ? ['pane_down'] : [])
         ]
         const icons = ids.flatMap((id) => defaultFeatures.filter((feature) => feature.id === id))
+        const problem = indicatorProblem(indicator)
+        const close = icons.findIndex((feature) => feature.id === 'close')
+        if (problem && close >= 0) {
+          // Sized and spaced as the × it follows; dimmed on the blink's off beat until clicked.
+          const dim = acknowledgedProblems.get(indicator.id) !== problem && !warningBlinkOn
+          icons.splice(close + 1, 0, {
+            ...icons[close],
+            id: 'warning',
+            type: 'path',
+            content: { path: WARNING_PATH, style: 'stroke', lineWidth: 1.5 },
+            color: dim ? WARNING_DIM : WARNING_COLOR,
+            activeColor: WARNING_COLOR
+          } as TooltipFeatureStyle)
+        }
         const own = templateTooltipDataSource(indicator.name)?.(params)
         return { ...own, features: icons } as IndicatorTooltipData
       }
@@ -1416,9 +1463,39 @@
         changeIndicator(indicator.name, data.paneId === 'candle_pane', false)
       } else if (featureId === 'pane_up' || featureId === 'pane_down') {
         moveSubIndicatorPane(indicator.name, featureId === 'pane_up' ? -1 : 1)
+      } else if (featureId === 'warning') {
+        const problem = indicatorProblem(indicator)
+        if (problem) {
+          acknowledgedProblems.set(indicator.id, problem)
+          const width = paneElement?.clientWidth ?? 0
+          problemCard = {
+            title: indicator.shortName || indicator.name,
+            text: problem,
+            left: Math.max(4, Math.min(lastPress.x - 12, width - 340)),
+            top: lastPress.y + 14
+          }
+          redrawLegends([data.paneId])
+        }
       }
     }
     widget.subscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
+
+    // The warning's blink: only the legends of panes with an unacknowledged warning are redrawn,
+    // and a pane with none costs one scan of its indicators per beat.
+    const warningBlink = setInterval(() => {
+      if (!widget) return
+      const blinking = new Set<string>()
+      for (const indicator of widget.getIndicators()) {
+        const problem = indicatorProblem(indicator)
+        if (problem && acknowledgedProblems.get(indicator.id) !== problem) blinking.add(indicator.paneId)
+      }
+      if (blinking.size === 0) {
+        warningBlinkOn = true
+        return
+      }
+      warningBlinkOn = !warningBlinkOn
+      redrawLegends(blinking)
+    }, WARNING_BLINK_MS)
 
     // Crosshair sync source: onCrosshairChange's payload is the raw {x, y, paneId} mousemove
     // record, not the timestamp/price -- crosshairPoint recovers both via the same
@@ -1824,6 +1901,7 @@
       window.removeEventListener('mouseup', onMeasureUp)
       window.removeEventListener('keydown', onMeasureKey)
       widget?.unsubscribeAction('onIndicatorTooltipFeatureClick', onIndicatorFeatureClick)
+      clearInterval(warningBlink)
       widget?.unsubscribeAction('onCrosshairChange', onCrosshairChange)
       widget?.unsubscribeAction('onVisibleRangeChange', onVisibleRangeChange)
       candleResize.disconnect()
@@ -1858,6 +1936,10 @@
     gesturePointer = event.pointerType || 'mouse'
     tooltipFeatureInteracted = false
     measureInteracted = false
+    const box = paneElement?.getBoundingClientRect()
+    if (box) lastPress = { x: event.clientX - box.left, y: event.clientY - box.top }
+    // A press anywhere but the card puts it away; the warning's own press opens it again after.
+    if (problemCard && !(event.target instanceof Element && event.target.closest('.klinecharts-pro-problem-card'))) problemCard = null
     onActivate(pane.id)
   }}
   onfocusin={() => onActivate(pane.id)}
@@ -1909,6 +1991,27 @@
          several tall indicator sub-panes those are a long way apart. -->
     {@render liveJump(priceAreaBottom, yAxisWidth)}
     {@render liveJump(0, 0)}
+  {/if}
+  {#if problemCard}
+    <!-- The legend's warning card: why an indicator's data is incomplete or did not load. -->
+    <div
+      class="klinecharts-pro-problem-card"
+      role="dialog"
+      aria-label={i18n('indicator_problem', locale)}
+      style={`left: ${problemCard.left}px; top: ${problemCard.top}px;`}
+    >
+      <div class="klinecharts-pro-problem-card-head">
+        <span class="klinecharts-pro-problem-card-title">⚠ {problemCard.title}</span>
+        <button
+          type="button"
+          class="kc-button kc-icon-button"
+          aria-label={i18n('indicator_problem_close', locale)}
+          title={i18n('indicator_problem_close', locale)}
+          onclick={() => (problemCard = null)}
+        >×</button>
+      </div>
+      <p>{problemCard.text}</p>
+    </div>
   {/if}
   {#if crosshairAway}
     <!-- Where the instant another pane is pointing at lies, when this pane's crosshair cannot

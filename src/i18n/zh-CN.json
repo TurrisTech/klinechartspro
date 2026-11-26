@@ -376,5 +376,7 @@
   "drawing_unlock": "解锁绘图",
   "drawing_deselect": "完成",
   "ruler": "测量尺：在图表上拖动即可测量（鼠标为 Shift + 拖动）",
-  "ruler_armed": "在图表上拖动以测量"
+  "ruler_armed": "在图表上拖动以测量",
+  "indicator_problem": "指标问题",
+  "indicator_problem_close": "关闭"
 }

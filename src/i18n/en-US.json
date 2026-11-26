@@ -403,5 +403,7 @@
   "drawing_unlock": "Unlock drawing",
   "drawing_deselect": "Done",
   "ruler": "Ruler: drag on a chart to measure (Shift + drag with a mouse)",
-  "ruler_armed": "Drag on a chart to measure"
+  "ruler_armed": "Drag on a chart to measure",
+  "indicator_problem": "Indicator problem",
+  "indicator_problem_close": "Close"
 }

@@ -43,6 +43,17 @@ const plugin: IndicatorPlugin = {
 }
 ```
 
+**When a source's data is incomplete or failed to load, the legend says so** (user, 2026-11-26).
+The host puts `problem` in every plugin indicator's `extendData`, after the plugin's own keys:
+a source in the `error` phase ("Could not be loaded: <why>"), else a source whose store holds a
+`problem`, else null. `src/ChartPane.svelte` draws one amber ⚠ beside that indicator's ×, which
+blinks until clicked and then stays; a click opens a card with the text. A fetch reports a
+partial answer by returning `problem` on its `Page` (the MTF overlays, when the server could not
+read a timeframe): its points are drawn and counted as fetched, but the host keeps the range as
+**degraded** and reads it again every `PARTIAL_RETRY_MS` (60 s) until a page over it comes back
+without a problem, which clears the store's problem and the warning. `phaseLabel` no longer adds
+"· error" to the name: the ⚠ says it, where a narrow pane cannot cut it off.
+
 **`follows`** is for a binding that depends on another indicator on the same chart: TradeTalk
 entries trades the zones of the Heath levels indicator beside it. The host asks it on every
 reconcile and adds the answer to the binding's identity, beside its own `calcParams`. So an edit
@@ -221,7 +232,7 @@ rule). Tests: `signals.test.ts`.
 | plugin | templates | sources | notes |
 |---|---|---|---|
 | `tsregistry/plugin.ts` (`registry`) | one per enabled row of `GET /indicators/registry`: `S:…`, `AREV:…`, `KREV:krev01:p`, `TS:…` | one per binding, on the wire its row names | every server indicator; see "The registry plugin" below |
-| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per binding: the server's answer (`GET /mtf/graph`) for the timeframes drawn, the roots and the largest step -- every signal at the instant it became knowable, and the graph's nodes and entry stars as an auxiliary array -- in an `MtfGraphStore` keyed by those settings, its windows absolute instants | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay; the server builds and caches signals and graphs (wdashboard-server 0.56.0), the template only places them on the chart's bars; in a bar replay the read at the next landing is warmed on the server before the press (`warm`) |
+| `mtf/plugin.ts` | `MTF:arev21`, `MTF:arev21_outlier_rank_90`, `MTF:arev21_outlier_rank_85` (one plugin per `mtf/overlays.ts` entry) | one per binding: the server's answer (`GET /mtf/graph`) for the timeframes drawn, the roots and the largest step -- every signal at the instant it became knowable, and the graph's nodes and entry stars as an auxiliary array -- in an `MtfGraphStore` keyed by those settings, its windows absolute instants | settings per pane (`mtf`, or `mx.<id>`), the graph on the rank-85 overlay; the server builds and caches signals and graphs (wdashboard-server 0.56.0), the template only places them on the chart's bars; in a bar replay the read at the next landing is warmed on the server before the press (`warm`); a timeframe the server cannot read (0.60.0) leaves the others' marks, no graph, and the page's `problem` -- the legend's ⚠ -- while "hide signals outside the graph" stands down |
 | `mtf01/plugin.ts` | `MTF01:mtf01` | one: the cascade's events with its trades as an auxiliary array | |
 | `arevlab/plugin.ts` | `LAB:arev` | one per shown AREV generation (the registry's own `storedSource`, reaching back exactly the rule's window), plus a bar source while any generation uses the prior | several generations' `p` in one sub-pane, each with the fixed level or a client-side rank/median/prior over a window of DAYS; every bar with a usable `p` is compared unless `samplesOnly`; per-pane settings, own panel; the quantile, the band and the entry rule are locked to the server's by `arevlab/fixtures/rules_parity.json` |
 | `arev21div/plugin.ts` | `DIV:arev21` (sub-pane), `DIV:arev21:price` (price pane) | one: the registry's own arev21 `storedSource`, unmodified -- the AREV21 pane's store, key and all, so beside one it costs no request | where price and arev21's `p` disagree at a swing (a lower low with a higher `p` is `bull`, a higher high with a lower `p` `bear`; the hidden pair on param `hidden`), computed entirely in the browser from the pane's own bars in `calc`; swings strict on `left` (10, arev21's lookback, so every swing is a sample bar) and confirmed by `right` (5), each compared with the swing immediately before it; the arrow is on the CONFIRMING bar and a line joins the two swings in each pane (thick dotted by default); rule, line style, width and colours are one per-pane config (`paneConfigs`), shared by both templates and persisted as `PersistedPane.dv`, so an edit recomputes or redraws without refetching; calcParams stay empty; no server change |
