@@ -1,4 +1,5 @@
 import type { SimOrder, SimTrade } from '../trading/api'
+import { rangeReaches } from './engine'
 import { type CandleGrid, fromWall, toWall } from './timeframes'
 
 // PURE. Advance planning: given the cursor, what the user asked for, the next alert found
@@ -68,7 +69,10 @@ interface Band {
 /** Whether a candle can interact with anything working: does its band reach a pending
  * limit/stop's trigger, or an open trade's stop loss / take profit -- on the side that
  * matters (a buy triggers on the ask, a long's protection on the bid; sells/shorts the
- * reverse). Pure; the caller decides to descend to a finer timeframe on `true`. */
+ * reverse). Pure; the caller decides to descend to a finer timeframe on `true`.
+ *
+ * A trade's levels are tested as the engine tests them, within its tolerance (`rangeReaches`);
+ * a resting order's trigger exactly, as the engine fills it. */
 export function intersectsWorking(band: Band, orders: readonly SimOrder[], trades: readonly SimTrade[], symbol: string): boolean {
   for (const o of orders) {
     if (o.symbol !== symbol || o.status !== 'pending' || o.price === null) continue
@@ -78,19 +82,17 @@ export function intersectsWorking(band: Band, orders: readonly SimOrder[], trade
   for (const t of trades) {
     if (t.symbol !== symbol || t.closedAt !== null) continue
     const [lo, hi] = t.side === 'buy' ? [band.bidLow, band.bidHigh] : [band.askLow, band.askHigh]
-    if (t.stopLoss !== null && t.stopLoss >= lo && t.stopLoss <= hi) return true
-    if (t.takeProfit !== null && t.takeProfit >= lo && t.takeProfit <= hi) return true
+    if (t.stopLoss !== null && rangeReaches(t.stopLoss, lo, hi)) return true
+    if (t.takeProfit !== null && rangeReaches(t.takeProfit, lo, hi)) return true
     // Exit management (engine.ts): a milestone or a breakeven trigger inside the band, or a trail
     // the band would move -- finer bars put the milestone at its bar and the trail on finer closes.
     const d = t.side === 'buy' ? 1 : -1
     for (const m of t.milestones ?? []) {
       if (m.reachedAt !== null) continue
-      const level = t.entryPrice + d * m.distance
-      if (level >= lo && level <= hi) return true
+      if (rangeReaches(t.entryPrice + d * m.distance, lo, hi, t.entryPrice)) return true
     }
     if (t.breakeven && !t.breakeven.done) {
-      const level = t.entryPrice + d * t.breakeven.trigger
-      if (level >= lo && level <= hi) return true
+      if (rangeReaches(t.entryPrice + d * t.breakeven.trigger, lo, hi, t.entryPrice)) return true
     }
     const trail = t.trailingStop
     if (trail && (trail.best === null || (d > 0 ? hi > trail.best : lo < trail.best))) return true

@@ -8,6 +8,9 @@
 //   left op 30          ->  { field: <left>, op, value: 30 }
 //   left op right       ->  { field: '<left> - <right>', op, value: 0 }   (a derived field)
 //   left inside [a, b]  ->  { field: <left>, op: 'inside', value: [a, b] }
+//   time of day inside [22:00, 06:00]
+//                       ->  { any: [{ field: <left>, op: '>=', value: 22:00 },
+//                                   { field: <left>, op: '<=', value: 06:00 }] }
 //   signal is long      ->  { field: <signal>, op: '==', value: 'long' }
 //
 // Comparing two series through their difference is exact for every operator offered against
@@ -187,6 +190,17 @@ function leaf(node: RuleLeaf, use: (operand: Operand) => string, fields: Map<str
   }
   if (op === 'inside' || op === 'outside') {
     if (!('band' in right)) throw new RuleError(`'${OP_WORDS[op]}' takes a low and a high`)
+    const [from, to] = right.band
+    // A time of day goes round the clock: "between 22:00 and 06:00" runs through midnight. The
+    // condition language puts a band's ends in order (an RSI band typed 70-30 is 30-70), which
+    // turned that window into 06:00-22:00, the hours it was meant to leave out. A window that
+    // starts later than it ends is the two pieces either side of midnight, both ends included
+    // as in any band.
+    if (node.left.kind === 'time' && node.left.field === 'minute' && from > to) {
+      return op === 'inside'
+        ? { any: [{ field: left, op: '>=', value: from }, { field: left, op: '<=', value: to }] }
+        : { all: [{ field: left, op: '<', value: from }, { field: left, op: '>', value: to }] }
+    }
     return { field: left, op, value: [...right.band] }
   }
   if (!('value' in right) || !Number.isFinite(right.value)) throw new RuleError(`'${OP_WORDS[op] ?? op}' takes a number`)

@@ -178,11 +178,6 @@ export function createLabPlugin(options: LabPluginOptions = {}): IndicatorPlugin
       const id = strategy.id
       const symbol = `${ctx.vendor}:${ctx.ticker}`
       const key = `lab|${id}|${symbol}|${pane.trades ? 'sim' : 'nosim'}`
-      const durationMs = (code: string): number => {
-        const m = /^(\d+)([smhDWMY])$/.exec(code)
-        const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, D: 86_400_000, W: 604_800_000, M: 2_592_000_000, Y: 31_536_000_000 }
-        return m ? Number(m[1]) * unit[m[2]] : 60_000
-      }
       const source: SourceSpec<RunPoint> = {
         id: 'run',
         key,
@@ -190,7 +185,9 @@ export function createLabPlugin(options: LabPluginOptions = {}): IndicatorPlugin
         // The pane's loaded bars, as absolute instants: a run is the same whichever timeframe asks.
         window: (chartRange) => ({
           from: grid.fromWire(ctx.interval, chartRange.from),
-          to: Math.min(now(), grid.fromWire(ctx.interval, chartRange.to) + durationMs(ctx.interval))
+          // Through the close of the last loaded bar, from the schedule (a bar's open plus its
+          // nominal length overshoots a weekly or monthly close).
+          to: Math.min(now(), grid.end(ctx.interval, grid.fromWire(ctx.interval, chartRange.to)))
         }),
         fetch: async (range) => {
           // The SAVED strategy as it is now: a save elsewhere re-runs it (`watchers`).
