@@ -5,6 +5,7 @@ import { MTF01_GENERATION, type Mtf01Event } from './api'
 import { isMtf01Indicator, registerMtf01Indicators } from './templates'
 import { Mtf01Store } from './store'
 import { phaseLabel } from '../plugins/legend'
+import { gridFor } from '../replay/timeframes'
 
 // mtf01 as a client plugin: one sub-pane template over one source, and that source reads
 // TWO kinds of row from one response -- the cascade events in `points`, the trades they
@@ -39,6 +40,10 @@ export function createMtf01Plugin(): IndicatorPlugin {
       // Not yet settable from the pane's settings; the server picks the most recently
       // active cascade when none is named, and echoes back which it chose.
       const cascade: string | null = null
+      // The pane's instrument's own candle grid, as plain data: the template places a context's
+      // end (an instant) on the bar that was open then, which from 1D up is not the bar whose
+      // wire label precedes it.
+      const schedule = gridFor(ctx.symbol)?.schedule ?? null
       return {
         sources: [
           {
@@ -63,6 +68,7 @@ export function createMtf01Plugin(): IndicatorPlugin {
           }
         ],
         label: (state: BindingState) => phaseLabel(base, [state.sources[0]?.store]) ?? base,
+        extendData: () => ({ chartInterval: ctx.interval, schedule }),
         yAxisGap: AXIS_GAP
       }
     }
