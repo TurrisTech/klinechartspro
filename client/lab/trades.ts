@@ -27,7 +27,7 @@
 
 import type { ReplayBar } from '../replay/cache'
 import { type BidAskBar, Engine, type Event, SimError } from '../replay/engine'
-import type { CandleGrid } from '../replay/timeframes'
+import { type CandleGrid, nominalMs } from '../replay/timeframes'
 import type { LabEntry } from './entries'
 import type { Compiled } from './expr'
 import type { Readings } from './graph'
@@ -148,7 +148,8 @@ export interface SimInput {
   exitRule: (direction: Direction) => ((t: number) => boolean) | null
   /** Beyond the spread; none when absent. */
   costs?: CostSpec
-  /** The instrument's candle grid: where its daily closes fall, for financing. */
+  /** The instrument's candle grid: where its daily closes fall, for financing, and where a time
+   * limit in bars of a chosen timeframe ends. */
   grid?: CandleGrid | null
 }
 
@@ -419,7 +420,7 @@ export function simulate(input: SimInput): SimResult {
         barsHeld: 0
       }
       trades.push(trade)
-      const deadline = exits.maxBars ? deadlineOf(ends, b, exits.maxBars.count, exits.maxBars.interval ? null : entry.signal.durationMs, input.pathMs, exits.maxBars.interval) : null
+      const deadline = exits.maxBars ? deadlineOf(exits.maxBars, entry.signal.durationMs, t, ends, b, input.pathMs, input.grid ?? null) : null
       open.set(engineId, { trade, engineId, bestClose: mid, breakeven: false, trailing: false, deadline })
     }
   }
@@ -429,17 +430,30 @@ export function simulate(input: SimInput): SimResult {
   return { trades, skipped, equity, stats: tradeStats(trades, sizing.balance) }
 }
 
-/** When a time exit falls: `count` bars of the entry's timeframe (or of `interval`) after the
- * path bar `b` the trade opened on, counted in path bars. */
-function deadlineOf(ends: readonly number[], b: number, count: number, entryMs: number | null, pathMs: number, interval: string | null): number | null {
-  let ms = entryMs
-  if (ms === null && interval) {
-    const m = /^(\d+)([smhDW])$/.exec(interval)
-    const unit: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, D: 86_400_000, W: 604_800_000 }
-    ms = m ? Number(m[1]) * unit[m[2]] : null
-  }
-  if (ms === null) return null
-  const steps = Math.max(1, Math.round((count * ms) / pathMs))
+/** When a time exit falls, for a trade opened at `t`, the close of path bar `b`.
+ *
+ * In bars of a timeframe the user chose: what a replay step of that many bars means
+ * (`advanceTarget`), the close of the candle the entry is inside and then each following close,
+ * all read from the instrument's schedule. So "1 bar of 1M" closes with the month the trade opened
+ * in, and 2 bars of 1D on an equity are two session closes. This used to count nominal lengths in
+ * path bars, which made a week 7 trading days on FX and a day about 3.5 sessions on an equity,
+ * and it read no `M` at all, so a monthly limit never closed anything.
+ *
+ * In bars of the entry's own timeframe: an entry is made at one of that timeframe's closes, so
+ * `count` of its lengths later, counted in path bars, is the same instant. That count is also the
+ * fallback when no grid is known. */
+function deadlineOf(
+  limit: { count: number; interval: string | null },
+  entryMs: number,
+  t: number,
+  ends: readonly number[],
+  b: number,
+  pathMs: number,
+  grid: CandleGrid | null
+): number | null {
+  if (limit.interval && grid) return grid.advanceTarget(limit.interval, t, limit.count)
+  const ms = limit.interval ? nominalMs(limit.interval) : entryMs
+  const steps = Math.max(1, Math.round((limit.count * ms) / pathMs))
   const at = b + steps
   return at < ends.length ? ends[at] : null
 }

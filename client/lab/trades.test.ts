@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { ReplayBar } from '../replay/cache'
 import type { LabEntry } from './entries'
 import type { LabSignal, Readings } from './graph'
+import { type CandleGrid, FX_GRID } from '../replay/timeframes'
 import { defaultExits, defaultSizing, type ExitSpec, type Sizing } from './model'
 import { simulate, type SimInput } from './trades'
 
@@ -39,12 +40,13 @@ function entry(at: number, direction: 'long' | 'short', interval = '1m'): LabEnt
 
 const readings: Readings = { pip: PIP, atr: () => 0.001, ind: () => undefined }
 
-function run(bars: ReplayBar[], entries: LabEntry[], exits: Partial<ExitSpec> = {}, sizing: Partial<Sizing> = {}, exitRule?: (t: number) => boolean) {
+function run(bars: ReplayBar[], entries: LabEntry[], exits: Partial<ExitSpec> = {}, sizing: Partial<Sizing> = {}, exitRule?: (t: number) => boolean, path: { ms: number; grid: CandleGrid | null } = { ms: M, grid: null }) {
   const input: SimInput = {
     symbol: 'oanda:EURUSD',
     entries,
     bars,
-    pathMs: M,
+    pathMs: path.ms,
+    grid: path.grid,
     exits: { ...defaultExits(), maxBars: null, ...exits },
     sizing: { ...defaultSizing(), mode: 'units', units: 10_000, ...sizing },
     pip: PIP,
@@ -107,6 +109,39 @@ describe('management at the close', () => {
     expect(trade.reason).toBe('time')
     expect(trade.closedAt).toBe(bars[2].end)
     expect(trade.barsHeld).toBe(2)
+  })
+
+  test("a time exit in bars of a chosen timeframe closes on that timeframe's closes", () => {
+    // FX daily path bars from Thu 2026-01-15 for ten weeks, on the FX week: a day opens 17:00 New
+    // York the evening before and the weekend belongs to no candle.
+    const bars: ReplayBar[] = []
+    for (let open = FX_GRID.start('1D', Date.UTC(2026, 0, 15, 12)); bars.length < 50; open = FX_GRID.nextStart('1D', open)) {
+      const half = SPREAD / 2
+      const side = (d: number) => ({ o: 1.1 + d, h: 1.1 + d, l: 1.1 + d, c: 1.1 + d })
+      bars.push({ open, end: FX_GRID.end('1D', open), date: open, o: 1.1, h: 1.1, l: 1.1, c: 1.1, v: 1, bid: side(-half), ask: side(half) })
+    }
+    const daily = { ms: 86_400_000, grid: FX_GRID }
+    const at = bars[0].end // Thu 2026-01-15 17:00 New York
+    const closeOf = (count: number, interval: string) => run(bars, [entry(at, 'long', '1D')], { stop: null, target: null, maxBars: { count, interval } }, {}, undefined, daily).trades[0]
+    const ny = (ms: number | null) => new Date((ms as number) - 5 * 3_600_000).toISOString().slice(0, 16)
+
+    // The month it opened in closes 17:00 on its last market day, Fri 30 January.
+    expect(closeOf(1, '1M').reason).toBe('time')
+    expect(ny(closeOf(1, '1M').closedAt)).toBe('2026-01-30T17:00')
+    expect(ny(closeOf(2, '1M').closedAt)).toBe('2026-02-27T17:00')
+    // A week closes Friday 17:00: one bar is this week's close, two the next one's -- not 7 or
+    // 14 trading days.
+    expect(ny(closeOf(1, '1W').closedAt)).toBe('2026-01-16T17:00')
+    expect(ny(closeOf(2, '1W').closedAt)).toBe('2026-01-23T17:00')
+    // Days are market days: two from Thursday's close are Friday's and Monday's.
+    expect(ny(closeOf(2, '1D').closedAt)).toBe('2026-01-19T17:00')
+  })
+
+  test('without a grid a chosen timeframe still ends, by its nominal length', () => {
+    const bars = Array.from({ length: 50 }, (_, i) => ({ ...flat(i), open: T0 + i * 86_400_000, end: T0 + (i + 1) * 86_400_000, date: T0 + i * 86_400_000 }))
+    const [trade] = run(bars, [entry(bars[0].end, 'long')], { stop: null, target: null, maxBars: { count: 1, interval: '1M' } }, {}, undefined, { ms: 86_400_000, grid: null }).trades
+    expect(trade.reason).toBe('time')
+    expect(trade.barsHeld).toBe(30)
   })
 
   test('breakeven: the stop moves to the entry and the trade is then stopped there', () => {
