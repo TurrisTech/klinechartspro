@@ -250,3 +250,35 @@ describe('labFigures', () => {
     expect(labFigures(config).map((f) => f.key)).toEqual(['arev21_p'])
   })
 })
+
+describe('calc', () => {
+  test('the same lab moved to another symbol reads the other store, at any revision', async () => {
+    const { getIndicatorClass } = await import('klinecharts')
+    const { registerLabIndicator } = await import('./templates')
+    const { storeFor } = await import('../plugins/store')
+    const { storeFactory } = await import('../tsregistry/store')
+    registerLabIndicator()
+    const template = new (getIndicatorClass(LAB_TEMPLATE_NAME) as new () => { calc: (d: unknown[], i: unknown) => Record<string, unknown>[] })()
+    const H = 3_600_000
+    const T0 = Date.UTC(2026, 9, 1)
+    const bars = Array.from({ length: 5 }, (_, i) => ({ timestamp: T0 + i * H, open: 1, high: 1, low: 1, close: 1, volume: 0 }))
+    // Two stores at the same revision, one holding p 0.6 and the other 0.4.
+    const loaded = (key: string, p: number) => {
+      const store = storeFor(key, storeFactory(null)) as unknown as {
+        ingest: (rows: unknown[], window: { from: number; to: number }) => void
+        setPhase: (phase: string) => void
+        rev: number
+      }
+      store.ingest(bars.map((b) => ({ date: b.timestamp, p, n: 200, prediction: 0, confidence: Math.abs(p - 0.5), atCross: true, signal: null })), { from: T0, to: T0 + 5 * H })
+      store.setPhase('ready')
+      return store
+    }
+    const eur = loaded('arev21|oanda:EURUSD|1h|memo-test', 0.6)
+    const gbp = loaded('arev21|oanda:GBPUSD|1h|memo-test', 0.4)
+    expect(eur.rev).toBe(gbp.rev)
+    const indicator = { id: 'LAB:memo-test', calcParams: [], extendData: { seriesKeys: { arev21: 'arev21|oanda:EURUSD|1h|memo-test' }, rev: 1, config: LAB_DEFAULTS } }
+    expect(template.calc(bars.slice(), indicator).map((v) => v.arev21_p)).toEqual([0.6, 0.6, 0.6, 0.6, 0.6])
+    indicator.extendData = { seriesKeys: { arev21: 'arev21|oanda:GBPUSD|1h|memo-test' }, rev: 2, config: LAB_DEFAULTS }
+    expect(template.calc(bars.slice(), indicator).map((v) => v.arev21_p)).toEqual([0.4, 0.4, 0.4, 0.4, 0.4])
+  })
+})

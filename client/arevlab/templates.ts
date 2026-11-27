@@ -87,7 +87,9 @@ export function labFigures(config: LabConfig): IndicatorFigure<LabValue>[] {
 
 // calc is the expensive half -- a rolling quantile over every loaded sample -- and klinecharts
 // asks for it whenever shouldUpdate says so, so one generation's result is kept while neither
-// its store nor its settings nor the bars changed. Bounded crudely: an entry per lab on the
+// its store nor its settings nor the bars changed. "Its store" is which store as well as its
+// revision: the same lab moved to another symbol or timeframe reads another store, which can
+// stand at the same revision, and a stamp without the key served the old symbol's values. Bounded crudely: an entry per lab on the
 // wall per generation, and a wall that has churned through more than this simply recomputes.
 const MEMO_LIMIT = 64
 const memo = new Map<string, { stamp: string; result: GenerationResult }>()
@@ -104,7 +106,7 @@ const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<LabValue
     if (!store) continue
     const settings = extend.config.generations[generation]
     const usesBars = settings.signals === 'prior'
-    const stamp = JSON.stringify([store.rev, settings, usesBars ? (barStore?.rev ?? -1) : null])
+    const stamp = JSON.stringify([key, store.rev, settings, usesBars ? [extend.seriesKeys[BARS_SOURCE_ID] ?? null, barStore?.rev ?? -1] : null])
     const memoKey = `${indicator.id}|${generation}`
     const held = memo.get(memoKey)
     if (held?.stamp === stamp) {
