@@ -7,6 +7,7 @@ import {
   closedShareOfBalance,
   closedTrades,
   equitySeries,
+  maxDrawdown,
   markToMarket,
   openAt,
   realisedInAccount
@@ -66,6 +67,20 @@ describe('the balance through time', () => {
   test('a server balance that does not re-add from the deposit is still the newest figure', () => {
     // The anchor is the reported balance, so the first figure moves with it, not the last.
     expect(balanceSeries(snapshot(trades, 10_075), [0, 9 * HOUR])).toEqual([10_005, 10_075])
+  })
+})
+
+describe('max drawdown', () => {
+  test('the deepest fall as a fraction of its high, with that fall in money', () => {
+    // 10,000 -> 7,000 is 30% (3,000); 20,000 -> 15,000 is more money (5,000) but 25%.
+    expect(maxDrawdown(10_000, [-3_000, 13_000, -5_000])).toEqual({ amount: 3_000, fraction: 0.3 })
+    // The other way round, the later fall is the deeper one.
+    expect(maxDrawdown(10_000, [-1_000, 11_000, -8_000])).toEqual({ amount: 8_000, fraction: 0.4 })
+  })
+
+  test('no closes is no figure; a balance that never fell is 0', () => {
+    expect(maxDrawdown(10_000, [])).toBeNull()
+    expect(maxDrawdown(10_000, [500, 0, 250])).toEqual({ amount: 0, fraction: 0 })
   })
 })
 

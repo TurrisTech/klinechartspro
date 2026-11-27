@@ -33,6 +33,7 @@ import type { Compiled } from './expr'
 import type { Readings } from './graph'
 import type { CostSpec, Direction, ExitSpec, Level, Sizing } from './model'
 import { lastAtOrBefore } from './sorted'
+import { maxDrawdown } from '../trading/ledger'
 
 export type ExitReason = 'stop' | 'target' | 'breakeven' | 'trail' | 'rule' | 'time' | 'opposite' | 'end'
 
@@ -465,19 +466,12 @@ export function tradeStats(trades: readonly LabTrade[], balance: number): TradeS
   const grossWin = wins.reduce((a, t) => a + (t.pnl as number), 0)
   const grossLoss = -losses.reduce((a, t) => a + (t.pnl as number), 0)
   const rs = done.map((t) => t.r).filter((r): r is number => r !== null)
-  let peak = balance
-  let equity = balance
-  let maxDrawdown = 0
-  for (const t of [...done].sort((a, b) => (a.closedAt as number) - (b.closedAt as number))) {
-    equity += t.pnl as number
-    if (equity > peak) peak = equity
-    if (peak > 0) maxDrawdown = Math.max(maxDrawdown, (peak - equity) / peak)
-  }
+  const byClose = [...done].sort((a, b) => (a.closedAt as number) - (b.closedAt as number))
   const byReason: Partial<Record<ExitReason, number>> = {}
   for (const t of done) if (t.reason) byReason[t.reason] = (byReason[t.reason] ?? 0) + 1
   const sum = (f: (t: LabTrade) => number): number => done.reduce((a, t) => a + f(t), 0)
   return {
-    rs: [...done].sort((a, b) => (a.closedAt as number) - (b.closedAt as number)).flatMap((t) => (t.r === null ? [] : [t.r])),
+    rs: byClose.flatMap((t) => (t.r === null ? [] : [t.r])),
     costs: { commission: sum((t) => t.commission), financing: sum((t) => t.financing), slippage: sum((t) => t.slippage) },
     capped: done.filter((t) => t.capped).length,
     trades: done.length,
@@ -489,7 +483,7 @@ export function tradeStats(trades: readonly LabTrade[], balance: number): TradeS
     totalR: rs.length > 0 ? rs.reduce((a, b) => a + b, 0) : null,
     avgR: rs.length > 0 ? rs.reduce((a, b) => a + b, 0) / rs.length : null,
     profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? Number.POSITIVE_INFINITY : null,
-    maxDrawdown,
+    maxDrawdown: maxDrawdown(balance, byClose.map((t) => t.pnl as number))?.fraction ?? 0,
     avgBarsHeld: done.length > 0 ? done.reduce((a, t) => a + t.barsHeld, 0) / done.length : null,
     byReason
   }

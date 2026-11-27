@@ -74,6 +74,13 @@ describe('replayResults', () => {
     expect(r.maxDrawdown?.pct).toBeCloseTo((350 / 10_200) * 100)
   })
 
+  test('deepest as a percentage, as the Strategy Lab reports it, not the largest in money', () => {
+    // 10,000 -> 7,000 is 30% (3,000); 20,000 -> 15,000 is more money (5,000) but 25%.
+    const trades = [trade('a', -3_000, T0 + H), trade('b', 13_000, T0 + 2 * H), trade('c', -5_000, T0 + 3 * H)]
+    const r = replayResults(snapshot(trades, 15_000), T0, T0 + 4 * H)
+    expect(r.maxDrawdown).toEqual({ amount: 3_000, pct: 30 })
+  })
+
   test('only winners: an infinite profit factor and a drawdown of nothing', () => {
     const r = replayResults(snapshot([trade('1', 10, T0 + H), trade('2', 20, T0 + 2 * H)], 10_030), T0, T0 + 3 * H)
     expect(r.profitFactor).toBe(Number.POSITIVE_INFINITY)
