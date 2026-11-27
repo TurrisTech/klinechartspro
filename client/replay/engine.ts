@@ -49,6 +49,22 @@ function tolerance(price: number): number {
   return REL_TOL * Math.max(1, Math.abs(price))
 }
 
+/** Whether a price range `[low, high]` reaches `level` within the tolerance this engine compares a
+ * trade's stop, target and thresholds with. `basis` is the price that tolerance is a part of: the
+ * level itself, or the entry for a level the engine measures from the entry (a milestone, the
+ * breakeven trigger).
+ *
+ * For a caller deciding whether a range can act on a trade, which is the replay's refinement
+ * (clock.ts `intersectsWorking`): it must never pass over a level the engine would hit. A trailed
+ * stop can sit an ulp off the decimal it means (1.1019999999999999 for 1.102), and an exact test
+ * there left the candle coarse while the engine still hit the stop on it, stamping the close at
+ * the coarse candle's open. Resting orders trigger exactly (`restingFillPrice`), so they need no
+ * tolerance. */
+export function rangeReaches(level: number, low: number, high: number, basis: number = level): boolean {
+  const tol = tolerance(basis)
+  return level >= low - tol && level <= high + tol
+}
+
 export class SimError extends Error {
   constructor(message: string) {
     super(message)

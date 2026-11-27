@@ -103,6 +103,18 @@ describe('intersectsWorking', () => {
     expect(intersectsWorking(band, [], [trade({ side: 'sell', takeProfit: 1.0992 })], sym)).toBe(true)
     expect(intersectsWorking(band, [], [trade({ side: 'sell', takeProfit: 1.0991 })], sym)).toBe(false)
   })
+  test("a trade's levels are tested within the engine's tolerance, as the engine hits them", () => {
+    // A trailed stop an ulp under 1.099 (1.1052 - 0.0032 is 1.1019999999999999, not 1.102): the
+    // engine's stop test counts it as hit by a bid low of 1.099, so the candle must be refined to
+    // find the bar it is hit on.
+    const ulpUnder = (price: number) => price - Number.EPSILON
+    expect(ulpUnder(1.099) < 1.099).toBe(true)
+    expect(intersectsWorking(band, [], [trade({ side: 'buy', stopLoss: ulpUnder(1.099) })], sym)).toBe(true)
+    expect(intersectsWorking(band, [], [trade({ side: 'sell', takeProfit: ulpUnder(1.0992) })], sym)).toBe(true)
+    // A pip outside is still outside.
+    expect(intersectsWorking(band, [], [trade({ side: 'buy', stopLoss: 1.0989 })], sym)).toBe(false)
+  })
+
   test('other symbols, filled orders and closed trades are ignored', () => {
     expect(intersectsWorking(band, [order({ symbol: 'oanda:GBPUSD', price: 1.1 })], [], sym)).toBe(false)
     expect(intersectsWorking(band, [order({ status: 'filled', price: 1.1 })], [], sym)).toBe(false)
