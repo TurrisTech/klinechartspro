@@ -59,8 +59,8 @@ export function preferencesLoaded(): boolean {
 // One unconditional GET. Separate from loadPreferences() because a conflict resolution must
 // never be served the memoized document (that is the revision it just lost to) nor a GET that
 // was already in flight before the conflict happened — both would replay the same stale
-// If-Match and burn an attempt. Undefined on failure, which flush() reads as "write
-// unconditionally", the same last-write-wins fallback a first-ever save takes.
+// If-Match and burn an attempt. Undefined on failure, which a write reads as "not yet": it
+// holds its changes and tries again later (drain).
 async function read(): Promise<PreferencesDocument | undefined> {
   try {
     const { data } = await apiSend<PreferencesDocument>('GET', '/preferences')
@@ -131,18 +131,56 @@ export function saveStarredTimeframes(starredTimeframes: string[]): void {
   savePreference(STARRED_TIMEFRAMES_KEY, starredTimeframes)
 }
 
+// When the server cannot be reached, a write waits and tries again rather than giving up: the
+// first retry after FIRST_RETRY_MS, each later one twice as long after, up to MAX_RETRY_MS.
+const FIRST_RETRY_MS = 1_000
+const MAX_RETRY_MS = 30_000
+let retryDelay = FIRST_RETRY_MS
+// The scheduled retry, while one is waiting. Resolves once that retry's drain has run.
+let retrying: Promise<void> | null = null
+
+function scheduleRetry(): void {
+  if (retrying) return
+  const delay = retryDelay
+  retryDelay = Math.min(retryDelay * 2, MAX_RETRY_MS)
+  retrying = new Promise((resolve) => {
+    setTimeout(() => {
+      retrying = null
+      resolve(drain())
+    }, delay)
+  })
+}
+
 // Writes accumulated changes until there are none left, one PUT at a time. Re-checking
 // `pending` after each write is what makes a save made DURING a write safe: it joins the
 // running loop instead of racing it, and the debounce timer that scheduled it becomes a no-op.
+//
+// Nothing is written until the document has been read. The PUT replaces the whole stored
+// document, so one sent over a document this page never saw carries only the keys it changed
+// and deletes every other one: the workspaces, the alerts, the strategies. A boot whose GET
+// failed (a 503, a dropped connection) used to do exactly that on its first save. Now the
+// changes wait, and each attempt reads first.
 function drain(): Promise<void> {
   if (writing) return writing
   writing = (async () => {
     try {
       while (Object.keys(pending).length > 0) {
+        if (!known) known = await read()
+        if (!known) {
+          scheduleRetry()
+          return
+        }
         const changes = pending
         pending = {}
-        await flush(changes)
+        if (!(await flush(changes))) {
+          // Not written, and worth trying again. Anything saved since sits in `pending` and
+          // is newer, so it goes on top.
+          pending = { ...changes, ...pending }
+          scheduleRetry()
+          return
+        }
       }
+      retryDelay = FIRST_RETRY_MS
     } finally {
       writing = null
     }
@@ -150,37 +188,53 @@ function drain(): Promise<void> {
   return writing
 }
 
-/** Exposed for tests: resolves once no write is in flight and nothing is pending. */
-export function settled(): Promise<void> {
-  return writing ?? Promise.resolve()
+/** Exposed for tests: resolves once no write is in flight or waiting to be retried. */
+export async function settled(): Promise<void> {
+  while (writing || retrying) await (writing ?? retrying)
+}
+
+// A failure the same write may get past by waiting: no answer at all, a lapsed session (the
+// login it prompts sets a new token), too many requests, or a server error. Any other refusal
+// (400, 413) would be repeated word for word.
+function transient(err: unknown): boolean {
+  if (!(err instanceof OhlcvApiError)) return true
+  return err.status === 401 || err.status === 429 || err.status >= 500
 }
 
 // Resolves a 412 by re-reading the current document and replaying the same changes on top of
 // it — last-write-wins is an acceptable resolution for one user's own preferences, and
 // replaying only the KEYS this flush carries is what lets two devices editing different
 // workspaces merge instead of clobbering each other (see workspaces/store.ts).
-async function flush(changes: Record<string, unknown>): Promise<void> {
+//
+// False when the changes were not written and should be tried again. True when they were
+// written, or refused in a way a retry would not change; those are dropped, as before.
+async function flush(changes: Record<string, unknown>): Promise<boolean> {
   for (let attempt = 1; ; attempt += 1) {
-    const headers: Record<string, string> = {}
-    // No If-Match at all is the deliberate first-ever-write path: the server treats an absent
-    // If-Match as an unconditional upsert. Quoting a revision we never read would be a lie.
-    if (known) headers['If-Match'] = `"${known.revision}"`
-
+    // Always conditional. There is no first-ever-write exception: a user with nothing stored
+    // reads as revision 0, and "0" is the server's create (appstate.py).
+    if (!known) return false
     try {
       const { data } = await apiSend<PreferencesDocument>('PUT', '/preferences', {
-        body: { data: { ...(known?.data ?? {}), ...changes } },
-        headers
+        body: { data: { ...known.data, ...changes } },
+        headers: { 'If-Match': `"${known.revision}"` }
       })
       known = data
-      return
+      return true
     } catch (err) {
+      if (transient(err)) {
+        console.warn('[preferences] save failed, will retry', err)
+        return false
+      }
       const conflict = err instanceof OhlcvApiError && err.status === 412
       if (!conflict || attempt >= MAX_WRITE_ATTEMPTS) {
         console.error('[preferences] save failed', err)
-        return
+        return true
       }
-      // Adopt whatever the winning writer stored, then replay `changes` on top of it.
-      known = await read()
+      // Adopt whatever the winning writer stored, then replay `changes` on top of it. If that
+      // read fails, keep the copy we have: the retry's PUT then 412s once more and re-reads.
+      const fresh = await read()
+      if (!fresh) return false
+      known = fresh
     }
   }
 }

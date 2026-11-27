@@ -258,6 +258,17 @@ describe('boot', () => {
     }
   })
 
+  test('writes nothing when the server copy could not be read', () => {
+    // The set on screen is then this device's mirror or a stand-in default. Writing its index
+    // would replace the user's real one with it.
+    for (const stored of [null, { version: 1, order: ['b', 'a'], lastActive: 'a' }]) {
+      const { store, indexWrites } = bootSetup('a')
+      store.boot(stored, false)
+      expect(indexWrites, JSON.stringify(stored)).toEqual([])
+      expect(local.get('wd.activeWorkspace')).toBe('a')
+    }
+  })
+
   test('a switch still writes the index', () => {
     const { store, indexWrites } = bootSetup('a')
     store.boot({ version: 1, order: ['a', 'b'], lastActive: 'a' })

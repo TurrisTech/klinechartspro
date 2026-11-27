@@ -6,7 +6,7 @@ import {
   layoutSignature,
   type PersistedLayout
 } from '../layout'
-import { loadPreferences, removePreference, savePreference } from '../preferences'
+import { loadPreferences, preferencesLoaded, removePreference, savePreference } from '../preferences'
 
 // A WORKSPACE is one saved wall: its layout preset, every pane's symbol/timeframe/indicators
 // (with their parameters, and where that pane was looking), and the sync toggles. A user keeps several —
@@ -337,9 +337,14 @@ export class WorkspaceStore {
    * an id gone or added or moved, or a `lastActive` that names no workspace. Opening the
    * dashboard writes nothing otherwise: `lastActive` is the seed for a device with no choice of
    * its own, and moves when the user switches (`setActive`), not when a device merely opens the
-   * workspace it last chose. */
-  boot(stored: WorkspaceIndex | null): void {
+   * workspace it last chose.
+   *
+   * `serverRead` false: the server's copy could not be read, so `stored` is this device's
+   * mirror or nothing, and what the server holds is unknown. Nothing is written then. An index
+   * written from here would replace the stored one with a set this page merely failed to see. */
+  boot(stored: WorkspaceIndex | null, serverRead = true): void {
     this.remember(this.activeId)
+    if (!serverRead) return
     const order = this.workspaces.map((w) => w.id)
     const describes =
       stored !== null &&
@@ -519,7 +524,10 @@ async function build(): Promise<WorkspaceStore> {
   // /preferences on the critical path of simply opening the dashboard: `boot` writes the index
   // only where the one read back is stale. A defaulted set has to be written whole, or it would
   // be re-derived (with a different id, so a second device would see a duplicate) on every visit.
-  store.boot(index)
-  if (fresh) store.persistAll()
+  // Neither is written when the server's copy could not be read: the set on screen is then a
+  // stand-in, and writing it would replace the user's real index with it.
+  const serverRead = remote === null || preferencesLoaded()
+  store.boot(index, serverRead)
+  if (fresh && serverRead) store.persistAll()
   return store
 }
