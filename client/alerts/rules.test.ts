@@ -107,6 +107,25 @@ describe('graph entries and the clock', () => {
     expect(compile({ left: weekday, op: '==', right: { label: 'Mon' } }).condition).toEqual({ field: operandKey(weekday), op: '==', value: 'Mon' })
   })
 
+  test('a time window that starts later than it ends runs through midnight', () => {
+    const inside = compile({ left: nyMinute, op: 'inside', right: { band: [22 * 60, 6 * 60] } }).condition
+    const outside = compile({ left: nyMinute, op: 'outside', right: { band: [22 * 60, 6 * 60] } }).condition
+    const at = (hh: number, mm = 0) => ({ [operandKey(nyMinute)]: { value: hh * 60 + mm } })
+    // Both ends belong to the window, as in any band.
+    for (const [hh, mm] of [[22, 0], [23, 0], [0, 0], [3, 30], [6, 0]]) {
+      expect(evaluate(inside, at(hh, mm), null), `${hh}:${mm} inside`).toBe(true)
+      expect(evaluate(outside, at(hh, mm), null), `${hh}:${mm} outside`).toBe(false)
+    }
+    for (const [hh, mm] of [[6, 1], [12, 0], [21, 59]]) {
+      expect(evaluate(inside, at(hh, mm), null), `${hh}:${mm} inside`).toBe(false)
+      expect(evaluate(outside, at(hh, mm), null), `${hh}:${mm} outside`).toBe(true)
+    }
+    // A window inside one day, and a number band typed high-first, are unchanged.
+    expect(compile({ left: nyMinute, op: 'inside', right: { band: [480, 660] } }).condition).toEqual({ field: operandKey(nyMinute), op: 'inside', value: [480, 660] })
+    expect(compile({ left: rsi, op: 'inside', right: { band: [70, 30] } }).condition).toEqual({ field: operandKey(rsi), op: 'inside', value: [30, 70] })
+    expect(describeRule({ left: nyMinute, op: 'inside', right: { band: [22 * 60, 6 * 60] } })).toBe('time of day (America/New_York) at 5m closes is between 22:00 and 06:00')
+  })
+
   test('refuses a graph that cannot have an entry there, and a clock that is not one', () => {
     const refused: Rule[] = [
       { left: { ...entry, timeframes: ['1h', '1D'] }, op: '==', right: { label: ANY_LABEL } },
