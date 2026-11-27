@@ -35,6 +35,11 @@ const server = {
   maxInFlight: 0,
   puts: 0,
   conflicts: 0,
+  /** How many of the next GETs answer 503, and likewise PUTs. */
+  getFailures: 0,
+  putFailures: 0,
+  /** Every PUT's If-Match, null where it carried none. */
+  ifMatches: [] as (string | null)[],
   /** Runs before each PUT is applied — lets a test move the revision under the client. */
   beforePut: null as null | (() => void)
 }
@@ -46,6 +51,9 @@ function resetServer(overrides: Partial<typeof server> = {}): void {
     maxInFlight: 0,
     puts: 0,
     conflicts: 0,
+    getFailures: 0,
+    putFailures: 0,
+    ifMatches: [],
     beforePut: null,
     ...overrides
   })
@@ -61,7 +69,13 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       headers: { 'Content-Type': 'application/json' }
     })
 
-  if (method === 'GET') return json(200, { data: server.data, revision: server.revision })
+  if (method === 'GET') {
+    if (server.getFailures > 0) {
+      server.getFailures -= 1
+      return json(503, { code: 'unavailable', detail: 'appstate database unreachable' })
+    }
+    return json(200, { data: server.data, revision: server.revision })
+  }
 
   server.puts += 1
   server.inFlight += 1
@@ -70,6 +84,11 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (server.putLatencyMs > 0) await sleep(server.putLatencyMs)
     server.beforePut?.()
     const ifMatch = new Headers(init?.headers).get('If-Match')
+    server.ifMatches.push(ifMatch)
+    if (server.putFailures > 0) {
+      server.putFailures -= 1
+      return json(503, { code: 'unavailable', detail: 'appstate database unreachable' })
+    }
     const body = JSON.parse(String(init?.body)) as { data: Record<string, unknown> }
     if (ifMatch !== null) {
       const expected = Number(ifMatch.replace(/"/g, ''))
@@ -169,4 +188,95 @@ test('a conflict that never clears gives up after a bounded number of attempts',
   expect(server.puts).toBe(4)
   expect(server.conflicts).toBe(4)
   expect(errors).toHaveLength(1)
+})
+
+// The tests below each start from a page that has read nothing, so each gets its own copy of the
+// module (bun keys a module by its specifier, query included). `config` is still shared.
+let copies = 0
+async function freshPreferences(): Promise<typeof import('./preferences')> {
+  copies += 1
+  return (await import(`./preferences?copy=${copies}`)) as typeof import('./preferences')
+}
+
+// A failed read or write is logged with console.warn; these tests make them on purpose.
+async function quietly(run: () => Promise<void>): Promise<void> {
+  const realWarn = console.warn
+  console.warn = () => {}
+  try {
+    await run()
+  } finally {
+    console.warn = realWarn
+  }
+}
+
+// The PUT replaces the whole stored document. One sent without having read it carries only the
+// keys it changed, and the server's unconditional upsert stores just those: every workspace, alert
+// and strategy is gone. A boot whose GET failed used to send exactly that on its first save.
+test('a save after a failed read waits for the document instead of replacing it', async () => {
+  await quietly(async () => {
+    resetServer({ getFailures: 3 })
+    server.data = { workspaces: 'theirs', alerts: 'theirs' }
+    server.revision = 20
+    const prefs = await freshPreferences()
+
+    expect(await prefs.loadPreferences()).toEqual({}) // GET 1 fails
+    expect(prefs.preferencesLoaded()).toBe(false)
+
+    prefs.savePreference('starredTimeframes', ['1h'])
+    await sleep(DEBOUNCE_MS + 50) // GET 2 fails: nothing is written, a retry is scheduled
+    expect(server.puts).toBe(0)
+
+    prefs.savePreference('starredTimeframes', ['1h', '4h'])
+    await sleep(DEBOUNCE_MS + 50) // GET 3 fails too
+    expect(server.puts).toBe(0)
+
+    await prefs.settled() // the retry's GET 4 succeeds
+    expect(server.ifMatches).toEqual(['"20"'])
+    expect(server.data).toEqual({ workspaces: 'theirs', alerts: 'theirs', starredTimeframes: ['1h', '4h'] })
+    expect(prefs.preferencesLoaded()).toBe(true)
+  })
+})
+
+test('a conflict whose re-read fails waits too, and never writes unconditionally', async () => {
+  await quietly(async () => {
+    resetServer()
+    server.data = { workspaces: 'theirs' }
+    server.revision = 30
+    const prefs = await freshPreferences()
+    await prefs.loadPreferences()
+
+    // Another tab writes first, and the GET that would adopt its document fails.
+    let moved = false
+    server.beforePut = () => {
+      if (moved) return
+      moved = true
+      server.revision += 1
+      server.data = { workspaces: 'theirs', fromAnotherTab: 'keep me' }
+      server.getFailures = 1
+    }
+
+    prefs.savePreference('mine', 'landed')
+    await sleep(DEBOUNCE_MS + 50)
+    await prefs.settled()
+
+    expect(server.ifMatches).not.toContain(null)
+    expect(server.data).toEqual({ workspaces: 'theirs', fromAnotherTab: 'keep me', mine: 'landed' })
+  })
+})
+
+test('a server error on the write keeps the change and tries it again', async () => {
+  await quietly(async () => {
+    resetServer({ putFailures: 1 })
+    server.data = { workspaces: 'theirs' }
+    server.revision = 40
+    const prefs = await freshPreferences()
+    await prefs.loadPreferences()
+
+    prefs.savePreference('mine', 'landed')
+    await sleep(DEBOUNCE_MS + 50)
+    await prefs.settled()
+
+    expect(server.puts).toBe(2)
+    expect(server.data).toEqual({ workspaces: 'theirs', mine: 'landed' })
+  })
 })
