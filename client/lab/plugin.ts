@@ -18,9 +18,11 @@ import { instrumentKey } from '../instrumentkey'
 // has loaded: its graphs and entries, and -- switched on -- its simulated trades.
 //
 // What a pane reads is the SAVED strategy: an experiment in the lab changes nothing here until it
-// is saved, and a save in another tab of this browser redraws every pane showing that strategy at
-// once (./store.ts announces it). It re-runs every minute as well, so a new entry appears without a
-// reload; the data layer re-reads only the tail of what it holds.
+// is saved, and a save redraws every pane showing that strategy at once -- one made in another tab
+// of this browser once the store has read it again (./store.ts announces it), one made on this page
+// (the Strategy Lab's own chart, whose store is the page's) as it is made. It re-runs every minute
+// as well, so a new entry appears without a reload; the data layer re-reads only the tail of what
+// it holds.
 //
 // One store per strategy and instrument, shared by every pane showing them whatever its
 // timeframe -- a run does not depend on the chart's interval; only where its nodes are drawn does.
@@ -87,7 +89,8 @@ export class RunStore implements SourceStore<RunPoint> {
 }
 
 interface LabPluginOptions {
-  /** The saved strategies; the page's shared store by default. */
+  /** The saved strategies; the page's shared store by default. The Strategy Lab page passes the
+   * store its session edits (client/builtins.ts `BuiltinOptions`). */
   store?: () => Promise<StrategyStore>
   data?: LabData
   now?: () => number
@@ -97,8 +100,12 @@ export function createLabPlugin(options: LabPluginOptions = {}): IndicatorPlugin
   let strategies: StrategyStore | null = null
   const data = options.data ?? new HttpLabData()
   const now = options.now ?? (() => Date.now())
-  /** Who to tell when a strategy is saved elsewhere, by strategy id. */
+  /** Who to tell when a strategy is saved, here or in another tab, by strategy id. */
   const watchers = new Map<string, Set<() => void>>()
+
+  const rerun = (id: string): void => {
+    for (const notify of watchers.get(id) ?? []) notify()
+  }
 
   const resolve = (id: string) => {
     if (!strategies) return null
@@ -151,7 +158,12 @@ export function createLabPlugin(options: LabPluginOptions = {}): IndicatorPlugin
       strategies = await (options.store ?? sharedStrategyStore)()
       strategies.onRemoteChange(async (message) => {
         await strategies?.load(true)
-        for (const notify of watchers.get(message.id) ?? []) notify()
+        rerun(message.id)
+      })
+      // A save on this page is in the store already: no channel brings it (a store never hears
+      // its own), so it is taken here.
+      strategies.onChange((id) => {
+        if (id !== null) rerun(id)
       })
       return [
         {

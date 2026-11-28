@@ -116,7 +116,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export class StrategyStore {
   private rows = new Map<string, Strategy>()
   private order: string[] = []
-  private readonly listeners = new Set<() => void>()
+  private readonly listeners = new Set<(id: string | null) => void>()
   /** Set when the stored set could not be read. Nothing is written then. */
   loadError = ''
   private channel: BroadcastChannel | null = null
@@ -150,7 +150,7 @@ export class StrategyStore {
       else console.warn(`[lab] dropping saved strategy ${id}: it no longer reads`)
     }
     this.order = order.filter((id) => this.rows.has(id))
-    this.emit()
+    this.emit(null)
   }
 
   list(): Strategy[] {
@@ -175,7 +175,7 @@ export class StrategyStore {
     this.persistence.save(`${DOC_PREFIX}${saved.id}`, saved)
     this.persistence.save(INDEX_KEY, { version: INDEX_VERSION, order: this.order })
     this.announce({ kind: 'saved', id: saved.id })
-    this.emit()
+    this.emit(saved.id)
     return saved
   }
 
@@ -186,10 +186,12 @@ export class StrategyStore {
     this.persistence.remove(`${DOC_PREFIX}${id}`)
     this.persistence.save(INDEX_KEY, { version: INDEX_VERSION, order: this.order })
     this.announce({ kind: 'removed', id })
-    this.emit()
+    this.emit(id)
   }
 
-  /** Called with every save or removal made in another tab of this browser. */
+  /** Called with every save or removal made in another tab of this browser. A store never hears
+   * its own (a BroadcastChannel delivers to every OTHER channel of the name, in this page too):
+   * those are `onChange`'s. */
   onRemoteChange(listener: (message: SavedMessage) => void): () => void {
     const channel = this.channel
     if (!channel) return () => {}
@@ -201,7 +203,9 @@ export class StrategyStore {
     return () => channel.removeEventListener('message', handler)
   }
 
-  onChange(listener: () => void): () => void {
+  /** Called with every change this store makes: a save or a removal with its strategy's id, a
+   * read of the stored set with null. */
+  onChange(listener: (id: string | null) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
@@ -220,15 +224,16 @@ export class StrategyStore {
     }
   }
 
-  private emit(): void {
-    for (const listener of this.listeners) listener()
+  private emit(id: string | null): void {
+    for (const listener of this.listeners) listener(id)
   }
 }
 
 let shared: StrategyStore | null = null
 let sharedLoad: Promise<StrategyStore> | null = null
 
-/** The page's store, loaded once (the wall's overlay and alerts read it). */
+/** The page's store, loaded once (the wall's overlay and alerts read it). The Strategy Lab page
+ * makes its own and hands it to its chart's overlay (page.ts), so it too holds one. */
 export function sharedStrategyStore(): Promise<StrategyStore> {
   if (!sharedLoad) {
     shared = new StrategyStore()
