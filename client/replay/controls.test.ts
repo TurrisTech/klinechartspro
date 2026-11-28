@@ -624,7 +624,7 @@ describe('the status line', () => {
     ['a fill', { reason: 'fill', events: [{ kind: 'fill' } as never] }, 'Order filled'],
     ['a stop loss', { reason: 'fill', events: [{ kind: 'fill' }, { kind: 'close', reason: 'stop_loss' }] as never }, 'Stop loss hit'],
     ['a take profit', { reason: 'fill', events: [{ kind: 'close', reason: 'take_profit' } as never] }, 'Take profit hit'],
-    ['a close', { reason: 'fill', events: [{ kind: 'close', reason: 'manual' } as never] }, 'Trade closed'],
+    ['a close', { reason: 'fill', events: [{ kind: 'close', reason: 'manual' } as never] }, 'Closed by hand'],
     ['a watch', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }] }, 'Stopped at watch EURUSD 1.10000'],
     ['several watches on one bar', { reason: 'watch', observed: [{ label: 'EURUSD 1.10000' }, { label: 'b' }, { label: 'c' }] }, 'Stopped at watch EURUSD 1.10000 +2'],
     ['a cancel after walking', { reason: 'cancel', walked: true, bars: [{}, {}, {}] as never }, 'Stopped by you after 3 bars'],

@@ -1,3 +1,4 @@
+import { closeReasonWords } from '../trading/exits'
 import { FigureList } from '../trading/kit'
 import { type GoToMode, type GoToSpec, goToInstant } from './clock'
 import { blocked, describeBlockers, type FollowNotice, undoBlockers } from './follow'
@@ -1150,11 +1151,10 @@ function describeStop(result: AdvanceResult, zone: string, timeframes: readonly 
       const last = [...result.events].reverse().find((e) => e.kind === 'fill' || e.kind === 'close' || e.kind === 'milestone')
       if (last?.kind === 'fill') return 'Order filled'
       if (last?.kind === 'milestone') return `Reached ${last.reason ?? 'a milestone'}`
-      if (last?.reason === 'stop_loss') {
-        const trade = trades?.find((t) => t.id === last.tradeId)
-        return trade?.stopMovedBy === 'trail' ? 'Trailing stop hit' : trade?.stopMovedBy === 'breakeven' ? 'Breakeven stop hit' : 'Stop loss hit'
-      }
-      return last?.reason === 'take_profit' ? 'Take profit hit' : 'Trade closed'
+      if (last?.kind !== 'close') return 'Trade closed'
+      // Named as the trading UI names a close (trading/exits.ts), so the status line and the card agree.
+      const trade = trades?.find((t) => t.id === last.tradeId)
+      return closeReasonWords({ closeReason: (last.reason as SimTrade['closeReason']) ?? null, stopMovedBy: trade?.stopMovedBy ?? null }, true)
     }
     case 'watch': {
       const [first, ...rest] = result.observed

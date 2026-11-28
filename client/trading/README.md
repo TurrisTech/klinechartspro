@@ -354,7 +354,7 @@ in the card's header for a few seconds.
 `touchstart`, `pointerdown`, `click`, `wheel` and `contextmenu` from reaching the chart (a pan, a
 wall seek, the watch menu) but lets `mouseup` and a button-down `mousemove` through (a pan ending
 over the card). And `src/app.css`'s `.klinecharts-pro * { border-color }` loads after
-`client/style.css` at equal specificity: a rule here that colours a border is scoped `.wd-oc …` or
+`client/styles/trading.css` at equal specificity: a rule here that colours a border is scoped `.wd-oc …` or
 `.wd-tk …`. The card's fields stop their keystrokes (but Escape) at the field, since klinecharts
 handles keys on the same container.
 
