@@ -54,7 +54,9 @@ export function createTradeTalkPlugin(): IndicatorPlugin {
   let facilities: PluginFacilities | null = null
 
   /** The legend: the indicator's name, and what is keeping its calendar levels off the chart
-   * when something is. `what` names the part that needs the daily bars. */
+   * when something is. `what` names the part that needs the daily bars. A failed read is the
+   * host's ⚠ beside the ×, with a card saying why, so the legend names the indicator alone
+   * (plugins/legend.ts). */
   const label = (name: string, what: string, clock: SessionClock | null) => (state: BindingState): string => {
     if (clock === null) return `${name} · no schedule for ${what}`
     const store = state.sources[0]?.store
@@ -62,8 +64,6 @@ export function createTradeTalkPlugin(): IndicatorPlugin {
       case 'idle':
       case 'loading':
         return `${name} · ${what} loading`
-      case 'error':
-        return `${name} · ${what} unavailable`
       default:
         return name
     }

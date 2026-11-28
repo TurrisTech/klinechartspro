@@ -139,6 +139,12 @@ describe('the binding', () => {
     expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 0]))?.label(state(null))).toBe('Heath levels')
   })
 
+  test('a failed read is named once, by the host -- the legend says only the name', () => {
+    // The host's ⚠ beside the × and its card say why (plugins/host.ts problemOf).
+    expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1]))?.label(state('error'))).toBe('Heath levels')
+    expect(plugin.bind(ctx('TT:entries', [2, 1, 1, 5, 0, 1]))?.label(state('error'))).toBe('TradeTalk')
+  })
+
   test('an instrument with no schedule reads nothing and says why', () => {
     const noSchedule = { ...SYMBOL, dayGeometry: undefined } as SymbolInfo
     const binding = plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1], noSchedule))
