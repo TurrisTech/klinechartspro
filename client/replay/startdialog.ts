@@ -2,9 +2,11 @@ import { dragByHandle } from '../chrome/drag'
 import { zoneName } from '../time/format'
 import { type BaseCheck, defaultBase, sortByLength, validateBase } from '../time/intervals'
 import { type CandleGrid, fromWall, toWall } from '../time/timeframes'
-import { button, chartTheme, checkbox, dayInput, el, select, toggleButton } from './dom'
+import { checkbox, dayInput, REPLAY_SELECT, toggleButton } from './dom'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { createSessionList, type SessionsSource } from './sessionlist'
+import { button, el, select } from '../ui/dom'
+import { chartTheme } from '../ui/theme'
 
 // GLUE (DOM). The start dialog the rail's Replay button opens: plain DOM in the house style
 // (`kc-*` tokens, `wd-replay-*` classes), centred on the app and dragged by its title. Two tabs
@@ -308,7 +310,8 @@ function mountStartForm(newPane: HTMLElement, options: StartDialogOptions, dialo
   const basePicker = select(
     options.stored.map((s) => ({ value: s, label: s === suggested ? `${s} (recommended)` : s })),
     initialBase,
-    () => validate()
+    () => validate(),
+    REPLAY_SELECT
   )
   baseField.appendChild(basePicker)
   const baseNote = el('div', 'wd-replay-dialog-note')

@@ -1,9 +1,9 @@
-import { button, el, iconButton } from '../alerts/dom'
 import { type BasketRow, FX_28, MAJORS, poolBasket, runBasket } from './basket'
 import { figuresTable } from './figtable'
 import { describeMean } from './figures'
 import type { Strategy } from './model'
 import type { LabRun } from './runner'
+import { button, el, iconButton } from '../ui/dom'
 
 // GLUE (DOM). The Basket panel: the draft run on every instrument of a list -- the seven majors,
 // the 28 FX pairs, or any -- a row of figures per instrument and the pooled trades of them all.

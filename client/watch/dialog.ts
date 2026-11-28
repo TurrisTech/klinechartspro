@@ -1,4 +1,6 @@
 import { placeOverFocus } from '../chrome/focus'
+import { button, el } from '../ui/dom'
+import { chartTheme } from '../ui/theme'
 import { PRICE_DIRECTIONS, type PriceDirection } from './types'
 
 // The one dialog the feature has: set a price, say which way, then apply. Both flows the
@@ -48,7 +50,7 @@ interface WatchDialog {
 
 export function openWatchDialog(options: WatchDialogOptions): WatchDialog {
   const precision = options.precision ?? 5
-  const theme = document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''
+  const theme = chartTheme()
 
   const backdrop = el('div', `wd-watch-backdrop ${theme}`.trim())
   const card = el('div', 'wd-watch-dialog')
@@ -172,21 +174,6 @@ export function openWatchDialog(options: WatchDialogOptions): WatchDialog {
   }
 
   return { close }
-}
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const node = document.createElement('button')
-  node.type = 'button'
-  node.className = className
-  node.textContent = text
-  node.addEventListener('click', onClick)
-  return node
 }
 
 function field(label: string): HTMLElement {

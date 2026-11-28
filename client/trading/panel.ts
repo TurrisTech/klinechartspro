@@ -1,10 +1,12 @@
 import { OhlcvApiError } from '../config'
+import { Arming } from '../ui/arming'
+import { button, el } from '../ui/dom'
 import type { SimSnapshot } from './api'
 import { formatMoney, formatShare, formatPips, formatPnl, formatPrice, formatUnits, toPips, tradePips, tradePnl } from './format'
 import { amendmentRefusal, describeAmendment, type ProposedChange } from './amend'
 import { closeReasonWords } from './exits'
 import type { InstrumentInfo } from './instrument'
-import { Arming, armKey, ConfirmBar, kbtn } from './kit'
+import { armKey, CONFIRM_MS, ConfirmBar, kbtn } from './kit'
 import { balancesBefore, closedMove, closedShareOfBalance, closedTrades } from './ledger'
 import { type Amendment, applyAmendment } from './lines'
 import { pricingContext, tradeFigures } from './metrics'
@@ -104,7 +106,7 @@ export class TradingPanel {
     private ctx: PanelContext
   ) {
     this.element = el('div', 'wd-tk wd-trade-panel')
-    this.arming = new Arming(() => this.render())
+    this.arming = new Arming(() => this.render(), CONFIRM_MS)
     this.body = el('div', 'wd-trade-panel-body')
     this.element.appendChild(this.body)
 
@@ -471,21 +473,6 @@ export class TradingPanel {
 
 /** The percent column's header: a share of the balance, the unit the trade box calls "% bal". */
 const PERCENT_HEADER = '% bal'
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = className
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
-}
 
 function tableEl(headers: string[]): HTMLTableElement {
   const table = document.createElement('table')

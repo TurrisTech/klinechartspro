@@ -1,5 +1,4 @@
 import { defaultLeaf, fromEditable, type GroupNode, group, toEditable } from '../alerts/editable'
-import { button, el, iconButton, input, select } from '../alerts/dom'
 import { compile, RuleError } from '../alerts/rules'
 import { createRuleTree } from '../alerts/ruletree'
 import type { Rule } from '../alerts/types'
@@ -40,6 +39,7 @@ import {
   withRuleCopied,
   withSourceAdded
 } from './model'
+import { button, el, iconButton, input, select } from '../ui/dom'
 
 // GLUE (DOM). The Strategy Lab's editor: a strategy (model.ts) as its RULES first -- the long ones,
 // then the short ones -- then the exits, and below them, closed until wanted, the signals the

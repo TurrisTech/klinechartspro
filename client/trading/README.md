@@ -53,7 +53,8 @@ mode only for its title.
 - `kit.ts` — **the trading kit**: the controls every surface is built from (below) — `LevelField`
   (a stop, target or price: label, presets, `[− | 20.0 | pips ▾ | +]`, readout), `NumberField`,
   `ExitField` (a trailing stop, a breakeven or Notify at, with its unit and secondary numbers),
-  `FigureList`, `ConfirmBar`, `TradeActions`, `Arming` (two presses) and `armKey`.
+  `FigureList`, `ConfirmBar`, `TradeActions`, and the keys (`armKey`) and window (`CONFIRM_MS`) of
+  the two presses, which `Arming` (`../ui/arming.ts`) holds.
 - `exits.ts` — PURE (tested): exit management as the surfaces state it — a trailing stop, an
   auto-breakeven and the "Notify at" milestones, each in pips / price / % of price / × ATR / R,
   parsed to the engine's price distances, read out, worded; Wilder's ATR; a position's R; and

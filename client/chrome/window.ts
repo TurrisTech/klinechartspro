@@ -17,6 +17,7 @@
 // The geometry is pure and tested (window.test.ts); everything else here is DOM.
 
 import { focusCenter } from './focus'
+import { button } from '../ui/dom'
 
 export type WindowMode = 'float' | 'dock'
 
@@ -725,11 +726,7 @@ export function createDockableWindow(options: DockableWindowOptions): DockableWi
   }
 }
 
+/** One of the title bar's own controls: roll up, dock or float, close. */
 function iconButton(text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = 'kc-button kc-icon-button wd-window-control'
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
+  return button('kc-button kc-icon-button wd-window-control', text, onClick)
 }

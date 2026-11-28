@@ -1,4 +1,3 @@
-import { button, el } from '../alerts/dom'
 import { rootIndex } from './entries'
 import { download, entriesCsv, fileStem, tradesCsv } from './export'
 import { figuresTable, type FigureRow } from './figtable'
@@ -9,6 +8,7 @@ import type { EntryOutcome, OutcomeSummary } from './outcomes'
 import type { LabRun } from './runner'
 import type { ExitReason, LabTrade } from './trades'
 import { resolutionDurationMs } from '../time/intervals'
+import { button, el } from '../ui/dom'
 
 // GLUE (DOM). What a run found, in four views:
 //

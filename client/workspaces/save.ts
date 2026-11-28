@@ -1,11 +1,11 @@
+import { anchoredPopover } from '../chrome/popover'
 import { icon } from './menu'
 import type { WorkspaceStore } from './store'
 
 // Save and Revert, beside the workspace switcher. A wall is not written as it changes: every
 // change is a draft in the store (see store.ts's header), and this is where the user commits
-// it or throws it away. Plain imperative DOM, and the confirm is a popover built the way the
-// switcher's panel is (menu.ts) -- see client/chartlayers/settings.ts's header for why client/
-// builds its popovers by hand.
+// it or throws it away. Plain imperative DOM, and the confirm is an anchored popover like the
+// switcher's panel (menu.ts; client/chrome/popover.ts).
 //
 // Save has three looks, because a draft can differ from what is saved in two ways:
 //   - disabled         nothing differs, nothing to write;
@@ -78,7 +78,6 @@ export function createWorkspaceSaveControls(options: WorkspaceSaveControlsOption
   element.append(save.button, revert.button)
 
   let flashTimer: ReturnType<typeof setTimeout> | null = null
-  let panel: HTMLElement | null = null
 
   function refresh(): void {
     element.classList.toggle('is-hidden', transient())
@@ -122,79 +121,51 @@ export function createWorkspaceSaveControls(options: WorkspaceSaveControlsOption
     }, SAVED_FLASH_MS)
   })
 
-  function onOutsideClick(event: MouseEvent): void {
-    if (!panel) return
-    const target = event.target as Node
-    if (!panel.contains(target) && !revert.button.contains(target)) close()
-  }
-
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close()
-  }
-
   function close(): void {
-    if (!panel) return
-    document.removeEventListener('mousedown', onOutsideClick)
-    document.removeEventListener('keydown', onKeydown)
-    panel.remove()
-    panel = null
-    revert.button.setAttribute('aria-expanded', 'false')
+    revertPopover.close()
   }
 
-  function open(): void {
-    const name = store.active().name
-    panel = document.createElement('div')
-    panel.className = 'kc-popover wd-ws-revert-panel'
-    panel.setAttribute('role', 'dialog')
-    panel.setAttribute('aria-label', 'Revert workspace')
-
-    const question = document.createElement('p')
-    question.className = 'wd-ws-revert-text'
-    question.textContent = store.isDirty()
-      ? `Discard the unsaved changes to “${name}” and reload it as last saved?`
-      : `Put the panes of “${name}” back where they were last saved?`
-
-    const actions = document.createElement('div')
-    actions.className = 'wd-ws-revert-actions'
-    const cancel = document.createElement('button')
-    cancel.type = 'button'
-    cancel.className = 'kc-button kc-button-outline wd-ws-confirm-button'
-    cancel.textContent = 'Cancel'
-    cancel.addEventListener('click', close)
-    const confirm = document.createElement('button')
-    confirm.type = 'button'
-    confirm.className = 'kc-button wd-ws-confirm-button is-danger'
-    confirm.textContent = 'Revert'
-    confirm.addEventListener('click', () => {
-      close()
-      store.revertActive()
-      onRevert()
-    })
-    actions.append(cancel, confirm)
-    panel.append(question, actions)
-
-    const mountPoint = revert.button.closest('.klinecharts-pro') ?? document.body
-    mountPoint.appendChild(panel)
-    const rect = revert.button.getBoundingClientRect()
-    panel.style.position = 'fixed'
-    panel.style.top = `${rect.bottom + 6}px`
-    const maxLeft = window.innerWidth - panel.offsetWidth - 8
-    panel.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`
-
-    // Deferred one microtask so the click that opened the panel doesn't immediately close it.
-    queueMicrotask(() => document.addEventListener('mousedown', onOutsideClick))
-    document.addEventListener('keydown', onKeydown)
-    revert.button.setAttribute('aria-expanded', 'true')
-    // On Cancel, not on Revert: Enter on an opened confirmation must not be what throws the
-    // work away.
-    cancel.focus()
-  }
-
+  // The confirmation's Cancel, focused once it is open.
+  let cancel: HTMLButtonElement | null = null
   revert.button.setAttribute('aria-haspopup', 'dialog')
   revert.button.setAttribute('aria-expanded', 'false')
-  revert.button.addEventListener('click', () => {
-    if (panel) close()
-    else open()
+  const revertPopover = anchoredPopover(revert.button, {
+    build: () => {
+      const name = store.active().name
+      const panel = document.createElement('div')
+      panel.className = 'kc-popover wd-ws-revert-panel'
+      panel.setAttribute('role', 'dialog')
+      panel.setAttribute('aria-label', 'Revert workspace')
+
+      const question = document.createElement('p')
+      question.className = 'wd-ws-revert-text'
+      question.textContent = store.isDirty()
+        ? `Discard the unsaved changes to “${name}” and reload it as last saved?`
+        : `Put the panes of “${name}” back where they were last saved?`
+
+      const actions = document.createElement('div')
+      actions.className = 'wd-ws-revert-actions'
+      cancel = document.createElement('button')
+      cancel.type = 'button'
+      cancel.className = 'kc-button kc-button-outline wd-ws-confirm-button'
+      cancel.textContent = 'Cancel'
+      cancel.addEventListener('click', close)
+      const confirm = document.createElement('button')
+      confirm.type = 'button'
+      confirm.className = 'kc-button wd-ws-confirm-button is-danger'
+      confirm.textContent = 'Revert'
+      confirm.addEventListener('click', () => {
+        close()
+        store.revertActive()
+        onRevert()
+      })
+      actions.append(cancel, confirm)
+      panel.append(question, actions)
+      return panel
+    },
+    // On Cancel, not on Revert: Enter on an opened confirmation must not be what throws the
+    // work away.
+    onOpen: () => cancel?.focus()
   })
 
   store.onChange(refresh)

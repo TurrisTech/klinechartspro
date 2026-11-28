@@ -1,27 +1,14 @@
-// GLUE (DOM). The small builders the replay's three DOM components share -- the controls window
+// GLUE (DOM). The builders the replay's three DOM components share -- the controls window
 // (./controls.ts), the start dialog (./startdialog.ts) and the list of past sessions both of them
-// show (./sessionlist.ts) -- in the house style: `kc-*` tokens, `wd-replay-*` classes, plain
-// elements. A builder only one of them uses stays in that module.
+// show (./sessionlist.ts) -- whose markup is the replay's own: `wd-replay-*` classes, styled in
+// styles/replay.css. The plain ones (`el`, `button`, `select`) are every surface's, ../ui/dom.ts;
+// a builder only one of the three uses stays in that module.
 
-/** The mounted chart's theme class ('dark' or ''), for chrome mounted outside its root. */
-export function chartTheme(): string {
-  return document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''
-}
+import { button, el, type SelectOptions } from '../ui/dom'
 
-export function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-export function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = className
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
-}
+/** How every replay picker is built (../ui/dom.ts `select`): styled as the replay's, and showing
+ * its first choice when the current value is not one of them. */
+export const REPLAY_SELECT: SelectOptions = { className: 'kc-input wd-replay-select', keepFirst: true }
 
 /** A toggle -- the window's footer, the dialog's tabs: label, optional count badge, on/off. */
 export function toggleButton(label: string, badge: string, on: boolean, onClick: () => void): HTMLButtonElement {
@@ -33,22 +20,6 @@ export function toggleButton(label: string, badge: string, on: boolean, onClick:
     b.appendChild(count)
   }
   return b
-}
-
-export function select(options: Array<{ value: string; label: string }>, current: string, onChange: (value: string) => void): HTMLSelectElement {
-  const s = document.createElement('select')
-  s.className = 'kc-input wd-replay-select'
-  for (const o of options) {
-    const opt = document.createElement('option')
-    opt.value = o.value
-    opt.textContent = o.label
-    s.appendChild(opt)
-  }
-  // By value once every option exists, not `option.selected` per option as it is appended:
-  // happy-dom (the controls' test DOM) loses track of which one was marked.
-  if (options.some((o) => o.value === current)) s.value = current
-  s.addEventListener('change', () => onChange(s.value))
-  return s
 }
 
 export function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void): HTMLElement {

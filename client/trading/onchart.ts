@@ -34,12 +34,13 @@ import {
 } from './metrics'
 import { amendmentRefusal, describeAmendment } from './amend'
 import { type AtrReading, atrReading, initialRisk, stopName, trailWords } from './exits'
-import { armKey } from './kit'
+import { armKey, CONFIRM_MS } from './kit'
 import { levelRefusal } from './levels'
 import { closeFraction, reverseTrade } from './manage'
 import { type CardAction, h, moveText, OrderCard } from './ordercard'
 import { setTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
+import { Arming } from '../ui/arming'
 
 // The HTML half of what a trading session puts on one candle pane: a LABEL on every trade line
 // and the ORDER CARD (ordercard.ts). Mounted inside klinecharts' own price-area container
@@ -84,7 +85,6 @@ const COMPACT_HEIGHT = 300
 const DRAG_THRESHOLD_PX = 3
 const FLASH_MS = 6_000
 const ERROR_MS = 5_000
-const CONFIRM_MS = 3_000
 /** A new stop or target starts this share of the visible price range away. */
 const DEFAULT_DISTANCE_FRACTION = 0.12
 const STOPPED_EVENTS = ['pointerdown', 'mousedown', 'touchstart', 'touchmove', 'touchend', 'click', 'dblclick', 'contextmenu', 'wheel']
@@ -199,8 +199,10 @@ export class OnChartLayer {
   private lines: LineSpec[] = []
   private draft: DraftOrder | null = null
   private drag: DragState | null = null
-  private armed: string | null = null
-  private armTimer: ReturnType<typeof setTimeout> | null = null
+  /** Two presses for what cannot be undone: the first relabels the button, a second within
+   * `CONFIRM_MS` does it -- or the first, where one-click trading covers it (placing, closing,
+   * cancelling; never flattening or cancelling every order). */
+  private readonly arming = new Arming(() => this.render(this.snapshot), CONFIRM_MS)
   private compact = false
   private raf = 0
   private disposed = false
@@ -431,7 +433,7 @@ export class OnChartLayer {
       collapsed: this.host.isCollapsed(this.compact),
       compact: this.compact,
       expanded: selected,
-      armed: this.armed,
+      armed: this.arming.key,
       riskPercent: tradePrefs().riskPercent,
       protectMode: tradePrefs().protectMode,
       exitUnits: { trail: tradePrefs().trailUnit, breakeven: tradePrefs().breakevenUnit, notify: tradePrefs().notifyUnit },
@@ -505,7 +507,7 @@ export class OnChartLayer {
       }
       label.addStop.hidden = draft.stop !== null
       label.addTarget.hidden = draft.target !== null
-      const armed = this.armed === armKey.place
+      const armed = this.arming.key === armKey.place
       label.place.hidden = false
       label.place.disabled = draft.problem !== null
       label.place.textContent = armed ? 'Confirm' : 'Place'
@@ -531,7 +533,7 @@ export class OnChartLayer {
       share = f.pnl?.ofBalance ?? null
       label.addStop.hidden = trade.stopLoss !== null
       label.addTarget.hidden = trade.takeProfit !== null
-      const armed = this.armed === armKey.close(trade.id, 1)
+      const armed = this.arming.key === armKey.close(trade.id, 1)
       label.remove.textContent = armed ? 'Close?' : '×'
       label.remove.classList.toggle('is-armed', armed)
       label.remove.setAttribute('aria-label', armed ? 'Confirm closing this trade' : 'Close this trade')
@@ -544,7 +546,7 @@ export class OnChartLayer {
       move = f.distance ? `${moveText(f.distance, false)} away` : ''
       label.addStop.hidden = order.stopLoss !== null
       label.addTarget.hidden = order.takeProfit !== null
-      const armed = this.armed === armKey.cancel(order.id)
+      const armed = this.arming.key === armKey.cancel(order.id)
       label.remove.textContent = armed ? 'Cancel?' : '×'
       label.remove.classList.toggle('is-armed', armed)
       label.remove.setAttribute('aria-label', armed ? 'Confirm cancelling this order' : 'Cancel this order')
@@ -645,29 +647,6 @@ export class OnChartLayer {
 
   // -- actions ------------------------------------------------------------------------------------
 
-  /** Two-press confirmation for what cannot be undone, with no modal: the first press relabels
-   * the button, a second within `CONFIRM_MS` does it -- or the first, where one-click trading
-   * covers it (placing, closing, cancelling; never flattening or cancelling every order). */
-  private confirmed(key: string, oneClick = false): boolean {
-    if (oneClick || this.armed === key) {
-      this.disarm()
-      return true
-    }
-    this.armed = key
-    if (this.armTimer) clearTimeout(this.armTimer)
-    this.armTimer = setTimeout(() => this.disarm(), CONFIRM_MS)
-    this.render(this.snapshot)
-    return false
-  }
-
-  private disarm(): void {
-    if (this.armTimer) clearTimeout(this.armTimer)
-    this.armTimer = null
-    if (this.armed === null) return
-    this.armed = null
-    this.render(this.snapshot)
-  }
-
   private run(promise: Promise<void>): void {
     promise.catch((err) => {
       this.showError(err)
@@ -724,12 +703,12 @@ export class OnChartLayer {
         else this.host.inspect(action.id)
         return
       case 'close': {
-        if (!this.confirmed(armKey.close(action.trade.id, action.fraction), tradePrefs().oneClick)) return
+        if (!this.arming.press(armKey.close(action.trade.id, action.fraction), tradePrefs().oneClick)) return
         this.run(closeFraction(session, action.trade, action.fraction, this.pricing(snapshot ?? session.snapshot)))
         return
       }
       case 'reverse': {
-        if (!this.confirmed(armKey.reverse(action.trade.id), tradePrefs().oneClick)) return
+        if (!this.arming.press(armKey.reverse(action.trade.id), tradePrefs().oneClick)) return
         reverseTrade(session, action.trade, this.pricing(snapshot ?? session.snapshot))
           .then((text) => this.flash(text, 'info'))
           .catch((err) => {
@@ -748,17 +727,17 @@ export class OnChartLayer {
         this.host.cancelAmendment()
         return
       case 'cancel':
-        if (!this.confirmed(armKey.cancel(action.order.id), tradePrefs().oneClick)) return
+        if (!this.arming.press(armKey.cancel(action.order.id), tradePrefs().oneClick)) return
         this.run(session.cancelOrder(action.order.id))
         return
       case 'cancelOrders': {
-        if (!this.confirmed('cancelOrders')) return
+        if (!this.arming.press('cancelOrders')) return
         const ids = (snapshot ? workingFor(snapshot, this.key).orders : []).map((o) => o.id)
         this.run(ids.reduce<Promise<void>>((chain, id) => chain.then(() => session.cancelOrder(id)), Promise.resolve()))
         return
       }
       case 'flatten':
-        if (!this.confirmed(armKey.flatten)) return
+        if (!this.arming.press(armKey.flatten)) return
         this.run(session.flatten(this.key))
         return
       case 'unprotect':
@@ -802,7 +781,7 @@ export class OnChartLayer {
         this.host.draft?.clearLevel(action.role)
         return
       case 'draftDiscard':
-        this.disarm()
+        this.arming.disarm()
         this.host.draft?.clearLevel('stop')
         this.host.draft?.clearLevel('target')
         this.host.draft?.clearLevel('entry')
@@ -810,7 +789,7 @@ export class OnChartLayer {
       case 'draftPlace': {
         const controller = this.host.draft
         if (!controller || !this.draft) return
-        if (!this.confirmed(armKey.place, tradePrefs().oneClick)) return
+        if (!this.arming.press(armKey.place, tradePrefs().oneClick)) return
         controller.place().catch((err) => this.showError(err))
         return
       }
@@ -1098,7 +1077,7 @@ export class OnChartLayer {
   dispose(): void {
     this.disposed = true
     if (this.raf !== 0) cancelAnimationFrame(this.raf)
-    if (this.armTimer) clearTimeout(this.armTimer)
+    this.arming.dispose()
     if (this.drag?.moved) this.host.release(false)
     this.drag = null
     this.resize.disconnect()

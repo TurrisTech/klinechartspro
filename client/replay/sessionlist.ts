@@ -1,8 +1,10 @@
-import { Arming, FigureList } from '../trading/kit'
+import { FigureList } from '../trading/kit'
 import { formatSpan, zoneName } from '../time/format'
+import { Arming } from '../ui/arming'
+import { button, el } from '../ui/dom'
 import { resultHeadline, resultRows } from './results'
 import { lastPlayed, type ReplaySessionSummary, resumable, sessionFacts } from './sessions'
-import { button, el, flash } from './dom'
+import { flash } from './dom'
 
 // GLUE (DOM). Past replays: the list the start dialog's Sessions tab (./startdialog.ts) and the
 // replay window's Sessions panel (./controls.ts) both show -- each row what it replayed, how far,
@@ -27,6 +29,9 @@ export interface SessionsSource {
   /** Delete it on the server; resolves once that is done. */
   remove(id: string): Promise<void>
 }
+
+/** How long an armed Delete waits for its second press. */
+const CONFIRM_MS = 3_000
 
 interface SessionListOptions {
   source: SessionsSource
@@ -67,7 +72,7 @@ export function createSessionList(options: SessionListOptions): SessionList {
   const expanded = new Set<string>()
   /** The rows whose delete is on its way to the server. */
   const deleting = new Set<string>()
-  const arming = new Arming(() => render())
+  const arming = new Arming(() => render(), CONFIRM_MS)
 
   function render(notify = true): void {
     if (disposed) return

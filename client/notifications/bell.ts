@@ -1,3 +1,4 @@
+import { button, el } from '../ui/dom'
 import type { NotificationCenter } from './center'
 import type { Notification } from './types'
 
@@ -243,19 +244,4 @@ export function relativeTime(at: number, now = Date.now()): string {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h ago`
   return `${Math.round(hours / 24)}d ago`
-}
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const node = document.createElement('button')
-  node.type = 'button'
-  node.className = className
-  node.textContent = text
-  node.addEventListener('click', onClick)
-  return node
 }
