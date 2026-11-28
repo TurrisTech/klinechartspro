@@ -140,7 +140,7 @@ describe('the binding', () => {
   })
 
   test('a failed read is named once, by the host -- the legend says only the name', () => {
-    // The host's ⚠ beside the × and its card say why (plugins/host.ts problemOf).
+    // The host's ⚠ beside the × and its card say why (plugins/apply.ts problemOf).
     expect(plugin.bind(ctx('TT:heathlevels', [5, 5, 0, 0, 0, 12, 1]))?.label(state('error'))).toBe('Heath levels')
     expect(plugin.bind(ctx('TT:entries', [2, 1, 1, 5, 0, 1]))?.label(state('error'))).toBe('TradeTalk')
   })
