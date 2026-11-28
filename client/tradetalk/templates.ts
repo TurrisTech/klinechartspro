@@ -16,7 +16,8 @@ import {
   type Axis,
   type ExtendData
 } from './levelmap'
-import { timestampMemo } from '../plugins/calc'
+import { shouldUpdateOn, timestampMemo } from '../plugins/calc'
+import { arrowPath, fillDot } from '../plugins/draw'
 import { computeTradeTalk, levelMap, type BarValue, type Settings, type Skips, type Trade } from './rules'
 
 // TT:entries -- where TradeTalk would enter, drawn on the price pane.
@@ -153,18 +154,6 @@ export function calc(dataList: KLineData[], indicator: Indicator): TradeTalkValu
  * be seen over a wick and no stronger. */
 const ZONE_ALPHA = 0.16
 
-/** A filled triangle whose tip is at (x, y), pointing up for a long and down for a short. */
-function arrow(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, up: boolean, color: string): void {
-  const base = up ? y + size : y - size
-  ctx.beginPath()
-  ctx.moveTo(x, y)
-  ctx.lineTo(x - size * 0.7, base)
-  ctx.lineTo(x + size * 0.7, base)
-  ctx.closePath()
-  ctx.fillStyle = color
-  ctx.fill()
-}
-
 /** What an entry is labelled with on the chart: the side, the level it was taken at, where
  * it is going and what that is worth -- "L Aug low > week open 2.4R", "½" when another level
  * sits between entry and stop and he would halve the size. */
@@ -226,13 +215,7 @@ export function registerTradeTalkIndicator(): IndicatorGroup[] {
       ],
       minValue: null,
       maxValue: null,
-      shouldUpdate: (prev, cur) => {
-        const a = prev.extendData
-        const b = cur.extendData
-        const changed =
-          a?.seriesKey !== b?.seriesKey || a?.rev !== b?.rev || JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
-        return { calc: changed, draw: true }
-      },
+      shouldUpdate: shouldUpdateOn<ExtendData>({ keys: ['seriesKey', 'rev'], calcParams: true }),
       calc: calc as IndicatorTemplate<TradeTalkValue, number, ExtendData>['calc'],
       regenerateFigures: null,
       // ChartPane installs its own tooltip data source on every indicator it creates, which
@@ -344,12 +327,7 @@ function drawTrades(
     const signal = data[trade.signalIndex]
     if (signal) {
       ctx.globalAlpha = 1
-      ctx.fillStyle = UNIT_COLOR[trade.level.unit]
-      const x = xAxis.convertToPixel(trade.signalIndex)
-      const y = yAxis.convertToPixel(trade.level.price)
-      ctx.beginPath()
-      ctx.arc(x, y, 2.5, 0, Math.PI * 2)
-      ctx.fill()
+      fillDot(ctx, xAxis.convertToPixel(trade.signalIndex), yAxis.convertToPixel(trade.level.price), 2.5, UNIT_COLOR[trade.level.unit])
     }
 
     const entryBar = data[trade.entryIndex]
@@ -358,7 +336,11 @@ function drawTrades(
       const size = Math.max(5, Math.min(9, pitch * 0.8))
       const tip = long ? yAxis.convertToPixel(entryBar.low) + 4 : yAxis.convertToPixel(entryBar.high) - 4
       ctx.globalAlpha = 1
-      arrow(ctx, xEntry, tip, size, long, color)
+      // Tip at the entry, pointing up for a long and down for a short, 0.7 of its length either
+      // side: a hair narrower than the MTF overlay's arrow (1 / ARROW_LENGTH), as it always was.
+      arrowPath(ctx, xEntry, tip, size * 0.7, size, long)
+      ctx.fillStyle = color
+      ctx.fill()
     }
 
     ctx.textAlign = 'left'

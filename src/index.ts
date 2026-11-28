@@ -56,3 +56,8 @@ export type {
 export type { LayoutPreset } from './config/layouts'
 export { getLayouts as getPaneLayouts, MAX_PANES } from './config/layouts'
 export { registerIndicatorSettings, type IndicatorParamSetting } from './config/indicators'
+// For an app that reads what the chart draws without a chart: the templates this library adds to
+// klinecharts' built-ins (by name, for a picker or a rule language), and the ATR its ATR pane
+// draws by default.
+export { default as libraryIndicators } from './indicators'
+export { averageTrueRange } from './indicators/nnfx/atr'

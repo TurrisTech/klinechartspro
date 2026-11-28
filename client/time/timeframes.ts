@@ -14,6 +14,9 @@
 // opens 17:00 the evening before its FIRST MARKET DAY; a market day is a weekday; a candle's
 // close is not the next candle's open (the weekend belongs to neither).
 
+// The pure module rather than the '../../src' barrel: this module is pure, and the barrel loads
+// klinecharts, which reads `window` at import.
+import { zoneReading } from '../../src/utils/wallclock'
 import { type IntervalSpec, isIntraday, nominalMs, parseInterval, unitMs } from './intervals'
 
 /** Daily-and-coarser bars are dated on the wire by their canonical date (00:00 of the session
@@ -43,62 +46,15 @@ const DAY = 86_400_000
 const SESSION_SHIFT = (24 - SESSION_ANCHOR_HOUR) * HOUR // 7h: wall + 7h floors to the session date
 const SESSION_CLOSE = SESSION_ANCHOR_HOUR * HOUR
 
-const formatters = new Map<string, Intl.DateTimeFormat>()
-
-function formatter(tz: string): Intl.DateTimeFormat {
-  let f = formatters.get(tz)
-  if (!f) {
-    f = new Intl.DateTimeFormat('en-US', {
-      timeZone: tz,
-      hourCycle: 'h23',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
-    formatters.set(tz, f)
-  }
-  return f
-}
-
 /** An instant as a "naive wall-clock" number: the wall-clock reading re-encoded as if it were
  * UTC (`Date.UTC(y, m, d, h, mi, s)` + the sub-second part), which is what makes floor/day
  * arithmetic on it plain integer arithmetic -- the same trick wmarkettypes' `to_wall_clock`
- * plays with a naive pandas Timestamp. */
+ * plays with a naive pandas Timestamp. Exact to the millisecond at every instant, uncached: not
+ * the library's `zoneOffsetMinutes` (src/indicators/sessions.ts), which is whole minutes resolved
+ * per quarter hour -- the same wherever a zone's offset is whole minutes, but a boundary here
+ * must be the server's to the millisecond (src/utils/wallclock.ts says where the two part). */
 export function toWall(ms: number, tz: string = MARKET_TZ): number {
-  const parts = formatter(tz).formatToParts(new Date(ms))
-  let y = 0
-  let mo = 0
-  let d = 0
-  let h = 0
-  let mi = 0
-  let s = 0
-  for (const p of parts) {
-    switch (p.type) {
-      case 'year':
-        y = Number(p.value)
-        break
-      case 'month':
-        mo = Number(p.value)
-        break
-      case 'day':
-        d = Number(p.value)
-        break
-      case 'hour':
-        h = Number(p.value)
-        break
-      case 'minute':
-        mi = Number(p.value)
-        break
-      case 'second':
-        s = Number(p.value)
-        break
-    }
-  }
-  const sub = ((ms % 1000) + 1000) % 1000
-  return Date.UTC(y, mo - 1, d, h, mi, s) + sub
+  return zoneReading(tz, ms) + (((ms % 1000) + 1000) % 1000)
 }
 
 /** The zone's offset (ms east of UTC) in force at an instant. */

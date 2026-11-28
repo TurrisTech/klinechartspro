@@ -87,6 +87,19 @@ reads a store does. klinecharts recalculates every indicator on a pane, over eve
 on every live tick; the wrapper hands back the last result while nothing it is computed from
 moved. The divergence, the volume profile and TradeTalk read prices and must not use it.
 
+**Decide `shouldUpdate` with `shouldUpdateOn`** (`calc.ts`): name the `extendData` keys `calc`
+reads -- by identity (`keys`: the store key, `rev`, an interval), by value (`json`: a config or a
+list the host rebuilds on every apply) -- and whether `calcParams` count; it always redraws. A
+template whose question is narrower than whole keys (the volume profile and the divergence read
+one field of their config) keeps its own.
+
+**Draw marks with `draw.ts`**: the arrows, triangles, stars, graph nodes, labels and links every
+template puts on the chart, and the `Fill` rule (solid is the event, hollow the same event
+failed, half-transparent still in play). A mark that means the same thing on two panes is the
+same function; a template that needs another proportion passes it (`arrowPath`'s half-width and
+length, `trianglePath`'s base). `draw.test.ts` holds each template's drawing to what its own copy
+drew before they were shared, on a recording context (`testcanvas.ts`).
+
 **Bars a plugin reads for itself** (TradeTalk's daily candles, the AREV lab's prior, the MTF
 grid, the volume profile's finer bars) go through `bars.ts` (`fetchClosedBars`,
 `closedBarPage`): closed bars only, so under a bar replay the window ends at the bar forming at
@@ -284,8 +297,8 @@ several lines with their own colours and dash styles; flat reference lines from 
 `render: 'hold'`, which carries the last value forward over bars that have none; a `gate`
 that drops an uncalibrated number; a `fold_by` source whose two rows on one bar are filed
 under their own side, so a series key is two-part (`top.p`); and per-bar `marks` chosen by a
-predicate, each with a shape, an anchor (`series:<key>` or `bar:low|high|close`), an optional
-label field and an optional fill (solid / hollow / pending).
+predicate, each with a shape (`MarkShape`, `draw.ts`), an anchor (`series:<key>` or
+`bar:low|high|close`), an optional label field and an optional fill (solid / hollow / pending).
 
 Three klinecharts facts the row is turned into, each of which cost a bug before:
 

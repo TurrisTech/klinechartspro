@@ -15,6 +15,7 @@
 import type { Chart, IndicatorTemplate, KLineData, TooltipLegend } from 'klinecharts'
 
 import type { SymbolInfo } from '../types'
+import { zoneReading } from '../utils/wallclock'
 
 /**
  * SESSIONS -- the trading sessions of the instrument's asset class, shaded on the price pane.
@@ -94,40 +95,21 @@ const DAY_MS = 86_400_000
 const OFFSET_BUCKET_MS = 15 * MINUTE_MS
 const OFFSET_CACHE_LIMIT = 50_000
 
-const formatters = new Map<string, Intl.DateTimeFormat>()
 const offsets = new Map<string, number>()
 
-function formatterFor(timezone: string): Intl.DateTimeFormat {
-  let formatter = formatters.get(timezone)
-  if (!formatter) {
-    formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      hourCycle: 'h23',
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric'
-    })
-    formatters.set(timezone, formatter)
-  }
-  return formatter
-}
-
-/** The zone's UTC offset in minutes at `ms`, positive east of Greenwich. Resolved through
- * `Intl` once per quarter hour per zone: a transition lands on a quarter hour in every zone
- * in use, and the cache is emptied rather than grown past `OFFSET_CACHE_LIMIT`. */
+/** The zone's UTC offset in minutes at `ms`, positive east of Greenwich. Resolved once per
+ * quarter hour per zone, at its start, and rounded to the minute: a transition lands on a quarter
+ * hour in every zone in use, and the cache is emptied rather than grown past
+ * `OFFSET_CACHE_LIMIT`. Coarser than the app's own wall clock (client/time/timeframes.ts
+ * `toWall`, exact to the millisecond) by design; ../utils/wallclock.ts, which both read the zone
+ * through, says where the two part. */
 export function zoneOffsetMinutes(timezone: string, ms: number): number {
   const bucket = Math.floor(ms / OFFSET_BUCKET_MS)
   const key = `${timezone}|${bucket}`
   let offset = offsets.get(key)
   if (offset === undefined) {
     const at = bucket * OFFSET_BUCKET_MS
-    const parts = formatterFor(timezone).formatToParts(new Date(at))
-    const part = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value)
-    const asUtc = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour') % 24, part('minute'), part('second'))
-    offset = Math.round((asUtc - at) / MINUTE_MS)
+    offset = Math.round((zoneReading(timezone, at) - at) / MINUTE_MS)
     if (offsets.size >= OFFSET_CACHE_LIMIT) offsets.clear()
     offsets.set(key, offset)
   }

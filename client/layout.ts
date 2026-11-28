@@ -8,6 +8,9 @@ import type {
   SymbolInfo,
   SyncOptions
 } from '../src'
+// The pure module rather than the '../src' barrel: a wall document is read with no chart on the
+// page (workspaces/store.ts, and its tests), and the barrel loads klinecharts, which reads
+// `window.navigator` at import.
 import { periodFor } from '../src/utils/period'
 import { availablePeriods, defaultPeriod } from './periods'
 import type { PaneDoc } from './plugins/paneconfig'

@@ -1,3 +1,5 @@
+// The pure module rather than the '../../src' barrel: this and ./panesettings.ts load no chart,
+// and the barrel loads klinecharts, which reads `window` at import.
 import { permuteByIndex } from '../../src/state/paneOrder'
 import type { SettingsField } from '../chartlayers/settings'
 

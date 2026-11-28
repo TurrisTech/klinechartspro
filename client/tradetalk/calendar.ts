@@ -1,3 +1,6 @@
+// The pure module rather than the '../../src' barrel: TradeTalk's calendar, levels and rules are
+// computed and tested without a chart, and the barrel loads klinecharts, which reads `window` at
+// import.
 import { zoneOffsetMinutes } from '../../src/indicators/sessions'
 
 // The map TradeTalk trades from: the objective calendar levels.
