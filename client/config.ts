@@ -148,14 +148,34 @@ export async function apiGetResponse<T>(
 ): Promise<ApiSendResult<T>> {
   const url = apiUrl(path, params)
   const response = await serverFetch(url)
-  const body: unknown = await response.json().catch(() => null)
+  return { data: await decodeBody<T>(response, path), response }
+}
+
+/** The body of a server answer, or the error it stands for. An error status throws the server's
+ * own error envelope when it sent one. A success whose body is not JSON throws too (`not_json`):
+ * a proxy's HTML page or a cut-off body is not an answer, and handing it on as `null` typed as
+ * `T` broke the first caller to read a field of it -- a 200 page from `/capabilities` stopped
+ * the chart booting. An empty body (204, or a 200 with nothing in it) is `null`, as it always was. */
+async function decodeBody<T>(response: Response, path: string): Promise<T> {
+  const text = response.status === 204 ? '' : await response.text().catch(() => '')
+  let body: unknown = null
+  let decoded = text === ''
+  if (!decoded) {
+    try {
+      body = JSON.parse(text)
+      decoded = true
+    } catch {
+      body = null
+    }
+  }
   if (!response.ok) {
     if (isErrorBody(body)) {
       throw new OhlcvApiError(response.status, body.code, body.detail, body.field)
     }
     throw new OhlcvApiError(response.status, 'internal', `${response.status} from ${path}`)
   }
-  return { data: body as T, response }
+  if (!decoded) throw new OhlcvApiError(response.status, 'not_json', `${response.status} from ${path} is not JSON`)
+  return body as T
 }
 
 interface ApiSendResult<T> {
@@ -184,12 +204,5 @@ export async function apiSend<T>(
     unauthorizedIsAnswer: options?.unauthorizedIsAnswer
   })
   // 204 (No Content, e.g. logout) has no body to parse.
-  const body: unknown = response.status === 204 ? null : await response.json().catch(() => null)
-  if (!response.ok) {
-    if (isErrorBody(body)) {
-      throw new OhlcvApiError(response.status, body.code, body.detail, body.field)
-    }
-    throw new OhlcvApiError(response.status, 'internal', `${response.status} from ${path}`)
-  }
-  return { data: body as T, response }
+  return { data: await decodeBody<T>(response, path), response }
 }
