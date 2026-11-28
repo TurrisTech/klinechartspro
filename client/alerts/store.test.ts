@@ -9,15 +9,32 @@ import type { AlertDefinition, Operand } from './types'
 
 const rsi: Operand = { kind: 'indicator', interval: '1h', name: 'RSI', params: [14], output: 'rsi1' }
 
-function memory(initial?: unknown): AlertPersistence & { saved: unknown[] } {
+/** One stored document, as the server or a browser's storage holds it, that any number of tabs
+ * (`tab()`) read and write. Every write applies its edit to the document as it is then. */
+function shared(initial?: unknown) {
+  let document: unknown = structuredClone(initial)
   const saved: unknown[] = []
   return {
     saved,
-    load: async () => initial,
-    save: (document) => {
-      saved.push(structuredClone(document))
+    get document() {
+      return document
+    },
+    tab(): AlertPersistence {
+      return {
+        load: async () => structuredClone(document),
+        update: (apply, written) => {
+          document = apply(structuredClone(document))
+          saved.push(structuredClone(document))
+          written(structuredClone(document))
+        }
+      }
     }
   }
+}
+
+function memory(initial?: unknown): AlertPersistence & { saved: unknown[] } {
+  const store = shared(initial)
+  return { ...store.tab(), saved: store.saved }
 }
 
 function definition(overrides: Partial<AlertDefinition> = {}): AlertDefinition {
@@ -96,10 +113,14 @@ describe('ClientAlertStore', () => {
     await store.create(definition())
     const document = first.saved.at(-1) as { alerts: unknown[] }
     const broken = { ...(document.alerts[0] as object), id: 'broken', rule: { all: [] } }
-    const reloaded = new ClientAlertStore(memory({ ...document, alerts: [...document.alerts, broken] }))
+    const again = memory({ ...document, alerts: [...document.alerts, broken] })
+    const reloaded = new ClientAlertStore(again)
     await reloaded.load()
     expect(reloaded.list().map((a) => a.name)).toEqual(['Oversold'])
     expect(reloaded.list()[0].rule).toEqual(definition().rule)
+    // Not shown, but not deleted either: a newer client's alert survives this one's writes.
+    await reloaded.create(definition({ name: 'Second' }))
+    expect((again.saved.at(-1) as { alerts: Array<{ id: string }> }).alerts.map((a) => a.id)).toContain('broken')
   })
 
   test('a store that could not be read refuses to write, so it cannot overwrite what is stored', async () => {
@@ -108,7 +129,7 @@ describe('ClientAlertStore', () => {
       load: async () => {
         throw new Error('503')
       },
-      save: (document) => saved.push(document)
+      update: (apply) => void saved.push(apply(undefined))
     })
     await store.load()
     expect(store.loadError).toContain('could not be read')
@@ -131,4 +152,63 @@ test('normaliseSymbol', () => {
   expect(normaliseSymbol(' Coinbase:btcusd ')).toBe('coinbase:BTCUSD')
   expect(() => normaliseSymbol('BTCUSD')).toThrow(RuleError)
   expect(() => normaliseSymbol('oanda:')).toThrow(RuleError)
+})
+
+// Every tab and device writes the one stored list: each write is an edit by id on the list as
+// it is stored then, never this tab's copy of the whole list.
+describe('several tabs on one stored list', () => {
+  async function twoTabs() {
+    const store = shared()
+    const a = new ClientAlertStore(store.tab(), { now: () => 1000 })
+    await a.load()
+    const first = await a.create(definition({ name: 'First' }))
+    const b = new ClientAlertStore(store.tab(), { now: () => 2000 })
+    await b.load()
+    return { store, a, b, first }
+  }
+  const storedRows = (store: { document: unknown }) => (store.document as { alerts: Array<{ id: string; name: string; enabled: boolean; fireCount: number }> }).alerts
+
+  test("a firing in a tab that has not seen another tab's new alert keeps it", async () => {
+    const { store, a, b, first } = await twoTabs()
+    await b.create(definition({ name: 'Made in B' }))
+    a.recordFiring(first.id, 5000)
+    expect(storedRows(store).map((r) => r.name).sort()).toEqual(['First', 'Made in B'])
+    // And the stale tab has caught up: it shows what the other made.
+    expect(a.list().map((x) => x.name).sort()).toEqual(['First', 'Made in B'])
+  })
+
+  test('a firing in a stale tab does not switch back on an alert switched off elsewhere', async () => {
+    const { store, a, b, first } = await twoTabs()
+    await b.setEnabled(first.id, false)
+    a.recordFiring(first.id, 5000)
+    expect(storedRows(store)[0]).toMatchObject({ enabled: false, fireCount: 0 })
+    expect(a.get(first.id)?.status).toBe('disabled')
+  })
+
+  test('one bar close seen by two tabs is one firing', async () => {
+    const { store, a, b, first } = await twoTabs()
+    a.recordFiring(first.id, 5000)
+    b.recordFiring(first.id, 5000)
+    expect(storedRows(store)[0].fireCount).toBe(1)
+    b.recordFiring(first.id, 6000)
+    expect(storedRows(store)[0].fireCount).toBe(2)
+  })
+
+  test('an alert deleted elsewhere is not brought back by a firing or an edit', async () => {
+    const { store, a, b, first } = await twoTabs()
+    await b.remove(first.id)
+    a.recordFiring(first.id, 5000)
+    expect(storedRows(store)).toEqual([])
+    expect(a.list()).toEqual([])
+  })
+
+  test("an edit changes its own alert and leaves the others' as they are stored", async () => {
+    const { store, a, b, first } = await twoTabs()
+    const other = await b.create(definition({ name: 'Made in B' }))
+    await b.setEnabled(other.id, false)
+    await a.update(first.id, definition({ name: 'Renamed in A' }))
+    const rows = storedRows(store)
+    expect(rows.find((r) => r.id === first.id)?.name).toBe('Renamed in A')
+    expect(rows.find((r) => r.id === other.id)).toMatchObject({ name: 'Made in B', enabled: false })
+  })
 })

@@ -21,7 +21,14 @@ const NO_SERVER = async () => ({
 
 function mount() {
   const saved: unknown[] = []
-  const store = new ClientAlertStore({ load: async () => undefined, save: (d) => saved.push(d) })
+  const store = new ClientAlertStore({
+    load: async () => undefined,
+    update: (apply, written) => {
+      const document = apply(saved.at(-1))
+      saved.push(document)
+      written(document)
+    }
+  })
   const bounds = document.createElement('div')
   document.body.appendChild(bounds)
   const manager = createAlertManager({
