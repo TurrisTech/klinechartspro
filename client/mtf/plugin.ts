@@ -240,7 +240,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       // are absolute -- so a replay step forgets from the cursor itself (plugins/horizon.ts),
       // which is exactly when each row came to exist.
       createStore: createMtfGraphStore,
-      window: (chartRange: Range): Range => windowAt(chartRange, getReadClock()),
+      window: (chartRange: Range): Range => windowAt(chartRange, facilities?.readClock() ?? null),
       fetch: async (range, limit) => {
         const answer = await fetchMtfGraph({ ...request, from: range.from, to: range.to, limit })
         // A timeframe the server could not read (user, 2026-11-26: "marks only"): the other

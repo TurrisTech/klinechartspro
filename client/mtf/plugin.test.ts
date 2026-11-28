@@ -13,6 +13,7 @@ const { MTF_OVERLAYS } = await import('./overlays')
 const { MTF_DEFAULTS } = await import('./config')
 const { MtfGraphStore } = await import('./store')
 const { storedSource } = await import('../tsregistry/plugin')
+const { getReadClock } = await import('../config')
 import type { PluginFacilities } from '../plugins/types'
 import type { RegistryIndicator } from '../tsregistry/api'
 
@@ -24,6 +25,7 @@ afterEach(() => {
 const facilities = {
   hasFeature: () => true,
   resolutionDurationMs: () => 3_600_000,
+  readClock: () => getReadClock(),
   stream: { subscribePlugin: () => {}, unsubscribePlugin: () => {} }
 } as unknown as PluginFacilities
 
