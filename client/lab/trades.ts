@@ -360,10 +360,7 @@ export function simulate(input: SimInput): SimResult {
         continue
       }
       const rule = input.exitRule(trade.direction)
-      if (rule?.(t)) {
-        closeNow(state, 'rule')
-        continue
-      }
+      if (rule?.(t)) closeNow(state, 'rule')
     }
 
     // Entries at this close.

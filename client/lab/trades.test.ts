@@ -208,13 +208,10 @@ describe('management at the close', () => {
 
     // The same trade, as a bar replay's engine runs it: in at bar 0's close, one R = 11 pips.
     const engine = new Engine(10_000, 'quote')
-    const fold = (b: ReplayBar) => ({
-      symbol: 'oanda:EURUSD',
-      time: b.open,
-      end: b.end,
-      bidOpen: b.bid!.o, bidHigh: b.bid!.h, bidLow: b.bid!.l, bidClose: b.bid!.c,
-      askOpen: b.ask!.o, askHigh: b.ask!.h, askLow: b.ask!.l, askClose: b.ask!.c
-    })
+    const fold = (b: ReplayBar) => {
+      const [bid, ask] = [b.bid ?? b, b.ask ?? b]
+      return { symbol: 'oanda:EURUSD', time: b.open, end: b.end, bidOpen: bid.o, bidHigh: bid.h, bidLow: bid.l, bidClose: bid.c, askOpen: ask.o, askHigh: ask.h, askLow: ask.l, askClose: ask.c }
+    }
     engine.onBar(fold(bars[0]))
     const R = 0.0011
     engine.submit({
