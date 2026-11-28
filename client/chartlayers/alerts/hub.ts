@@ -1,9 +1,9 @@
 import type { SymbolInfo } from '../../../src'
-import { symbolVendor } from '../../symbols'
 import type { WatchStore } from '../../watch/store'
 import { instrumentTarget, PRICE_SOURCE, type Watch, type WatchRepeat } from '../../watch/types'
 import type { AlertTarget } from '../types'
 import { alertName, alertNote, centredOn, type Zone, zoneAround, zoneCondition, zoneOf, zoneUnit } from './zone'
+import { symbolVendor } from '../../instrumentkey'
 
 // The PRICE ALERTS the chart's layers can see: a view of one watch backend, narrowed to the
 // watches that are price alerts (zone.ts), plus the things a line can have done to it -- enable

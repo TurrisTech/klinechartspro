@@ -22,7 +22,7 @@ import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
 import { phaseLabel } from '../plugins/legend'
 import type { IndicatorPoint, SeriesDoc } from '../ohlcv'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // The one client plugin for every server indicator: it reads the registry, registers a
 // template per row, and binds each one to the wire its row names.

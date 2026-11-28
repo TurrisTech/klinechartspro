@@ -14,7 +14,7 @@ import { type PerfContext, PerformanceView } from './perfview'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { formatInstant } from '../time/format'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // The trading panel: an account strip and the working-orders / open-positions / history tables.
 // It reads and acts ONLY through the `TradingSession` interface, so the same panel serves a

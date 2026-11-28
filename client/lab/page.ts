@@ -9,7 +9,7 @@ import { builtinPlugins } from '../builtins'
 import { createFacilities } from '../facilities'
 import { createPluginHost } from '../plugins'
 import type { CandleGrid } from '../time/timeframes'
-import { fetchSymbolInfo, fetchSymbols, DEFAULT_VENDOR, splitInstrumentKey, symbolKey } from '../symbols'
+import { fetchSymbolInfo, fetchSymbols } from '../symbols'
 import { loadLabCatalogue, labIntervals, type LabCatalogue } from './catalogue'
 import { createBasketPanel } from './basketview'
 import { HttpLabData } from './data'
@@ -23,6 +23,7 @@ import { LabSession, type NewKind } from './session'
 import { createSweepPanel } from './sweepview'
 import { StrategyStore } from './store'
 import { periodToResolution } from '../time/intervals'
+import { DEFAULT_VENDOR, splitInstrumentKey, symbolKey } from '../instrumentkey'
 
 // THE STRATEGY LAB: a page of the dashboard (`/lab`) for developing a strategy's rules -- the
 // graph that joins signals into cascades, which of its nodes are entries, and what happens after

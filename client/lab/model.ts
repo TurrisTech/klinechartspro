@@ -29,6 +29,7 @@ import type { Rule } from '../alerts/types'
 import { COMMON_FUNCTIONS, type ExprScope, exprProblem, type FieldSpec, type FnSpec } from './expr'
 import { resolutionDurationMs } from '../time/intervals'
 import { isInterval } from '../time/intervals'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey } from '../instrumentkey'
 
 export const STRATEGY_VERSION = 2
 
@@ -626,15 +627,13 @@ export function utcDayStart(day: string): number | null {
 }
 
 /** An instrument as the header takes it -- `vendor:TICKER`, or a bare ticker for OANDA -- as the
- * lab names it: the vendor in lower case, the ticker in upper.
- *
- * Parsed and spelled here rather than with symbols.ts's helpers, and 'oanda' written out where that
- * module says DEFAULT_VENDOR, because this module is pure and tested without a `window`, which
- * symbols.ts reads at import (through config.ts); symbols.test.ts holds the two together. */
+ * lab names it: the vendor in lower case, the ticker in upper. */
 export function normalInstrument(raw: string): string {
   const text = raw.trim()
-  const at = text.indexOf(':')
-  return at > 0 ? `${text.slice(0, at).toLowerCase()}:${text.slice(at + 1).toUpperCase()}` : `oanda:${text.toUpperCase()}`
+  // A leading ':' names no vendor here: the whole text is a ticker of the default vendor's.
+  if (text.indexOf(':') <= 0) return instrumentKey(DEFAULT_VENDOR, text.toUpperCase())
+  const { vendor, ticker } = splitInstrumentKey(text)
+  return instrumentKey(vendor.toLowerCase(), ticker.toUpperCase())
 }
 
 /** `strategy` with its window as the last N days or as a range of UTC days, over the same span:

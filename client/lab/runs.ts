@@ -4,7 +4,7 @@ import { type Figures, figuresOf } from './figures'
 import type { Strategy } from './model'
 import type { LabRun } from './runner'
 import { button, el } from '../ui/dom'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // THE RUNS OF THIS SESSION, and the BASELINE: every run the page makes is kept here -- the copy
 // of the strategy it ran, where and when, and its figures (figures.ts) -- with what changed since

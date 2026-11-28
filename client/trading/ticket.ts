@@ -73,7 +73,7 @@ import {
 } from './order'
 import { type ProtectMode, SIZE_MODES, type SizeMode, setTradePrefs, sizedByStop, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
-import { symbolKey, tickerOf } from '../symbols'
+import { symbolKey, tickerOf } from '../instrumentkey'
 
 // The order ticket: the TRADE BOX's contents. Side, type, size, price, stop and target -- and what
 // they add up to before anything is sent.

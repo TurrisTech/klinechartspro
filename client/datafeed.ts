@@ -3,8 +3,9 @@ import type { Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '..
 import { fetchBarsWidened } from './history'
 import { barToKLineData, type OHLCVBar } from './ohlcv'
 import { stream, subscriptionKey, type StreamListener } from './stream'
-import { fetchSymbols, instrumentKey, symbolVendor } from './symbols'
+import { fetchSymbols } from './symbols'
 import { periodToResolution } from './time/intervals'
+import { instrumentKey, symbolVendor } from './instrumentkey'
 
 // KLineChart Pro asks for history one window at a time and caps a window at 500 bars
 // (ChartPro.svelte's adjustFromTo call), so this is the widest reply that can ever be

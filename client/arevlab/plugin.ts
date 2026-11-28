@@ -20,7 +20,7 @@ import { AREV22_HORIZON, type LabBar } from './labels'
 import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, registerLabIndicator } from './templates'
 import { phaseLabel } from '../plugins/legend'
 import type { Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // The AREV lab as a client plugin: one sub-pane reading the prediction line of any AREV
 // generation, several at once, with each generation's arrows placed by the published rule or

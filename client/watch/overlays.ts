@@ -1,8 +1,8 @@
 import type { Chart, Overlay, OverlayCreate } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import { symbolVendor, symbolKey } from '../symbols'
 import { registerWatchOverlay, WATCH_OVERLAY_NAME, type WatchOverlayData } from './template'
 import { instrumentTarget, priceLevel, type Watch } from './types'
+import { symbolVendor, symbolKey } from '../instrumentkey'
 
 // Every price-watch line on every pane of the wall, and the two gestures they answer: a DRAG
 // (which the caller turns into the edit dialog) and a right-click (which the caller turns

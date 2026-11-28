@@ -13,7 +13,7 @@ import { loadRegistry, type RegistryParam } from '../tsregistry/api'
 import { libraryIndicators } from '../../src'
 import type { Side } from './model'
 import { resolutionDurationMs } from '../time/intervals'
-import { splitInstrumentKey } from '../symbols'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export interface LabSignalFamily extends SignalFamily {
   /** The registry row's declared parameters, in its order; empty when it has none. */

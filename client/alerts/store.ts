@@ -22,7 +22,7 @@ import { hasFeature } from '../capabilities'
 import { loadPreferences, preferencesLoaded, updatePreference } from '../preferences'
 import { compile, describeRule, type Labeller, RuleError } from './rules'
 import { type Alert, type AlertDefinition, type AlertSource, DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
-import { instrumentKey, splitInstrumentKey } from '../symbols'
+import { instrumentKey, splitInstrumentKey } from '../instrumentkey'
 
 const MAX_ALERTS = 200
 const PREFERENCE_KEY = 'alerts'

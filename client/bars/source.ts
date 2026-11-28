@@ -5,7 +5,7 @@ import { isNoData, type OHLCVBar } from '../ohlcv'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import type { CandleGrid } from '../time/timeframes'
 import { nominalMs, storedLadderFor } from '../time/intervals'
-import { splitInstrumentKey } from '../symbols'
+import { splitInstrumentKey } from '../instrumentkey'
 
 // GLUE. `BarSource` over `/getbars` -- the only module in client/replay that fetches bars. It
 // reads PAST the page-wide read clock on purpose (`asof: null`): the caches are the replay's

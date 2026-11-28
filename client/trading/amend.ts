@@ -5,7 +5,7 @@ import type { InstrumentInfo } from './instrument'
 import type { Amendment } from './lines'
 import { levelRefusal, restingRefusal } from './levels'
 import { closingPrice, fillingPrice, outcome, pricingContext, protectionValid } from './metrics'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // A change to a working stop, target or pending price, put to the user before it is sent -- in
 // words, and checked against what the engine would refuse. PURE, and shared: the chart's labels and

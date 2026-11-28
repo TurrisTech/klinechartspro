@@ -9,7 +9,7 @@ import type { ReplayBar } from '../bars/cache'
 import type { ReplayObserver } from './session'
 import { formatInstant } from '../time/format'
 import type { ObserverStop } from './walk'
-import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, tickerOf } from '../symbols'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, tickerOf } from '../instrumentkey'
 
 // PRICE WATCHES ON A REPLAY WALL: the same lines, the same right-click, the same dialog and
 // the same Notification Center as a live wall — over the replay's own market instead of the

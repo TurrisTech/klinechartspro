@@ -9,7 +9,7 @@ import { DEFAULT_SHOW, LAB_TEMPLATE, publishRun, registerLabTemplate, type ShowO
 import { type LabRun, runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'
 import type { Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // A SAVED STRATEGY ON A DASHBOARD PANE -- where a strategy developed in the Strategy Lab goes
 // once it is good. One template, `LAB:strategy` (./overlay.ts, the same drawing the lab's chart

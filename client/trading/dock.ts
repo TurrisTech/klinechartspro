@@ -12,7 +12,7 @@ import { TradingOverlays } from './overlays'
 import { TradingPanel } from './panel'
 import type { TradingSession } from './session'
 import { OrderTicket } from './ticket'
-import { symbolKey } from '../symbols'
+import { symbolKey } from '../instrumentkey'
 
 // The trading dock, mode-agnostic: the panel (account strip, tables), the order ticket, the
 // position popup, the per-pane overlays, the windows they live in, open/close and teardown --

@@ -36,7 +36,7 @@ import { freshRun, type Instant, instants, type RunState, spend, stepInstant, ty
 import type { Alert, Operand } from './types'
 import { resolutionDurationMs } from '../time/intervals'
 import { operandKey, readsCatalogue } from './operands'
-import { splitInstrumentKey, tickerOf } from '../symbols'
+import { splitInstrumentKey, tickerOf } from '../instrumentkey'
 
 /** The stream, as much of it as the monitor uses -- the page's `stream` is one. */
 interface BarStream {

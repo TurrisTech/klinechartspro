@@ -3,7 +3,7 @@ import type { MtfConfig } from '../mtf/config'
 import type { EditorContext } from './editor'
 import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './graphentry'
 import { periodToResolution } from '../time/intervals'
-import { symbolKey } from '../symbols'
+import { symbolKey } from '../instrumentkey'
 
 // THE ALERT EDITOR'S CONTEXT ON A WALL: where a new alert starts and what it may copy, read off
 // the wall as it stands each time the editor asks (`mountAlertManager`'s `context`). Until

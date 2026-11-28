@@ -41,7 +41,7 @@ import { type CardAction, h, moveText, OrderCard } from './ordercard'
 import { setTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { Arming } from '../ui/arming'
-import { symbolKey } from '../symbols'
+import { symbolKey } from '../instrumentkey'
 
 // The HTML half of what a trading session puts on one candle pane: a LABEL on every trade line
 // and the ORDER CARD (ordercard.ts). Mounted inside klinecharts' own price-area container

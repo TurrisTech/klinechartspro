@@ -1,11 +1,11 @@
 import type { Chart, OverlayEvent } from 'klinecharts'
 import type { ChartProPane, SymbolInfo } from '../../src'
 import { onViewMoved } from '../chartview'
-import { symbolVendor } from '../symbols'
 import { overlaySignature } from './paint'
 import { type LayerConfigCodec, layerConfigCodec } from '../plugins/settings/persist'
 import type { ChartLayer, LayerContext, LayerDecorator, LayerWindow } from './types'
 import { contains, missingWindows, PRICE_WINDOW_FRACTION, targetWindow } from './window'
+import { symbolVendor } from '../instrumentkey'
 
 // How a ChartLayer (types.ts) draws on a pane: coverage-gated drawing, a debounced redraw on
 // pan/zoom/data load/price-axis change, and a record of which price/time window the pane has

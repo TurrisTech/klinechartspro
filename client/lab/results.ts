@@ -9,7 +9,7 @@ import type { LabRun } from './runner'
 import type { ExitReason, LabTrade } from './trades'
 import { resolutionDurationMs } from '../time/intervals'
 import { button, el } from '../ui/dom'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // GLUE (DOM). What a run found, in four views:
 //

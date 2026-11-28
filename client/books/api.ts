@@ -2,7 +2,7 @@ import type { PluginFacilities, SourceSpec } from '../plugins/types'
 import { readHorizon, readTiled } from '../tiles/join'
 import { isTiledMetric, pointsFromTiles } from './tiles'
 import type { Page } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // The client half of the server's `books` plugin (`GET /plugins/books/values`,
 // wdashboard-server services/books.py): OANDA's 20-minute client order/position book

@@ -23,7 +23,7 @@ import { phaseLabel } from '../plugins/legend'
 import { registerMtfIndicators } from './templates'
 import { createMtfGraphStore, type MtfGraphStore, NODES_ARRAY } from './store'
 import type { Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // A multi-timeframe signal overlay as a client plugin -- AREV21 MTF, and the arev21_outlier
 // rank overlays (overlays.ts says what differs between them). Each binding reads ONE source: the

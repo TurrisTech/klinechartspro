@@ -11,7 +11,7 @@ import type { Alert, AlertDefinition } from './types'
 import { DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
 import { resolutionDurationMs } from '../time/intervals'
 import { button, el, input, select } from '../ui/dom'
-import { splitInstrumentKey } from '../symbols'
+import { splitInstrumentKey } from '../instrumentkey'
 
 // GLUE (DOM). The alert editor: a name, an instrument, a rule, and how it fires.
 //

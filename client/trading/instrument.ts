@@ -1,7 +1,7 @@
 import { cachedInstrumentConfig, instrumentConfig } from '../instrumentconfig'
 import { pipSizeOf } from '../pipsize'
 import type { InstrumentConfig } from '../instrumentconfig'
-import { instrumentKey, splitInstrumentKey } from '../symbols'
+import { instrumentKey, splitInstrumentKey } from '../instrumentkey'
 
 // Per-instrument facts the trading panel needs to price in pips the OANDA way, cached by
 // `vendor:TICKER` and fetched once from `GET /instrument`. A pip is the instrument's

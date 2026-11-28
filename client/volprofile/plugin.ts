@@ -8,7 +8,7 @@ import { fromStoredVpConfig, normaliseVpConfig, toStoredVpConfig, VP_DEFAULTS, V
 import { type BarStore, barSource, barSourceKey, pickSource, type Schedule, wireShift } from './source'
 import { isVolumeProfileIndicator, registerVolumeProfileIndicator, TEMPLATE_NAME } from './templates'
 import { nominalMs } from '../time/intervals'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // The volume profile as a client plugin: one template on the price pane, at most one source
 // (bars of a lower timeframe than the chart, source.ts), and no server change of any kind --

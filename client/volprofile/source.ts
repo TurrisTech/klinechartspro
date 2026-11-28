@@ -6,7 +6,7 @@ import type { StreamListener } from '../stream'
 import { lowerBound, type SourceBar } from './atoms'
 import { isInterval, nominalMs, parseInterval } from '../time/intervals'
 import type { Page, Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // Which bars the profile is built from, and reading them.
 //

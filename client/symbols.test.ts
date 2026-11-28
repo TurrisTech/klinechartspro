@@ -6,12 +6,12 @@ import { installWindow } from './plugins/testing'
 // a static import would be hoisted above the install.
 installWindow()
 
-const { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, symbolKey, symbolVendor, tickerOf } = await import('./symbols')
 const { normaliseSymbol } = await import('./alerts/store')
 const { defaultLayout } = await import('./layout')
 const { normalInstrument } = await import('./lab/model')
 const { pairCurrencies } = await import('./trading/metrics')
 const { instrumentTarget } = await import('./watch/types')
+const { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, symbolKey, symbolVendor, tickerOf } = await import('./instrumentkey')
 
 // The inputs a parse can go wrong on: a bare ticker, nothing at all, an empty vendor, an empty
 // ticker -- and well-formed keys of each vendor, for the spellings that must come through intact.

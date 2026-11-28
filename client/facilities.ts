@@ -1,10 +1,10 @@
 import { capabilities, hasFeature } from './capabilities'
 import { apiGet, getReadClock } from './config'
 import { stream } from './stream'
-import { symbolVendor } from './symbols'
 import { fetchPoints } from './plugins/api'
 import type { PluginFacilities, PluginStream } from './plugins/types'
 import { periodToResolution, resolutionDurationMs } from './time/intervals'
+import { symbolVendor } from './instrumentkey'
 
 // The app's shared services, bundled for plugin consumption. Built once per mount by
 // client/index.ts (and the Lab's chart, client/lab/page.ts); a plugin gets this and nothing else,

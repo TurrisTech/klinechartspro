@@ -4,7 +4,7 @@ import { describeMean } from './figures'
 import { normalInstrument, type Strategy } from './model'
 import type { LabRun } from './runner'
 import { button, el, iconButton } from '../ui/dom'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // GLUE (DOM). The Basket panel: the draft run on every instrument of a list -- the seven majors,
 // the 28 FX pairs, or any -- a row of figures per instrument and the pooled trades of them all.

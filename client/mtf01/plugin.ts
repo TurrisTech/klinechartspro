@@ -6,7 +6,7 @@ import { isMtf01Indicator, registerMtf01Indicators } from './templates'
 import { Mtf01Store } from './store'
 import { phaseLabel } from '../plugins/legend'
 import { gridFor } from '../time/timeframes'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // mtf01 as a client plugin: one sub-pane template over one source, and that source reads
 // TWO kinds of row from one response -- the cascade events in `points`, the trades they

@@ -13,7 +13,7 @@ import { snapshotOf } from './sessions'
 import type { CandleGrid } from '../time/timeframes'
 import { type BaseCheck, nominalMs, validateBase } from '../time/intervals'
 import { type ObserverStop, ReplayWalker, summaryIntervals, type WalkObserver, type WalkState } from './walk'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50

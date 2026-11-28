@@ -16,7 +16,7 @@ import { sortByLength, validateBase } from '../time/intervals'
 import { checkbox, dayInput, flash, REPLAY_SELECT, toggleButton } from './dom'
 import { button, el, select } from '../ui/dom'
 import { chartTheme } from '../ui/theme'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // GLUE (DOM). The replay controls: plain DOM in the house style (`kc-*` tokens, `wd-*` classes),
 // driven by a `ReplayController` they do not implement. The start dialog is ./startdialog.ts, the

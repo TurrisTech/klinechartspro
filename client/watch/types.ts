@@ -9,6 +9,7 @@
 
 import type { Condition } from '../alerts/conditions'
 import type { Repeat, Trigger } from '../alerts/policy'
+import { instrumentKey } from '../instrumentkey'
 
 export type WatchStatus = 'armed' | 'fired' | 'disabled'
 export type WatchTrigger = Trigger
@@ -111,10 +112,8 @@ export function priceDirection(watch: Watch): PriceDirection {
   return leaf.op === 'crosses_above' || leaf.op === 'crosses_below' ? leaf.op : 'crosses'
 }
 
-/** `vendor:TICKER` — a `price` watch's target, and the key the chart groups by. It is symbols.ts's
- * `instrumentKey`, written out rather than imported because this module is pure and tested without
- * a `window`, which symbols.ts reads at import (through config.ts); symbols.test.ts holds the two
- * together. */
+/** `vendor:TICKER` — a `price` watch's target, and the key the chart groups by: the instrument key
+ * (instrumentkey.ts). */
 export function instrumentTarget(vendor: string, symbol: string): string {
-  return `${vendor}:${symbol}`
+  return instrumentKey(vendor, symbol)
 }

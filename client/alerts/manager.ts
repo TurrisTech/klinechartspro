@@ -9,7 +9,7 @@ import { describeRule, type Labeller } from './rules'
 import type { ClientAlertStore } from './store'
 import type { Alert, AlertKind, AlertSource } from './types'
 import { formatInstant } from '../time/format'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // GLUE (DOM). THE ALERT MANAGER: one window listing every alert, by kind.
 //

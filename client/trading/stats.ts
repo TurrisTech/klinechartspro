@@ -6,7 +6,7 @@ import { balancesBefore, closedShareOfBalance } from './ledger'
 import { amountText, type LevelBasis, levelReadout } from './levels'
 import { orderFigures, outcome, type PricingContext, pricingContext, sizeFigures, tradeFigures } from './metrics'
 import { formatInstant } from '../time/format'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // What the position popup (inspector.ts) says about one trade or order. PURE: the rows are
 // worked out from a snapshot here and only drawn there, so the figures are tested on their own

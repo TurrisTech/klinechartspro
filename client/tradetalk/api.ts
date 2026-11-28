@@ -1,7 +1,7 @@
 import { closedBarPage } from '../bars/closed'
 import type { SourceSpec } from '../plugins/types'
 import type { Page, Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // The one thing TradeTalk reads that the chart does not already hold: DAILY bars.
 //

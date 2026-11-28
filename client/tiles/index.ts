@@ -26,7 +26,7 @@ import type { Tiled } from './join'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
 import { isIntraday } from '../time/intervals'
 import type { MarketHours } from '../time/markethours'
-import { instrumentKey, splitInstrumentKey } from '../symbols'
+import { instrumentKey, splitInstrumentKey } from '../instrumentkey'
 
 /** Every bar the manifest's tiles hold in `[from, to)`, or null if any of them will not load.
  * Null is never "no bars": a tile that will not load must fall back for the whole window

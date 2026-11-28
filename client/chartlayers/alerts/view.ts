@@ -17,7 +17,7 @@ import {
 import type { PriceAlerts } from './hub'
 import { describeZone, type Zone, zoneAround, zonePips, zoneUnit } from './zone'
 import { formatInstant } from '../../time/format'
-import { instrumentKey } from '../../symbols'
+import { instrumentKey } from '../../instrumentkey'
 
 // Price alerts ON A LAYER'S PANE: what a click, a hover and an enabled line look like, for any
 // chart layer that offers its data (types.ts `LayerAlerts`). This is the layer's DECORATOR

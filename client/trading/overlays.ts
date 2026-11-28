@@ -38,7 +38,7 @@ import { OnChartLayer } from './onchart'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { periodToResolution } from '../time/intervals'
-import { symbolKey } from '../symbols'
+import { symbolKey } from '../instrumentkey'
 
 // Everything a trading session puts on the candle panes, one instance per mounted wall:
 //

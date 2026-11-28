@@ -4,6 +4,7 @@ import { apiGet } from './config'
 import { dayGeometryOf, tradingWeekOf } from './time/daygeometry'
 import { pipSizeOf } from './pipsize'
 import { type InstrumentConfig, instrumentConfig } from './instrumentconfig'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey } from './instrumentkey'
 
 // wdashboard-server has no vendor/exchange field name of its own — `/search` returns
 // `description` as "{vendor}:{symbol}". We fold vendor into SymbolInfo.exchange since
@@ -71,48 +72,6 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
     periods: offeredIntervalCodes(vendor, symbol),
     pipSize: pipSizeOf(config) ?? undefined
   }
-}
-
-// -- the instrument key ------------------------------------------------------------------------
-//
-// `vendor:TICKER` ('oanda:EURUSD', 'coinbase:BTCUSD', 'schwab:$SPX') is how an instrument is named
-// everywhere a string has to carry it: the server's `symbol=` parameters, the paper engine's and a
-// replay's instrument, an alert's target, the Lab's strategies. These are its one spelling and its
-// one parse, so a reader and a writer cannot disagree about it.
-
-/** The vendor a bare ticker means. Older deep links and stored layouts named only the ticker, from
- * before this client served anything but OANDA (and a stored pane still leaves its vendor out when
- * it is this one, layout.ts), so a key or a SymbolInfo that names no vendor is read as OANDA rather
- * than refused. */
-export const DEFAULT_VENDOR = 'oanda'
-
-/** The `vendor:TICKER` key, spelled exactly as given: no case is changed. */
-export function instrumentKey(vendor: string, ticker: string): string {
-  return `${vendor}:${ticker}`
-}
-
-/**
- * A key's two halves, split at its first ':'. A bare ticker (no ':') is DEFAULT_VENDOR's; a key
- * that has one is taken as written, so ':EURUSD' has an empty vendor and 'oanda:' an empty ticker
- * -- the callers that refuse those check for them, rather than this guessing.
- */
-export function splitInstrumentKey(key: string): { vendor: string; ticker: string } {
-  const at = key.indexOf(':')
-  return at < 0 ? { vendor: DEFAULT_VENDOR, ticker: key } : { vendor: key.slice(0, at), ticker: key.slice(at + 1) }
-}
-
-/** A key's ticker, for a label: the whole string when it names no vendor. */
-export function tickerOf(key: string): string {
-  return splitInstrumentKey(key).ticker
-}
-
-export function symbolVendor(symbol: SymbolInfo): string {
-  return symbol.exchange ?? DEFAULT_VENDOR
-}
-
-/** The instrument key of a pane's symbol. */
-export function symbolKey(symbol: SymbolInfo): string {
-  return instrumentKey(symbolVendor(symbol), symbol.ticker)
 }
 
 // GET /search requires the `query` param even when empty (empty string = list everything),

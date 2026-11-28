@@ -16,8 +16,9 @@ import { describeUnavailable, fetchMtfGraph, type MtfGraphAnswer, type MtfGraphR
 import { fetchPoints } from '../plugins/api'
 import { TiledBarSource } from '../bars/tiled'
 import { type CandleGrid, gridFor } from '../time/timeframes'
-import { fetchSymbolInfo, splitInstrumentKey } from '../symbols'
+import { fetchSymbolInfo } from '../symbols'
 import type { AlertBar, PointSource } from './compute'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export type Point = { date: number } & Record<string, unknown>
 

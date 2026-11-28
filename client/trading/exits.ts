@@ -14,7 +14,7 @@ import { formatPrice, formatUnitsShort } from './format'
 import type { InstrumentInfo } from './instrument'
 import type { ReadoutPart } from './levels'
 import type { ExitUnit } from './prefs'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 export type { ExitUnit }
 

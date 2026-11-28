@@ -9,7 +9,7 @@ import { HttpBarSource } from './source'
 import type { CandleGrid } from '../time/timeframes'
 import { nextTask } from './yield'
 import { nominalMs } from '../time/intervals'
-import { splitInstrumentKey } from '../symbols'
+import { splitInstrumentKey } from '../instrumentkey'
 
 // THE REPLAY'S BARS, FROM TILES WHERE THERE ARE TILES (user, 2026-10-28: "bar replay should cache
 // future data. the base timeframe should be pulled, so a whole tile from the current replay time

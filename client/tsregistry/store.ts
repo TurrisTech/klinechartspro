@@ -1,6 +1,6 @@
 import { WindowStore } from '../plugins/store'
 import type { Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // THE store class for every registry-driven source, and deliberately the only one.
 //

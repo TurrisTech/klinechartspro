@@ -1,6 +1,6 @@
 import { apiGetResponse, getReadClock } from '../config'
 import { parseWatermark, type Watermark } from './freshness'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // `GET /levels` — precomputed support/resistance price levels. Mirrors the `Level` model in
 // wdashboard-server's schemas.py.

@@ -38,7 +38,7 @@ import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings
 import { type SimResult, simulate } from './trades'
 import { defaultBase, nominalMs, STORED_LADDER, resolutionDurationMs } from '../time/intervals'
 import { operandKey } from '../alerts/operands'
-import { splitInstrumentKey } from '../symbols'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export class RunError extends Error {
   constructor(

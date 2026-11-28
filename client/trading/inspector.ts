@@ -10,7 +10,7 @@ import type { PanelAmendments } from './panel'
 import { tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { findInspected, type Inspected, positionStats } from './stats'
-import { tickerOf } from '../symbols'
+import { tickerOf } from '../instrumentkey'
 
 // The position popup: click a position -- its line or label on a pane, its row on the order card,
 // its row in the account window's tables -- and a small window opens beside the click with that

@@ -4,7 +4,7 @@ import type { StreamListener } from '../stream'
 import type { PluginFacilities, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import type { WindowStore } from '../plugins/store'
 import type { Page, Range } from '../paging'
-import { instrumentKey } from '../symbols'
+import { instrumentKey } from '../instrumentkey'
 
 // The bid/ask of every bar, read from `/getbars?columns=all`. Nothing new on the server:
 // the store has always held the bid and ask OHLC beside the mid, `/getbars` passes them

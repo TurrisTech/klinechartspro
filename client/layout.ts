@@ -14,7 +14,8 @@ import type {
 import { periodFor } from '../src/utils/period'
 import { availablePeriods, defaultPeriod } from './periods'
 import type { PaneDoc } from './plugins/paneconfig'
-import { DEFAULT_SYMBOL_TICKER, DEFAULT_VENDOR, fetchSymbolInfo, instrumentKey, splitInstrumentKey, symbolVendor } from './symbols'
+import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo } from './symbols'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, symbolVendor } from './instrumentkey'
 
 // The SHAPE of one wall document -- per pane its symbol/period/indicators, those indicators'
 // parameters and where the pane was looking, plus the active pane, the two sync toggles and

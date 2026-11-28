@@ -23,9 +23,10 @@ import { fetchBars } from '../history'
 import type { ReplayBar } from '../bars/cache'
 import { TiledBarSource } from '../bars/tiled'
 import type { CandleGrid } from '../time/timeframes'
-import { fetchSymbolInfo, splitInstrumentKey } from '../symbols'
+import { fetchSymbolInfo } from '../symbols'
 import type { SignalPoint } from './events'
 import { nominalMs } from '../time/intervals'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export interface SignalRequest {
   plugin: string

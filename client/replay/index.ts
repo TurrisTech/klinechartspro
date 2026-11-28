@@ -3,7 +3,7 @@ import { capabilities, hasFeature } from '../capabilities'
 import { OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
 import type { PluginHost } from '../plugins/host'
-import { fetchSymbolInfo, symbolVendor, symbolKey, splitInstrumentKey, tickerOf } from '../symbols'
+import { fetchSymbolInfo } from '../symbols'
 import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { milestoneNotice } from '../trading/exits'
@@ -31,6 +31,7 @@ import { ReplayWatches } from './watches'
 import { type CandleGrid, gridOf, scheduleOf } from '../time/timeframes'
 import { sortByLength, periodToResolution } from '../time/intervals'
 import { formatInstant } from '../time/format'
+import { symbolVendor, symbolKey, splitInstrumentKey, tickerOf } from '../instrumentkey'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
 // session bound to the shared trading dock, the floating control window over the chart, and
