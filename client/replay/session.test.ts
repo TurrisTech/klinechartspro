@@ -3,13 +3,15 @@ import { installWindow } from '../plugins/testing'
 import type { ReplayAlertBook, SearchProgress } from './alerts'
 import type { BarSource, ReplayBar } from '../bars/cache'
 import type { AlertOccurrence } from './clock'
-import type { ObserverStop, ReplayObserver } from './session'
+import type { ReplayObserver } from './session'
 import { Engine } from '../sim/engine'
 import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from '../time/timeframes'
+import type { ObserverStop } from './walk'
 
 // session.ts imports ../trading/api -> ../auth -> ../config, which read `window` at import.
 installWindow()
-const { ReplayTradingSession, WALK_CHUNK_BARS, WALK_PROGRESS_MS } = await import('./session')
+const { ReplayTradingSession, WALK_PROGRESS_MS } = await import('./session')
+const { WALK_CHUNK_BARS } = await import('./walk')
 
 const H = 3_600_000
 const M = 60_000
