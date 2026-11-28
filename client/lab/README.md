@@ -108,7 +108,7 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `trades.ts` | entries as trades through the paper-trading fill engine (`client/sim/engine.ts`), plus breakeven, trailing, rule and time exits; the leverage cap, slippage, commission and financing (`financedCloses`) | yes |
 | `runner.ts` | one run: check, read (each source and timeframe once, longest first), then rule by rule signals → graphs → entries → filter, outcomes → trades for the rules together and each alone; the holdout's split instant | — |
 | `stats.ts` | a mean's t-statistic and its seeded bootstrap interval | yes |
-| `figures.ts` | a run (or its fitting part, or its holdout) as one row of figures, which way each is better, and a change between two | yes |
+| `figures.ts` | a run (or its fitting part, or its holdout) as one row of figures, which way each is better, and a change between two; the rest of what the Summary counts -- forward pips per horizon with their t and interval, the trades month by month, the entries not taken and why, the signals in the window | yes |
 | `changes.ts` | what an edit changed, in the editor's words | yes |
 | `sweep.ts`, `sweepview.ts` | every number a strategy holds (a signal's parameter, a number written in a condition, a stop, a cost...), a sweep over one, and its panel | logic yes |
 | `basket.ts`, `basketview.ts` | one strategy over many instruments (the 7 majors, the 28 FX pairs), the pooled trades, and its panel | logic yes |

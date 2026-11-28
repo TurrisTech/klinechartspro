@@ -2,7 +2,7 @@ import { button, el } from '../alerts/dom'
 import { rootIndex } from './entries'
 import { download, entriesCsv, fileStem, tradesCsv } from './export'
 import { figuresTable, type FigureRow } from './figtable'
-import { describeMean, type Figures, figuresOf } from './figures'
+import { byMonth, describeMean, type EntrySide, type Figures, figuresOf, forwardStats, notTaken, signalsInWindow } from './figures'
 import { meanStats } from './stats'
 import { type Problem, ruleLabel } from './model'
 import type { EntryOutcome, OutcomeSummary } from './outcomes'
@@ -31,8 +31,9 @@ import { resolutionDurationMs } from '../time/intervals'
 // The Summary's first table is the run's figures (figures.ts) -- beside the fitting part and the
 // holdout when the window has one, and beside the BASELINE run when one is pinned, each change
 // coloured by whether it is better. Under them: how sure the mean R and the forward pips are
-// (stats.ts), the trades month by month, and what the costs came to. Panels the page adds (the
-// run history, a sweep, a basket) are tabs after these four, and work without a run.
+// (stats.ts), the trades month by month, and what the costs came to -- counted in figures.ts,
+// drawn here. Panels the page adds (the run history, a sweep, a basket) are tabs after these
+// four, and work without a run.
 
 export interface Pick {
   /** The entry the row is about (a trade's entry too). */
@@ -150,7 +151,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
   let tab: Tab = storedTab()
   let run: LabRun | null = null
   let selected: string | null = null
-  let side: 'all' | 'long' | 'short' = 'all'
+  let side: EntrySide = 'all'
   /** Per table: the column it is sorted on and which way; null for time order. */
   const sorts: Record<Sortable, { col: number; desc: boolean } | null> = { entries: null, trades: null }
   const panels: ResultsPanel[] = []
@@ -423,16 +424,12 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
     box.appendChild(head)
     const summary: OutcomeSummary = r.summary[side]
     // How sure each mean is: forward pips per entry on this side, horizon by horizon.
-    const sideEntries = r.entries.filter((e) => side === 'all' || e.direction === side)
-    const forwardStats = summary.horizons.map((_, h) => meanStats(sideEntries.flatMap((e) => {
-      const pips = r.outcomes.get(e.id)?.forward[h]?.pips
-      return pips === undefined || !Number.isFinite(pips) ? [] : [pips]
-    })))
+    const forward = forwardStats(r, side)
     box.appendChild(
       table(
         ['after', 'n', 'mean pips', 't', '95% CI', 'median pips', 'its way', 'mean ATR'],
         summary.horizons.map((h, i) => {
-          const st = forwardStats[i]
+          const st = forward[i]
           return {
             cells: [
               `${h.bars} bar${h.bars === 1 ? '' : 's'}`,
@@ -489,7 +486,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         p.textContent = `${parts.length > 0 ? `Costs beyond the spread (${quoteOf(r)}, in the P&L and R above): ${parts.join(' · ')}.` : ''}${s.capped > 0 ? ` ${s.capped} trade${s.capped === 1 ? '' : 's'} cut to the ${r.strategy.sizing.maxLeverage}:1 leverage cap.` : ''}`.trim()
         box.appendChild(p)
       }
-      const months = monthly(r)
+      const months = byMonth(r)
       if (months.length > 1) {
         const mHead = el('div', 'wd-lab-subhead')
         mHead.textContent = 'Month by month -- by when each trade closed'
@@ -513,10 +510,8 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
         box.appendChild(p)
       }
       if (r.sim.skipped.length > 0) {
-        const why = new Map<string, number>()
-        for (const k of r.sim.skipped) why.set(k.reason, (why.get(k.reason) ?? 0) + 1)
         const p = el('p', 'wd-lab-note')
-        p.textContent = `Not taken: ${[...why].map(([reason, n]) => `${n} -- ${reason}`).join('; ')}`
+        p.textContent = `Not taken: ${notTaken(r.sim).map(([reason, n]) => `${n} -- ${reason}`).join('; ')}`
         box.appendChild(p)
       }
     }
@@ -536,8 +531,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
       if (title) f.title = title
       facts.appendChild(f)
     }
-    const inWindow = r.signals.filter((s) => s.knownAt >= r.from && s.knownAt <= r.to).length
-    fact(whole(inWindow), 'signals', 'Signals of the pool in the window (more are read before it, for the graphs in force at its start)')
+    fact(whole(signalsInWindow(r)), 'signals', 'Signals of the pool in the window (more are read before it, for the graphs in force at its start)')
     if (r.strategy.rules.some((rule) => rule.enabled && rule.steps.length > 0)) fact(String(r.graphs.length), 'graphs')
     fact(String(r.entries.length), 'entries', `${longs} long, ${r.entries.length - longs} short`)
     if (r.filtered.length > 0) fact(String(r.filtered.length), 'filtered out')
@@ -823,26 +817,6 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
       if (run && shown() === 'summary') render()
     }
   }
-}
-
-/** The closed trades by the month they closed in, on the instrument's clock. */
-function monthly(r: LabRun): Array<{ month: string; trades: number; wins: number; r: number; pips: number; pnl: number }> {
-  const zone = r.grid.schedule.timezone
-  const key = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit' })
-  const name = new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: 'short' })
-  const out = new Map<string, { month: string; trades: number; wins: number; r: number; pips: number; pnl: number }>()
-  for (const t of r.sim?.trades ?? []) {
-    if (t.closedAt === null || t.pnl === null) continue
-    const k = key.format(t.closedAt)
-    const m = out.get(k) ?? { month: name.format(t.closedAt), trades: 0, wins: 0, r: 0, pips: 0, pnl: 0 }
-    m.trades++
-    if (t.pnl > 0) m.wins++
-    m.r += t.r ?? 0
-    m.pips += t.pips ?? 0
-    m.pnl += t.pnl
-    out.set(k, m)
-  }
-  return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, m]) => m)
 }
 
 /** The instrument's quote currency (what P&L is counted in): EURUSD's USD. */
