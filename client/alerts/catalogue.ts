@@ -19,7 +19,7 @@ import { loadSignalCatalogue } from '../plugins/api'
 import type { SignalCatalogueEntry } from '../plugins/types'
 import { loadRegistry, type RegistryIndicator, type RegistrySeries } from '../tsregistry/api'
 import { type Feature, hasFeature } from '../capabilities'
-import { instantiate } from './compute'
+import { instantiate, type PointSource } from './compute'
 import { graphOverlays } from './graphentry'
 import { savedStrategyName } from '../lab/store'
 import { operandKey } from './rules'
@@ -251,4 +251,17 @@ export function byInterval(operands: readonly Operand[]): Map<string, Map<string
     group.set(operandKey(operand), operand)
   }
   return out
+}
+
+/** Where a server operand's points come from, or null when the catalogue has no such row (a
+ * registry entry removed since the alert was written) -- the operand then reads as missing. Here
+ * rather than in search.ts so the Lab's runner reads it without importing the search, which
+ * imports the Lab: that was the client's one runtime import cycle. */
+export function pointSource(operand: Operand, catalogue: ServerCatalogue): PointSource | null {
+  if (operand.kind === 'series') {
+    const row = catalogue.stored.find((s) => s.entry.name === operand.indicator)
+    return row ? { plugin: row.plugin, variant: row.variant, foldBy: row.foldBy } : null
+  }
+  if (operand.kind === 'signal') return { plugin: operand.plugin, variant: operand.variant, foldBy: null }
+  return null
 }

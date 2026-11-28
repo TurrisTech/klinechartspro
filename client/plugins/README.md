@@ -150,7 +150,7 @@ all overlaying 4h arev21 pay for one fetch, not three). But `storeFor(key, creat
 and the second silently gets it. Two rules follow, and both are load-bearing:
 
 - **Name the same factory.** Not an equivalent closure — the same module-level function, so
-  there is one place to look. `arev/store.ts`'s `arevStore` is the pattern.
+  there is one place to look. `mtf/store.ts`'s `createMtfGraphStore` is the pattern.
 - **Write the same row.** Anything a source needs that is *not* that row is an auxiliary
   array on the same window (`Page.arrays`), never a second kind of value. mtf01 ships its
   trades that way, and the MTF overlays their graph nodes (in a store of their own class).

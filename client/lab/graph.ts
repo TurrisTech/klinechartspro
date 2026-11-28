@@ -1,6 +1,7 @@
 // THE SIGNAL GRAPH, WITH EVERY RULE A SLOT. A port of the AREV21 outlier rank 85 overlay's graph
-// (client/mtf/graph.ts `buildGraphs` / `buildRootGraphs`) in which each rule that file hard-codes
-// is read from the strategy (model.ts `GraphSpec`) instead:
+// -- built on the server since wdashboard-server 0.56.0 (`services/mtfgraph.py`, `GET /mtf/graph`;
+// it was client/mtf/graph.ts before) -- in which each rule that builder hard-codes is read from
+// the strategy (model.ts `GraphSpec`) instead:
 //
 //   overlay (graph.ts)                                  here
 //   ------------------------------------------------    ---------------------------------------
@@ -28,8 +29,8 @@ import { resolutionDurationMs } from '../periods'
 import { type Compiled, compileExpr, type ExprEnv, type ExprValue } from './expr'
 import { type GraphSpec, SCOPES, type Side, type SlotCondition } from './model'
 
-/** One signal of the pool, as the graph and the entries read it. A `GraphSignal`
- * (client/mtf/graph.ts) by shape, so the overlay's builder accepts it too. */
+/** One signal of the pool, as the graph and the entries read it. The shape of the server
+ * builder's signal (`services/mtfgraph.py`), so a parity case reads the same on both sides. */
 export interface LabSignal {
   /** `source|interval|sourceDate`: unique in a run. */
   key: string
@@ -261,8 +262,8 @@ function further(side: Side, price: number, than: number): boolean {
 }
 
 /**
- * The graphs one root grows, oldest first: `buildGraphs` in client/mtf/graph.ts, with the
- * strategy's slots where that file has its own rules.
+ * The graphs one root grows, oldest first: the server builder's walk (`services/mtfgraph.py`),
+ * with the strategy's slots where that builder has its own rules.
  */
 function buildGraphs(
   input: GraphInput,

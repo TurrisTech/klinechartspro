@@ -13,7 +13,7 @@
 // the next bar close at which it holds.
 
 import { resolutionDurationMs } from '../periods'
-import { byInterval, leadInFor, type ServerCatalogue } from './catalogue'
+import { byInterval, leadInFor, pointSource, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { type AlertData, type Point, SpanCache } from './data'
 import { StrategyEntryEngine } from '../lab/alertentries'
@@ -56,17 +56,6 @@ export interface SearchOptions {
   shouldStop?: () => boolean
   /** How far the search has looked, after each chunk. */
   onProgress?: (reached: number) => void
-}
-
-/** Where a server operand's points come from, or null when the catalogue has no such row (a
- * registry entry removed since the alert was written) -- the operand then reads as missing. */
-export function pointSource(operand: Operand, catalogue: ServerCatalogue): PointSource | null {
-  if (operand.kind === 'series') {
-    const row = catalogue.stored.find((s) => s.entry.name === operand.indicator)
-    return row ? { plugin: row.plugin, variant: row.variant, foldBy: row.foldBy } : null
-  }
-  if (operand.kind === 'signal') return { plugin: operand.plugin, variant: operand.variant, foldBy: null }
-  return null
 }
 
 function sourceKey(source: PointSource, symbol: string, interval: string): string {
