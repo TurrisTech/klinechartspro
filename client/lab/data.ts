@@ -63,6 +63,11 @@ export class TailCache<R> {
   private rows: R[] = []
   private lo: number | null = null
   private hi: number | null = null
+  /** Reads run one at a time, as alerts/data.ts `SpanCache`'s do. Each splices what it fetched
+   * into the run as it stood when it started, so two at once -- a run abandoned for a newer one
+   * and still reading, a sweep beside the Run, two alerts on one strategy -- held the rows both
+   * fetched twice, or a hole as if it were read. */
+  private queue: Promise<unknown> = Promise.resolve()
 
   constructor(
     private readonly fetch: (from: number, to: number) => Promise<R[]>,
@@ -70,8 +75,14 @@ export class TailCache<R> {
     private readonly tailMs: number
   ) {}
 
-  async ensure(from: number, to: number): Promise<void> {
-    if (to <= from) return
+  ensure(from: number, to: number): Promise<void> {
+    if (to <= from) return Promise.resolve()
+    const run = this.queue.then(() => this.extend(from, to))
+    this.queue = run.catch(() => {})
+    return run
+  }
+
+  private async extend(from: number, to: number): Promise<void> {
     if (this.lo === null || this.hi === null || to < this.lo || from > this.hi) {
       this.rows = await this.fetch(from, to)
       this.lo = from
