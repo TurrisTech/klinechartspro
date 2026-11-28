@@ -1,11 +1,11 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
-import type { SeriesDoc } from '../indicators/api'
 import { peekStore } from '../plugins/store'
 import { matches, readField, type MarkSpec, type RegistryIndicator, type RegistrySeries } from './api'
 import { drawLabel, drawMark, type Fill } from './marks'
 import type { BarValue, RegistryStore } from './store'
 import { timestampCalc } from '../plugins/calc'
+import type { SeriesDoc } from '../ohlcv'
 
 // ONE klinecharts template, built from a registry row. It computes nothing: `calc` reads
 // the points the host fetched into the store and turns them into the figures the row

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import type { InstrumentConfig } from './symbols'
+import type { InstrumentConfig } from './instrumentconfig'
 
 // ONE request per instrument per page. Two modules read `GET /instrument` -- the pane's
 // SymbolInfo (client/symbols.ts) and the trading panel (client/trading/instrument.ts) -- and

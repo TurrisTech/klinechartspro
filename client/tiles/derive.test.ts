@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
 import { tradingWeekOf } from '../time/daygeometry'
-import type { MarketHours } from '../symbols'
 import { scheduleIsMarketOpen, type TradingWeek, tradingFilter } from '../time/timeframes'
 import { fold, foldedCoveredFrom, foldedCoveredTo, foldsIntradayRows, manifestDay, sourceInterval, sourceWindow } from './derive'
 import prod from './fixtures/trading-folds.json'
 import type { TileManifest } from './manifest'
+import type { MarketHours } from '../time/markethours'
 
 // Folding a derived timeframe out of the base tiles, in the browser.
 //

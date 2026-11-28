@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { LAYOUT_VERSION, type TileManifest } from './manifest'
-import type { MarketHours } from '../symbols'
+import type { MarketHours } from '../time/markethours'
 
 // A FOLD OF INTRADAY TILES ASKS WHICH ROWS COUNT, AND DECLINES WITHOUT AN ANSWER. The manifest
 // carries the grid (`day`) and not the trading week, so `barsFromTiles` asks `/instrument` for it

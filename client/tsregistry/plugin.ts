@@ -1,6 +1,6 @@
 import type { IndicatorGroup } from '../../src'
 import { apiUrl } from '../config'
-import { resolveSeries, type IndicatorPoint, type SeriesDoc } from '../indicators/api'
+import { resolveSeries } from '../indicators/api'
 import { fetchEnvelope, loadPluginCatalogue, type PluginCatalogue, toPage } from '../plugins/api'
 import type {
   BindContext,
@@ -21,6 +21,7 @@ import { loadRegistry, type RegistryIndicator, type RegistryWire } from './api'
 import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore } from './store'
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
 import { phaseLabel } from '../plugins/legend'
+import type { IndicatorPoint, SeriesDoc } from '../ohlcv'
 
 // The one client plugin for every server indicator: it reads the registry, registers a
 // template per row, and binds each one to the wire its row names.

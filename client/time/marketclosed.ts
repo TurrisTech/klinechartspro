@@ -1,7 +1,7 @@
 import type { KLineData } from 'klinecharts'
 import { dayGeometryOf } from './daygeometry'
 import { scheduleIntervalStart, scheduleIsMarketOpen, scheduleWireShift } from './timeframes'
-import type { MarketHours } from '../symbols'
+import type { MarketHours } from './markethours'
 
 // PURE. Drop bars the chart must not draw: rows whose label is not a legal candle open for
 // the instrument's own schedule.

@@ -1,9 +1,21 @@
 import type { KLineData } from 'klinecharts'
-import type { IndicatorPoint, SeriesDoc } from './indicators/api'
 
 // The wire contract of wdashboard-server's OHLCV app, mirroring the Pydantic models in
 // `wdashboard_server/services/schemas.py` field for field. Timestamps are always integer
 // Unix epoch milliseconds.
+
+/** The node document a server-computed indicator series is addressed by (services/indicators.py). */
+export interface SeriesDoc {
+  name: string
+  version?: string
+  params?: Record<string, number>
+  inputs?: Array<Record<string, unknown>>
+}
+
+export interface IndicatorPoint {
+  date: number
+  value: number | null
+}
 
 type ErrorCode =
   | 'invalid_request'

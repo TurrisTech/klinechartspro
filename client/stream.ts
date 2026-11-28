@@ -1,14 +1,7 @@
 import { getToken, sessionRejected } from './authtoken'
 import { capabilities, hasFeature } from './capabilities'
 import { STREAM_URL } from './config'
-import type { IndicatorPoint, SeriesDoc } from './indicators/api'
-import type {
-  NotificationWire,
-  OHLCVBar,
-  StreamClientMessage,
-  StreamError,
-  StreamServerMessage
-} from './ohlcv'
+import type { NotificationWire, OHLCVBar, StreamClientMessage, StreamError, StreamServerMessage, IndicatorPoint, SeriesDoc } from './ohlcv'
 
 // Reconnect backoff. A dropped stream is usually a proxy idle-timeout or a server rollout,
 // so the first retry is fast; the ceiling stops a server that is genuinely down from being
