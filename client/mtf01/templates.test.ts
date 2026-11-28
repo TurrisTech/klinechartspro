@@ -26,7 +26,7 @@ const bars = wire.map((timestamp) => ({ timestamp, open: 1, high: 1, low: 1, clo
 function stages(key: string, events: Event[], trades: Trade[], extend: Record<string, unknown>): (number | undefined)[] {
   const store = storeFor(key, (k) => new Mtf01Store(k)) as InstanceType<typeof Mtf01Store>
   store.ingest(events, { from: wire[0], to: wire[4] + 1 }, { trades })
-  return template.calc(bars, { calcParams: [], extendData: { seriesKey: key, rev: store.rev, pip: 0.0001, ...extend } }).map((v) => v.stage)
+  return template.calc(bars, { calcParams: [], extendData: { seriesKey: key, rev: store.rev, ...extend } }).map((v) => v.stage)
 }
 
 const armed = (endedAt: number): Event => ({

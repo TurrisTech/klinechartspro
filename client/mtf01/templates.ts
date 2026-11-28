@@ -1,4 +1,4 @@
-import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
+import { registerIndicator, utils, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import { MTF01_GENERATION, type Stage, type Mtf01Event, type Mtf01Trade } from './api'
 import { peekStore } from '../plugins/store'
@@ -38,8 +38,13 @@ const TEMPLATE_NAME = `MTF01:${MTF01_GENERATION}`
 interface ExtendData {
   seriesKey: string
   rev: number
-  /** One pip in price units, for the P&L label. From the instrument's own precision. */
-  pip: number
+  /** One pip in price, for the P&L label: the pane's `SymbolInfo.pipSize`, which comes from the
+   * instrument's configuration (`pipSizeOf`). Null for an instrument its configuration does not
+   * price in pips (crypto, equities) or one with no configuration at all. */
+  pip?: number | null
+  /** The instrument's display precision (`SymbolInfo.pricePrecision`, its configuration's
+   * `displayPrecision`), for a P&L label stated in price. Null without a configuration. */
+  pricePrecision?: number | null
   /** The pane's interval and its instrument's schedule (plain data, as extendData must be): how
    * an instant is placed on the pane's bars. Without them a bar is taken to be dated by its open,
    * which holds below 1D and nowhere a day is dated by its session. */
@@ -201,6 +206,17 @@ function label(ctx: CanvasRenderingContext2D, x: number, y: number, text: string
   ctx.restore()
 }
 
+/** A trade's P&L as its label states it: in the instrument's pips where its configuration gives it
+ * one, else as the price move at its display precision -- and, for an instrument with no
+ * configuration, at klinecharts' default precision, which is what that pane's price axis shows.
+ * Nothing here is a constant: a JPY cross reads in 0.01 pips because its configuration says so,
+ * and a crypto pair in price because its configuration gives it no pip. */
+export function pnlLabel(move: number, pip: number | null | undefined, pricePrecision: number | null | undefined): string {
+  const sign = move >= 0 ? '+' : ''
+  if (pip) return `${sign}${(move / pip).toFixed(1)}`
+  return `${sign}${utils.formatPrecision(move, pricePrecision ?? undefined)}`
+}
+
 function fillOf(trade: Mtf01Trade): Fill {
   if (trade.outcome === 'target') return 'solid'
   if (trade.outcome === 'stop') return 'hollow'
@@ -222,7 +238,7 @@ export function registerMtf01Indicators(): IndicatorGroup[] {
       shouldFormatBigNumber: false,
       visible: true,
       zLevel: 0,
-      extendData: { seriesKey: '', rev: 0, pip: 0.0001 },
+      extendData: { seriesKey: '', rev: 0 },
       series: 'normal',
       figures: [{ key: 'stage', title: 'cascade: ', type: 'line' }],
       // Three rungs and the floor; the axis never needs to be anything else, and pinning
@@ -241,7 +257,8 @@ export function registerMtf01Indicators(): IndicatorGroup[] {
         const data = chart.getDataList()
         const range = chart.getVisibleRange()
         const size = Math.max(3, Math.min(7, chart.getBarSpace().bar * 0.35))
-        const pip = indicator.extendData?.pip ?? 0.0001
+        const pip = indicator.extendData?.pip
+        const pricePrecision = indicator.extendData?.pricePrecision
         // The P&L labels are drawn left to right, so one x is enough to keep them apart.
         // On a 1D pane a cluster of trades is a few pixels wide and the labels land on top
         // of each other -- unreadable, and worse, it reads as one number. The marks
@@ -266,8 +283,7 @@ export function registerMtf01Indicators(): IndicatorGroup[] {
             const color = t.outcome === 'open' ? STAGE_COLOR.ltf : won ? WIN_COLOR : LOSS_COLOR
             triangleDown(ctx, x, y, size * 1.3, color, fillOf(t), 1)
             if (t.pnlPrice != null && x - lastLabelX >= LABEL_GAP) {
-              const pips = t.pnlPrice / pip
-              label(ctx, x + size * 1.3 + 3, y, `${pips >= 0 ? '+' : ''}${pips.toFixed(1)}`, color)
+              label(ctx, x + size * 1.3 + 3, y, pnlLabel(t.pnlPrice, pip, pricePrecision), color)
               lastLabelX = x
             }
           }
