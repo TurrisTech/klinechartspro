@@ -32,7 +32,10 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | — glue — | |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). Also `inertStream`. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk, and the follow (`follow`: one attempt at a time, for the newest request). |
-| `controls.ts` | The controls that fill the window (`../chrome/window.ts`), their keys, and the start dialog (plain DOM, `kc-*`/`wd-replay-*`). |
+| `controls.ts` | The controls that fill the window (`../chrome/window.ts`) and their keys (plain DOM, `kc-*`/`wd-replay-*`). |
+| `startdialog.ts` | The start dialog: its New replay tab (the start form, or why this instrument cannot start one) and its Sessions tab. |
+| `sessionlist.ts` | The list of past replays the dialog's Sessions tab and the window's Sessions panel both show: each row's facts and score, Stats, Delete, Resume. |
+| `dom.ts` | The small DOM builders those three share (`el`, `button`, `toggleButton`, `select`, `checkbox`, `dayInput`, `flash`, `chartTheme`). |
 | `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
 | `index.ts` | `mountBarReplay` — mirrors `mountPaperTrading` on the shared `mountTradingDock`; `startReplayFlow`, `bootReplay`, `clearReplay`. |
 
@@ -306,7 +309,7 @@ per instrument (cached per page); UTC, named so, when it cannot be resolved.
 The user, 2026-11-17, asked for this once the dialog's tab existed. The dialog opens only on a live
 wall, so switching meant Exit, then Replay, then Sessions, then Resume. The replay window's footer
 now has **Sessions**, one of its panels beside Go to, Base and Results, showing the same list
-(`controls.ts` `createSessionList`, which the dialog's tab uses too) of the owner's **other**
+(`sessionlist.ts` `createSessionList`, which the dialog's tab uses too) of the owner's **other**
 replays: the one in progress is filtered out (`index.ts`), so it cannot be deleted from under
 itself. The list loads each time the panel opens and is kept while it is open. Play re-renders the
 window twice a second, and the list is neither re-read nor rebuilt for that. Its scroll position is
@@ -925,19 +928,22 @@ for a watch, Stop during the search), persist round trip (an old blob with signa
 synthetic path: an armed watch forcing the walk, firing on the base bar that reaches the
 level, the band (a level between two closes), the blob round trip and the one-instrument
 refusal. The firing RULE is tested against the server's own fixtures in `client/watch`.
-`controls.test.ts` renders the controls and the start dialog into a real DOM (happy-dom,
+`controls.test.ts` renders the controls into a real DOM (happy-dom,
 registered for that file only and removed after it) over a fake `ReplayController`: which
 controller call every gesture makes, when each button is usable, Step becoming Stop, every stop
 reason's wording, the search's progress line, the Alerts toggle, the base
 refusal, Play (pace, self-stop on every reason, the settle wait, a hand-pressed Step ending it),
 the keys (kept from the chart, the repeat that must not cancel, a field's own keys), Exit's one
-press, and the dialog's New York clock on both sides of DST, its weekend default, On chart,
+press -- and the window's Sessions panel: one panel among the others, loaded each time it
+opens and kept across re-renders, Resume ending a play and saying "Opening…", a failed switch, a
+refusal under a visible advance, a quick step waited for, Delete. `startdialog.test.ts` renders
+the start dialog the same way: its New York clock on both sides of DST, its weekend default, On chart,
 Enter, its refusals and Random's range -- and its Sessions tab: the count, a row's facts scored
 from the blob and not the server's account, Stats, Delete's two presses and a refused delete,
 Resume, an unreadable blob, the remembered tab, Enter kept from Start, and a Stats that keeps
-the scroll box; a refused dialog (opens on Sessions, says why, nothing to start, not remembered) -- and the window's Sessions panel: one panel among the others, loaded each time it
-opens and kept across re-renders, Resume ending a play and saying "Opening…", a failed switch, a
-refusal under a visible advance, a quick step waited for, Delete. `sessions.test.ts` pins
+the scroll box; a refused dialog (opens on Sessions, says why, nothing to start, not remembered).
+The two share the stored replays they list and the gestures they drive (`testing.ts`, imported
+by tests only). `sessions.test.ts` pins
 the list's order and its score against the running session's; `mount.test.ts` resumes from a wall
 showing the instrument and from one on another instrument (the mount must not follow it away),
 and checks every save is stamped; it also switches from inside a replay: the panel lists only the

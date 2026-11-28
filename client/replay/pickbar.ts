@@ -1,6 +1,6 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import { chartTheme } from './controls'
+import { chartTheme } from './dom'
 import { formatClock } from '../time/format'
 import { gridFor } from '../time/timeframes'
 import { periodToResolution } from '../time/intervals'
