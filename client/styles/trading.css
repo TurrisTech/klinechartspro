@@ -1,0 +1,1652 @@
+/* --- Paper trading (client/trading) ------------------------------------------------- */
+
+/* The account window's body is the panel itself, so it brings no padding of its own. */
+.wd-trade-window > .wd-window-body {
+  padding: 0;
+}
+
+.wd-trade-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.wd-trade-panel-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    'account'
+    'tabs'
+    'tables';
+  gap: 0.5rem 1rem;
+  padding: 0.5rem 0.75rem;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* Floated small (or on a narrow screen) the whole body scrolls rather than only the tables,
+   so the account strip can wrap without squeezing the tables to nothing. */
+.wd-trade-panel.is-narrow .wd-trade-panel-body {
+  gap: 0.5rem;
+  overflow-y: auto;
+}
+
+.wd-trade-account {
+  grid-area: account;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  padding-bottom: 0.375rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The title-bar readout: what the account window still tells you rolled up to that bar. */
+.wd-trade-summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-summary-equity {
+  font-weight: 600;
+}
+
+.wd-trade-summary-pnl.is-up {
+  color: #26a69a;
+}
+
+.wd-trade-summary-pnl.is-down {
+  color: #ef5350;
+}
+
+.wd-trade-summary-open {
+  padding: 0 0.375rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+
+.wd-trade-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.wd-trade-stat-label {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.wd-trade-stat-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wd-trade-stat-value.is-up,
+.wd-trade-table .is-up {
+  color: #26a69a;
+}
+
+.wd-trade-stat-value.is-down,
+.wd-trade-table .is-down {
+  color: #ef5350;
+}
+
+.wd-trade-new-order {
+  margin-left: auto;
+}
+
+.wd-trade-account .wd-tk-btn {
+  height: 1.75rem;
+}
+
+/* --- The trading kit (client/trading/kit.ts) ------------------------------------------------
+
+   One set of controls for every trading surface -- the trade box, the order card on the pane, the
+   position popup and the account window -- so a stop loss, a figure or a Close button looks and
+   behaves the same wherever it is. Scoped under `.wd-tk` (each surface's root carries it): on the
+   pane, the library's `.klinecharts-pro * { border-color }` loads after this file at one class,
+   and every kit rule that colours a border has to outrank it. */
+
+.wd-tk {
+  --tk-buy: #26a69a;
+  --tk-sell: #ef5350;
+  --tk-warn: #f59e0b;
+  --tk-control: 1.75rem;
+  --tk-button: 1.5rem;
+  --tk-radius: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.wd-tk [hidden] {
+  display: none !important;
+}
+
+.wd-tk .is-up {
+  color: var(--tk-buy);
+}
+
+.wd-tk .is-down {
+  color: var(--tk-sell);
+}
+
+.wd-tk .is-warn {
+  color: var(--tk-warn);
+}
+
+/* Buttons. */
+.wd-tk .wd-tk-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  height: var(--tk-button);
+  padding: 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--tk-radius);
+  background: var(--background);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.wd-tk .wd-tk-btn:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--foreground) 35%, transparent);
+}
+
+.wd-tk .wd-tk-btn:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--ring) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.wd-tk .wd-tk-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wd-tk .wd-tk-btn.is-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.wd-tk .wd-tk-btn.is-quiet:hover:not(:disabled) {
+  border-color: transparent;
+  background: color-mix(in oklab, var(--foreground) 8%, transparent);
+  color: var(--foreground);
+}
+
+.wd-tk .wd-tk-btn.is-icon {
+  width: var(--tk-button);
+  padding: 0;
+  font-size: 14px;
+}
+
+.wd-tk .wd-tk-btn.is-chip {
+  min-width: 1.75rem;
+  padding: 0 0.375rem;
+}
+
+/* A preset whose level is the one set now. */
+.wd-tk .wd-tk-btn.is-chip.is-active {
+  border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.wd-tk .wd-tk-btn.is-primary {
+  border-color: var(--foreground);
+  font-weight: 600;
+}
+
+.wd-tk .wd-tk-btn.is-danger {
+  color: var(--kc-danger);
+}
+
+.wd-tk .wd-tk-btn.is-buy,
+.wd-tk .wd-tk-btn.is-sell {
+  border-color: var(--tk-buy);
+  background: var(--tk-buy);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.wd-tk .wd-tk-btn.is-sell {
+  border-color: var(--tk-sell);
+  background: var(--tk-sell);
+}
+
+.wd-tk .wd-tk-btn.is-buy:hover:not(:disabled),
+.wd-tk .wd-tk-btn.is-sell:hover:not(:disabled) {
+  border-color: transparent;
+  filter: brightness(1.08);
+}
+
+/* Waiting for its second press. A close or a cancel turns red; a buy or a sell keeps its colour
+   and gains a ring, so "Confirm: buy" never reads as a warning. */
+.wd-tk .wd-tk-btn.is-armed {
+  border-color: var(--kc-danger);
+  background: var(--kc-danger);
+  color: #ffffff;
+}
+
+.wd-tk .wd-tk-btn.is-buy.is-armed,
+.wd-tk .wd-tk-btn.is-sell.is-armed {
+  border-color: var(--background);
+  background: var(--tk-buy);
+  box-shadow: 0 0 0 2px var(--tk-buy);
+  animation: wd-tk-armed 900ms ease-in-out infinite alternate;
+}
+
+.wd-tk .wd-tk-btn.is-sell.is-armed {
+  background: var(--tk-sell);
+  box-shadow: 0 0 0 2px var(--tk-sell);
+}
+
+@keyframes wd-tk-armed {
+  to {
+    filter: brightness(1.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wd-tk .wd-tk-btn.is-armed {
+    animation: none;
+  }
+}
+
+/* Rows of buttons. Right-aligned ones grow leftwards when a button is relabelled "Confirm", so the
+   right edge -- under the pointer -- is where the second press finds it. */
+.wd-tk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-tk-row.is-end {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
+.wd-tk-row-label {
+  margin-right: 0.125rem;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+/* A segmented choice (Market / Limit / Stop). */
+.wd-tk .wd-tk-seg {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--tk-radius);
+}
+
+.wd-tk .wd-tk-seg > .wd-tk-btn {
+  height: var(--tk-control);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.wd-tk .wd-tk-seg > .wd-tk-btn + .wd-tk-btn {
+  border-left: 1px solid var(--border);
+}
+
+.wd-tk .wd-tk-seg > .wd-tk-btn.is-active {
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+/* A number: [− | 20.0 | pips ▾ | +]. */
+.wd-tk .wd-tk-num {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  width: 10.5rem;
+  height: var(--tk-control);
+  overflow: hidden;
+  border: 1px solid var(--input);
+  border-radius: var(--tk-radius);
+  background: var(--background);
+}
+
+.wd-tk .wd-tk-num:focus-within {
+  border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+}
+
+.wd-tk .wd-tk-num.is-invalid {
+  border-color: var(--tk-warn);
+}
+
+/* A change to it waits for Confirm. */
+.wd-tk .wd-tk-num.is-pending {
+  border-color: var(--tk-warn);
+  background: color-mix(in oklab, var(--tk-warn) 12%, var(--background));
+}
+
+.wd-tk .wd-tk-num > .wd-tk-num-step {
+  width: 1.5rem;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  font-size: 13px;
+}
+
+.wd-tk-num-input {
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 2.5rem;
+  padding: 0 0.25rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.wd-tk-num-input::placeholder {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.wd-tk .wd-tk-num-unit {
+  flex: none;
+  max-width: 5.5rem;
+  padding: 0 0.125rem 0 0.25rem;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.wd-tk-num-unit option {
+  background: var(--popover);
+  color: var(--popover-foreground);
+}
+
+/* A level: label and presets over the number and its readout. */
+.wd-tk-level {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.wd-tk-level-head {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: var(--tk-button);
+}
+
+.wd-tk-level-label {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* The chart's line in miniature: long dashes for a stop and a target (10 on, 6 off on the chart),
+   solid for a price. A CSS dashed border's dash length cannot be set. */
+.wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  width: 1rem;
+  height: 2px;
+  flex: none;
+  background: var(--tk-mark);
+}
+
+.wd-tk-level[data-role='stop'] .wd-tk-mark,
+.wd-tk-level[data-role='target'] .wd-tk-mark {
+  --tk-mark: var(--tk-sell);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 6px, transparent 6px 9px);
+}
+
+.wd-tk-level[data-role='target'] .wd-tk-mark {
+  --tk-mark: var(--tk-buy);
+}
+
+.wd-tk-presets {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.wd-tk-level-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.5rem;
+}
+
+.wd-tk-readout {
+  display: flex;
+  flex: 1 1 7rem;
+  flex-wrap: wrap;
+  gap: 0 0.3rem;
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-tk-sep {
+  opacity: 0.5;
+}
+
+.wd-tk-problem {
+  color: var(--tk-warn);
+  font-size: 11px;
+}
+
+.wd-tk-problem.is-error {
+  color: var(--kc-danger);
+}
+
+/* Exit management (kit.ts ExitField): a trailing stop is the stop's line with a step in it, a
+   breakeven a stop's dash meeting a dot, a milestone a dotted line -- the marks say "this moves the
+   stop" and "this only tells you". */
+.wd-tk-level[data-role='trail'] .wd-tk-mark {
+  --tk-mark: var(--tk-sell);
+  background:
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 0 100% / 45% 2px no-repeat,
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 100% 0 / 45% 2px no-repeat,
+    linear-gradient(var(--tk-mark), var(--tk-mark)) 50% 50% / 2px 100% no-repeat;
+  height: 6px;
+}
+
+.wd-tk-level[data-role='breakeven'] .wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 6px, transparent 6px 9px);
+}
+
+.wd-tk-level[data-role='notify'] .wd-tk-mark {
+  --tk-mark: var(--muted-foreground);
+  background: repeating-linear-gradient(90deg, var(--tk-mark) 0 2px, transparent 2px 4px);
+}
+
+.wd-tk-num-input.is-list {
+  text-align: left;
+}
+
+.wd-tk-exit-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  padding-left: 1.375rem;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.wd-tk-exit-extras[hidden] {
+  display: none;
+}
+
+.wd-tk-exit-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.wd-tk .wd-tk-exit-extra-input {
+  width: 3.75rem;
+  height: calc(var(--tk-button) - 4px);
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: var(--tk-radius);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  outline: none;
+}
+
+.wd-tk .wd-tk-exit-extra-input:focus {
+  border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+}
+
+.wd-tk-exit-extra-input::placeholder {
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+/* Figures: label/value rows in two columns, the same rows on every surface. */
+.wd-tk .wd-tk-figs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.125rem 0.75rem;
+  margin: 0;
+  padding-top: 0.375rem;
+  border-top: 1px dashed var(--border);
+}
+
+.wd-tk-figs.is-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.wd-tk-fig {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.wd-tk-fig.is-wide {
+  grid-column: 1 / -1;
+}
+
+.wd-tk-fig > dt {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.wd-tk-fig > dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wd-tk-figs.is-single .wd-tk-fig > dd,
+.wd-tk-fig.is-wide > dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* An open trade's actions: manage, then close, each on a line of its own -- so a button relabelled
+   "Confirm" grows within its line and never wraps the row. A wrap would move the button out from
+   under the pointer (and grow the popup, which the window then re-clamps) before the second press. */
+.wd-tk .wd-tk-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+  padding-top: 0.375rem;
+  border-top: 1px dashed var(--border);
+}
+
+.wd-tk-actions > .wd-tk-row {
+  flex-wrap: nowrap;
+}
+
+/* The waiting change, asked in words. */
+.wd-tk .wd-tk-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid color-mix(in oklab, var(--tk-warn) 45%, transparent);
+  border-radius: var(--tk-radius);
+  background: color-mix(in oklab, var(--tk-warn) 12%, transparent);
+}
+
+.wd-tk-confirm-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.wd-tk-confirm-title {
+  font-weight: 600;
+}
+
+.wd-tk-confirm-detail {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- The trade box (ticket.ts) --- */
+
+.wd-ticket-window {
+  /* The order card's width: a level field reads the same in both. */
+  width: 24rem;
+  max-width: calc(100vw - 16px);
+}
+
+.wd-ticket-window > .wd-window-body {
+  padding: 0.625rem 0.75rem 0.75rem;
+  overflow-y: auto;
+  max-height: calc(100vh - 7rem);
+}
+
+.wd-trade-ticket {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.wd-tk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.wd-tk-symbol {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wd-tk-position {
+  overflow: hidden;
+  padding: 0.0625rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* SELL at the bid · spread · BUY at the ask. The side picked is filled; the other is outlined. */
+.wd-tk-sides {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  height: 2.75rem;
+  padding: 0 0.625rem;
+  background: transparent;
+  color: var(--tk-buy);
+  font-weight: 400;
+  text-align: left;
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side.is-sell {
+  color: var(--tk-sell);
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side.is-buy {
+  text-align: right;
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side.is-active {
+  background: var(--tk-buy);
+  color: #ffffff;
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side.is-sell.is-active {
+  background: var(--tk-sell);
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side:not(.is-active):hover {
+  background: color-mix(in oklab, var(--tk-buy) 12%, transparent);
+  filter: none;
+}
+
+.wd-tk .wd-tk-btn.wd-tk-side.is-sell:not(.is-active):hover {
+  background: color-mix(in oklab, var(--tk-sell) 12%, transparent);
+}
+
+.wd-tk-side-name {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.wd-tk-side-price {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-tk-spread {
+  min-width: 1.75rem;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.wd-tk-note-input {
+  width: 100%;
+  height: var(--tk-control);
+  padding: 0 0.5rem;
+  border: 1px solid var(--input);
+  border-radius: var(--tk-radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.wd-tk-note-input:focus {
+  border-color: color-mix(in oklab, var(--foreground) 55%, transparent);
+}
+
+.wd-tk .wd-tk-btn.wd-tk-submit {
+  width: 100%;
+  height: 2.25rem;
+  font-size: 13px;
+}
+
+.wd-tk-foot {
+  justify-content: space-between;
+}
+
+.wd-tk-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* --- The position popup (inspector.ts) --- */
+
+.wd-pos-window {
+  width: 22rem;
+  max-width: calc(100vw - 16px);
+}
+
+.wd-pos-window > .wd-window-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem 0.75rem;
+}
+
+.wd-pos-window[data-side='buy'] .wd-window-title {
+  color: #26a69a;
+}
+
+.wd-pos-window[data-side='sell'] .wd-window-title {
+  color: #ef5350;
+}
+
+.wd-pos-headline {
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-pos-window .wd-tk-figs {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* The account window's notices above its tables. */
+.wd-trade-tables-notice {
+  margin: 0 0 0.375rem;
+}
+
+.wd-trade-tables-notice[hidden] {
+  display: none;
+}
+
+.wd-trade-tables > .wd-tk-confirm {
+  margin-bottom: 0.375rem;
+}
+
+/* Tabs + tables. */
+.wd-trade-tables {
+  grid-area: tables;
+  overflow: auto;
+  min-height: 0;
+}
+
+.wd-trade-tabs {
+  grid-area: tabs;
+  display: flex;
+  align-self: start;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.wd-trade-tab {
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.wd-trade-tab.is-active {
+  color: var(--foreground);
+  border-bottom-color: var(--primary);
+}
+
+.wd-trade-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-table th {
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  padding: 0.25rem 0.5rem;
+  position: sticky;
+  top: 0;
+  background: var(--background);
+}
+
+.wd-trade-table td {
+  padding: 0.1875rem 0.5rem;
+  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
+}
+
+/* A table row is a click target: it selects the position and opens its stats. */
+.wd-trade-row {
+  cursor: pointer;
+}
+
+.wd-trade-row:hover > td {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+}
+
+.wd-trade-row.is-selected > td {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+}
+
+.wd-trade-side-badge {
+  display: inline-flex;
+  width: 1.1rem;
+  height: 1.1rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: #fff;
+}
+
+.wd-trade-side-badge.is-buy {
+  background: #26a69a;
+}
+
+.wd-trade-side-badge.is-sell {
+  background: #ef5350;
+}
+
+.wd-trade-table td.wd-trade-editable {
+  padding: 0;
+}
+
+.wd-trade-cell-input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 0.1875rem 0.5rem;
+}
+
+.wd-trade-cell-input:hover,
+.wd-trade-cell-input:focus {
+  background: color-mix(in oklab, var(--muted-foreground) 14%, transparent);
+  outline: none;
+}
+
+.wd-trade-close {
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.6875rem;
+}
+
+.wd-trade-empty {
+  padding: 1rem;
+  text-align: center;
+  color: var(--muted-foreground);
+}
+
+/* History: whether it is on the chart, and what it adds up to. */
+.wd-trade-history-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-trade-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.wd-trade-history-totals {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-trade-history-totals.is-up {
+  color: #26a69a;
+}
+
+.wd-trade-history-totals.is-down {
+  color: #ef5350;
+}
+
+/* --- Performance: the balance or equity per period (client/trading/perfview.ts) ----------- */
+
+.wd-perf {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.wd-perf-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.wd-perf-seg {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.wd-perf-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+}
+
+.wd-perf-value {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.wd-perf-change {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.wd-perf-change.is-up {
+  color: #26a69a;
+}
+
+.wd-perf-change.is-down {
+  color: #ef5350;
+}
+
+.wd-perf-since,
+.wd-perf-readout,
+.wd-perf-note {
+  color: var(--muted-foreground);
+}
+
+.wd-perf-note {
+  font-size: 0.6875rem;
+}
+
+.wd-perf-note[hidden] {
+  display: none;
+}
+
+.wd-perf-plot {
+  position: relative;
+  min-height: 132px;
+  /* A drawing measured a scrollbar ago may be a few pixels wide; it is redrawn on the next
+     resize or poll, and must not scroll the window sideways meanwhile. */
+  overflow-x: hidden;
+}
+
+.wd-perf-plot.is-loading {
+  opacity: 0.55;
+}
+
+.wd-perf-svg {
+  display: block;
+  overflow: visible;
+  color: var(--muted-foreground);
+}
+
+.wd-perf-grid {
+  stroke: color-mix(in oklab, var(--border) 70%, transparent);
+  stroke-width: 1;
+}
+
+.wd-perf-base {
+  stroke: var(--muted-foreground);
+  stroke-width: 1;
+}
+
+.wd-perf-tick {
+  fill: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-perf-tick.is-base {
+  fill: var(--foreground);
+}
+
+/* The period still running is the account now: the same colour, lighter until it closes. */
+.wd-perf-bar.is-live {
+  opacity: 0.6;
+}
+
+.wd-perf-plot.has-hover .wd-perf-bar:not(.is-hover) {
+  opacity: 0.45;
+}
+
+.wd-perf-bar.is-flat {
+  opacity: 0.5;
+}
+
+.wd-perf-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.wd-perf-hit:focus {
+  outline: none;
+}
+
+.wd-perf-hit:focus-visible {
+  fill: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.wd-perf-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+:root .wd-trade-cell-input.is-proposed {
+  border-color: #f59e0b;
+  background: color-mix(in oklab, #f59e0b 14%, transparent);
+}
+
+/* --- On the price pane: line labels and the order card (client/trading/onchart.ts) --------- */
+
+/* Mounted inside klinecharts' price-area container, which is exactly the candles and clips to
+   them. The layer itself never takes a pointer; its labels and card do. */
+.wd-oc {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.wd-oc [hidden] {
+  display: none !important;
+}
+
+.wd-oc .is-up {
+  color: #26a69a;
+}
+
+.wd-oc .is-down {
+  color: #ef5350;
+}
+
+/* Labels hang off the right edge, beside the axis tag their line already carries. */
+/* Its own stacking context, under the card: a selected label is raised above its neighbours,
+   never above the card the user has open over it. */
+.wd-oc-tags {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  z-index: 0;
+  width: 0;
+  height: 100%;
+}
+
+/* Every rule here that colours a border is scoped under `.wd-oc`: src/app.css's
+   `.klinecharts-pro * { border-color: var(--border) }` loads after this file at the same
+   specificity, and would otherwise grey every label border, leader and chevron. */
+.wd-oc .wd-oc-tag {
+  --wd-oc-color: #787b86;
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: stretch;
+  height: 20px;
+  white-space: nowrap;
+  pointer-events: auto;
+  border: 1px solid var(--wd-oc-color);
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--background) 92%, transparent);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  will-change: transform;
+}
+
+.wd-oc-tag.is-draggable {
+  cursor: ns-resize;
+}
+
+.wd-oc-tag.is-selected,
+.wd-oc-tag.is-dragging {
+  z-index: 1;
+  box-shadow:
+    0 0 0 1px var(--wd-oc-color),
+    0 2px 8px rgb(0 0 0 / 0.22);
+}
+
+.wd-oc.is-dragging .wd-oc-tag:not(.is-dragging) {
+  opacity: 0.55;
+}
+
+.wd-oc-tag > span {
+  display: flex;
+  align-items: center;
+}
+
+.wd-oc-tag-name {
+  padding: 0 5px;
+  background: var(--wd-oc-color);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.wd-oc-tag-move {
+  padding: 0 4px 0 5px;
+}
+
+.wd-oc-tag-amount {
+  padding: 0 5px 0 0;
+}
+
+.wd-oc-tag-share {
+  padding: 0 5px 0 0;
+}
+
+/* A drag the engine would refuse: said before it is sent. */
+.wd-oc-tag.is-invalid {
+  border-style: dashed;
+}
+
+.wd-oc-tag.is-invalid .wd-oc-tag-name {
+  background: var(--muted-foreground);
+}
+
+.wd-oc-tag[data-edge='above'] .wd-oc-tag-name::before {
+  content: '▲\00a0';
+}
+
+.wd-oc-tag[data-edge='below'] .wd-oc-tag-name::before {
+  content: '▼\00a0';
+}
+
+.wd-oc-tag[data-edge='above'],
+.wd-oc-tag[data-edge='below'] {
+  opacity: 0.8;
+}
+
+/* From a label that had to move to make room, back to its line -- in the gap before the axis. */
+.wd-oc .wd-oc-tag-leader {
+  position: absolute;
+  right: -5px;
+  width: 4px;
+  border-right: 1px solid var(--wd-oc-color);
+  pointer-events: none;
+}
+
+.wd-oc .wd-oc-tag-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 0 4px;
+  border: 0;
+  border-left: 1px solid color-mix(in oklab, var(--wd-oc-color) 45%, transparent);
+  background: transparent;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wd-oc-tag-btn:hover,
+.wd-oc-tag-btn:focus-visible {
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--foreground);
+}
+
+.wd-oc-tag-btn.is-remove {
+  font-size: 13px;
+}
+
+.wd-oc-tag-btn.is-armed {
+  padding: 0 6px;
+  background: var(--kc-danger);
+  color: #ffffff;
+  font-size: 11px;
+}
+
+/* "Add stop / target" buttons are for the label in hand: shown on hover, or once selected. */
+.wd-oc-tag:not(:hover):not(.is-selected) .wd-oc-tag-btn.is-add {
+  display: none;
+}
+
+.wd-oc.is-compact .wd-oc-tag-amount,
+.wd-oc.is-compact .wd-oc-tag-share {
+  display: none;
+}
+
+/* The draft: outlined where a working order is filled, dotted where it is solid, and in its own
+   column (its right offset is set by the layout, clear of the working orders' labels). */
+.wd-oc-tags.is-draft-column {
+  z-index: 1;
+}
+
+.wd-oc .wd-oc-tag.is-draft {
+  border-style: dashed;
+  background: color-mix(in oklab, var(--background) 96%, transparent);
+}
+
+.wd-oc-tag.is-draft .wd-oc-tag-name {
+  background: transparent;
+  color: var(--wd-oc-color);
+}
+
+.wd-oc .wd-oc-tag-btn.is-place {
+  background: var(--wd-oc-color);
+  color: #ffffff;
+}
+
+.wd-oc .wd-oc-tag-btn.is-place:disabled {
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: not-allowed;
+}
+
+.wd-oc .wd-oc-tag-btn.is-place.is-armed {
+  background: var(--kc-danger);
+}
+
+/* A change waiting for confirmation: the label is the question -- a pulsing outline, and Confirm. */
+.wd-oc .wd-oc-tag.is-proposed {
+  z-index: 2;
+  opacity: 1;
+  animation: wd-oc-propose 1.4s ease-in-out infinite;
+}
+
+@keyframes wd-oc-propose {
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in oklab, var(--wd-oc-color) 45%, transparent),
+      0 2px 8px rgb(0 0 0 / 0.22);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wd-oc .wd-oc-tag.is-proposed {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--wd-oc-color);
+  }
+}
+
+.wd-oc .wd-oc-tag-btn.is-confirm {
+  padding: 0 6px;
+  background: var(--wd-oc-color);
+  color: #ffffff;
+}
+
+.wd-oc .wd-oc-tag-btn.is-confirm:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* Composing a draft, what is already working recedes -- and comes back under the pointer, so it
+   can still be managed. */
+.wd-oc.is-drafting .wd-oc-tag:not(.is-draft):not(.is-selected):not(:hover) {
+  opacity: 0.45;
+}
+
+.wd-oc.is-drafting .wd-oc-row:not(.is-draft):not(.is-expanded) {
+  opacity: 0.65;
+}
+
+/* The card. Bottom-left of the price area, clear of the jump-to-live control on the right. */
+.wd-oc-card {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(24rem, calc(100% - 16px));
+  max-height: calc(var(--wd-oc-pane-height, 100%) - 16px);
+  overflow: hidden;
+  pointer-events: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in oklab, var(--popover) 94%, transparent);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  color: var(--popover-foreground);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.18);
+  font-size: 12px;
+  line-height: 1.3;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wd-oc-card.is-collapsed {
+  width: auto;
+  max-width: calc(100% - 16px);
+}
+
+.wd-oc-card.is-collapsed .wd-oc-card-body,
+.wd-oc-card.is-empty .wd-oc-card-body {
+  display: none;
+}
+
+/* A phone-sized pane: the open card takes the width, and half the height at most. */
+.wd-oc.is-compact .wd-oc-card:not(.is-collapsed) {
+  right: 8px;
+  width: auto;
+  max-height: min(62%, calc(var(--wd-oc-pane-height, 100%) - 16px));
+}
+
+.wd-oc-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 0.25rem;
+  min-width: 0;
+}
+
+.wd-oc-card-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.375rem 0.625rem 0.375rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wd-oc-card-toggle:hover {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.wd-oc .wd-oc-card-chevron {
+  width: 0.4rem;
+  height: 0.4rem;
+  flex: none;
+  margin: 0 0.125rem;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  transition: transform 120ms ease;
+  opacity: 0.7;
+}
+
+.wd-oc-card.is-collapsed .wd-oc-card-chevron {
+  transform: translateY(1px) rotate(-135deg);
+}
+
+.wd-oc-card-symbol {
+  font-weight: 600;
+}
+
+.wd-oc-card-count {
+  padding: 0.0625rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.wd-oc-card-pnl {
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wd-oc-card-flash {
+  margin: 0 0.5rem 0.375rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  animation: wd-oc-flash-in 180ms ease-out;
+}
+
+.wd-oc-card-flash[data-tone='up'] {
+  background: color-mix(in oklab, #26a69a 22%, transparent);
+  color: #26a69a;
+}
+
+.wd-oc-card-flash[data-tone='down'] {
+  background: color-mix(in oklab, #ef5350 22%, transparent);
+  color: #ef5350;
+}
+
+@keyframes wd-oc-flash-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+.wd-oc-card-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+}
+
+.wd-oc-card-list {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.wd-oc-row + .wd-oc-row {
+  border-top: 1px solid var(--border);
+}
+
+.wd-oc-row.is-expanded {
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+.wd-oc-row-main {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.375rem 0.625rem;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wd-oc-row-main:hover {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.wd-oc-badge {
+  min-width: 1.25rem;
+  padding: 0.0625rem 0.3rem;
+  border-radius: 3px;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.wd-oc-badge.is-buy {
+  background: #26a69a;
+}
+
+.wd-oc-badge.is-sell {
+  background: #ef5350;
+}
+
+/* Not filled yet: outlined, not solid. */
+.wd-oc-badge.is-pending {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+.wd-oc-badge.is-pending.is-buy {
+  color: #26a69a;
+}
+
+.wd-oc-badge.is-pending.is-sell {
+  color: #ef5350;
+}
+
+.wd-oc-row-size {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.wd-oc-row-prices {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wd-oc-row-pips,
+.wd-oc-row-pnl,
+.wd-oc-row-share {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.wd-oc.is-compact .wd-oc-row-share {
+  display: none;
+}
+
+.wd-oc-row-pnl {
+  min-width: 3.5rem;
+  font-weight: 600;
+}
+
+.wd-oc.is-compact .wd-oc-row-prices {
+  visibility: hidden;
+}
+
+/* An expanded row: its levels, figures and actions, from the trading kit. */
+.wd-oc-row-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.125rem 0.625rem 0.625rem;
+}
+
+.wd-oc-card-body > .wd-tk-confirm {
+  margin: 0.5rem 0.5rem 0;
+}
+
+/* The card's draft row: the thing being worked on, set apart from what is working. */
+.wd-oc-row.is-draft {
+  border-bottom: 1px dashed var(--border);
+  background: color-mix(in oklab, var(--primary) 6%, transparent);
+}
+
+.wd-oc-row.is-draft .wd-oc-row-main {
+  cursor: default;
+}
+
+.wd-oc-row.is-draft .wd-oc-row-main:hover {
+  background: transparent;
+}
+
+.wd-oc-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border-top: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+/* The summary wraps inside its own box and the button never wraps below it: a confirm button
+   has to be where the first press found it when the second one comes. */
+.wd-oc-card-foot-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wd-oc-card-foot > .wd-tk-btn {
+  flex: none;
+}
+
+.wd-oc-card-foot-text.is-warn {
+  color: #f59e0b;
+}
+
+.wd-oc-card-error {
+  padding: 0.375rem 0.625rem;
+  border-top: 1px solid var(--border);
+  color: var(--kc-danger);
+}
