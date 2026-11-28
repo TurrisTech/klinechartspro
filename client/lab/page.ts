@@ -10,26 +10,14 @@ import { fetchSymbolInfo, fetchSymbols } from '../symbols'
 import { loadLabCatalogue, labIntervals, type LabCatalogue } from './catalogue'
 import { createBasketPanel } from './basketview'
 import { HttpLabData } from './data'
-import { download, fileStem, ImportError, readStrategyFile, strategyJson } from './export'
+import { download, fileStem, ImportError, strategyJson } from './export'
 import { createStrategyEditor } from './editor'
-import {
-  normalInstrument,
-  type Problem,
-  rank85Strategy,
-  ruleStrategy,
-  type Strategy,
-  strategyCopy,
-  strategyProblems,
-  utcDay,
-  utcDayStart,
-  withHoldoutKind,
-  withWindowKind
-} from './model'
+import { normalInstrument, type Problem, utcDay } from './model'
 import { DEFAULT_SHOW, LAB_DRAFT_TEMPLATE, type LabExtendData, publishRun, registerLabTemplate, type ShowOptions } from './overlay'
 import { createResultsView } from './results'
-import { createRunsPanel, type RunRecord, RunHistory } from './runs'
+import { createRunsPanel, type RunRecord } from './runs'
+import { LabSession, type NewKind } from './session'
 import { createSweepPanel } from './sweepview'
-import { type LabRun, RunCancelled, RunError, runStrategy, runWindow } from './runner'
 import { StrategyStore } from './store'
 import { periodToResolution } from '../time/intervals'
 
@@ -52,6 +40,11 @@ import { periodToResolution } from '../time/intervals'
 // reading a strategy reads what is saved. With Auto-run on, an edit that leaves the strategy
 // runnable runs it again; the data layer holds what it has read, so a re-run fetches nothing.
 // With it off, the results say they are out of date until Run.
+//
+// What is open, the drafts, saving and deleting, the header's settings and the runs are the
+// session's (./session.ts `LabSession`, no DOM). This module is the DOM around it -- the header,
+// the auto-run timer, the Delete button's second press, the chart's selection and what it shows --
+// and after each action draws what the session holds.
 //
 // Keys: Ctrl+Enter runs, Ctrl+S saves, `[` / `]` step the chart through the entries (or the
 // trades, on that tab) -- the last two anywhere but in a text field.
@@ -90,13 +83,6 @@ function typing(target: EventTarget | null): boolean {
   return target.isContentEditable || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || (target instanceof HTMLInputElement && !['checkbox', 'radio', 'button'].includes(target.type))
 }
 
-/** A strategy as compared for "unsaved": everything but when it was saved. */
-function signature(strategy: Strategy | null): string {
-  if (!strategy) return ''
-  const { updatedAt: _u, ...rest } = strategy
-  return JSON.stringify(rest)
-}
-
 export async function runLab(container: HTMLElement, params: URLSearchParams): Promise<void> {
   container.innerHTML = ''
   const theme = params.get('theme') ?? 'dark'
@@ -110,28 +96,13 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
 
   const store = new StrategyStore()
   const [catalogue] = await Promise.all([loadLabCatalogue().catch((): LabCatalogue | null => null), store.load()])
-  const data = new HttpLabData()
   root.innerHTML = ''
 
-  // -- drafts -----------------------------------------------------------------------------------
-  const drafts = new Map<string, Strategy>()
-  for (const saved of store.list()) drafts.set(saved.id, structuredClone(saved))
-  const requested = params.get('strategy')
-  let currentId = (requested && drafts.has(requested) ? requested : null) ?? storageGet(CURRENT_KEY) ?? ''
-  if (!drafts.has(currentId)) {
-    const first = store.list()[0]
-    if (first) currentId = first.id
-    else {
-      const fresh = rank85Strategy()
-      drafts.set(fresh.id, fresh)
-      currentId = fresh.id
-    }
-  }
-  const current = (): Strategy => drafts.get(currentId) as Strategy
-  const unsaved = (id: string): boolean => signature(drafts.get(id) ?? null) !== signature(store.get(id))
-  /** Drafts the user has edited or created. Only these can hold work worth a "leave the page?"
-   * prompt: the default strategy a first visit opens on is unsaved but holds nothing of theirs. */
-  const touched = new Set<string>()
+  // -- the session: the drafts, the runs, what is open (./session.ts) -----------------------------
+  const session = new LabSession(
+    { store, data: new HttpLabData(), newData: () => new HttpLabData(), catalogue: catalogue?.server ?? null, clock: () => Date.now() },
+    { requested: params.get('strategy'), remembered: storageGet(CURRENT_KEY) }
+  )
 
   // -- layout -----------------------------------------------------------------------------------
   const head = el('header', 'wd-lab-head')
@@ -144,42 +115,36 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   bodyBox.append(editorBox, main)
   root.append(head, bodyBox)
 
-  let lastRun: LabRun | null = null
   let selected: string | null = null
   const results = createResultsView({
     onPick: (pick) => {
       selected = pick.entryId
       chart?.select(pick.entryId)
-      if (lastRun) chart?.seek(pick.at, lastRun.grid)
+      if (session.lastRun) chart?.seek(pick.at, session.lastRun.grid)
     },
     onProblem: (problem) => reveal(problem)
   })
   main.appendChild(results.element)
 
   // -- this session's runs, a sweep, a basket ------------------------------------------------------
-  const history = new RunHistory()
-  /** The run on the chart, as the history keeps it. */
-  let currentRecord: RunRecord | null = null
-  const runLabel = (r: RunRecord): string => {
-    const n = history.list(r.strategy.id).indexOf(r) + 1
-    return `run ${n}, ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(r.ranAt)}`
-  }
+  const runLabel = (r: RunRecord): string =>
+    `run ${session.runNumber(r)}, ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(r.ranAt)}`
   const runsPanel = createRunsPanel({
     onPin: (record) => {
-      history.pin(currentId, record?.id ?? null)
+      session.pin(record)
       showHistory()
     },
     onRestore: (record) => {
-      drafts.set(currentId, { ...structuredClone(record.strategy), id: currentId })
-      editor.setStrategy(current())
+      session.restore(record)
+      editor.setStrategy(session.current)
       edited()
     }
   })
-  results.addPanel({ id: 'runs', label: () => `Runs ${history.list(currentId).length || ''}`.trim(), element: runsPanel.element })
+  results.addPanel({ id: 'runs', label: () => `Runs ${session.runs().length || ''}`.trim(), element: runsPanel.element })
   function showHistory(): void {
-    const baseline = history.baseline(currentId)
-    runsPanel.render(history.list(currentId), baseline, currentRecord?.strategy.id === currentId ? currentRecord.id : null)
-    results.setBaseline(baseline && baseline.id !== currentRecord?.id ? { figures: baseline.figures, label: runLabel(baseline) } : null)
+    runsPanel.render(session.runs(), session.baseline(), session.shownRunId())
+    const baseline = session.comparedBaseline()
+    results.setBaseline(baseline ? { figures: baseline.figures, label: runLabel(baseline) } : null)
     results.refreshTabs()
   }
 
@@ -188,12 +153,12 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     return p ? { type: p.type, min: p.min, max: p.max } : null
   }
   const sweepPanel = createSweepPanel({
-    strategy: () => current(),
+    strategy: () => session.current,
     paramInfo,
     // A sweep compares whole runs: no rule needs an account of its own.
-    run: (strategy, isCancelled) => runStrategy(strategy, data, { catalogue: catalogue?.server ?? null, isCancelled, perRule: false }),
+    run: (strategy, isCancelled) => session.sweepRun(strategy, isCancelled),
     use: (target, value) => {
-      target.apply(current(), value)
+      target.apply(session.current, value)
       editor.render()
       edited()
     }
@@ -201,14 +166,11 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   results.addPanel({ id: 'sweep', label: () => 'Sweep', element: sweepPanel.element })
 
   const basketPanel = createBasketPanel({
-    strategy: () => current(),
+    strategy: () => session.current,
     symbols: () => fetchSymbols('').then((list) => list.map((s) => `${s.exchange ?? 'oanda'}:${s.ticker}`)),
-    // The lab's own instrument reads through the page's data; any other through a data layer of
-    // its own, dropped with its run, so a basket of 28 never holds 28 instruments' bars at once.
-    run: (strategy, symbol, isCancelled) =>
-      runStrategy(strategy, symbol === current().instrument ? data : new HttpLabData(), { symbol, catalogue: catalogue?.server ?? null, isCancelled, perRule: false }),
+    run: (strategy, symbol, isCancelled) => session.basketRun(strategy, symbol, isCancelled),
     open: (symbol) => {
-      current().instrument = symbol
+      session.setInstrument(symbol)
       editor.render()
       edited()
     }
@@ -216,11 +178,11 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   results.addPanel({ id: 'basket', label: () => 'Basket', element: basketPanel.element })
 
   const editor = createStrategyEditor(
-    current(),
+    session.current,
     {
       catalogue,
-      intervals: () => labIntervals(current().instrument),
-      counts: () => (lastRun && lastRun.strategy.id === currentId ? new Map(lastRun.counts.map((c) => [`${c.source}|${c.interval}`, c.signals])) : null)
+      intervals: () => labIntervals(session.current.instrument),
+      counts: () => session.signalCounts()
     },
     () => edited()
   )
@@ -247,21 +209,17 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   picker.setAttribute('aria-label', 'Strategy')
   picker.addEventListener('change', () => switchTo(picker.value))
 
-  const nameInput = input('text', current().name, (value) => {
-    current().name = value
+  const nameInput = input('text', session.current.name, (value) => {
+    session.rename(value)
     edited(false)
   })
   nameInput.className = 'kc-input wd-lab-name'
   nameInput.setAttribute('aria-label', 'Name')
 
   /** A new draft: the rank 85 rules, the rule-event pair, or a copy of this one. */
-  function createNew(kind: 'rank85' | 'rule' | 'copy'): void {
-    const now = Date.now()
-    const fresh: Strategy = kind === 'copy' ? strategyCopy(current(), now) : kind === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
-    fresh.instrument = current().instrument
-    drafts.set(fresh.id, fresh)
-    touched.add(fresh.id)
-    switchTo(fresh.id)
+  function createNew(kind: NewKind): void {
+    session.create(kind)
+    opened()
   }
 
   // A strategy to or from a file: how one moves between the dev and prod dashboards.
@@ -274,22 +232,19 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     importFile.value = ''
     if (!file) return
     try {
-      const fresh = readStrategyFile(await file.text())
-      drafts.set(fresh.id, fresh)
-      touched.add(fresh.id)
+      session.importFile(await file.text())
       saveNote.textContent = ''
-      switchTo(fresh.id)
+      opened()
     } catch (err) {
       saveNote.textContent = `Could not import ${file.name}: ${err instanceof ImportError ? err.message : String(err)}`
     }
   })
-  const exportButton = button('wd-lab-menu-item', 'Export to a file', () => download(`${fileStem(current().name)}.strategy.json`, strategyJson(current()), 'application/json'))
+  const exportButton = button('wd-lab-menu-item', 'Export to a file', () => download(`${fileStem(session.current.name)}.strategy.json`, strategyJson(session.current), 'application/json'))
   exportButton.title = 'This strategy (the draft, as it stands) as a file; New from a file reads it back, here or on another dashboard'
 
   const save = button('kc-button kc-button-primary', 'Save', () => {
     try {
-      const saved = store.save(current())
-      drafts.set(saved.id, structuredClone(saved))
+      session.save()
       saveNote.textContent = ''
     } catch (err) {
       saveNote.textContent = err instanceof Error ? err.message : String(err)
@@ -298,17 +253,15 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   })
   save.title = 'Keep this strategy. A dashboard pane or an alert reads what is saved.'
   const revert = button('wd-lab-menu-item', 'Revert to the saved version', () => {
-    const saved = store.get(currentId)
-    if (!saved) return
-    drafts.set(currentId, structuredClone(saved))
-    editor.setStrategy(current())
+    if (!session.revert()) return
+    editor.setStrategy(session.current)
     refreshHead()
     scheduleRun()
   })
   revert.title = 'Discard the changes since the last Save'
   let deleteArmed: ReturnType<typeof setTimeout> | null = null
   /** A saved strategy is deleted; a draft never saved is discarded -- the same button. */
-  const removeWord = (): string => (store.get(currentId) ? 'Delete' : 'Discard')
+  const removeWord = (): string => (session.isSaved() ? 'Delete' : 'Discard')
   const disarm = (): void => {
     if (deleteArmed) clearTimeout(deleteArmed)
     deleteArmed = null
@@ -325,26 +278,19 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     disarm()
     closePops()
     try {
-      if (store.get(currentId)) store.remove(currentId)
+      session.remove()
     } catch (err) {
       saveNote.textContent = err instanceof Error ? err.message : String(err)
       return
     }
-    drafts.delete(currentId)
-    const next = [...drafts.keys()][0]
-    if (next) switchTo(next)
-    else {
-      const fresh = rank85Strategy()
-      drafts.set(fresh.id, fresh)
-      switchTo(fresh.id)
-    }
+    opened()
   })
   remove.title = 'Delete this strategy (press twice)'
   remove.addEventListener('blur', disarm)
   const saveNote = el('span', 'wd-lab-save-note')
 
   // The run's instrument and window.
-  const instrument = input('text', current().instrument, () => {})
+  const instrument = input('text', session.current.instrument, () => {})
   instrument.className = 'kc-input wd-lab-instrument'
   instrument.setAttribute('aria-label', 'Instrument')
   instrument.setAttribute('list', 'wd-lab-symbols')
@@ -361,8 +307,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     })
     .catch(() => {})
   instrument.addEventListener('change', () => {
-    current().instrument = normalInstrument(instrument.value)
-    instrument.value = current().instrument
+    session.setInstrument(normalInstrument(instrument.value))
+    instrument.value = session.current.instrument
     editor.render()
     edited()
   })
@@ -375,8 +321,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     ],
     'days',
     (value) => {
-      // The same span, as dates or as days. The draft is edited in place: the editor holds it.
-      Object.assign(current(), withWindowKind(current(), value, Date.now()))
+      // The same span, as dates or as days.
+      session.setWindowKind(value)
       refreshHead()
       edited()
     }
@@ -391,10 +337,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   days.className = 'kc-input wd-lab-days'
   days.setAttribute('aria-label', 'Days')
   days.addEventListener('input', () => {
-    const n = Math.round(Number(days.value))
-    if (!(n >= 1)) return
-    current().window = { kind: 'days', days: n }
-    edited()
+    if (session.setDays(Number(days.value))) edited()
   })
   const daysWord = el('span', '')
   daysWord.textContent = 'days'
@@ -405,11 +348,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     i.setAttribute('aria-label', label)
     i.title = `${label} (a UTC day; the last day is included)`
     i.addEventListener('change', () => {
-      const from = utcDayStart(fromDate.value)
-      const to = utcDayStart(toDate.value)
-      if (from === null || to === null) return
-      current().window = { kind: 'range', from, to: to + DAY_MS }
-      edited()
+      if (session.setRange(fromDate.value, toDate.value)) edited()
     })
     return i
   }
@@ -429,7 +368,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     ],
     '',
     (value) => {
-      Object.assign(current(), withHoldoutKind(current(), value, runWindow(current())))
+      session.setHoldoutKind(value)
       refreshHead()
       edited()
     }
@@ -445,10 +384,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   holdoutPercent.className = 'kc-input wd-lab-days'
   holdoutPercent.setAttribute('aria-label', 'Holdout percent')
   holdoutPercent.addEventListener('input', () => {
-    const n = Number(holdoutPercent.value)
-    if (!(n > 0 && n < 100)) return
-    current().holdout = { kind: 'percent', percent: n }
-    edited()
+    if (session.setHoldoutPercent(Number(holdoutPercent.value))) edited()
   })
   const holdoutPercentWord = el('span', '')
   holdoutPercentWord.textContent = '%'
@@ -458,22 +394,18 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   holdoutDate.setAttribute('aria-label', 'Holdout from')
   holdoutDate.title = 'The first day held out (UTC)'
   holdoutDate.addEventListener('change', () => {
-    const at = utcDayStart(holdoutDate.value)
-    if (at === null) return
-    current().holdout = { kind: 'from', at }
-    edited()
+    if (session.setHoldoutFrom(holdoutDate.value)) edited()
   })
   const holdoutLabel = el('div', 'wd-lab-window')
   holdoutLabel.append(holdoutKind, holdoutPercent, holdoutPercentWord, holdoutDate)
 
-  let running = false
   const runButton = button('kc-button kc-button-primary wd-lab-run', 'Run', () => {
-    if (!running) {
+    if (!session.running) {
       void run()
       return
     }
     stop()
-    if (lastRun) results.showStale('Stopped: these are the last finished run’s results. Run (Ctrl+Enter) to try again.')
+    if (session.lastRun) results.showStale('Stopped: these are the last finished run’s results. Run (Ctrl+Enter) to try again.')
   })
   runButton.title = 'Run the strategy over its window (Ctrl+Enter)'
   const auto = document.createElement('input')
@@ -554,19 +486,17 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
 
   function refreshHead(): void {
     picker.innerHTML = ''
-    const ids = [...new Set([...store.list().map((s) => s.id), ...drafts.keys()])]
-    for (const id of ids) {
-      const s = drafts.get(id) ?? store.get(id)
-      if (!s) continue
+    for (const s of session.strategies()) {
       const option = document.createElement('option')
-      option.value = id
-      option.textContent = `${s.name || 'Untitled'}${store.get(id) ? '' : ' (not saved)'}${unsaved(id) && store.get(id) ? ' •' : ''}`
+      option.value = s.id
+      option.textContent = `${s.name || 'Untitled'}${s.saved ? '' : ' (not saved)'}${s.unsaved && s.saved ? ' •' : ''}`
       picker.appendChild(option)
     }
-    picker.value = currentId
-    if (document.activeElement !== nameInput) nameInput.value = current().name
-    instrument.value = current().instrument
-    const w = current().window
+    picker.value = session.currentId
+    const current = session.current
+    if (document.activeElement !== nameInput) nameInput.value = current.name
+    instrument.value = current.instrument
+    const w = current.window
     windowKind.value = w.kind
     days.value = w.kind === 'days' ? String(w.days) : ''
     if (w.kind === 'range') {
@@ -575,14 +505,14 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     }
     for (const n of [days, daysWord]) n.hidden = w.kind !== 'days'
     for (const n of [fromDate, toWord, toDate]) n.hidden = w.kind !== 'range'
-    const h = current().holdout
+    const h = current.holdout
     holdoutKind.value = h?.kind ?? ''
     if (h?.kind === 'percent' && document.activeElement !== holdoutPercent) holdoutPercent.value = String(h.percent)
     if (h?.kind === 'from' && document.activeElement !== holdoutDate) holdoutDate.value = utcDay(h.at)
     for (const n of [holdoutPercent, holdoutPercentWord]) n.hidden = h?.kind !== 'percent'
     holdoutDate.hidden = h?.kind !== 'from'
-    const dirty = unsaved(currentId)
-    const saved = !!store.get(currentId)
+    const dirty = session.unsaved(session.currentId)
+    const saved = session.isSaved()
     save.disabled = !dirty || !!store.loadError
     revert.disabled = !dirty || !saved
     save.textContent = saved ? 'Save' : 'Save new'
@@ -590,17 +520,17 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     if (!deleteArmed) remove.textContent = removeWord()
     remove.title = saved ? 'Delete this strategy (press twice)' : 'Discard this draft, never saved (press twice)'
     // A fresh default nobody has touched holds nothing to discard.
-    remove.disabled = !saved && !touched.has(currentId)
+    remove.disabled = !session.removable
     root.classList.toggle('is-unsaved', dirty)
-    editor.markProblems(strategyProblems(current()))
+    editor.markProblems(session.problems())
     sweepPanel.refresh()
   }
 
   /** Take the page to a problem's slot: the editor's, or the header's instrument and window. */
   function reveal(problem: Problem): void {
     if (editor.reveal(problem)) return
-    const holdout = /holdout/.test(problem.message) ? (current().holdout?.kind === 'from' ? holdoutDate : holdoutPercent) : null
-    const field = holdout ?? (problem.where === 'Instrument' ? instrument : current().window.kind === 'days' ? days : fromDate)
+    const holdout = /holdout/.test(problem.message) ? (session.current.holdout?.kind === 'from' ? holdoutDate : holdoutPercent) : null
+    const field = holdout ?? (problem.where === 'Instrument' ? instrument : session.current.window.kind === 'days' ? days : fromDate)
     field.focus()
     field.classList.remove('is-flash')
     void field.offsetWidth
@@ -608,33 +538,30 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   }
 
   function switchTo(id: string): void {
-    if (!drafts.has(id)) {
-      const saved = store.get(id)
-      if (!saved) return
-      drafts.set(id, structuredClone(saved))
-    }
-    stop()
+    if (session.open(id)) opened()
+  }
+
+  /** The page after the session opened a strategy (another one, a new draft, or the one left
+   * after a delete): nothing running, the editor and the header on it, no run shown yet. */
+  function opened(): void {
+    showIdle()
     disarm()
-    currentId = id
-    storageSet(CURRENT_KEY, id)
-    lastRun = null
-    currentRecord = null
-    editor.setStrategy(current())
+    storageSet(CURRENT_KEY, session.currentId)
+    editor.setStrategy(session.current)
     refreshHead()
     results.showMessage('Press Run to evaluate the strategy over its window.')
     showHistory()
     publishRun(RUN_KEY, null)
     chart?.draw()
-    void chart?.setInstrument(current().instrument)
+    void chart?.setInstrument(session.current.instrument)
     scheduleRun(0)
   }
 
   // -- running ----------------------------------------------------------------------------------
-  let token = 0
   let timer: ReturnType<typeof setTimeout> | null = null
 
   function edited(rerun = true): void {
-    touched.add(currentId)
+    session.touch()
     refreshHead()
     if (!rerun) return
     if (auto.checked) {
@@ -642,9 +569,9 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
       return
     }
     // No run is coming: say so, and what stops one.
-    const problems = strategyProblems(current())
+    const problems = session.problems()
     if (problems.length > 0) results.showProblems(problems, `${problems.length} problem${problems.length === 1 ? '' : 's'} to fix before it can run`)
-    else if (lastRun) results.showStale('Edited since this run: Run (Ctrl+Enter) to see the change')
+    else if (session.lastRun) results.showStale('Edited since this run: Run (Ctrl+Enter) to see the change')
   }
 
   function scheduleRun(delay = AUTO_DELAY_MS): void {
@@ -653,7 +580,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     if (!auto.checked) return
     timer = setTimeout(() => {
       timer = null
-      const problems = strategyProblems(current())
+      const problems = session.problems()
       if (problems.length > 0) {
         results.showProblems(problems, `${problems.length} problem${problems.length === 1 ? '' : 's'} to fix before it can run`)
         return
@@ -664,50 +591,47 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
 
   /** Abandon the run in progress; what the last one found stays shown. */
   function stop(): void {
-    token++
-    running = false
+    session.stop()
+    showIdle()
+  }
+
+  /** The Run button and the progress line with no run going. */
+  function showIdle(): void {
     results.progress(null)
     runButton.textContent = 'Run'
     runButton.title = 'Run the strategy over its window (Ctrl+Enter)'
   }
 
+  function showFailure(err: unknown): void {
+    console.error('[lab] run failed', err)
+    results.showProblems([], `The run failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
   async function run(): Promise<void> {
     if (timer) clearTimeout(timer)
     timer = null
-    const mine = ++token
-    const strategy = structuredClone(current())
-    running = true
     results.progress('Running…')
     runButton.textContent = 'Stop'
     runButton.title = 'Stop this run'
+    const outcome = await session.run((text) => results.progress(text))
     try {
-      const result = await runStrategy(strategy, data, {
-        catalogue: catalogue?.server ?? null,
-        onProgress: (text) => {
-          if (mine === token) results.progress(text)
-        },
-        isCancelled: () => mine !== token
-      })
-      if (mine !== token) return
-      lastRun = result
-      currentRecord = history.add(result)
-      publishRun(RUN_KEY, result)
-      showHistory()
-      results.showRun(result)
-      if (selected) results.select(selected)
-      await chart?.setInstrument(result.symbol)
-      chart?.draw()
-      // The editor shows each timeframe's signal count; redraw it unless the user is typing in it.
-      if (!editorBox.contains(document.activeElement)) editor.render()
+      if (outcome.kind === 'done') {
+        const result = outcome.run
+        publishRun(RUN_KEY, result)
+        showHistory()
+        results.showRun(result)
+        if (selected) results.select(selected)
+        await chart?.setInstrument(result.symbol)
+        chart?.draw()
+        // The editor shows each timeframe's signal count; redraw it unless the user is typing in it.
+        if (!editorBox.contains(document.activeElement)) editor.render()
+      } else if (outcome.kind === 'problems') results.showProblems(outcome.problems, outcome.message)
+      else if (outcome.kind === 'failed') showFailure(outcome.error)
     } catch (err) {
-      if (err instanceof RunCancelled || mine !== token) return
-      if (err instanceof RunError) results.showProblems(err.problems, err.message)
-      else {
-        console.error('[lab] run failed', err)
-        results.showProblems([], `The run failed: ${err instanceof Error ? err.message : String(err)}`)
-      }
+      // Showing the run failed: said as a failed run is, unless a newer run has taken over.
+      if (session.isLatest(outcome.ticket)) showFailure(err)
     } finally {
-      if (mine === token) stop()
+      if (session.settle(outcome.ticket)) showIdle()
     }
   }
 
@@ -726,7 +650,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   })
 
   window.addEventListener('beforeunload', (event) => {
-    if (![...touched].some((id) => drafts.has(id) && unsaved(id))) return
+    if (!session.hasUnsavedWork()) return
     event.preventDefault()
     event.returnValue = ''
   })
@@ -735,7 +659,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   let chart: LabChart | null = null
   refreshHead()
   try {
-    chart = await mountLabChart(chartBox, current().instrument, theme, () => ({ runKey: RUN_KEY, show, selected }))
+    chart = await mountLabChart(chartBox, session.current.instrument, theme, () => ({ runKey: RUN_KEY, show, selected }))
   } catch (err) {
     console.error('[lab] the chart could not be built', err)
     const failed = el('p', 'wd-lab-error')
