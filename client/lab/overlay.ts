@@ -48,15 +48,34 @@ export interface LabExtendData {
   selected?: string | null
 }
 
-const runs = new Map<string, LabRun | null>()
+/** How many runs are kept: one for each of a wall's twelve panes drawing a saved strategy and the
+ * Strategy Lab page's own, with room for the ones panes have just moved off. */
+const MAX_RUNS = 32
+
+// Least recently published or read first: each moves its key to the end of the map, and past
+// `MAX_RUNS` the front goes. Nothing says when a run stops being drawn -- a pane that moves to
+// another strategy, instrument or trades setting publishes under a new key, and the store that
+// published the old one is dropped with its last binding without telling anyone -- so until
+// 2026-11-28 every run a page made stayed here, each with its pool, graphs and trades. A run still
+// drawn is read at each of its pane's redraws and published again at each re-run (every minute,
+// ./plugin.ts), so it goes only once 32 others have been made or read since.
+const runs = new Map<string, LabRun>()
 
 /** File a run under `key` for every `LAB:strategy` indicator naming it; null clears it. */
 export function publishRun(key: string, run: LabRun | null): void {
+  runs.delete(key)
+  if (run === null) return
   runs.set(key, run)
+  while (runs.size > MAX_RUNS) runs.delete(runs.keys().next().value as string)
 }
 
 export function publishedRun(key: string | null): LabRun | null {
-  return key ? (runs.get(key) ?? null) : null
+  if (!key) return null
+  const run = runs.get(key)
+  if (run === undefined) return null
+  runs.delete(key)
+  runs.set(key, run)
+  return run
 }
 
 // -- placement ----------------------------------------------------------------------------------

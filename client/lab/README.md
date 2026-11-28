@@ -209,6 +209,13 @@ The user chose all of these when asked what the lab lacked:
 - **Saving is explicit**, as a workspace's is; a dashboard pane and an alert read the SAVED
   strategy, so an experiment in the lab changes nothing else until it is kept. The page asks before
   closing only for a draft the user changed.
+- **One store of saved strategies per page.** The Lab page's session and its chart's "Saved
+  strategy" overlay read the same `StrategyStore`: the page hands its own to `builtinPlugins`
+  (`BuiltinOptions.strategies`), where the wall's overlay and alerts read `sharedStrategyStore`. A
+  store hears every OTHER store's save on the channel, in the same page too, so until 2026-11-28
+  the overlay's store re-read `/preferences` at each Save -- before the debounced write had gone
+  out -- and held the set as it stood before the save. A save on the page re-runs the panes
+  showing that strategy through the store's `onChange`; one in another tab, through the channel.
 - **A span's tail is read again** whenever the data layer extends it forward: a span read up to now
   ends on a bar still forming, which a closed-bars read leaves out (`TailCache`).
 - **A lab rule offers no graph entries and no strategy entries**: the graph is the lab's own job,

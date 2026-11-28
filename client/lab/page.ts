@@ -100,6 +100,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   placeholder.textContent = 'Loading the Strategy Lab…'
   root.appendChild(placeholder)
 
+  // The page's ONE store of saved strategies: the session edits through it, and the chart's
+  // "Saved strategy" overlay is handed it (`mountLabChart`) rather than reading a store of its own.
   const store = new StrategyStore()
   const [catalogue] = await Promise.all([loadLabCatalogue().catch((): LabCatalogue | null => null), store.load()])
   root.innerHTML = ''
@@ -663,7 +665,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   let chart: LabChart | null = null
   refreshHead()
   try {
-    chart = await mountLabChart(chartBox, session.current.instrument, theme, () => ({ runKey: RUN_KEY, show, selected }))
+    chart = await mountLabChart(chartBox, session.current.instrument, theme, () => ({ runKey: RUN_KEY, show, selected }), store)
   } catch (err) {
     console.error('[lab] the chart could not be built', err)
     const failed = el('p', 'wd-lab-error')
@@ -758,12 +760,15 @@ interface LabChart {
 }
 
 /** One chart pane -- the dashboard's own component, datafeed and plugins, so every indicator the
- * dashboard offers can be put beside the run -- with the `LAB:draft` overlay on its price pane. */
+ * dashboard offers can be put beside the run -- with the `LAB:draft` overlay on its price pane.
+ * Its plugins read `strategies`, the page's store, and never one of their own (builtins.ts
+ * `BuiltinOptions`). */
 async function mountLabChart(
   container: HTMLElement,
   instrument: string,
   theme: string,
-  view: () => { runKey: string; show: ShowOptions; selected: string | null }
+  view: () => { runKey: string; show: ShowOptions; selected: string | null },
+  strategies: StrategyStore
 ): Promise<LabChart> {
   registerLabTemplate()
   const { vendor, ticker } = splitInstrumentKey(instrument)
@@ -772,7 +777,7 @@ async function mountLabChart(
   const hydrated = await hydrateLayout(layout)
   const levels = createLevelsIndicators()
   const pluginHost = await createPluginHost({
-    plugins: builtinPlugins(levels.plugin),
+    plugins: builtinPlugins(levels.plugin, { strategies: async () => strategies }),
     facilities: createFacilities({}),
     paneDocs: {},
     requestPersist: () => {}
