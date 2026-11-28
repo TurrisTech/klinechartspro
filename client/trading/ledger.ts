@@ -24,6 +24,30 @@ export function closedTrades(snapshot: Pick<SimSnapshot, 'trades'>): SimTrade[] 
     .map(({ trade }) => trade)
 }
 
+/** The deepest fall of a balance from an earlier high, over realised P&L in close order from
+ * `start`: the fall that is the largest FRACTION of the high it fell from -- what a max drawdown in
+ * percent means -- with that same fall in money. Null with no closes; 0 and 0 when the balance
+ * never fell. Where two falls are the same fraction (or the high was not positive), the larger in
+ * money.
+ *
+ * The one definition the bar replay's Results and the Strategy Lab both report. They used to
+ * pick different falls -- the largest in money against the largest as a fraction -- so one curve
+ * read 25% in one and 30% in the other (10,000 to 7,000, then 20,000 to 15,000). */
+export function maxDrawdown(start: number, pnls: readonly number[]): { amount: number; fraction: number } | null {
+  if (pnls.length === 0) return null
+  let balance = start
+  let peak = start
+  let deepest = { amount: 0, fraction: 0 }
+  for (const pnl of pnls) {
+    balance += pnl
+    if (balance > peak) peak = balance
+    const amount = peak - balance
+    const fraction = peak > 0 ? amount / peak : 0
+    if (fraction > deepest.fraction || (fraction === deepest.fraction && amount > deepest.amount)) deepest = { amount, fraction }
+  }
+  return deepest
+}
+
 /** The balance each closed trade was realised against -- the balance just before it closed --
  * by trade id. */
 export function balancesBefore(snapshot: Pick<SimSnapshot, 'trades' | 'account'>): Map<string, number> {

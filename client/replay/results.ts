@@ -1,5 +1,6 @@
 import type { SimSnapshot } from '../trading/api'
 import { formatDuration, formatMoney, formatShare } from '../trading/format'
+import { maxDrawdown } from '../trading/ledger'
 import type { StatRow, StatTone } from '../trading/stats'
 
 // PURE. How a replay session has gone, worked out from its snapshot: the closed trades' realised
@@ -32,7 +33,9 @@ export interface ReplayResults {
   best: number | null
   worst: number | null
   /** The deepest fall of the balance from a previous high, over the closes in order -- the
-   * realised curve, so a drawdown is one the account actually took. */
+   * realised curve, so a drawdown is one the account actually took. Deepest as a percentage of
+   * that high, as the Strategy Lab reports it (`trading/ledger.ts` `maxDrawdown`); `amount` is
+   * the same fall in money. */
   maxDrawdown: { amount: number; pct: number } | null
   open: number
   /** How much market time the session has replayed. */
@@ -49,15 +52,7 @@ export function replayResults(snapshot: SimSnapshot, startedAt: number, cursor: 
   const grossLoss = -sum(losses)
   const realised = sum(pnls)
 
-  let balance = account.initialBalance
-  let peak = balance
-  let drawdown: { amount: number; pct: number } | null = null
-  for (const p of pnls) {
-    balance += p
-    if (balance > peak) peak = balance
-    const fall = peak - balance
-    if (fall > 0 && (drawdown === null || fall > drawdown.amount)) drawdown = { amount: fall, pct: peak > 0 ? (fall / peak) * 100 : 0 }
-  }
+  const drawdown = maxDrawdown(account.initialBalance, pnls)
 
   const net = account.equity - account.initialBalance
   return {
@@ -78,7 +73,7 @@ export function replayResults(snapshot: SimSnapshot, startedAt: number, cursor: 
     expectancy: closed.length > 0 ? realised / closed.length : null,
     best: pnls.length > 0 ? Math.max(...pnls) : null,
     worst: pnls.length > 0 ? Math.min(...pnls) : null,
-    maxDrawdown: closed.length > 0 ? (drawdown ?? { amount: 0, pct: 0 }) : null,
+    maxDrawdown: drawdown && { amount: drawdown.amount, pct: drawdown.fraction * 100 },
     open: snapshot.trades.length - closed.length,
     span: Math.max(0, cursor - startedAt)
   }

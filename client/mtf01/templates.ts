@@ -4,6 +4,7 @@ import { MTF01_GENERATION, type Stage, type Mtf01Event, type Mtf01Trade } from '
 import { peekStore } from '../plugins/store'
 import type { Mtf01Store } from './store'
 import { timestampCalc } from '../plugins/calc'
+import { gridOf, type Schedule } from '../replay/timeframes'
 
 // One klinecharts indicator template: mtf01's cascade as a SUB-PANE. Like the AREV and
 // KREV templates, `calc` computes nothing — it reads what the controller fetched from
@@ -39,6 +40,11 @@ interface ExtendData {
   rev: number
   /** One pip in price units, for the P&L label. From the instrument's own precision. */
   pip: number
+  /** The pane's interval and its instrument's schedule (plain data, as extendData must be): how
+   * an instant is placed on the pane's bars. Without them a bar is taken to be dated by its open,
+   * which holds below 1D and nowhere a day is dated by its session. */
+  chartInterval?: string
+  schedule?: Schedule | null
 }
 
 const STAGE_LEVEL: Record<Stage, number> = { htf: 1, mtf: 2, ltf: 3 }
@@ -63,14 +69,14 @@ interface Value {
   trades?: Mtf01Trade[]
 }
 
-/** The last bar at or before `instant`, or -1. dataList is ascending, so a binary search. */
-function indexAtOrBefore(dataList: KLineData[], instant: number): number {
+/** The last of the ascending `times` at or before `instant`, or -1. A binary search. */
+function indexAtOrBefore(times: readonly number[], instant: number): number {
   let lo = 0
-  let hi = dataList.length - 1
+  let hi = times.length - 1
   let found = -1
   while (lo <= hi) {
     const mid = (lo + hi) >> 1
-    if (dataList[mid].timestamp <= instant) {
+    if (times[mid] <= instant) {
       found = mid
       lo = mid + 1
     } else {
@@ -81,18 +87,30 @@ function indexAtOrBefore(dataList: KLineData[], instant: number): number {
 }
 
 const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, number, ExtendData>): Value[] => {
-  const key = indicator.extendData?.seriesKey
-  const store = peekStore<Mtf01Store>(key)
+  const extend = indicator.extendData
+  const store = peekStore<Mtf01Store>(extend?.seriesKey)
   const out: Value[] = dataList.map(() => ({ stage: 0 }))
   if (!store || dataList.length === 0) return out
+
+  // Two clocks. A row's `date` is a bar of this pane on the wire clock, as `dataList` is. A
+  // context's end (`endedAt`, `expiresAt`, a trade's `resolvedAt`) is an instant, which the
+  // server never shifts. From 1D up the wire dates a bar by its session -- an FX day at 00:00
+  // New York of its date, seven hours after it opened -- so an end between 17:00 and midnight,
+  // compared with the wire labels, fell on the bar before the one open at that instant and the
+  // rung dropped a bar early. An instant is placed on the pane's bars by when they opened,
+  // through the instrument's schedule.
+  const wire = dataList.map((d) => d.timestamp)
+  const interval = extend?.chartInterval
+  const clock = extend?.schedule && interval ? gridOf(extend.schedule) : null
+  const opens = clock && interval ? wire.map((w) => clock.fromWire(interval, w)) : wire
 
   // A context holds its rung from the bar it became actionable on until the bar it ended
   // on. `endedAt` is null only for a context still live at the end of the generated data,
   // which holds to the right edge — the honest reading, since nothing has ended it yet.
   const hold = (fromBar: number, until: number | null, level: number): void => {
-    const start = indexAtOrBefore(dataList, fromBar)
+    const start = indexAtOrBefore(wire, fromBar)
     if (start < 0) return
-    const end = until == null ? dataList.length - 1 : indexAtOrBefore(dataList, until)
+    const end = until == null ? dataList.length - 1 : indexAtOrBefore(opens, until)
     for (let i = start; i <= Math.max(start, end); i++) {
       const value = out[i]
       if (value.stage == null || value.stage < level) value.stage = level
@@ -100,7 +118,7 @@ const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, n
   }
 
   for (const [bar, events] of store.events) {
-    const index = indexAtOrBefore(dataList, bar)
+    const index = indexAtOrBefore(wire, bar)
     if (index >= 0) {
       const value = out[index]
       value.events = value.events ? [...value.events, ...events] : events
@@ -111,7 +129,7 @@ const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, n
     }
   }
   for (const [bar, trades] of store.trades) {
-    const index = indexAtOrBefore(dataList, bar)
+    const index = indexAtOrBefore(wire, bar)
     if (index >= 0) {
       const value = out[index]
       value.trades = value.trades ? [...value.trades, ...trades] : trades
