@@ -2,13 +2,14 @@ import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src'
 import { baseIntervalsFor } from '../capabilities'
 import { fetchBarsWidened } from '../history'
-import { answerableTo } from '../plugins/horizon'
-import type { PluginStream, Range } from '../plugins/types'
-import { periodToResolution } from '../periods'
-import { fetchSymbols, symbolVendor } from '../symbols'
+import { answerableTo } from '../time/horizon'
+import { fetchSymbols } from '../symbols'
 import { foldsIntradayRows } from '../tiles/derive'
-import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
-import { type CandleGrid, gridFor, isIntraday, nominalMs } from './timeframes'
+import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from '../bars/cache'
+import { type CandleGrid, gridFor } from '../time/timeframes'
+import { isIntraday, nominalMs, periodToResolution } from '../time/intervals'
+import type { Range } from '../paging'
+import { symbolVendor, instrumentKey, symbolKey } from '../instrumentkey'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
 // every pane. No stream: only this client moves the clock.
@@ -69,7 +70,7 @@ class ReplayDatafeed implements Datafeed {
     // forming from Tuesday 17:00 is dated Wednesday 00:00, AFTER the cursor, so a window ending
     // at the cursor left it out -- a 1D pane reloaded between 17:00 and midnight drew no forming
     // candle (prod EURGBP, 2023-10-24 19:00 New York: Tuesday's bar last). The end is the date
-    // after the bar forming at the cursor (`plugins/horizon.ts` `answerableTo`), which holds it
+    // after the bar forming at the cursor (`time/horizon.ts` `answerableTo`), which holds it
     // and nothing later; with no schedule to find it on, the cursor.
     const reach = answerableTo(interval, this.hub.cursor, gridFor(symbol))
     const end = Number.isFinite(reach) ? reach : this.hub.cursor
@@ -82,7 +83,7 @@ class ReplayDatafeed implements Datafeed {
     }
     this.hub.loadsInFlight++
     try {
-      return await fetchBarsWidened(`${vendor}:${symbol.ticker}`, interval, f, t, direction === 'older' ? HISTORY_WINDOW_BARS : null, direction)
+      return await fetchBarsWidened(instrumentKey(vendor, symbol.ticker), interval, f, t, direction === 'older' ? HISTORY_WINDOW_BARS : null, direction)
     } catch (err) {
       console.error('[replay] history fetch failed', err)
       return []
@@ -106,7 +107,7 @@ class ReplayDatafeed implements Datafeed {
 }
 
 function feedKey(vendor: string, ticker: string, interval: string): string {
-  return `${vendor}:${ticker}|${interval}`
+  return `${instrumentKey(vendor, ticker)}|${interval}`
 }
 
 interface PushReport {
@@ -263,7 +264,7 @@ export class ReplayFeedHub {
     if (!held || !reloads(held.interval, held.grid.fromWire(held.interval, held.last), previous, this.cursor)) return null
     const symbolInfo = pane.getSymbol()
     const vendor = symbolVendor(symbolInfo)
-    this.reload(pane, `${vendor}:${symbolInfo.ticker}`, held.interval, held.grid)
+    this.reload(pane, instrumentKey(vendor, symbolInfo.ticker), held.interval, held.grid)
     return { paneId: pane.id, key: feedKey(vendor, symbolInfo.ticker, held.interval), pushed: 0, forming: false, reloaded: true, problem: null }
   }
 
@@ -321,7 +322,7 @@ export class ReplayFeedHub {
         const info = pane.getSymbol()
         const grid = gridFor(info)
         if (!grid) return
-        const symbol = `${symbolVendor(info)}:${info.ticker}`
+        const symbol = symbolKey(info)
         const interval = periodToResolution(pane.getPeriod())
         const bucketOpen = grid.start(interval, this.cursor - 1)
         if (bucketOpen >= this.cursor) return
@@ -344,7 +345,7 @@ export class ReplayFeedHub {
     const vendor = symbolVendor(symbolInfo)
     const ticker = symbolInfo.ticker
     const interval = periodToResolution(pane.getPeriod())
-    const symbol = `${vendor}:${ticker}`
+    const symbol = instrumentKey(vendor, ticker)
     const key = feedKey(vendor, ticker, interval)
     const feed = pane.getDatafeed() as ReplayDatafeed
     const callback = typeof feed?.callbackFor === 'function' ? feed.callbackFor(vendor, ticker, interval) : undefined
@@ -440,15 +441,4 @@ export class ReplayFeedHub {
 
 function toKLine(bar: ReplayBar): KLineData {
   return { timestamp: bar.date, open: bar.o, high: bar.h, low: bar.l, close: bar.c, volume: bar.v }
-}
-
-/** The stream a replay wall hands the plugins: nothing live ever arrives. Only this client
- * moves the clock, and a live point would be a value from the future. */
-export const inertStream: PluginStream = {
-  subscribe() {},
-  unsubscribe() {},
-  subscribeIndicator() {},
-  unsubscribeIndicator() {},
-  subscribePlugin() {},
-  unsubscribePlugin() {}
 }

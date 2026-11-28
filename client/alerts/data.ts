@@ -14,10 +14,11 @@ import { capabilities } from '../capabilities'
 import { OhlcvApiError } from '../config'
 import { describeUnavailable, fetchMtfGraph, type MtfGraphAnswer, type MtfGraphRequest } from '../mtf/api'
 import { fetchPoints } from '../plugins/api'
-import { TiledBarSource } from '../replay/tiled'
-import { type CandleGrid, gridFor } from '../replay/timeframes'
+import { TiledBarSource } from '../bars/tiled'
+import { type CandleGrid, gridFor } from '../time/timeframes'
 import { fetchSymbolInfo } from '../symbols'
 import type { AlertBar, PointSource } from './compute'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export type Point = { date: number } & Record<string, unknown>
 
@@ -41,7 +42,7 @@ export interface AlertData {
 const MAX_POINT_PAGES = 200
 
 export class HttpAlertData implements AlertData {
-  // Closed periods from the tiles the chart reads (replay/tiled.ts), the forming one from `/getbars`.
+  // Closed periods from the tiles the chart reads (bars/tiled.ts), the forming one from `/getbars`.
   private readonly source = new TiledBarSource()
   private readonly grids = new Map<string, Promise<CandleGrid | null>>()
 
@@ -49,8 +50,8 @@ export class HttpAlertData implements AlertData {
   grid(symbol: string): Promise<CandleGrid | null> {
     let grid = this.grids.get(symbol)
     if (!grid) {
-      const at = symbol.indexOf(':')
-      grid = fetchSymbolInfo(symbol.slice(at + 1), symbol.slice(0, at))
+      const { vendor, ticker } = splitInstrumentKey(symbol)
+      grid = fetchSymbolInfo(ticker, vendor)
         .then((info) => gridFor(info))
         .catch(() => null)
       this.grids.set(symbol, grid)

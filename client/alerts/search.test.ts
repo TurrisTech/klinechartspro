@@ -7,7 +7,7 @@ const { AlertSearch, earliestHit, SEARCH_CHUNK_BARS } = await import('./search')
 const { buildTrack, indexPoints } = await import('./compute')
 const { compile } = await import('./rules')
 const { instants, scan } = await import('./timeline')
-const { FX_GRID } = await import('../replay/timeframes')
+const { FX_GRID } = await import('../time/timeframes')
 import type { AlertBar } from './compute'
 import type { AlertData, Point } from './data'
 import type { ServerCatalogue } from './catalogue'

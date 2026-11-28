@@ -5,8 +5,8 @@
 // 1Y) is folded here, from the tiles of the interval it derives from, rather than published as
 // a tree of its own. wmarketdata's `tiles/derived.py` does the identical thing server-side; the
 // grid arithmetic on both sides is `Interval`'s, and this file's half of it is the port in
-// `../replay/timeframes.ts`, which is asserted against wmarkettypes bar for bar by
-// `../replay/fixtures/boundaries.json`.
+// `../time/timeframes.ts`, which is asserted against wmarkettypes bar for bar by
+// `../time/fixtures/boundaries.json`.
 //
 // Two rules carry the whole thing, and neither is about the aggregation:
 //
@@ -64,10 +64,9 @@ import {
   scheduleWireShift,
   type TradingWeek,
   tradingFilter
-} from '../replay/timeframes'
+} from '../time/timeframes'
 import type { TileManifest } from './manifest'
-
-const PATTERN = /^([1-9][0-9]*)([smhDWMY])$/
+import { isInterval, parseInterval } from '../time/intervals'
 
 /** Unit -> [family, size in that family's own base unit]. Divisibility is only meaningful
  * inside a family: a day is not a fixed number of hours (24 for forex, seven for a US equity
@@ -87,11 +86,10 @@ const UNIT: Record<string, [string, number]> = {
 const FAMILIES = ['month', 'day', 'intraday']
 
 function span(code: string): [string, number] | null {
-  const m = PATTERN.exec(code)
-  if (!m) return null
-  const unit = UNIT[m[2]]
-  if (unit === undefined) return null
-  return [unit[0], Number(m[1]) * unit[1]]
+  if (!isInterval(code)) return null
+  const { number, unit } = parseInterval(code)
+  const [family, size] = UNIT[unit]
+  return [family, number * size]
 }
 
 /**

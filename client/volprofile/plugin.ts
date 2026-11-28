@@ -3,11 +3,12 @@ import { baseIntervalsFor } from '../capabilities'
 import { phaseLabel } from '../plugins/legend'
 import { paneConfig } from '../plugins/paneconfig'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities } from '../plugins/types'
-import { nominalMs } from '../replay/timeframes'
 import { clockFor } from '../tradetalk/plugin'
 import { fromStoredVpConfig, normaliseVpConfig, toStoredVpConfig, VP_DEFAULTS, VP_FIELDS, type VpConfig } from './config'
 import { type BarStore, barSource, barSourceKey, pickSource, type Schedule, wireShift } from './source'
 import { isVolumeProfileIndicator, registerVolumeProfileIndicator, TEMPLATE_NAME } from './templates'
+import { nominalMs } from '../time/intervals'
+import { instrumentKey } from '../instrumentkey'
 
 // The volume profile as a client plugin: one template on the price pane, at most one source
 // (bars of a lower timeframe than the chart, source.ts), and no server change of any kind --
@@ -88,6 +89,7 @@ export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = 
           ? [
               barSource({
                 stream: f.stream,
+                readClock: () => f.readClock(),
                 vendor: ctx.vendor,
                 ticker: ctx.ticker,
                 source,
@@ -98,7 +100,7 @@ export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = 
               })
             ]
           : []
-      const quantumKey = source ? barSourceKey(ctx.vendor, ctx.ticker, source) : `chart|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`
+      const quantumKey = source ? barSourceKey(ctx.vendor, ctx.ticker, source) : `chart|${instrumentKey(ctx.vendor, ctx.ticker)}|${ctx.interval}`
 
       // The legend names the source and what the volume IS, and says why nothing is drawn when
       // nothing is. A source that does not reach the chart's first bar says from when it runs:

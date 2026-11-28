@@ -113,3 +113,21 @@ describe('the settings panel', () => {
     expect(inner.fields).toHaveLength(LEVERS.length)
   })
 })
+
+// The settings panel rounds a number lever only when its field says `integer`
+// (plugins/settings/settings.ts `settleNumber`), so the lab must declare it on each lever it rounds.
+describe('the AREV lab passes its integer levers through', () => {
+  test("a lab lever that rounds is declared integer to the panel", () => {
+    const group = LAB_FIELDS[0]
+    if (group?.kind !== 'group') throw new Error('expected a generation group')
+    const settings = group.fields.find((f) => f.kind === 'group')
+    if (settings?.kind !== 'group') throw new Error('expected a settings group')
+    const byLabel = (label: string) => settings.fields.find((f) => 'label' in f && f.label === label)
+    expect(byLabel('Min neighbours')).toMatchObject({ kind: 'number', integer: true })
+    expect(byLabel('Window (bars)')).toMatchObject({ kind: 'number', integer: true })
+    // A lever that is genuinely fractional must NOT be rounded to 1.
+    expect(byLabel('Line width')).toMatchObject({ kind: 'number' })
+    expect(byLabel('Line width')).not.toMatchObject({ integer: true })
+    expect(LAB_DEFAULTS.generations.arev21.lineWidth).toBeLessThan(2)
+  })
+})

@@ -100,11 +100,11 @@ describe('every network call goes through a door', () => {
         // serverFetch: the one door to wdashboard-server; adds the bearer.
         'client/config.ts',
         // Runs in Bun, not the browser: the dev server's /tiles proxy (forwards no auth).
-        'client/devtiles.ts',
+        'client/dev/devtiles.ts',
         // objectStoreFetch: the one door to the tile buckets; never carries the bearer.
         'client/objectstore.ts',
         // Runs in Bun, not the browser: the dev server's /ohlcv proxy.
-        'client/serve.ts',
+        'client/dev/serve.ts',
         // WS /stream: presents the session in its first frame (an auth frame).
         'client/stream.ts',
         // The library's demo datafeed (Polygon). The dashboard client never constructs it.

@@ -2,7 +2,7 @@ import { registerIndicator, type IndicatorTemplate, type KLineData } from 'kline
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
 import type { QuotePoint } from './api'
-import { timestampCalc } from '../plugins/calc'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
 
 // QUOTE:spread -- the bid/ask spread of every bar, in its own sub-pane.
 //
@@ -102,16 +102,7 @@ export function registerSpreadIndicator(): IndicatorGroup[] {
       styles: {
         lines: [{ color: LINE, size: 1, style: 'solid', smooth: false, dashedValue: [2, 2] }]
       },
-      shouldUpdate: (prev, cur) => {
-        const a = prev.extendData
-        const b = cur.extendData
-        const changed =
-          a?.seriesKey !== b?.seriesKey ||
-          a?.rev !== b?.rev ||
-          a?.pointSize !== b?.pointSize ||
-          JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
-        return { calc: changed, draw: true }
-      },
+      shouldUpdate: shouldUpdateOn<SpreadExtendData>({ keys: ['seriesKey', 'rev', 'pointSize'], calcParams: true }),
       calc: calc as IndicatorTemplate<SpreadValue, number, SpreadExtendData>['calc'],
       regenerateFigures: null,
       createTooltipDataSource: null,

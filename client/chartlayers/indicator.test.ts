@@ -3,8 +3,8 @@ import type { Chart, Indicator, OverlayCreate } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup } from '../../src'
 import { fakeFacilities, fakePane, flush, installWindow } from '../plugins/testing'
 import type { BindContext } from '../plugins/types'
-import type { SettingsField } from './settings'
-import type { ChartLayer } from './types'
+import type { SettingsField } from '../plugins/settings/settings'
+import type { ChartLayer, LayerDecorator } from './types'
 
 // A chart layer as an indicator: drawn on a pane exactly while a binding of the layer's
 // template lives there and the indicator is shown, with settings of its own per pane -- the
@@ -126,6 +126,85 @@ function setup(config: Config = DEFAULTS, ticker = 'EURUSD') {
 function widths(chart: TestChart): number[] {
   return chart.overlays.map((overlay) => (overlay.styles as { line: { size: number } }).line.size)
 }
+
+describe('a decorator', () => {
+  // What the controller is handed to add to everything a layer paints (types.ts LayerDecorator)
+  // -- the price alerts on a wall (alerts/view.ts, which alerts/alerts.test.ts drives for real).
+  // Here a stand-in that adds one tag at a price it can be told to move.
+
+  function tagger() {
+    const seen = { decorated: [] as number[], cleared: 0, subscribed: 0 }
+    let price = 1.15
+    let repaint: (() => void) | null = null
+    const decorator: LayerDecorator<Config> = {
+      decorate: (overlays) => {
+        seen.decorated.push(overlays.length)
+        return [...overlays, { name: 'simpleTag', points: [{ value: price }] }]
+      },
+      clear: () => {
+        seen.cleared++
+      },
+      subscribe: (fn) => {
+        seen.subscribed++
+        repaint = fn
+        return () => {
+          repaint = null
+        }
+      }
+    }
+    return {
+      decorator,
+      seen,
+      move(next: number): void {
+        price = next
+        repaint?.()
+      }
+    }
+  }
+
+  function attachDecorated(decorator: LayerDecorator<Config>) {
+    const fetches: string[] = []
+    const controller = createLayerController(testLayer(fetches), TEMPLATE, decorator)
+    const chart = testChart()
+    chart.indicators.push(indicator())
+    const release = controller.attach(fakePane('p1', chart.chart), 'ind1', DEFAULTS)
+    return { chart, fetches, release }
+  }
+
+  test('what it adds is painted with the layer, in its group, and goes with it', async () => {
+    const { decorator, seen } = tagger()
+    const { chart, release } = attachDecorated(decorator)
+    await flush()
+    expect(seen.subscribed).toBe(1)
+    expect(seen.decorated).toEqual([1])
+    expect(chart.overlays.map((overlay) => [overlay.name, overlay.groupId])).toEqual([
+      ['horizontalStraightLine', 'test'],
+      ['simpleTag', 'test']
+    ])
+    release()
+    expect(chart.overlays).toEqual([])
+    expect(seen.cleared).toBeGreaterThan(0)
+  })
+
+  test('a change it announces repaints from what the pane holds, without a request', async () => {
+    const { decorator, move } = tagger()
+    const { chart, fetches, release } = attachDecorated(decorator)
+    cleanup.push(release)
+    await flush()
+    move(1.16)
+    await flush()
+    expect(fetches).toEqual(['EURUSD'])
+    expect(chart.overlays.find((overlay) => overlay.name === 'simpleTag')?.points).toEqual([{ value: 1.16 }])
+  })
+
+  test('without one the layer paints exactly what it builds', async () => {
+    const { chart, attach } = setup()
+    chart.indicators.push(indicator())
+    attach()
+    await flush()
+    expect(chart.overlays.map((overlay) => overlay.name)).toEqual(['horizontalStraightLine'])
+  })
+})
 
 describe('the view', () => {
   test('draws nothing while the indicator is hidden, and fetches nothing for it', async () => {

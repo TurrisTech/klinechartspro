@@ -1,7 +1,7 @@
 import type { KLineData } from 'klinecharts'
-import { formatClock } from '../replay/format'
-import { type CandleGrid, nominalMs } from '../replay/timeframes'
-import { formatInstant, formatMoney, formatShare } from './format'
+import { formatClock, formatInstant } from '../time/format'
+import type { CandleGrid } from '../time/timeframes'
+import { formatMoney, formatShare } from './format'
 import { h, kbtn } from './kit'
 import type { MarkAt } from './ledger'
 import {
@@ -22,6 +22,7 @@ import {
 } from './performance'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
+import { nominalMs } from '../time/intervals'
 
 // The account window's Performance tab (user, 2026-11-13: "next to history, show a histogram,
 // with button allowing the user to see balance or equity for last 1M, 3M, 6M, 1Y and all time").

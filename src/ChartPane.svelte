@@ -158,7 +158,7 @@
   // the pane ... it can blink if there is an issue", then "just put it once at the end next to the
   // X. yes, it can show a card"): one amber ⚠ beside an indicator's ×, when whoever feeds it says
   // what it holds is incomplete or did not load -- the plugin host's `extendData.problem`
-  // (client/plugins/host.ts `problemOf`): an MTF overlay with a timeframe the server could not
+  // (client/plugins/apply.ts `problemOf`): an MTF overlay with a timeframe the server could not
   // read, a series that failed to load. It blinks until it is clicked, then stays until the
   // problem goes; a click opens a card with the reason. Once, at the end: a narrow pane cuts the
   // name, and the icons after it are drawn all the same.

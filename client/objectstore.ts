@@ -7,7 +7,7 @@
 // /indicator-tiles/ to the SeaweedFS S3 gateway with `proxy_pass_request_headers on`, so a
 // header the browser sends reaches S3, which reads `Authorization` as a request signature: a
 // bearer there is at best ignored and at worst fails the read, and either way it hands the
-// session token to a system that has no use for it. In dev, client/devtiles.ts forwards only
+// session token to a system that has no use for it. In dev, client/dev/devtiles.ts forwards only
 // the conditional and range headers, for the same reason. The session's bearer is the
 // server's business only, so this door never carries one, whatever a caller passes.
 //

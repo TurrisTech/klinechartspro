@@ -1,3 +1,4 @@
+const { nominalMs, resolutionToPeriod } = await import('../time/intervals')
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Period, SymbolInfo } from '../../src'
@@ -69,20 +70,20 @@ describe.skipIf(!BASE_URL || !TILES_URL)('bar replay end to end (real server, re
   test('a step seeks, a walk skims and refines a fill, Next alert jumps, the state persists', async () => {
     const { loadCapabilities, capabilities } = await import('../capabilities')
     const { setReadClock, getReadClock } = await import('../config')
-    const { resolutionToPeriod } = await import('../periods')
-    const { AlertSearch } = await import('../alerts/search')
+        const { AlertSearch } = await import('../alerts/search')
     const { HttpAlertData } = await import('../alerts/data')
     const { ReplayAlerts } = await import('./alerts')
     const { simApi } = await import('../trading/api')
-    const { Engine } = await import('./engine')
+    const { Engine } = await import('../sim/engine')
     const { ReplayFeedHub, HISTORY_WINDOW_BARS } = await import('./feed')
     const { restore } = await import('./persist')
     const { ReplayTradingSession } = await import('./session')
-    const { HttpBarSource } = await import('./source')
-    const { TiledBarSource } = await import('./tiled')
-    const { FX_GRID, FX_SCHEDULE, fromWall, intervalStart, nominalMs, nonWeekendGaps, toWireDate } = await import('./timeframes').then(async (tf) => ({
+    const { HttpBarSource } = await import('../bars/source')
+    const { TiledBarSource } = await import('../bars/tiled')
+    const { FX_GRID, FX_SCHEDULE, fromWall, intervalStart, nonWeekendGaps, toWireDate } = await import('../time/timeframes')
+.then(async (tf) => ({
       ...tf,
-      nonWeekendGaps: (await import('./cache')).nonWeekendGaps
+      nonWeekendGaps: (await import('../bars/cache')).nonWeekendGaps
     }))
 
     await loadCapabilities()

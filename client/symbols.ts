@@ -1,65 +1,14 @@
 import type { SymbolInfo } from '../src'
 import { offeredIntervalCodes } from './periods'
 import { apiGet } from './config'
-import { dayGeometryOf, tradingWeekOf } from './daygeometry'
+import { dayGeometryOf, tradingWeekOf } from './time/daygeometry'
 import { pipSizeOf } from './pipsize'
-import { instrumentConfig } from './instrumentconfig'
+import { type InstrumentConfig, instrumentConfig } from './instrumentconfig'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey } from './instrumentkey'
 
 // wdashboard-server has no vendor/exchange field name of its own — `/search` returns
 // `description` as "{vendor}:{symbol}". We fold vendor into SymbolInfo.exchange since
 // getbars/WS-stream take vendor and symbol as separate fields, same as this API does.
-
-// One half-open [open, close) span of the trading week, in the schedule's timezone.
-// Days are 'mon'..'sun'; times are 'HH:MM' (or 'HH:MM:SS'). A close earlier in the week
-// than the open wraps the weekend — that is how forex's Sunday-to-Friday span is written.
-export interface MarketSession {
-  openDay: string
-  openTime: string
-  closeDay: string
-  closeTime: string
-}
-
-// When the instrument's market is open, as a repeating weekly schedule. A list of
-// sessions rather than an open/close pair because forex is one span across the week,
-// US equity is five daily ones, and crypto is a single span covering all of it.
-// Always the EFFECTIVE schedule: the server has already resolved any per-instrument
-// override against the vendor's default.
-//
-// `trading`, when present, is when the instrument actually TRADES where that is not its grid
-// (wmarkettypes `MarketHours.trading`): the lira crosses keep Istanbul hours on New York's FX
-// grid, the metals stop for an hour at 17:00. The top level stays the grid every candle
-// boundary is read from (`dayGeometryOf`); rows are filtered on `trading ?? the top level`
-// (`tradingWeekOf`). Exactly one level deep; null or absent where the two coincide.
-export interface MarketHours {
-  timezone: string
-  sessions: MarketSession[]
-  trading?: MarketHours | null
-}
-
-// The vendor's own configuration for an instrument (wdashboard-server's
-// InstrumentConfigModel, sourced from OANDA via wmarketdata). This is where display
-// precision comes from — see resolvePrecision below for why it is not computed here.
-//
-// `instrumentType` is the vendor's word ('CURRENCY'); `assetClass` is the normalised one
-// ('forex', alongside 'equity' and 'crypto'). Fields prefixed `forex` are FX-only.
-export interface InstrumentConfig {
-  vendor: string
-  symbol: string
-  displayName: string
-  instrumentType: string
-  assetClass: string
-  displayPrecision: number
-  // null for an asset class with no pips (crypto).
-  forexPipLocation: number | null
-  tradeUnitsPrecision: number
-  minimumTradeSize: number | null
-  maximumOrderUnits: number | null
-  maximumPositionSize: number | null
-  minimumTrailingStopDistance: number | null
-  maximumTrailingStopDistance: number | null
-  marginRate: number | null
-  marketHours: MarketHours
-}
 
 interface SearchResult {
   symbol: string
@@ -92,9 +41,10 @@ function assetClassOf(config: InstrumentConfig | null | undefined): string {
 }
 
 function toSymbolInfo(result: SearchResult): SymbolInfo {
-  const [vendor, symbol] = result.description.includes(':')
-    ? result.description.split(':', 2)
-    : ['oanda', result.symbol]
+  // A bare description names the ticker in `symbol` instead: the vendor is the default one.
+  const { vendor, ticker: symbol } = result.description.includes(':')
+    ? splitInstrumentKey(result.description)
+    : { vendor: DEFAULT_VENDOR, ticker: result.symbol }
   const config = result.config
   return {
     ticker: symbol,
@@ -124,10 +74,6 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
   }
 }
 
-export function symbolVendor(symbol: SymbolInfo): string {
-  return symbol.exchange ?? 'oanda'
-}
-
 // GET /search requires the `query` param even when empty (empty string = list everything),
 // so always set it.
 export async function fetchSymbols(search = ''): Promise<SymbolInfo[]> {
@@ -146,14 +92,15 @@ export async function fetchSymbols(search = ''): Promise<SymbolInfo[]> {
 
 // Resolve one instrument without running a search first — what the initial symbol needs,
 // since it is named in configuration rather than picked from search results.
-export async function fetchSymbolInfo(ticker: string, vendor = 'oanda'): Promise<SymbolInfo> {
+export async function fetchSymbolInfo(ticker: string, vendor = DEFAULT_VENDOR): Promise<SymbolInfo> {
   // Shared with the trading panel's own reader (client/instrumentconfig.ts): one request per
   // instrument per page, not one per caller per hydration. It never rejects -- a failure
   // reads as `null` here, exactly as the try/catch this replaced did.
-  const config = await instrumentConfig(`${vendor}:${ticker}`)
+  const key = instrumentKey(vendor, ticker)
+  const config = await instrumentConfig(key)
   return toSymbolInfo({
     symbol: ticker,
-    description: `${vendor}:${ticker}`,
+    description: key,
     // `/instrument` answers with the configuration alone, not the coarse asset class that
     // `/search` results carry, so derive it the same way the server does rather than
     // assuming forex — this client is pointed at metals and CFDs too.

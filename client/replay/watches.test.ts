@@ -2,10 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import type { NotificationSpec } from '../notifications'
 import { installWindow } from '../plugins/testing'
 import { priceCondition, PRICE_SOURCE } from '../watch/types'
-import type { BarSource, ReplayBar } from './cache'
-import { Engine } from './engine'
+import type { BarSource, ReplayBar } from '../bars/cache'
+import { Engine } from '../sim/engine'
 import type { ReplayAlertBook } from './alerts'
-import { FX_GRID, fromWall, intervalEnd, toWireDate } from './timeframes'
+import { FX_GRID, fromWall, intervalEnd, toWireDate } from '../time/timeframes'
 
 // PRICE WATCHES ON A REPLAY WALL, end to end: a watch created the way the chart's dialog
 // creates one, driven by a real session over a synthetic price path.

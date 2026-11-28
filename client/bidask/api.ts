@@ -1,8 +1,10 @@
 import { getbarsSplit } from '../history'
 import type { OHLCVBar } from '../ohlcv'
 import type { StreamListener } from '../stream'
-import type { Page, PluginFacilities, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
+import type { PluginFacilities, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import type { WindowStore } from '../plugins/store'
+import type { Page, Range } from '../paging'
+import { instrumentKey } from '../instrumentkey'
 
 // The bid/ask of every bar, read from `/getbars?columns=all`. Nothing new on the server:
 // the store has always held the bid and ask OHLC beside the mid, `/getbars` passes them
@@ -47,7 +49,7 @@ export function quoteOf(bar: OHLCVBar & Record<string, unknown>): QuotePoint | n
 }
 
 export function quoteSourceKey(vendor: string, ticker: string, interval: string): string {
-  return `bidask|${vendor}:${ticker}|${interval}`
+  return `bidask|${instrumentKey(vendor, ticker)}|${interval}`
 }
 
 /** Bars per page, as a share of the server's cap: a page is sized by nominal duration, and
@@ -61,7 +63,7 @@ export function quoteSource(
   interval: string,
   maxBarsPerRequest: number
 ): SourceSpec<QuotePoint> {
-  const symbol = `${vendor}:${ticker}`
+  const symbol = instrumentKey(vendor, ticker)
   const barMs = Math.max(1, f.resolutionDurationMs(interval))
 
   // The chart's range is on the wire clock and so is `/getbars`'s window; `to` is exclusive

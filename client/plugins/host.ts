@@ -1,25 +1,16 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, IndicatorSettingsModel } from '../../src'
-import { openSettingsPanel as openPanel, setByPath, type SettingsPanelHandle } from '../chartlayers/settings'
+import type { openSettingsPanel as openPanel } from './settings/settings'
 import { onViewMoved } from '../chartview'
-import { gridFor } from '../replay/timeframes'
-import { knownThrough } from './horizon'
-import { type PaneConfig, PaneConfigStore, type PaneDoc } from './paneconfig'
-import { dropStore, liveStores, mergeRange, missingRanges, storeFor, WindowStore } from './store'
-import type {
-  BindContext,
-  BindingSpec,
-  BindingState,
-  BoundSource,
-  IndicatorPlugin,
-  PluginFacilities,
-  Range,
-  SettingsRequest,
-  SourceSpec,
-  SourceStore,
-  SourceWarm,
-  ValidateRequest
-} from './types'
+import { gridFor } from '../time/timeframes'
+import { applyBinding, createApplyCoalescer } from './apply'
+import { knownThrough } from '../time/horizon'
+import type { PaneDoc } from './paneconfig'
+import { createPaneSettings } from './panesettings'
+import { liveStores, mergeRange, missingRanges, WindowStore } from './store'
+import { StoreTable } from './storetable'
+import type { BindContext, BindingSpec, BindingState, BoundSource, IndicatorPlugin, PluginFacilities, SettingsRequest, SourceSpec, SourceStore, SourceWarm, ValidateRequest } from './types'
+import type { Range } from '../paging'
 
 // The plugin host: one controller for every indicator plugin on every live pane.
 //
@@ -39,17 +30,16 @@ import type {
 // One thing it does that is not coverage: on a bar replay's word, it has the server compute
 // ahead what the sources will read at the replay's next landing (`warmAhead`) -- only for the
 // sources that offer it, and never filing what comes back.
+//
+// Three of its jobs are modules of their own: every pane's settings (panesettings.ts), which
+// bindings read which store (storetable.ts), and handing a binding's values to the chart, at
+// most once per frame (apply.ts).
 
 const POLL_MS = 500
 const RANGE_DEBOUNCE_MS = 250
 const MAX_PAGES_PER_GAP = 20
 /** How often `settled` looks again while some binding is still fetching. */
 const SETTLE_POLL_MS = 50
-/** The longest a re-apply waits for an animation frame: none comes in a hidden tab. */
-const APPLY_FALLBACK_MS = 100
-/** Rough height of one klinecharts legend row: a settings panel hangs just below the legend
- * the gear sits in. */
-const LEGEND_ROW_HEIGHT = 24
 
 /** How long a range a page answered only partly (`Page.problem`) waits before it is read again.
  * The fault behind one can last days (2026-11-02..04: one unreadable index file), so the retry is
@@ -58,6 +48,8 @@ const PARTIAL_RETRY_MS = 60_000
 
 interface Binding {
   plugin: IndicatorPlugin
+  /** The chart its indicator is on: its pane's, for the binding's whole life. */
+  chart: Chart
   indicatorId: string
   name: string
   chartPaneId: string
@@ -160,74 +152,23 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
 
   const pluginFor = (name: string): IndicatorPlugin | undefined => plugins.find((p) => p.matches(name))
 
-  // Per-pane settings: owned for the plugins that registered, carried verbatim for the rest so
-  // a server that cannot draw an overlay does not cost a pane its settings at the next save.
-  const configByTemplate = new Map<string, PaneConfig>()
-  for (const plugin of plugins) for (const config of plugin.paneConfigs ?? []) for (const name of config.templates) configByTemplate.set(name, config)
-  const paneConfigs = new PaneConfigStore(
-    [...new Set(configByTemplate.values())],
-    options.plugins.flatMap((plugin) => (plugin.paneConfigs ?? []).map((config) => config.doc))
-  )
-  paneConfigs.hydrate(options.paneDocs ?? {})
-  const openSettingsPanel = options.openSettingsPanel ?? openPanel
-  let panel: SettingsPanelHandle | null = null
-
-  /** A pane's settings edited, from its panel or from the indicator manager: kept, the wall
-   * saved, and only that pane rebound -- the settings belong to it, so another pane showing the
-   * same instrument keeps whatever it was set to. */
-  const writeConfig = (config: PaneConfig, paneIndex: number, paneId: string, next: object): void => {
-    paneConfigs.write(config, paneIndex, next)
-    options.requestPersist?.()
-    const entry = wired.get(paneId)
-    if (entry) reconcile(entry)
-  }
-
-  /** One field of a pane's settings, by its dotted key: the indicator manager's edit, and a
-   * binding's own (`BindContext.editConfig`). The pane is looked up at the moment of the edit,
-   * so one that has since moved on the wall is written at its new index. */
-  const editField = (config: PaneConfig, paneId: string, key: string, value: unknown): void => {
-    const entry = wired.get(paneId)
-    if (!entry) return
-    const next = structuredClone(paneConfigs.read(config, entry.paneIndex))
-    setByPath(next, key, value)
-    writeConfig(config, entry.paneIndex, paneId, next)
-  }
-
-  const openConfigPanel = (config: PaneConfig, paneId: string): boolean => {
-    const entry = wired.get(paneId)
-    if (!entry) return false
-    // The gear is drawn on the chart's CANVAS, not in the DOM, so there is no element to point
-    // at. The chart container is what the panel must live inside (it carries the theme class
-    // the panel's tokens resolve against), but it is the full height of the pane, so its own
-    // rect is the wrong place to hang the panel from -- under its bottom edge is below the
-    // fold. Hence an explicit rect: just under the legend row at the chart's top left, which is
-    // where the gear that opened it is drawn.
-    let anchor: HTMLElement | null = null
-    try {
-      anchor = entry.chart.getDom() as HTMLElement | null
-    } catch {
-      anchor = null
+  // Every pane's settings (panesettings.ts). A pane is looked up when it is needed, because panes
+  // change places, and an edit reaches the pane as a reconcile, which rebinds what it changed.
+  const settings = createPaneSettings({
+    registered: plugins,
+    all: options.plugins,
+    paneDocs: options.paneDocs,
+    requestPersist: options.requestPersist,
+    openSettingsPanel: options.openSettingsPanel,
+    facilities,
+    paneOf: (paneId) => wired.get(paneId),
+    rebind: (paneId) => {
+      const entry = wired.get(paneId)
+      if (entry) reconcile(entry)
     }
-    if (!anchor) return false
-    const rect = anchor.getBoundingClientRect()
-    const paneIndex = entry.paneIndex
-    panel?.close()
-    panel = openSettingsPanel<object>({
-      anchor,
-      anchorRect: { top: rect.top, bottom: rect.top + LEGEND_ROW_HEIGHT, left: rect.left + 8 },
-      // Names the pane, because the settings are that pane's alone and a wall can have twelve
-      // of them open on different instruments.
-      title: `${config.title} · ${entry.pane.getSymbol().ticker} ${facilities.periodToResolution(entry.pane.getPeriod())}`,
-      fields: config.fields,
-      config: paneConfigs.read(config, paneIndex),
-      defaults: config.defaults,
-      onChange: (next) => writeConfig(config, paneIndex, paneId, next),
-      onClose: () => {
-        panel = null
-      }
-    })
-    return true
-  }
+  })
+
+  const stores = new StoreTable<Binding>()
 
   const chartRange = (chart: Chart): Range | null => {
     const data = chart.getDataList()
@@ -235,89 +176,13 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     return { from: data[0].timestamp, to: data[data.length - 1].timestamp + 1 }
   }
 
-  const aggregateRev = (b: Binding): number => {
-    let rev = b.seq * 1_000_003
-    for (const s of b.sources) rev += s.store.rev
-    return rev
-  }
-
-  const apply = (entry: WiredPane, b: Binding): void => {
-    if (b.disposed) return
-    const rev = aggregateRev(b)
-    let shortName: string
-    try {
-      shortName = b.spec.label(b.state)
-    } catch (err) {
-      console.warn(`[plugins] ${b.plugin.id} label failed`, err)
-      shortName = b.name
-    }
-    if (rev === b.lastAppliedRev && shortName === b.lastShortName) return
-    b.lastAppliedRev = rev
-    b.lastShortName = shortName
-    const seriesKeys: Record<string, string> = {}
-    for (const s of b.sources) seriesKeys[s.id] = s.key
-    const extendData = {
-      seriesKey: b.sources[0]?.key ?? '',
-      seriesKeys,
-      rev,
-      ...(b.spec.extendData?.(b.state) ?? {}),
-      // The legend's warning icon and its card (src/ChartPane.svelte): set by the host for every
-      // plugin indicator, after the plugin's own keys so none can hide it.
-      problem: problemOf(b)
-    }
-    try {
-      // klinecharts MERGES an override's extendData into the indicator's own, deeply: an array
-      // is merged index by index and a key is never removed, so a plugin could never say "these
-      // and no others" -- an MTF overlay's graph roots going from ['1D', '8h'] to [] read
-      // ['8h', '8h'], and the graph stayed drawn. Clearing the indicator's own first makes the
-      // merge a copy of exactly what is sent.
-      for (const live of entry.chart.getIndicators({ id: b.indicatorId })) live.extendData = undefined
-      entry.chart.overrideIndicator({ id: b.indicatorId, name: b.name, paneId: b.chartPaneId, extendData, shortName } as never)
-    } catch (err) {
-      console.warn(`[plugins] ${b.plugin.id} override failed`, err)
-    }
-  }
-
-  // Re-applies are coalesced to one per binding per animation frame. Each is an
-  // `overrideIndicator`, and so a full `calc` of the template and a layout: a fetch arrives in
-  // pages, an MTF overlay reads five sources, and a live point lands on several stores at once,
-  // so applying each as it came recalculated the same indicator several times a frame -- going
-  // live once cost five back-to-back ~150 ms frames on a prod wall (2026-10-07). A binding just
-  // made is still applied at once (`reconcile`), so its legend appears with it.
-  const dirty = new Map<Binding, WiredPane>()
-  let flushPending = false
-  const flushApplies = (): void => {
-    flushPending = false
-    const batch = [...dirty]
-    dirty.clear()
-    for (const [b, entry] of batch) apply(entry, b)
-  }
-  const requestApply = (entry: WiredPane, b: Binding): void => {
-    dirty.set(b, entry)
-    if (flushPending) return
-    flushPending = true
-    if (typeof requestAnimationFrame !== 'function') {
-      queueMicrotask(flushApplies)
-      return
-    }
-    let done = false
-    const run = (): void => {
-      if (done) return
-      done = true
-      if (flushPending) flushApplies()
-    }
-    requestAnimationFrame(run)
-    setTimeout(run, APPLY_FALLBACK_MS)
-  }
+  // Re-applies are coalesced to one per binding per animation frame (apply.ts).
+  const applies = createApplyCoalescer<Binding>(applyBinding)
 
   /** Every binding on the wall that reads the store under `key` -- what a fetch into that
    * store changed, whichever binding asked for it. */
   const applyReaders = (key: string): void => {
-    for (const e of wired.values()) {
-      for (const other of e.bindings.values()) {
-        if (!other.disposed && other.sources.some((s) => s.key === key)) requestApply(e, other)
-      }
-    }
+    for (const other of stores.readersOf(key)) applies.request(other)
   }
 
   // Every fetch in flight, by store: what it covers, the turn it was sent in, and when it ends. A
@@ -415,14 +280,6 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       .filter((r) => r.from < r.to)
   }
 
-  /** What the legend's warning says for a binding: a source that failed to load, else one that
-   * loaded only partly (`SourceStore.problem`), else null. */
-  const problemOf = (b: Binding): string | null => {
-    for (const s of b.sources) if (s.store.phase === 'error') return `Could not be loaded: ${s.store.error ?? 'unknown error'}`
-    for (const s of b.sources) if (s.store.problem) return s.store.problem
-    return null
-  }
-
   const scheduleRetry = (entry: WiredPane, b: Binding, afterMs: number): void => {
     if (b.retryTimer) clearTimeout(b.retryTimer)
     b.retryTimer = setTimeout(() => {
@@ -509,17 +366,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         b.inFlight.delete(tag)
       }
     }
-    requestApply(entry, b)
-  }
-
-  const storeInUse = (key: string, except: Binding): boolean => {
-    for (const e of wired.values()) {
-      for (const other of e.bindings.values()) {
-        if (other === except || other.disposed) continue
-        if (other.sources.some((s) => s.key === key)) return true
-      }
-    }
-    return false
+    applies.request(b)
   }
 
   const dispose = (b: Binding): void => {
@@ -534,10 +381,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     for (const s of b.sources) {
       s.unsubscribe?.()
       s.unsubscribe = null
-      if (!storeInUse(s.key, b)) {
-        dropStore(s.key)
-        degraded.delete(s.key)
-      }
+      if (stores.release(s.key, b)) degraded.delete(s.key)
     }
   }
 
@@ -549,8 +393,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     ctx: Omit<BindContext, 'indicator' | 'siblings' | 'config' | 'follows'>,
     follows: unknown
   ): string => {
-    const config = configByTemplate.get(ind.name)
-    const rev = config ? paneConfigs.rev(config, ctx.paneIndex) : null
+    const rev = settings.rev(ind.name, ctx.paneIndex)
     return JSON.stringify([ind.name, ind.paneId, ind.calcParams, ctx.vendor, ctx.ticker, ctx.interval, ctx.paneIndex, rev, follows ?? null])
   }
 
@@ -565,6 +408,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     if (!spec) return null
     const b: Binding = {
       plugin,
+      chart: entry.chart,
       indicatorId: ind.id,
       name: ind.name,
       chartPaneId: ind.paneId,
@@ -581,7 +425,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       lastShortName: ''
     }
     for (const sourceSpec of spec.sources as SourceSpec[]) {
-      const store: SourceStore = storeFor(sourceSpec.key, sourceSpec.createStore ?? ((key) => new WindowStore(key)))
+      const store: SourceStore = stores.open(sourceSpec.key, sourceSpec.createStore ?? ((key) => new WindowStore(key)))
       const bound = { id: sourceSpec.id, key: sourceSpec.key, store, spec: sourceSpec, unsubscribe: null as (() => void) | null }
       b.sources.push(bound)
       b.state.sources.push({ id: bound.id, key: bound.key, store })
@@ -608,7 +452,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       if (!s.spec.subscribe) continue
       try {
         s.unsubscribe = s.spec.subscribe(s.store, {
-          changed: () => requestApply(entry, b),
+          changed: () => applies.request(b),
           refetch: () => {
             noteInvalidation(entry, b)
             void ensureCoverage(entry, b)
@@ -659,12 +503,10 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         .map((o) => ({ indicatorId: o.indicatorId, name: o.name }))
       // The new binding is made AND filed before the old one is disposed, so a store both
       // read (a rebind that keeps a source) survives the hand-over instead of being dropped
-      // and refetched. Filing it first is the half that matters: `dispose` asks
-      // `storeInUse`, which only sees filed bindings, and a store dropped while the new
-      // binding still holds it is unreachable by key -- the template's `peekStore` finds
+      // and refetched. Filing it first is the half that matters: `dispose` asks the store
+      // table (storetable.ts), which counts only filed bindings, and a store dropped while the
+      // new binding still holds it is unreachable by key -- the template's `peekStore` finds
       // nothing and the pane stays blank however much the orphan is filled.
-      const config = configByTemplate.get(ind.name)
-      const paneId = entry.pane.id
       const b = bind(
         entry,
         plugin,
@@ -673,14 +515,15 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
           ...base,
           indicator: ind,
           siblings,
-          config: config && paneConfigs.read(config, entry.paneIndex),
-          editConfig: config ? (key: string, value: unknown) => editField(config, paneId, key, value) : undefined,
+          ...settings.bindConfig(ind.name, entry.pane.id, entry.paneIndex),
           follows
         },
         sig
       )
-      if (b) entry.bindings.set(ind.id, b)
-      else entry.bindings.delete(ind.id)
+      if (b) {
+        entry.bindings.set(ind.id, b)
+        stores.file(b)
+      } else entry.bindings.delete(ind.id)
       if (existing) dispose(existing)
       if (!b) continue
       fresh.push(b)
@@ -692,7 +535,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       }
     }
     for (const b of fresh) {
-      apply(entry, b)
+      applyBinding(b)
       void ensureCoverage(entry, b)
     }
   }
@@ -808,32 +651,19 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       }
     },
     handleSettings(request: SettingsRequest): boolean {
-      const config = configByTemplate.get(request.indicatorName)
-      return config ? openConfigPanel(config, request.paneId) : false
+      return settings.handleSettings(request)
     },
     ownsSettings(templateName: string): boolean {
-      return configByTemplate.has(templateName)
+      return settings.ownsSettings(templateName)
     },
     settingsModel(templateName: string): IndicatorSettingsModel | null {
-      const config = configByTemplate.get(templateName)
-      if (!config) return null
-      // Settings are kept by pane INDEX (what the wall document stores them under); the library
-      // addresses panes by id. Only a wired pane has an index, and only a wired pane can be
-      // holding the indicator.
-      return {
-        fields: config.fields,
-        read: (paneId) => {
-          const entry = wired.get(paneId)
-          return entry ? paneConfigs.read(config, entry.paneIndex) : null
-        },
-        write: (paneId, key, value) => editField(config, paneId, key, value)
-      }
+      return settings.settingsModel(templateName)
     },
     paneDocs(): Record<number, PaneDoc> {
-      return paneConfigs.snapshot()
+      return settings.paneDocs()
     },
     reorderPanes(order: readonly number[]): void {
-      paneConfigs.reorder(order)
+      settings.reorderPanes(order)
     },
     async settled(timeoutMs = 3000): Promise<void> {
       const deadline = Date.now() + timeoutMs
@@ -843,7 +673,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
         if (!busy || Date.now() >= deadline) {
           // What was fetched reaches the panes now rather than on the next frame: the caller
           // reads what they draw.
-          if (dirty.size > 0) flushApplies()
+          if (applies.pending > 0) applies.flush()
           return
         }
         await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS))
@@ -857,7 +687,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // 06:15, a 1h source's only through 06:00, and a 1D source's only through the
       // session's date. Forgetting from the cursor leaves each coarser source's forming bar
       // filed as fetched-and-empty for good, which draws as a permanent hole in the series
-      // -- one per stop (`horizon.ts`, and notes/architecture/freshness-horizons.md).
+      // -- one per stop (`time/horizon.ts`, and notes/architecture/freshness-horizons.md).
       const seen = new Set<string>()
       for (const entry of wired.values()) {
         // On the schedule of the instrument THIS pane shows: its forming bar is where it is.
@@ -916,8 +746,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     },
     teardown(): void {
       host.sync([])
-      panel?.close()
-      panel = null
+      settings.close()
     }
   }
   return host

@@ -20,21 +20,23 @@
 
 import type { NotificationSink } from '../notifications'
 import type { OHLCVBar } from '../ohlcv'
-import { resolutionDurationMs } from '../periods'
-import { toReplayBar } from '../replay/source'
-import type { CandleGrid } from '../replay/timeframes'
+import { toReplayBar } from '../bars/source'
+import type { CandleGrid } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { byInterval, labelOperand, leadInFor, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { evaluate } from './conditions'
-import { StrategyEntryEngine } from '../lab/alertentries'
+import { type StrategyEntryReader, strategyEntryReader } from './strategies'
 import { GraphEntryEngine } from './graphentry'
 import type { AlertData, Point } from './data'
-import { compile, type CompiledRule, operandKey } from './rules'
-import { pointSource } from './search'
+import { compile, type CompiledRule } from './rules'
+import { pointSource } from './catalogue'
 import { type ClientAlertStore, signature } from './store'
 import { freshRun, type Instant, instants, type RunState, spend, stepInstant, type Track, unspent } from './timeline'
 import type { Alert, Operand } from './types'
+import { resolutionDurationMs } from '../time/intervals'
+import { operandKey, readsCatalogue } from './operands'
+import { splitInstrumentKey, tickerOf } from '../instrumentkey'
 
 /** The stream, as much of it as the monitor uses -- the page's `stream` is one. */
 interface BarStream {
@@ -108,11 +110,11 @@ class Feed {
   }
 
   get vendor(): string {
-    return this.symbol.slice(0, this.symbol.indexOf(':'))
+    return splitInstrumentKey(this.symbol).vendor
   }
 
   get ticker(): string {
-    return this.symbol.slice(this.symbol.indexOf(':') + 1)
+    return splitInstrumentKey(this.symbol).ticker
   }
 
   watch(listener: () => void, depth: number): void {
@@ -367,7 +369,7 @@ class Runner {
 
   private async tracks(): Promise<Track[]> {
     const operands = [...this.compiled.operands.values()]
-    const catalogue = operands.some((o) => o.kind === 'series' || o.kind === 'signal') ? await this.owner.catalogue() : null
+    const catalogue = operands.some(readsCatalogue) ? await this.owner.catalogue() : null
     const out: Track[] = []
     for (const [interval, group] of byInterval(operands)) {
       const bars = (this.feeds.get(interval) as Feed).bars
@@ -425,7 +427,7 @@ class Runner {
     const alert = fired ?? this.alert
     this.owner.notify.notify({
       title: alert.name,
-      body: [alert.symbol.split(':')[1] ?? alert.symbol, readings(this.compiled, instant, this.owner.labelCatalogue), alert.note]
+      body: [tickerOf(alert.symbol), readings(this.compiled, instant, this.owner.labelCatalogue), alert.note]
         .filter(Boolean)
         .join(' · '),
       level: 'alert',
@@ -467,7 +469,7 @@ export class AlertMonitor {
   /** Graph entries, with each timeframe's tail read again per evaluation. */
   readonly graphs: GraphEntryEngine
   /** A saved strategy's entries (client/lab). */
-  readonly strategies: StrategyEntryEngine
+  readonly strategies: StrategyEntryReader
   private readonly runners = new Map<string, Runner>()
   private readonly feeds = new Map<string, Feed>()
   private readonly pointFeeds = new Map<string, PointFeed>()
@@ -486,7 +488,7 @@ export class AlertMonitor {
     this.pollMs = options.pollMs ?? DEFAULT_POLL_MS
     this.graceMs = options.graceMs ?? DEFAULT_GRACE_MS
     this.graphs = new GraphEntryEngine(options.data)
-    this.strategies = new StrategyEntryEngine(undefined, undefined, () => this.clock())
+    this.strategies = strategyEntryReader(() => this.clock())
   }
 
   now(): number {

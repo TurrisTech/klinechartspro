@@ -1,9 +1,10 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import { periodToResolution } from '../periods'
-import { chartTheme } from './controls'
-import { formatClock } from './format'
-import { gridFor } from './timeframes'
+import { formatClock } from '../time/format'
+import { gridFor } from '../time/timeframes'
+import { periodToResolution } from '../time/intervals'
+import { el } from '../ui/dom'
+import { chartTheme } from '../ui/theme'
 
 // GLUE (DOM). Choosing where a replay starts by pointing at the chart: hover a bar, see the
 // bars that will be hidden shaded out to its right, click it. The bar clicked is the LAST one
@@ -174,10 +175,4 @@ function union(rects: DOMRect[]): { left: number; top: number; width: number } {
   const right = Math.max(...rects.map((r) => r.right))
   const top = Math.min(...rects.map((r) => r.top))
   return { left, top, width: right - left }
-}
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
 }

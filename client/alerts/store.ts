@@ -22,6 +22,7 @@ import { hasFeature } from '../capabilities'
 import { loadPreferences, preferencesLoaded, updatePreference } from '../preferences'
 import { compile, describeRule, type Labeller, RuleError } from './rules'
 import { type Alert, type AlertDefinition, type AlertSource, DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
+import { instrumentKey, splitInstrumentKey } from '../instrumentkey'
 
 const MAX_ALERTS = 200
 const PREFERENCE_KEY = 'alerts'
@@ -81,9 +82,10 @@ export function defaultPersistence(): AlertPersistence {
 /** `oanda:EURUSD` from any spelling of it; throws on something that is not `vendor:TICKER`. */
 export function normaliseSymbol(symbol: string): string {
   const raw = symbol.trim()
-  const at = raw.indexOf(':')
-  if (at <= 0 || at === raw.length - 1) throw new RuleError(`not an instrument: '${symbol}' (want vendor:TICKER)`)
-  return `${raw.slice(0, at).toLowerCase()}:${raw.slice(at + 1).toUpperCase()}`
+  const { vendor, ticker } = splitInstrumentKey(raw)
+  // An alert names its vendor: a bare ticker is refused here, not read as the default vendor's.
+  if (!raw.includes(':') || !vendor || !ticker) throw new RuleError(`not an instrument: '${symbol}' (want vendor:TICKER)`)
+  return instrumentKey(vendor.toLowerCase(), ticker.toUpperCase())
 }
 
 /** A stored alert with its internal status: `disabled` is derived from `enabled`, never kept. */

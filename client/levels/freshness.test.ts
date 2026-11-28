@@ -10,7 +10,7 @@ import {
   recheckDelay,
   SETTLE_WINDOW_MS
 } from './freshness'
-import { CONTINUOUS_DAY, FX_GRID, gridOf, nextSessionAnchor } from '../replay/timeframes'
+import { CONTINUOUS_DAY, FX_GRID, gridOf, nextSessionAnchor } from '../time/timeframes'
 
 // When to look at a level book again. The rule has to answer three questions and it must
 // answer all of them definitely: is the book current, is a late one worth waiting for, and

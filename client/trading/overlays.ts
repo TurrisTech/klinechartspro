@@ -1,11 +1,10 @@
 import type { Chart, OverlayCreate, OverlayEvent } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import { periodToResolution } from '../periods'
-import { gridFor } from '../replay/timeframes'
+import { gridFor } from '../time/timeframes'
 import type { SimSide, SimSnapshot, SimTrade } from './api'
-import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText, symbolKey } from './format'
+import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText } from './format'
 import type { InstrumentInfo } from './instrument'
-import { distanceWords } from './exits'
+import { closeReasonWords, distanceWords } from './exits'
 import { balancesBefore, closedMove, closedShareOfBalance } from './ledger'
 import {
   type Amendment,
@@ -38,6 +37,8 @@ import {
 import { OnChartLayer } from './onchart'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
+import { periodToResolution } from '../time/intervals'
+import { symbolKey } from '../instrumentkey'
 
 // Everything a trading session puts on the candle panes, one instance per mounted wall:
 //
@@ -616,16 +617,7 @@ export class TradingOverlays {
               : trade.entryPrice - trade.closePrice
         const pips = move !== null && info.pipSize ? `${formatPips(move / info.pipSize)}p ` : ''
         const pnl = trade.realizedPnl ?? 0
-        const reason =
-          trade.closeReason === 'stop_loss'
-            ? trade.stopMovedBy === 'trail'
-              ? 'Trailing stop hit'
-              : trade.stopMovedBy === 'breakeven'
-                ? 'Breakeven stop hit'
-                : 'Stop hit'
-            : trade.closeReason === 'take_profit'
-              ? 'Target hit'
-              : 'Closed'
+        const reason = closeReasonWords(trade, true)
         const share = closedShareOfBalance(trade, before.get(trade.id), next.account)
         messages.push({
           key: trade.symbol,

@@ -1,22 +1,21 @@
 import { KLineChartPro, type ChartProPane } from '../src'
 import { mountAlertManager, startAlerts } from './alerts'
-import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './alerts/graphentry'
-import type { MtfConfig } from './mtf/config'
-import { currentSession, logout } from './auth'
+import { wallEditorContext } from './alerts/wallcontext'
+import { currentSession } from './auth'
 import { whenSessionRejected } from './authtoken'
-import { capabilities, hasFeature, loadCapabilities } from './capabilities'
-import { attachToSlot } from './chrome/slot'
+import { hasFeature, loadCapabilities } from './capabilities'
 import { setFocusSource } from './chrome/focus'
 import { WdashboardDatafeed } from './datafeed'
 import { defaultLayout, hydrateLayout, toPaneOptions, toPersistedLayout, type PersistedLayout } from './layout'
 import { createLevelsIndicators } from './levels/indicator'
 import { durableSink, mountNotificationCenter, notifications } from './notifications'
 import { createChannelSettings, HttpChannelsApi } from './notifications/channels'
-import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
+import { builtinPlugins, registerBuiltinStrategies } from './builtins'
+import { createFacilities, inertStream } from './facilities'
+import { createPluginHost } from './plugins'
 import { renderLogin } from './login'
-import { availablePeriods, periodToResolution } from './periods'
+import { availablePeriods } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
-import { stream, type StreamRefusal, type StreamStatus } from './stream'
 import {
   type BarReplayController,
   bootReplay,
@@ -24,15 +23,12 @@ import {
   currentIntent,
   mountBarReplay,
   type ReplayBoot,
-  replayAvailable,
-  startReplayFlow,
-  takeReplayNotice
+  replayAvailable
 } from './replay'
-import { inertStream } from './replay/feed'
 import { mountPaperTrading, type PaperTradingController } from './trading'
-import { symbolKey } from './trading/format'
 import { loadWatches, mountPriceWatches, type PriceWatchesController } from './watch'
 import { createRemoteNotifications, raiseNotification } from './watch/notifications'
+import { mountChartExtras } from './wall/extras'
 import { createWorkspaceSwitcher } from './workspaces/menu'
 import { createWorkspaceSaveControls, type WorkspaceSaveControls } from './workspaces/save'
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
@@ -115,12 +111,6 @@ function sessionEnded(): void {
 
 function isLabPage(): boolean {
   return /(^|\/)lab\/?$/.test(window.location.pathname) || params.get('app') === 'lab'
-}
-
-/** Where the Strategy Lab is from the dashboard: `lab` beside the page, under any base path. */
-function labHref(): string {
-  const base = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname.replace(/[^/]*$/, '')
-  return `${base}lab`
 }
 
 /** A mounted wall's one obligation: give back everything it took when the next one replaces
@@ -505,36 +495,22 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // feature `notification_raise`): stored, shown on every tab, and delivered to the account's
   // channels (Pushover, Telegram) like a watch's. A bar replay's notifications never go this way
   // -- the replay raises its own into the centre directly.
+  // An alert can watch a saved strategy's entries: the Lab is registered with the alerts here,
+  // which never import it (alerts/strategies.ts, client/builtins.ts).
+  registerBuiltinStrategies()
   const alertsRuntime = await startAlerts(
     hasFeature('notification_raise') ? durableSink(notifications, raiseNotification) : notifications
   )
   const alertManager = mountAlertManager(chartPro, alertsRuntime, {
     bounds: container,
-    context: () => {
-      const panes = chartPro?.getPanes() ?? []
-      const active = chartPro?.getPane(chartPro.getActivePaneId()) ?? panes[0]
-      return {
-        symbol: active ? symbolKey(active.getSymbol()) : '',
-        interval: active ? periodToResolution(active.getPeriod()) : '1h',
-        symbols: [...new Set(panes.map((p) => symbolKey(p.getSymbol())))],
-        // A graph entry condition copies an overlay's graph settings from the active pane when
-        // that pane carries the overlay, else from the first pane that does, else its defaults.
-        graphSettings: (overlayId) => {
-          const overlay = graphOverlays().find((o) => o.id === overlayId)
-          const carries = (pane: ChartProPane | undefined): boolean =>
-            !!overlay && (pane?.getChart()?.getIndicators({ name: overlay.templateName }).length ?? 0) > 0
-          const pane = [active, ...panes].find(carries)
-          if (!overlay || !pane) return defaultGraphSettings()
-          const config = pluginHost.settingsModel(overlay.templateName)?.read(pane.id) as MtfConfig | null
-          return graphSettingsOf(config ?? undefined, `pane ${panes.indexOf(pane) + 1}`)
-        }
-      }
-    }
+    // Read off the wall each time the editor asks (alerts/wallcontext.ts); an overlay's graph
+    // settings come from the plugin host, which keeps every pane's.
+    context: () => wallEditorContext(chartPro, (template, paneId) => pluginHost.settingsModel(template)?.read(paneId) ?? null)
   })
 
   // The paper-trading account: the panel dock below the chart and the per-pane overlays.
   // Gated on the server's `sim` capability (returns null otherwise); its rail button is added
-  // in mountChartExtras beside the stream status.
+  // in mountChartExtras (wall/extras.ts) beside the stream status.
   // A replay wall mounts the replay dock instead (client/replay/index.ts); a live wall the
   // paper account. The "Replay" rail button starts one here, or exits it there.
   if (replayBoot) {
@@ -667,207 +643,6 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
       chartPro = null
       window.__wdPanes = []
     }
-  }
-}
-
-// Populates the two slots the library exposes (src/types.ts ChartPro.getSlot): the top-rail
-// toolbar gets the workspace switcher and its Save and Revert, the bottom of the left drawing rail gets the stream-liveness dot, server version,
-// and (when logged in) a sign-out control. The rail-footer trio lives in the chrome because
-// it answers questions the chart itself cannot — a chart with a dead socket looks exactly
-// like a quiet market.
-//
-// Returns a disposer, because a workspace switch replaces the chart these are attached to.
-/** A few words beside a rail button for a few seconds: the rail is 3rem wide, too narrow to
- * say why a press did nothing, and a press that silently does nothing reads as a broken one. */
-function railNote(anchor: HTMLElement, text: string, ms = 4000): void {
-  const note = document.createElement('div')
-  note.className = 'wd-rail-note'
-  note.setAttribute('role', 'status')
-  note.textContent = text
-  const box = anchor.getBoundingClientRect()
-  note.style.left = `${box.right + 8}px`
-  note.style.top = `${box.top + box.height / 2}px`
-  document.body.appendChild(note)
-  setTimeout(() => note.remove(), ms)
-}
-
-function mountChartExtras(
-  chartPro: KLineChartPro,
-  switcher: ReturnType<typeof createWorkspaceSwitcher>,
-  saveControls: WorkspaceSaveControls,
-  paper: PaperTradingController | null,
-  replay: { inReplay: boolean; rebuild: () => void }
-): () => void {
-  const footer = document.createElement('div')
-  footer.className = 'wd-rail-footer-content'
-
-  // Paper-trading toggle: no top-toolbar button by design -- it lives in the rail footer's
-  // lower-left corner, beside the stream status and version. Prompt 2's "Bar replay" button
-  // goes right next to it. Only present when the server advertises the `sim` capability
-  // (mountPaperTrading returns null otherwise).
-  if (paper) {
-    const paperButton = document.createElement('button')
-    paperButton.type = 'button'
-    paperButton.className = 'wd-rail-button'
-    paperButton.textContent = 'Paper'
-    paperButton.title = 'Paper trading'
-    paperButton.addEventListener('click', () => paper.toggle())
-    // Driven by the window, not by the click: it can also be closed from its own title bar.
-    paper.onOpenChange((open) => paperButton.classList.toggle('is-on', open))
-    footer.appendChild(paperButton)
-
-    // The trade box: the order ticket in a floating window of its own, apart from the account.
-    const tradeButton = document.createElement('button')
-    tradeButton.type = 'button'
-    tradeButton.className = 'wd-rail-button'
-    tradeButton.textContent = 'Trade'
-    tradeButton.title = 'Order ticket: buy or sell'
-    tradeButton.addEventListener('click', () => paper.toggleTicket())
-    paper.onTicketOpenChange((open) => tradeButton.classList.toggle('is-on', open))
-    footer.appendChild(tradeButton)
-  }
-
-  // Bar replay toggle, right next to Paper. On a live wall it opens the start dialog (and
-  // rebuilds the wall in replay mode); on a replay wall it exits replay. Only present when
-  // the server advertises both `sim` and `asof`.
-  if (replayAvailable()) {
-    const replayButton = document.createElement('button')
-    replayButton.type = 'button'
-    replayButton.className = `wd-rail-button${replay.inReplay ? ' is-on' : ''}`
-    const idleTitle = replay.inReplay ? 'Exit bar replay (it is kept: Replay → Sessions resumes it)' : 'Bar replay: step through history from a date you choose, or resume a past replay'
-    const showIdle = (): void => {
-      replayButton.textContent = 'Replay'
-      replayButton.title = idleTitle
-    }
-    showIdle()
-    // Leaving keeps the replay -- the start dialog's Sessions tab resumes it -- so, like the
-    // controls' own Exit, it is one press.
-    replayButton.addEventListener('click', () => {
-      if (replay.inReplay) {
-        clearReplay()
-        replay.rebuild()
-        return
-      }
-      // The start dialog needs the store probed first; say so while it is. An instrument with
-      // nothing to replay still opens it, on Sessions, saying why (startReplayFlow).
-      replayButton.disabled = true
-      replayButton.textContent = 'Replay…'
-      void startReplayFlow(chartPro, replayButton, replay.rebuild)
-        .catch((err) => {
-          console.error('[replay] could not open the start dialog', err)
-          railNote(replayButton, "Couldn't open replay")
-        })
-        .finally(() => {
-          replayButton.disabled = false
-          showIdle()
-        })
-    })
-    footer.appendChild(replayButton)
-    // A replay that could not open drops the page on this live wall (client/replay/index.ts
-    // `takeReplayNotice`): say why beside the button that reopens it, once the rail is laid out.
-    // Longer than a press's note: nobody pressed anything here, so nobody is looking yet.
-    const notice = replay.inReplay ? null : takeReplayNotice()
-    if (notice) requestAnimationFrame(() => railNote(replayButton, notice, 10_000))
-  }
-
-  // The Strategy Lab, in a tab of its own so the wall stays where it is.
-  const labLink = document.createElement('a')
-  labLink.className = 'wd-rail-button'
-  labLink.textContent = 'Lab'
-  labLink.title = 'Strategy Lab: develop entry and exit rules from signals and indicators'
-  labLink.href = labHref()
-  labLink.target = '_blank'
-  labLink.rel = 'noopener'
-  footer.appendChild(labLink)
-
-  const status = document.createElement('span')
-  status.className = 'wd-status'
-  const dot = document.createElement('span')
-  dot.className = 'wd-status-dot'
-  const statusText = document.createElement('span')
-  status.append(dot, statusText)
-
-  const version = document.createElement('span')
-  version.className = 'wd-version'
-  version.textContent = capabilities().version
-  version.title = `server ${capabilities().version}`
-
-  footer.append(status, version)
-
-  if (hasFeature('auth')) {
-    const logoutButton = document.createElement('button')
-    logoutButton.type = 'button'
-    logoutButton.className = 'wd-logout'
-    logoutButton.textContent = 'Sign out'
-    logoutButton.addEventListener('click', () => {
-      void logout().then(() => window.location.reload())
-    })
-    footer.append(logoutButton)
-  }
-
-  // The rail is 3rem (48px) wide, so the visible label has to be short — the full word
-  // ('connecting', 'offline') lives in `title` for anyone who hovers.
-  const STATUS_LABELS: Record<StreamStatus, string> = {
-    connected: 'live',
-    connecting: 'conn',
-    offline: 'off'
-  }
-  // Disposed on teardown: `stream` is a page-lifetime singleton, so a listener left behind by
-  // each workspace switch would accumulate, each writing into a detached footer.
-  let streamStatus: StreamStatus = 'offline'
-  let refusals: StreamRefusal[] = []
-  const renderStatus = () => {
-    // A replay wall is not live, whatever the socket is doing (it still carries notifications):
-    // a green "live" under a chart frozen in 2024 was the one thing on screen that lied.
-    if (replay.inReplay) {
-      status.dataset.stream = 'replay'
-      delete status.dataset.refused
-      statusText.textContent = 'replay'
-      statusText.title = 'Bar replay: the chart shows stored history up to the replay clock, not the live market'
-      return
-    }
-    status.dataset.stream = streamStatus
-    if (refusals.length === 0) {
-      delete status.dataset.refused
-      statusText.textContent = STATUS_LABELS[streamStatus]
-      statusText.title = streamStatus
-      return
-    }
-    // A pane whose live bars (or live plugin points) the server refused goes quiet with nothing
-    // else on screen to say why: the warning, and the server's own reasons on hover.
-    status.dataset.refused = String(refusals.length)
-    statusText.textContent = `${STATUS_LABELS[streamStatus]}⚠`
-    statusText.title = [
-      streamStatus,
-      '',
-      `The server refused ${refusals.length === 1 ? 'one live subscription' : `${refusals.length} live subscriptions`}:`,
-      ...refusals.map((r) => `${r.label} -- ${r.code}: ${r.errmsg}`)
-    ].join('\n')
-  }
-  const unsubscribeStatus = stream.onStatus((value: StreamStatus) => {
-    streamStatus = value
-    renderStatus()
-  })
-  const unsubscribeRefusals = stream.onRefusals((value: StreamRefusal[]) => {
-    refusals = value
-    renderStatus()
-  })
-
-  // First in the toolbar slot: which wall you are on is the outermost thing about it, and it
-  // reads left-to-right with the symbol and timeframe controls the library owns.
-  const detachSwitcher = attachToSlot(chartPro, 'toolbar', switcher.element)
-  // Save and Revert right after it: they act on the workspace the switcher names.
-  const detachSaveControls = attachToSlot(chartPro, 'toolbar', saveControls.element)
-  const detachFooter = attachToSlot(chartPro, 'rail-footer', footer)
-
-  return () => {
-    switcher.close()
-    saveControls.close()
-    unsubscribeStatus()
-    unsubscribeRefusals()
-    detachSwitcher()
-    detachSaveControls()
-    detachFooter()
   }
 }
 

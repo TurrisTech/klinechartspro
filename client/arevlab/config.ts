@@ -1,5 +1,5 @@
 import { AREV_GENERATIONS, type ArevGeneration } from '../arev/api'
-import type { SettingsField } from '../chartlayers/settings'
+import type { SettingsField } from '../plugins/settings/settings'
 
 // The AREV lab's settings: which AREV generations it draws in its one sub-pane, how each
 // looks, and which signal rule each one's arrows follow, with that rule's levers.

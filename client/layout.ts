@@ -8,10 +8,14 @@ import type {
   SymbolInfo,
   SyncOptions
 } from '../src'
+// The pure module rather than the '../src' barrel: a wall document is read with no chart on the
+// page (workspaces/store.ts, and its tests), and the barrel loads klinecharts, which reads
+// `window.navigator` at import.
 import { periodFor } from '../src/utils/period'
 import { availablePeriods, defaultPeriod } from './periods'
 import type { PaneDoc } from './plugins/paneconfig'
-import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo, symbolVendor } from './symbols'
+import { DEFAULT_SYMBOL_TICKER, fetchSymbolInfo } from './symbols'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, symbolVendor } from './instrumentkey'
 
 // The SHAPE of one wall document -- per pane its symbol/period/indicators, those indicators'
 // parameters and where the pane was looking, plus the active pane, the two sync toggles and
@@ -32,7 +36,7 @@ const LAYOUT_VERSION = 1
 
 interface PersistedPane extends PanePluginFields {
   s: string // symbol ticker, e.g. 'EURUSD'
-  v?: string // vendor; omitted when 'oanda' (client/symbols.ts symbolVendor's own default)
+  v?: string // vendor; omitted when it is client/symbols.ts's DEFAULT_VENDOR
   p: string // Period.text -- which IS the server's resolution code ('1h', '1D')
   mi?: string[] // main indicator names, omitted when empty
   si?: string[] // sub indicator names, top to bottom, omitted when empty
@@ -174,9 +178,7 @@ export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): Persisted
   // A deep link may qualify the ticker with its vendor ('coinbase:BTCUSD'); a persisted
   // pane keeps the two apart (`s` is the bare ticker, `v` the non-default vendor), so
   // split here rather than letting the whole string read as an oanda ticker.
-  const [vendor, bare] = ticker.includes(':')
-    ? (ticker.split(':', 2) as [string, string])
-    : [undefined, ticker]
+  const { vendor, ticker: bare } = splitInstrumentKey(ticker)
   return {
     version: LAYOUT_VERSION,
     preset: '1',
@@ -184,7 +186,8 @@ export function defaultLayout(ticker: string = DEFAULT_SYMBOL_TICKER): Persisted
     panes: [
       {
         s: bare,
-        ...(vendor && vendor !== 'oanda' ? { v: vendor } : {}),
+        // Not for an empty vendor (':EURUSD') either: no `v` reads back as the default one.
+        ...(vendor && vendor !== DEFAULT_VENDOR ? { v: vendor } : {}),
         p: defaultPeriod(availablePeriods()).text,
         mi: ['MA'],
         si: ['VOL']
@@ -290,8 +293,8 @@ export async function hydrateLayout(layout: PersistedLayout): Promise<HydratedLa
   const periods = availablePeriods()
   const resolved = new Map<string, Promise<SymbolInfo>>()
   const symbolFor = (pane: PersistedPane): Promise<SymbolInfo> => {
-    const vendor = pane.v ?? 'oanda'
-    const key = `${vendor}:${pane.s}`
+    const vendor = pane.v ?? DEFAULT_VENDOR
+    const key = instrumentKey(vendor, pane.s)
     let promise = resolved.get(key)
     if (!promise) {
       promise = fetchSymbolInfo(pane.s, vendor)
@@ -392,7 +395,7 @@ function toPersistedPane(pane: PaneSnapshot): PersistedPane {
   const styles = Object.keys(pane.styleOverrides ?? {}).length > 0 ? pane.styleOverrides : undefined
   return {
     s: pane.symbol.ticker,
-    ...(vendor === 'oanda' ? {} : { v: vendor }),
+    ...(vendor === DEFAULT_VENDOR ? {} : { v: vendor }),
     p: pane.period.text,
     ...(pane.mainIndicators.length > 0 ? { mi: pane.mainIndicators } : {}),
     ...(pane.subIndicators.length > 0 ? { si: pane.subIndicators } : {}),

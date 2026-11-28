@@ -14,6 +14,7 @@ import { formatPrice, formatUnitsShort } from './format'
 import type { InstrumentInfo } from './instrument'
 import type { ReadoutPart } from './levels'
 import type { ExitUnit } from './prefs'
+import { tickerOf } from '../instrumentkey'
 
 export type { ExitUnit }
 
@@ -22,7 +23,7 @@ export type { ExitUnit }
 // options to notify when price goes a certain multiple (or multiples) from entry"). PURE
 // (exits.test.ts).
 //
-// The engine (wdashboard-server sim/engine.py, and its port client/replay/engine.ts) knows three
+// The engine (wdashboard-server sim/engine.py, and its port client/sim/engine.ts) knows three
 // things, every figure a PRICE distance:
 //
 // - a TRAILING STOP: the stop follows the best closing-side price at a distance, from the fill or
@@ -354,10 +355,21 @@ export function managementOf(record: SimTrade | SimOrder): { trailingStop: Trail
   }
 }
 
-/** Why a trade closed, in words: a stop the trail or the breakeven placed says so. */
-export function closeReasonWords(trade: Pick<SimTrade, 'closeReason' | 'stopMovedBy'>): string {
-  if (trade.closeReason === 'stop_loss') return trade.stopMovedBy === 'trail' ? 'Trailing stop' : trade.stopMovedBy === 'breakeven' ? 'Breakeven stop' : 'Stop loss'
-  if (trade.closeReason === 'take_profit') return 'Take profit'
+/** Why a trade closed, in words -- the one naming of a close every surface uses (History, the
+ * popup, the card's announcement): a stop the trail or the breakeven placed says so. `asEvent`
+ * words a level as what happened, "Stop loss hit", for an announcement of the close. */
+export function closeReasonWords(trade: Pick<SimTrade, 'closeReason' | 'stopMovedBy'>, asEvent = false): string {
+  if (trade.closeReason === 'stop_loss' || trade.closeReason === 'take_profit') {
+    const level =
+      trade.closeReason === 'take_profit'
+        ? 'Take profit'
+        : trade.stopMovedBy === 'trail'
+          ? 'Trailing stop'
+          : trade.stopMovedBy === 'breakeven'
+            ? 'Breakeven stop'
+            : 'Stop loss'
+    return asEvent ? `${level} hit` : level
+  }
   if (trade.closeReason === 'flatten') return 'Flattened'
   return 'Closed by hand'
 }
@@ -371,7 +383,7 @@ export function stopName(record: Pick<SimTrade, 'trailingStop'> & Partial<Pick<S
 
 /** A milestone reached, in words: the card's flash and a replay's notification. */
 export function milestoneNotice(trade: SimTrade, event: SimEvent, info: InstrumentInfo): { title: string; body: string } {
-  const ticker = trade.symbol.includes(':') ? trade.symbol.split(':', 2)[1] : trade.symbol
+  const ticker = tickerOf(trade.symbol)
   const side = trade.side === 'buy' ? 'long' : 'short'
   const level = event.price ?? trade.entryPrice
   const move = trade.side === 'buy' ? level - trade.entryPrice : trade.entryPrice - level

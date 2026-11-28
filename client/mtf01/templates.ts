@@ -3,8 +3,9 @@ import type { IndicatorGroup } from '../../src'
 import { MTF01_GENERATION, type Stage, type Mtf01Event, type Mtf01Trade } from './api'
 import { peekStore } from '../plugins/store'
 import type { Mtf01Store } from './store'
-import { timestampCalc } from '../plugins/calc'
-import { gridOf, type Schedule } from '../replay/timeframes'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
+import { drawShape, drawText, paintShape, trianglePath, type Fill } from '../plugins/draw'
+import { gridOf, type Schedule } from '../time/timeframes'
 
 // One klinecharts indicator template: mtf01's cascade as a SUB-PANE. Like the AREV and
 // KREV templates, `calc` computes nothing — it reads what the controller fetched from
@@ -144,27 +145,11 @@ const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, n
   return out
 })
 
-function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
-  const dataChanged =
-    prev.extendData?.seriesKey !== cur.extendData?.seriesKey || prev.extendData?.rev !== cur.extendData?.rev
-  return { calc: dataChanged, draw: true }
-}
+const shouldUpdate = shouldUpdateOn<ExtendData>({ keys: ['seriesKey', 'rev'] })
 
-type Fill = 'solid' | 'hollow' | 'pending'
-
-function paint(ctx: CanvasRenderingContext2D, color: string, fill: Fill, alpha: number): void {
-  ctx.lineWidth = 1.5
-  ctx.strokeStyle = color
-  if (fill !== 'hollow') {
-    ctx.globalAlpha = alpha * (fill === 'pending' ? 0.45 : 1)
-    ctx.fillStyle = color
-    ctx.fill()
-    ctx.globalAlpha = alpha
-  }
-  ctx.stroke()
-}
-
-/** A down arrow: every mtf01 signal is one, at the rung of the stage that produced it. */
+/** A down arrow: every mtf01 signal is one, at the rung of the stage that produced it. Squatter
+ * than the registry's `triangle-down` -- its base 0.4 of its size above the rung rather than
+ * 0.8 -- and painted by the same `Fill` rule, so a hollow one means a stopped trade here too. */
 function triangleDown(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -176,33 +161,8 @@ function triangleDown(
 ): void {
   ctx.save()
   ctx.globalAlpha = alpha
-  ctx.beginPath()
-  ctx.moveTo(x, y + size)
-  ctx.lineTo(x - size, y - size * 0.4)
-  ctx.lineTo(x + size, y - size * 0.4)
-  ctx.closePath()
-  paint(ctx, color, fill, alpha)
-  ctx.restore()
-}
-
-function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, alpha: number): void {
-  ctx.save()
-  ctx.globalAlpha = alpha
-  ctx.beginPath()
-  ctx.arc(x, y, r, 0, Math.PI * 2)
-  ctx.strokeStyle = color
-  ctx.lineWidth = 1
-  ctx.stroke()
-  ctx.restore()
-}
-
-function label(ctx: CanvasRenderingContext2D, x: number, y: number, text: string, color: string): void {
-  ctx.save()
-  ctx.font = '10px sans-serif'
-  ctx.textAlign = 'left'
-  ctx.textBaseline = 'middle'
-  ctx.fillStyle = color
-  ctx.fillText(text, x, y)
+  trianglePath(ctx, x, y, size, false, 0.4)
+  paintShape(ctx, color, fill, alpha)
   ctx.restore()
 }
 
@@ -275,7 +235,7 @@ export function registerMtf01Indicators(): IndicatorGroup[] {
             // A rejected arrow is drawn small and hollow rather than dropped: on a
             // multi-timeframe rule "why was there no trade here" is the question actually
             // asked, and the answer is usually a ring on a rung.
-            else dot(ctx, x, y, size * 0.45, STAGE_COLOR[e.stage], 0.5)
+            else drawShape(ctx, 'circle', x, y, size * 0.45, STAGE_COLOR[e.stage], { fill: 'hollow', alpha: 0.5, lineWidth: 1 })
           }
           for (const t of value.trades ?? []) {
             const y = yAxis.convertToPixel(STAGE_LEVEL.ltf)
@@ -283,7 +243,7 @@ export function registerMtf01Indicators(): IndicatorGroup[] {
             const color = t.outcome === 'open' ? STAGE_COLOR.ltf : won ? WIN_COLOR : LOSS_COLOR
             triangleDown(ctx, x, y, size * 1.3, color, fillOf(t), 1)
             if (t.pnlPrice != null && x - lastLabelX >= LABEL_GAP) {
-              label(ctx, x + size * 1.3 + 3, y, pnlLabel(t.pnlPrice, pip, pricePrecision), color)
+              drawText(ctx, x + size * 1.3 + 3, y, pnlLabel(t.pnlPrice, pip, pricePrecision), color)
               lastLabelX = x
             }
           }

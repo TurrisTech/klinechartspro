@@ -1,7 +1,6 @@
 import type { Chart, KLineData } from 'klinecharts'
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { hasFeature } from '../capabilities'
-import { symbolVendor } from '../symbols'
 import { copyPendingText, copyText } from './clipboard'
 import { openWatchDialog } from './dialog'
 import { attachLongPress, type LongPress } from './longpress'
@@ -16,6 +15,7 @@ import {
   priceLevel,
   type Watch
 } from './types'
+import { symbolVendor, tickerOf } from '../instrumentkey'
 
 export { loadWatches } from './store'
 // PRICE WATCHES on the chart: a line per level, right-click (or, on a touch screen, a
@@ -323,7 +323,7 @@ export async function mountPriceWatches(
   }
 
   function instrumentOf(target: string): string {
-    return target.split('@')[0].split(':').pop() ?? target
+    return tickerOf(target.split('@')[0])
   }
 
   /** The newest close any pane on this instrument holds. Context for the dialog only: the

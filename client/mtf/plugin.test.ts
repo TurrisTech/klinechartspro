@@ -13,6 +13,7 @@ const { MTF_OVERLAYS } = await import('./overlays')
 const { MTF_DEFAULTS } = await import('./config')
 const { MtfGraphStore } = await import('./store')
 const { storedSource } = await import('../tsregistry/plugin')
+const { getReadClock } = await import('../config')
 import type { PluginFacilities } from '../plugins/types'
 import type { RegistryIndicator } from '../tsregistry/api'
 
@@ -24,6 +25,7 @@ afterEach(() => {
 const facilities = {
   hasFeature: () => true,
   resolutionDurationMs: () => 3_600_000,
+  readClock: () => getReadClock(),
   stream: { subscribePlugin: () => {}, unsubscribePlugin: () => {} }
 } as unknown as PluginFacilities
 
@@ -134,7 +136,7 @@ describe('each overlay', () => {
 
   test("live, Friday's last close is read once it has passed; a close the next bar opens at is not", async () => {
     const { closeKnown } = await import('./plugin')
-    const { FX_GRID } = await import('../replay/timeframes')
+    const { FX_GRID } = await import('../time/timeframes')
     const H = 3_600_000
     const { spec } = bound(2, '1h')
     // Friday 2026-10-02 16:00 New York (20:00Z): the week's last hour, closing 17:00 (21:00Z).

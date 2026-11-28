@@ -1,6 +1,6 @@
 import type { KLineData } from 'klinecharts'
-import { resolutionDurationMs } from '../periods'
-import type { CandleGrid } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
+import { resolutionDurationMs } from '../time/intervals'
 
 // Where a higher-timeframe signal belongs on a lower-timeframe chart.
 //
@@ -31,7 +31,7 @@ import type { CandleGrid } from '../replay/timeframes'
 // chart bar is then read back off the chart's own array.
 //
 // The conversion is the PANE'S INSTRUMENT'S, handed in as its `CandleGrid`
-// (replay/timeframes.ts). Until 2026-10-04 it was the forex 7h for every instrument, and on
+// (time/timeframes.ts). Until 2026-10-04 it was the forex 7h for every instrument, and on
 // prod's coinbase BTCUSD that drew every 1D vote on the hourly bar seven hours BEFORE the
 // vote existed -- measured on five votes, 2026-08-21 to 09-03, each placed at 17:00 UTC on
 // the day it was cast instead of at the next midnight: lookahead, the one thing this module

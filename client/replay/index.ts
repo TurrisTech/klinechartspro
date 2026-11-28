@@ -3,32 +3,35 @@ import { capabilities, hasFeature } from '../capabilities'
 import { OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
 import type { PluginHost } from '../plugins/host'
-import { periodToResolution } from '../periods'
-import { fetchSymbolInfo, symbolVendor } from '../symbols'
+import { fetchSymbolInfo } from '../symbols'
 import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { milestoneNotice } from '../trading/exits'
 import { instrumentInfo } from '../trading/instrument'
-import { formatInstant, symbolKey } from '../trading/format'
 import type { ServerCatalogue } from '../alerts/catalogue'
 import type { AlertSearch } from '../alerts/search'
 import type { Alert } from '../alerts/types'
 import { ReplayAlerts } from './alerts'
 import { passesDailyClose } from './clock'
-import { createReplayControls, type ListedSession, openStartDialog } from './controls'
+import { createReplayControls } from './controls'
+import type { ListedSession } from './sessionlist'
+import { openStartDialog } from './startdialog'
 import { ReplayQuiet } from './quiet'
 import { pickBarOnChart } from './pickbar'
-import { Engine } from './engine'
+import { Engine } from '../sim/engine'
 import { ReplayFeedHub } from './feed'
 import { LandingWarmer } from './landing'
 import { type FollowSources, followOnMount, followRequest, followTarget } from './follow'
 import { type ReplayIntent, type ReplayState, readIntent, restore, stampSaved, writeIntent } from './persist'
 import { type AdvanceResult, ReplayTradingSession } from './session'
 import { type ReplaySessionSummary, summarizeSessions } from './sessions'
-import { probeStoredIntervals } from './source'
-import { TiledBarSource } from './tiled'
+import { probeStoredIntervals } from '../bars/source'
+import { TiledBarSource } from '../bars/tiled'
 import { ReplayWatches } from './watches'
-import { type CandleGrid, gridOf, scheduleOf, sortByLength } from './timeframes'
+import { type CandleGrid, gridOf, scheduleOf } from '../time/timeframes'
+import { sortByLength, periodToResolution } from '../time/intervals'
+import { formatInstant } from '../time/format'
+import { symbolVendor, symbolKey, splitInstrumentKey, tickerOf } from '../instrumentkey'
 
 // GLUE. `mountBarReplay(chartPro, container, ...)` mirrors `mountPaperTrading`: the replay
 // session bound to the shared trading dock, the floating control window over the chart, and
@@ -258,7 +261,7 @@ async function listSessions(): Promise<ListedSession[]> {
   const zoneOf = (symbol: string): Promise<string> => {
     let zone = zones.get(symbol)
     if (!zone) {
-      const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+      const { vendor, ticker } = splitInstrumentKey(symbol)
       zone = fetchSymbolInfo(ticker, vendor)
         .then((info) => scheduleOf(info)?.timezone ?? 'UTC')
         .catch(() => 'UTC')
@@ -281,7 +284,7 @@ export async function resumeReplay(chartPro: KLineChartPro, session: ReplaySessi
   if (!state) return
   const shown = chartPro.getPaneSnapshots()
   if (!shown.some((p) => symbolKey(p.symbol) === state.symbol)) {
-    const ticker = state.symbol.split(':').pop() ?? state.symbol
+    const ticker = tickerOf(state.symbol)
     const info = await fetchSymbolInfo(ticker, state.vendor)
     const active = chartPro.getPane(chartPro.getActivePaneId()) ?? chartPro.getPanes()[0]
     active?.setSymbol(info)
@@ -298,9 +301,9 @@ async function replayScheduleFor(chartPro: KLineChartPro, symbol: string) {
   const onWall = chartPro
     .getPanes()
     .map((p) => p.getSymbol())
-    .find((s) => `${symbolVendor(s)}:${s.ticker}` === symbol)
+    .find((s) => symbolKey(s) === symbol)
   if (onWall && scheduleOf(onWall)) return scheduleOf(onWall)
-  const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+  const { vendor, ticker } = splitInstrumentKey(symbol)
   try {
     return scheduleOf(await fetchSymbolInfo(ticker, vendor))
   } catch (err) {
@@ -336,7 +339,7 @@ export async function mountBarReplay(
   const schedule = await replayScheduleFor(chartPro, stored.symbol)
   if (!schedule) {
     console.error(`${REPLAY_LOG} no market hours for ${stored.symbol}; leaving replay`)
-    return abandonReplay(`no market hours for ${stored.symbol.split(':').pop() ?? stored.symbol}`, ctx)
+    return abandonReplay(`no market hours for ${tickerOf(stored.symbol)}`, ctx)
   }
   const grid = gridOf(schedule)
   const probed = followProbe?.symbol === stored.symbol && followProbe.at === stored.cursor ? followProbe.held : null
@@ -421,7 +424,7 @@ export async function mountBarReplay(
       // under the OLD clock forgets the coverage that clock made incomplete. The old cursor
       // is what is handed over, not a margin off it: each source's answer was final only
       // through the bar IT had forming at that instant, which the host works out per source
-      // from its own interval (plugins/horizon.ts).
+      // from its own interval (time/horizon.ts).
       setReadClock(result.to)
       hub.cursor = result.to
       hub.setBase(session.base)
@@ -524,7 +527,7 @@ export async function mountBarReplay(
         ctx.notify.notify({
           title: result.alert.name,
           // The alert's own instrument: any on the Alerts list, not only the one replayed.
-          body: [result.alert.symbol.split(':')[1] ?? result.alert.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective, instrumentInfo(result.alert.symbol).timezone)}`].filter(Boolean).join(' · '),
+          body: [tickerOf(result.alert.symbol), result.alert.readings, `replay ${formatInstant(result.alert.effective, instrumentInfo(result.alert.symbol).timezone)}`].filter(Boolean).join(' · '),
           level: 'alert',
           source: 'replay',
           data: { alertId: result.alert.alertId, eventAt: result.alert.effective, replay: true }
@@ -566,7 +569,7 @@ export async function mountBarReplay(
   session.warmAlerts()
   await session.primeQuote()
   // The wall reads as history at a glance: a thin edge in the replay's orange round the chart,
-  // however far away or rolled up the controls are (client/style.css `.wd-replay-wall`).
+  // however far away or rolled up the controls are (client/styles/replay.css `.wd-replay-wall`).
   container.classList.add(REPLAY_WALL_CLASS)
 
   // FOLLOWING THE CHART (follow.ts). What a follow reads to know it can walk the instrument the

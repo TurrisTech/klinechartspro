@@ -2,7 +2,7 @@ import type { KLineData } from 'klinecharts'
 import { capabilities } from './capabilities'
 import { apiGet, getReadClock, OhlcvApiError, type QueryParams } from './config'
 import { instrumentConfig } from './instrumentconfig'
-import { legalCandleOpens } from './marketclosed'
+import { legalCandleOpens } from './time/marketclosed'
 import { barToKLineData, isNoData, type GetBarsResponse, type OHLCVBar } from './ohlcv'
 import { barsFromTiles } from './tiles'
 import { readHorizon, readTiled } from './tiles/join'
@@ -26,7 +26,7 @@ const MAX_WIDENING_ATTEMPTS_HARD = 24
  * One window of bars: tiles for the closed part, the API for whatever is left
  * (`tiles/join.ts`), the last `limit` of them when given.
  *
- * Exported because the plugins' own bar reads (`plugins/bars.ts`) and the AREV21 MTF overlay's
+ * Exported because the plugins' own bar reads (`bars/closed.ts`) and the AREV21 MTF overlay's
  * bar GRID need the same thing, and the overlay used to ask `/getbars` directly, which meant
  * panning through tiled history still hit the API once per grid window per source timeframe.
  *

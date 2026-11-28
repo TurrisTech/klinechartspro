@@ -1,0 +1,17 @@
+/* --- Phone -------------------------------------------------------------------------------- */
+
+@media (max-width: 639px) {
+  /* The docked account on a phone: 70vh of an iPhone leaves the chart a sliver. */
+  .wd-dockhost {
+    max-height: 55dvh;
+  }
+
+  /* A floating window may be as wide as the screen, less its edge margins. */
+  .wd-window[data-mode='float'] {
+    max-width: calc(100vw - 16px);
+  }
+
+  .wd-replay-window[data-mode='float'] {
+    min-width: 0;
+  }
+}

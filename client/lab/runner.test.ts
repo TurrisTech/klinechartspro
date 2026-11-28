@@ -6,7 +6,6 @@ import { installWindow } from '../plugins/testing'
 // its default slots build over the same signals, read back as far as they need. That those are
 // the overlay's -- the server's -- is graph.test.ts's job, against the server's own output.
 installWindow()
-const { nominalMs } = await import('../replay/timeframes')
 const { runStrategy, autoPathInterval, RunError } = await import('./runner')
 const { rank85Strategy, ruleStrategy, defaultGraph, defaultGraphEntry } = await import('./model')
 const { buildRootGraphs } = await import('./graph')
@@ -15,6 +14,7 @@ const { ruleEntryTest, ruleGraphSpec, ruleSignals } = await import('./rules')
 import type { Strategy, StrategyRule } from './model'
 
 const { FakeData, NOW, D, withRules } = await import('./testdata')
+const { nominalMs } = await import('../time/intervals')
 
 const window = { from: NOW - 10 * D, to: NOW }
 const POOL = ['3m', '5m', '15m', '1h', '4h']

@@ -1,4 +1,4 @@
-// ENTRIES AS TRADES, through the paper-trading fill engine (client/replay/engine.ts -- the port of
+// ENTRIES AS TRADES, through the paper-trading fill engine (client/sim/engine.ts -- the port of
 // the server's sim engine, kept to it by shared fixtures): a market order at the entry bar's
 // close fills at its bid or ask, a stop or target fills where OANDA's rules say it does, across a
 // gap at the worse (stop) or better (target) open, and a bar reaching both takes the stop.
@@ -35,15 +35,17 @@
 //
 // PURE.
 
-import type { ReplayBar } from '../replay/cache'
-import { type BidAskBar, type BreakevenRequest, Engine, type Event, SimError, type Trade, type TrailRequest } from '../replay/engine'
-import { type CandleGrid, nominalMs } from '../replay/timeframes'
+import type { ReplayBar } from '../bars/cache'
+import { type BreakevenRequest, Engine, type Event, SimError, type Trade, type TrailRequest } from '../sim/engine'
+import { toBidAsk } from '../sim/bidask'
+import type { CandleGrid } from '../time/timeframes'
 import type { LabEntry } from './entries'
 import type { Compiled } from './expr'
 import type { Readings } from './graph'
 import type { CostSpec, Direction, ExitSpec, Level, Sizing } from './model'
 import { lastAtOrBefore } from './sorted'
 import { maxDrawdown } from '../trading/ledger'
+import { nominalMs } from '../time/intervals'
 
 export type ExitReason = 'stop' | 'target' | 'breakeven' | 'trail' | 'rule' | 'time' | 'opposite' | 'end'
 
@@ -116,27 +118,6 @@ export interface SimResult {
   skipped: SkippedEntry[]
   equity: EquityPoint[]
   stats: TradeStats
-}
-
-/** A bar as the engine folds it: its bid and ask, or its mid on both sides where the store has
- * no quotes (client/replay/session.ts `toBidAsk`, which this module cannot import without the
- * page's configuration). */
-function bidAsk(bar: ReplayBar, symbol: string): BidAskBar {
-  const bid = bar.bid ?? { o: bar.o, h: bar.h, l: bar.l, c: bar.c }
-  const ask = bar.ask ?? { o: bar.o, h: bar.h, l: bar.l, c: bar.c }
-  return {
-    symbol,
-    time: bar.open,
-    end: bar.end,
-    bidOpen: bid.o,
-    bidHigh: bid.h,
-    bidLow: bid.l,
-    bidClose: bid.c,
-    askOpen: ask.o,
-    askHigh: ask.h,
-    askLow: ask.l,
-    askClose: ask.c
-  }
 }
 
 /** What a level reads beyond its own numbers: an expression's environment for an entry. */
@@ -310,7 +291,7 @@ export function simulate(input: SimInput): SimResult {
     t.commission += commissionOf(t.units)
     t.financing = financingOf(t, at)
     const delta = dir > 0 ? close - t.openPrice : t.openPrice - close
-    // As the engine counts it (replay/engine.ts `pnl`), less what is paid on top.
+    // As the engine counts it (sim/engine.ts `pnl`), less what is paid on top.
     const fees = t.commission + t.financing
     t.pnl = delta * t.units - fees
     t.pips = delta / input.pip
@@ -345,7 +326,7 @@ export function simulate(input: SimInput): SimResult {
 
   for (let b = 0; b < input.bars.length; b++) {
     const bar = input.bars[b]
-    closed(engine.onBar(bidAsk(bar, symbol)), stopReason)
+    closed(engine.onBar(toBidAsk(bar, symbol)), stopReason)
     const t = bar.end
     const mid = bar.c
 

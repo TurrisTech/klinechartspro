@@ -2,7 +2,7 @@ import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineDa
 import type { IndicatorGroup } from '../../src'
 import type { ArevPoint } from '../arev/api'
 import { peekStore } from '../plugins/store'
-import { drawLink, drawMark } from '../tsregistry/marks'
+import { drawLink, drawShape } from '../plugins/draw'
 import type { RegistryStore } from '../tsregistry/store'
 import { DIV_DEFAULTS, type DivConfig } from './config'
 import { MIN_NEIGHBOURS, divergences, type Label, type Rule, type Side } from './divergence'
@@ -104,7 +104,9 @@ function calcFor(kind: Kind) {
   }
 }
 
-/** Recompute when the data or the RULE changed; a line-style edit only redraws. */
+/** Recompute when the data or the RULE changed; a line-style edit only redraws. Not
+ * `shouldUpdateOn`, which compares whole keys: the rule is one field of the config, read through
+ * its default when the pane has none yet. */
 function shouldUpdate(prev: Indicator<DivValue, number, ExtendData>, cur: Indicator<DivValue, number, ExtendData>) {
   const changed =
     prev.extendData?.seriesKey !== cur.extendData?.seriesKey ||
@@ -145,7 +147,7 @@ function drawFor(kind: Kind): NonNullable<IndicatorTemplate<DivValue, number, Ex
         }
         if (y == null) continue
         const scale = hidden ? 0.7 : 1
-        drawMark(ctx, { shape: up ? 'arrow-up' : 'arrow-down', size: scale }, x, y, size * scale, 'solid', color)
+        drawShape(ctx, up ? 'arrow-up' : 'arrow-down', x, y, size * scale, color)
       }
     }
     // klinecharts assigns this to `isCover` and draws the declared figures only when it is

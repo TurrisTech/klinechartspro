@@ -9,8 +9,8 @@ installWindow()
 const { toPips, tradePips, tradePnl } = await import('./format')
 const { DEFAULT_COLORS, linesFor, overlaysFor } = await import('./overlays')
 const { applyAmendment, bracketFigures, currentLevel, historyFigures, isComposing } = await import('./lines')
-const { formatInstant, formatShare } = await import('./format')
-const { formatClock } = await import('../replay/format')
+const { formatShare } = await import('./format')
+const { formatClock, formatInstant } = await import('../time/format')
 const { bracketDatum } = await import('./overlays')
 
 const KEY = 'oanda:EUR_USD'

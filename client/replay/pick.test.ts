@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { defaultRange, DEFAULT_RANGE_MS, randomStart } from './pick'
-import { FX_GRID, fromWall, intervalStart } from './timeframes'
+import { FX_GRID, fromWall, intervalStart } from '../time/timeframes'
 
 const TZ = 'America/New_York'
 

@@ -11,7 +11,7 @@ import type { ExtendData, Value } from './templates'
 const { MTF_DEFAULTS } = await import('./config')
 const { storeFor, dropStore } = await import('../plugins/store')
 const { createMtfGraphStore, NODES_ARRAY } = await import('./store')
-const { FX_SCHEDULE } = await import('../replay/timeframes')
+const { FX_SCHEDULE } = await import('../time/timeframes')
 
 import type { Indicator, KLineData } from 'klinecharts'
 import type { MtfConfig } from './config'

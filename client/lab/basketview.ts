@@ -1,9 +1,10 @@
-import { button, el, iconButton } from '../alerts/dom'
 import { type BasketRow, FX_28, MAJORS, poolBasket, runBasket } from './basket'
 import { figuresTable } from './figtable'
 import { describeMean } from './figures'
-import type { Strategy } from './model'
+import { normalInstrument, type Strategy } from './model'
 import type { LabRun } from './runner'
+import { button, el, iconButton } from '../ui/dom'
+import { instrumentKey } from '../instrumentkey'
 
 // GLUE (DOM). The Basket panel: the draft run on every instrument of a list -- the seven majors,
 // the 28 FX pairs, or any -- a row of figures per instrument and the pooled trades of them all.
@@ -29,11 +30,15 @@ const LIST_KEY = 'wd.lab.basket'
 /** Two at a time: a run is mostly waiting on the server, and the dev server is shared. */
 const CONCURRENCY = 2
 
+/** A preset's key: the majors and the 28 pairs are OANDA's names (basket.ts), whatever the default
+ * vendor is. */
+const oandaKey = (ticker: string): string => instrumentKey('oanda', ticker)
+
 const signed = (v: number | null | undefined, digits: number): string => (v === null || v === undefined || !Number.isFinite(v) ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(digits)}`)
 
 export function createBasketPanel(ctx: BasketContext): BasketPanel {
   const element = el('div', 'wd-lab-panel wd-lab-basket')
-  let list: string[] = stored() ?? MAJORS.map((s) => `oanda:${s}`)
+  let list: string[] = stored() ?? MAJORS.map(oandaKey)
   let rows: Array<BasketRow | null> = []
   let ranOn: string[] = []
   let token = 0
@@ -74,7 +79,7 @@ export function createBasketPanel(ctx: BasketContext): BasketPanel {
     preset.appendChild(o)
   }
   preset.addEventListener('change', () => {
-    const wanted = preset.value === 'majors' ? MAJORS.map((s) => `oanda:${s}`) : preset.value === 'fx28' ? FX_28.map((s) => `oanda:${s}`) : [ctx.strategy().instrument]
+    const wanted = preset.value === 'majors' ? MAJORS.map(oandaKey) : preset.value === 'fx28' ? FX_28.map(oandaKey) : [ctx.strategy().instrument]
     // Only what this server has: dev carries a handful of OANDA instruments, prod all of them.
     const missing = offeredSet.size > 0 ? wanted.filter((s) => !offeredSet.has(s)) : []
     list = wanted.filter((s) => !missing.includes(s))
@@ -107,8 +112,7 @@ export function createBasketPanel(ctx: BasketContext): BasketPanel {
   const addIt = (): void => {
     const raw = add.value.trim()
     if (!raw) return
-    const at = raw.indexOf(':')
-    const symbol = at > 0 ? `${raw.slice(0, at).toLowerCase()}:${raw.slice(at + 1).toUpperCase()}` : `oanda:${raw.toUpperCase()}`
+    const symbol = normalInstrument(raw)
     if (!list.includes(symbol)) list.push(symbol)
     add.value = ''
     keep()

@@ -11,6 +11,7 @@ import {
   zoneSettingsOf
 } from './heathtemplate'
 import { registerTradeTalkIndicator, TEMPLATE_NAME } from './templates'
+import { isInterval, isIntraday } from '../time/intervals'
 
 // TradeTalk as a client plugin: one template on the price pane, one source (daily bars), and
 // no server change of any kind -- the rule, the level map and the drawing are all in the
@@ -23,13 +24,10 @@ import { registerTradeTalkIndicator, TEMPLATE_NAME } from './templates'
 // statement about a session. Without it nothing is drawn, and the legend says so, rather
 // than a guessed zone putting every boundary an hour or seven out.
 
-const INTERVAL_PATTERN = /^(\d+)([smhDWMY])$/
-
 /** Whether bars of this interval are dated by their SESSION (daily and coarser, which the
  * wire dates canonically) rather than by their open. */
 export function isSessionDated(interval: string): boolean {
-  const unit = INTERVAL_PATTERN.exec(interval)?.[2]
-  return unit === 'D' || unit === 'W' || unit === 'M' || unit === 'Y'
+  return isInterval(interval) && !isIntraday(interval)
 }
 
 /** The clock this chart's bars are dated to sessions on, or null for an instrument whose

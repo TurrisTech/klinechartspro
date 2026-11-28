@@ -14,9 +14,9 @@
 //                     `indicatorValues`), so the value is the line the chart draws
 
 import type { KLineData } from 'klinecharts'
-import { averageTrueRange } from '../../src/indicators/nnfx/atr'
+import { averageTrueRange } from '../../src'
 import { indicatorValues } from '../alerts/compute'
-import type { ReplayBar } from '../replay/cache'
+import type { ReplayBar } from '../bars/cache'
 import { type Ast, callsOf } from './expr'
 import type { Readings } from './graph'
 import { lastAtOrBefore } from './sorted'

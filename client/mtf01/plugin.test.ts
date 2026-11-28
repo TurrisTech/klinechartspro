@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { BindContext } from '../plugins/types'
-import type { InstrumentConfig } from '../symbols'
 import { fakeChart, fakeFacilities, fakeIndicator, fakePane, installWindow } from '../plugins/testing'
+import type { InstrumentConfig } from '../instrumentconfig'
 
 // The P&L label beside each mtf01 trade states its move in the instrument's own pips, and the pip
 // is read from the instrument's configuration -- the `GET /instrument` record the pane's SymbolInfo

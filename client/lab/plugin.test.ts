@@ -12,7 +12,7 @@ const { LAB_TEMPLATE, publishedRun } = await import('./overlay')
 const { StrategyStore } = await import('./store')
 const { rank85Strategy } = await import('./model')
 const { FakeData, NOW, D, withRules } = await import('./testdata')
-const { FX_DAY, FX_GRID } = await import('../replay/timeframes')
+const { FX_DAY, FX_GRID } = await import('../time/timeframes')
 const { peekStore } = await import('../plugins/store')
 
 import type { ChartProPane, Period, SymbolInfo } from '../../src'

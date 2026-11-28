@@ -1,5 +1,5 @@
 import type { Encoding } from '../chartlayers/encoding'
-import type { SettingsField } from '../chartlayers/settings'
+import type { SettingsField } from '../plugins/settings/settings'
 
 // Display order for the intervals zones are computed on (wdashboard-server levels2.py:
 // LEVELS2_INTERVAL_ALLOWLIST), short-to-long -- a UI reading order, not the wire order.

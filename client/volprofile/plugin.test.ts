@@ -112,3 +112,27 @@ describe('settings', () => {
     expect(plugin.bind(ctx('1D', SYMBOL, 'oanda', config))?.sources.map((s) => s.key)).toEqual(['vp-bars|oanda:EURUSD|1m'])
   })
 })
+
+describe('the read clock', () => {
+  test("is the facilities': under a replay standing at a window's start, nothing is read from it", async () => {
+    const { fakeFacilities } = await import('../plugins/testing')
+    const realFetch = globalThis.fetch
+    const asked: string[] = []
+    globalThis.fetch = (async (url: URL) => {
+      asked.push(String(url))
+      throw new Error('nothing may be read')
+    }) as unknown as typeof fetch
+    try {
+      const start = Date.UTC(2026, 0, 5, 14)
+      const plugin = createVolumeProfilePlugin(() => OANDA)
+      plugin.register(fakeFacilities({ readClock: () => start }))
+      const spec = plugin.bind(setup().ctx('1h'))
+      // Long past by the browser's clock, but the read clock stands at it: nothing there yet.
+      const page = await spec?.sources[0].fetch({ from: start, to: start + 3_600_000 }, 5000)
+      expect(page).toEqual({ points: [], nextFrom: null })
+      expect(asked).toEqual([])
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+})

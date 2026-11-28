@@ -12,15 +12,16 @@
 // "next": with `edge` the next answer is where it starts holding again, and with `level` it is
 // the next bar close at which it holds.
 
-import { resolutionDurationMs } from '../periods'
-import { byInterval, leadInFor, type ServerCatalogue } from './catalogue'
+import { byInterval, leadInFor, pointSource, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { type AlertData, type Point, SpanCache } from './data'
-import { StrategyEntryEngine } from '../lab/alertentries'
+import { strategyEntryReader } from './strategies'
 import { GraphEntryEngine } from './graphentry'
-import { compile, operandKey } from './rules'
+import { compile } from './rules'
 import { freshRun, type Instant, instants, scan, type Track } from './timeline'
 import type { Alert, Operand } from './types'
+import { resolutionDurationMs } from '../time/intervals'
+import { operandKey, readsCatalogue } from './operands'
 
 /** Bars of the finest timeframe a rule reads, per chunk of a search -- the first chunk. */
 export const SEARCH_CHUNK_BARS = 3000
@@ -58,17 +59,6 @@ export interface SearchOptions {
   onProgress?: (reached: number) => void
 }
 
-/** Where a server operand's points come from, or null when the catalogue has no such row (a
- * registry entry removed since the alert was written) -- the operand then reads as missing. */
-export function pointSource(operand: Operand, catalogue: ServerCatalogue): PointSource | null {
-  if (operand.kind === 'series') {
-    const row = catalogue.stored.find((s) => s.entry.name === operand.indicator)
-    return row ? { plugin: row.plugin, variant: row.variant, foldBy: row.foldBy } : null
-  }
-  if (operand.kind === 'signal') return { plugin: operand.plugin, variant: operand.variant, foldBy: null }
-  return null
-}
-
 function sourceKey(source: PointSource, symbol: string, interval: string): string {
   return `${source.plugin}|${source.variant}|${symbol}|${interval}`
 }
@@ -78,7 +68,7 @@ export class AlertSearch {
   private readonly points = new Map<string, SpanCache<Point>>()
   private readonly graphs: GraphEntryEngine
   /** A saved strategy's entries (client/lab), run over each window. */
-  private readonly strategies = new StrategyEntryEngine()
+  private readonly strategies = strategyEntryReader()
 
   constructor(
     private readonly data: AlertData,
@@ -107,7 +97,7 @@ export class AlertSearch {
     const groups = byInterval(operands)
     const intervals = [...groups.keys()]
     if (intervals.length === 0) return null
-    const catalogue = operands.some((o) => o.kind === 'series' || o.kind === 'signal') ? await this.catalogue() : null
+    const catalogue = operands.some(readsCatalogue) ? await this.catalogue() : null
     const lengths = intervals.map(resolutionDurationMs)
     const firstChunk = SEARCH_CHUNK_BARS * Math.min(...lengths)
     let chunk = firstChunk

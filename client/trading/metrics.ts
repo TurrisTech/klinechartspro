@@ -1,5 +1,6 @@
 import type { SimAccount, SimOrder, SimOrderType, SimQuote, SimSide, SimTrade } from './api'
 import type { InstrumentInfo } from './instrument'
+import { tickerOf } from '../instrumentkey'
 
 // The numbers the on-chart order widget shows, computed from a snapshot. PURE: no DOM, no
 // session, no chart -- so the forex arithmetic is tested on its own (metrics.test.ts).
@@ -27,7 +28,7 @@ export interface Currencies {
 /** The currencies of a pair ticker -- `EURUSD`, `EUR_USD`, `SPX500_USD` (quote only is
  * meaningful there) -- or null for a ticker that names none (`SPY`). */
 export function pairCurrencies(key: string): Currencies | null {
-  const ticker = (key.includes(':') ? key.split(':', 2)[1] : key).toUpperCase()
+  const ticker = tickerOf(key).toUpperCase()
   const six = /^([A-Z]{3})([A-Z]{3})$/.exec(ticker)
   if (six) return { base: six[1], quote: six[2] }
   const split = /^([A-Z0-9]+)[_/-]([A-Z]{3})$/.exec(ticker)

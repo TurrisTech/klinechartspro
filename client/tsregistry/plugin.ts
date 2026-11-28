@@ -1,6 +1,6 @@
 import type { IndicatorGroup } from '../../src'
 import { apiUrl } from '../config'
-import { resolveSeries, type IndicatorPoint, type SeriesDoc } from '../indicators/api'
+import { resolveSeries } from '../indicators/api'
 import { fetchEnvelope, loadPluginCatalogue, type PluginCatalogue, toPage } from '../plugins/api'
 import type {
   BindContext,
@@ -21,6 +21,8 @@ import { loadRegistry, type RegistryIndicator, type RegistryWire } from './api'
 import { registrySourceKey, storeFactory, type RegistryPoint, type RegistryStore } from './store'
 import { defaultCalcParams, drawnSeries, PALETTE, registerRegistryIndicators, seriesDocFor } from './templates'
 import { phaseLabel } from '../plugins/legend'
+import type { IndicatorPoint, SeriesDoc } from '../ohlcv'
+import { instrumentKey } from '../instrumentkey'
 
 // The one client plugin for every server indicator: it reads the registry, registers a
 // template per row, and binds each one to the wire its row names.
@@ -51,7 +53,7 @@ function seriesSourceKey(
   interval: string,
   series: SeriesDoc
 ): string {
-  return `S|${vendor}:${ticker}|${interval}|${JSON.stringify(series)}`
+  return `S|${instrumentKey(vendor, ticker)}|${interval}|${JSON.stringify(series)}`
 }
 
 function computedSource(
@@ -69,7 +71,7 @@ function computedSource(
     createStore: storeFactory(null),
     fetch: async (range, limit) => {
       const url = apiUrl('/indicators/values', {
-        symbol: `${ctx.vendor}:${ctx.ticker}`,
+        symbol: instrumentKey(ctx.vendor, ctx.ticker),
         resolution: ctx.interval,
         series: JSON.stringify(series),
         from: range.from,
@@ -245,6 +247,7 @@ export function storedSource(
   // params keeps the key it always had, so the AREV sub-pane and the MTF overlay still share
   // one store (`store.ts`).
   const tuned = Object.keys(params).length > 0 ? `|${JSON.stringify(params)}` : ''
+  const vendorSymbol = instrumentKey(ctx.vendor, ctx.ticker)
   return {
     id: entry.name,
     key: `${registrySourceKey(entry.name, ctx.vendor, ctx.ticker, ctx.interval)}${tuned}`,
@@ -256,11 +259,11 @@ export function storedSource(
     // Answered from indicator tiles wherever the server has said a series is tiered and the
     // tiles cover the window (`client/indicatortiles/source.ts`); the server otherwise.
     fetch: tieredFetch<RegistryPoint>(
-      `${entry.wire.plugin}|${entry.wire.variant ?? ''}${tuned}|${ctx.vendor}:${ctx.ticker}|${ctx.interval}`,
+      `${entry.wire.plugin}|${entry.wire.variant ?? ''}${tuned}|${vendorSymbol}|${ctx.interval}`,
       (range, limit) =>
         f.points<RegistryPoint>({
           pluginId: entry.wire.plugin,
-          vendorSymbol: `${ctx.vendor}:${ctx.ticker}`,
+          vendorSymbol,
           resolution: ctx.interval,
           from: range.from,
           to: range.to,
@@ -268,7 +271,7 @@ export function storedSource(
           variant: entry.wire.variant ?? undefined,
           ...(Object.keys(params).length > 0 ? { params } : {})
         }),
-      () => readHorizon(`${ctx.vendor}:${ctx.ticker}`, ctx.interval)
+      () => readHorizon(vendorSymbol, ctx.interval)
     ),
     subscribe: storedSubscribe(f, entry, ctx)
   }
@@ -343,7 +346,7 @@ export function createRegistryPlugin(): IndicatorPlugin {
       if (!entry || !f || entry.wire.plugin !== 'indicators' || !f.hasFeature('indicators.resolve')) {
         return { ok: true }
       }
-      const vendorSymbol = `${f.symbolVendor(request.symbol)}:${request.symbol.ticker}`
+      const vendorSymbol = instrumentKey(f.symbolVendor(request.symbol), request.symbol.ticker)
       const result = await resolveSeries(
         vendorSymbol,
         request.period.text,

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
 import { installWindow } from '../plugins/testing'
-import { FX_DAY } from '../replay/timeframes'
+import { FX_DAY } from '../time/timeframes'
 
 installWindow()
 const { computeValues } = await import('./templates')

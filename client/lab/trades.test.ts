@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import type { ReplayBar } from '../replay/cache'
+import type { ReplayBar } from '../bars/cache'
 import type { LabEntry } from './entries'
 import type { LabSignal, Readings } from './graph'
-import { type CandleGrid, FX_GRID } from '../replay/timeframes'
+import { type CandleGrid, FX_GRID } from '../time/timeframes'
 import { defaultExits, defaultSizing, type ExitSpec, type Sizing } from './model'
-import { Engine } from '../replay/engine'
+import { Engine } from '../sim/engine'
 import { simulate, type SimInput } from './trades'
 
 // The simulated trades, bar by bar, against the fill engine's rules: a long buys the ask at the

@@ -1,7 +1,7 @@
-import type { TileHint } from '../indicatortiles/index'
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, Period, SymbolInfo } from '../../src'
 import type { Feature } from '../capabilities'
+import type { Page, Range } from '../paging'
 import type { stream } from '../stream'
 import type { PaneConfig } from './paneconfig'
 
@@ -20,36 +20,7 @@ import type { PaneConfig } from './paneconfig'
 // The server has the same shape (`wdashboard_server/plugins`): a plugin there reads points,
 // the host owns the route. The two meet on `GET /plugins/{id}/values` (`api.ts`).
 
-export interface Range {
-  from: number
-  to: number
-}
-
 export type Phase = 'idle' | 'loading' | 'queued' | 'replaying' | 'ready' | 'error'
-
-/** One page of a fetch. `nextFrom` says where the next page starts, or `null` when the
- * requested range is covered -- so a capped answer (`points.length >= limit`) continues
- * from the last point, and a chunked fetch continues from the chunk's end, through one
- * host loop. `status` reports a server still building the series; the host records the
- * phase and retries after `retryAfterMs`. */
-export interface Page<P> {
-  points: P[]
-  nextFrom: number | null
-  status?: { phase: 'queued' | 'replaying'; progress: number | null; retryAfterMs: number }
-  /** The auxiliary arrays named in the request, by name. Absent when none were asked for;
-   * a name the server did not send reads as an empty array, so a plugin talking to an
-   * older server sees "no trades" rather than a crash. Paging is driven by `points`
-   * alone: an auxiliary array is a different kind of row and does not have its own
-   * cursor. */
-  arrays?: Record<string, { date: number }[]>
-  /** Where a tiered series' closed partitions can be read straight from the bucket, when the
-   * server says so (`client/indicatortiles/`). Absent for everything else. */
-  tiles?: TileHint
-  /** Why this page holds less than was asked -- a timeframe of an MTF overlay the server could
-   * not read. Its points are drawn, its range is read again until a page comes back without one
-   * (host.ts `degraded`), and the legend's warning says this (`SourceStore.problem`). */
-  problem?: string
-}
 
 /** What the host needs from a store. `WindowStore` (store.ts) is the implementation
  * every plugin uses unless it holds something beside points (mtf's bar grid). */
@@ -69,7 +40,7 @@ export interface SourceStore<P = unknown> {
   missing(window: Range): Range[]
   /** Forget coverage at or after `from` (the replay's cursor moved: values that were not
    * knowable then may be now). The host passes the source's own knowability horizon under
-   * the OLD clock, not the cursor -- see `horizon.ts`. Optional; a store without it keeps
+   * the OLD clock, not the cursor -- see `time/horizon.ts`. Optional; a store without it keeps
    * whatever it fetched. */
   forgetAfter?(from: number): void
   setPhase(phase: Phase, progress?: number | null, error?: string | null): void
@@ -96,7 +67,7 @@ export interface SourceSpec<P = unknown> {
   fetch(range: Range, limit: number): Promise<Page<P>>
   /** The interval this source's points are dated on -- usually the chart's, but not for a
    * multi-timeframe source that reads another. The host needs it to know how far an answer
-   * fetched under a replay's read clock is FINAL (`horizon.ts`): a point exists once its bar
+   * fetched under a replay's read clock is FINAL (`time/horizon.ts`): a point exists once its bar
    * has closed, so the bar forming at the cursor is missing from every answer taken at it
    * and its window must not be recorded as covered. Omit it and the source is refetched only
    * from the cursor, which leaves that bar permanently blank. */
@@ -216,6 +187,11 @@ export interface PluginFacilities {
   symbolVendor(symbol: SymbolInfo): string
   /** The server's per-request values cap. */
   maxValuesPerRequest: number
+  /** The most bars one `/getbars` request may ask for, as `/capabilities` states it (`limits`). */
+  readonly maxBarsPerRequest: number
+  /** The read clock: a bar replay's cursor, or null on a live wall (config.ts). Read when it is
+   * needed and never kept, because a replay moves it. */
+  readClock(): number | null
 }
 
 /** One label a plugin publishes (the server's `signal()` row). `id` is what a point's

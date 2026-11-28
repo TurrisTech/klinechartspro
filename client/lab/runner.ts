@@ -21,13 +21,11 @@
 import type { Point } from '../alerts/data'
 import { indexPoints, type PointIndex } from '../alerts/compute'
 import { leadInFor, type ServerCatalogue } from '../alerts/catalogue'
-import { operandKey } from '../alerts/rules'
-import { pointSource } from '../alerts/search'
+import { pointSource } from '../alerts/catalogue'
 import type { Operand } from '../alerts/types'
 import { advertisedBaseIntervals } from '../capabilities'
-import { resolutionDurationMs } from '../periods'
-import type { ReplayBar } from '../replay/cache'
-import { type CandleGrid, defaultBase, nominalMs, STORED_LADDER } from '../replay/timeframes'
+import type { ReplayBar } from '../bars/cache'
+import type { CandleGrid } from '../time/timeframes'
 import type { LabData } from './data'
 import { applyFilter, entriesOfEvents, entriesOfGraphs, graphStateAt, type LabEntry, RuleAtInstant, rootIndex } from './entries'
 import { type Ast, compileExpr, type ExprEnv } from './expr'
@@ -38,6 +36,9 @@ import { ruleEntryTest, ruleGraphSpec, ruleSignals as signalsOfRule, ruleTimefra
 import { type EntryOutcome, measureOutcome, type OutcomeSummary, pathIndex, summariseOutcomes } from './outcomes'
 import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings } from './readings'
 import { type SimResult, simulate } from './trades'
+import { defaultBase, nominalMs, STORED_LADDER, resolutionDurationMs } from '../time/intervals'
+import { operandKey } from '../alerts/operands'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export class RunError extends Error {
   constructor(
@@ -398,7 +399,7 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   stage('graphs')
 
   // -- path: outcomes and trades --------------------------------------------------------------
-  const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval), advertisedBaseIntervals(symbol.split(':', 2)[0]))
+  const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval), advertisedBaseIntervals(splitInstrumentKey(symbol).vendor))
   const outcomes = new Map<string, EntryOutcome>()
   let sim: SimResult | null = null
   const perRule = options.perRule ?? options.simulate !== false

@@ -8,10 +8,12 @@
 
 import { getIndicatorClass } from 'klinecharts'
 import { BUILTIN_INDICATORS, loadServerCatalogue, type ServerCatalogue, type SignalFamily } from '../alerts/catalogue'
-import { offeredIntervalCodes, resolutionDurationMs } from '../periods'
+import { offeredIntervalCodes } from '../periods'
 import { loadRegistry, type RegistryParam } from '../tsregistry/api'
-import libraryIndicators from '../../src/indicators'
+import { libraryIndicators } from '../../src'
 import type { Side } from './model'
+import { resolutionDurationMs } from '../time/intervals'
+import { splitInstrumentKey } from '../instrumentkey'
 
 export interface LabSignalFamily extends SignalFamily {
   /** The registry row's declared parameters, in its order; empty when it has none. */
@@ -60,7 +62,9 @@ export function labIndicators(): string[] {
 
 /** The timeframes offered for `symbol`, shortest first. */
 export function labIntervals(symbol: string): string[] {
-  const at = symbol.indexOf(':')
-  const codes = at > 0 ? offeredIntervalCodes(symbol.slice(0, at), symbol.slice(at + 1)) : []
+  const { vendor, ticker } = splitInstrumentKey(symbol)
+  // Only for a key that names its vendor: a bare ticker or ':EURUSD' offers nothing, rather than
+  // reading as the default vendor's.
+  const codes = symbol.includes(':') && vendor ? offeredIntervalCodes(vendor, ticker) : []
   return [...new Set(codes)].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))
 }

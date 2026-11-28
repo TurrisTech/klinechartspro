@@ -1,4 +1,4 @@
-import type { InstrumentConfig } from './symbols'
+import type { InstrumentConfig } from './instrumentconfig'
 
 // One pip in price, or null for an instrument not priced in pips. The one rule for it, shared
 // by the chart (SymbolInfo.pipSize, the price pane's ruler) and the trading panel

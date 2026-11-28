@@ -16,7 +16,7 @@ const hadWindow = 'window' in globalThis
 const { defaultLayout, hydrateLayout, isPersistedLayout, layoutSettingsSignature, toPaneOptions, toPersistedLayout } =
   await import('./layout')
 const { PaneConfigStore } = await import('./plugins/paneconfig')
-const { builtinPlugins } = await import('./plugins/registry')
+const { builtinPlugins } = await import('./builtins')
 const { createLevelsIndicators } = await import('./levels/indicator')
 const golden = (await import('./plugins/fixtures/panedocs-golden.json')).default
 

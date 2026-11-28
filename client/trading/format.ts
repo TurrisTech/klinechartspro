@@ -1,13 +1,6 @@
-import type { SymbolInfo } from '../../src'
-import { symbolVendor } from '../symbols'
 import type { SimTrade } from './api'
 
 // Small pure helpers shared by the panel, the ticket and the overlays.
-
-/** The engine's instrument key for a pane's symbol: `vendor:TICKER`. */
-export function symbolKey(symbol: SymbolInfo): string {
-  return `${symbolVendor(symbol)}:${symbol.ticker}`
-}
 
 export function formatPrice(price: number | null | undefined, precision: number): string {
   if (price === null || price === undefined || !Number.isFinite(price)) return '—'
@@ -23,39 +16,6 @@ export function formatPnl(value: number | null | undefined): string {
 
 export function formatUnits(units: number): string {
   return Number.isInteger(units) ? String(units) : units.toFixed(2)
-}
-
-// To the second (user, 2026-11-13): a paper fill lands on a tick, and two trades a few seconds
-// apart read as one instant without them. `hourCycle: 'h23'` rather than `hour12: false`, which
-// prints midnight as "24:00" in some engines. One formatter per zone, made on first use.
-const timeFormats = new Map<string, Intl.DateTimeFormat>()
-
-function timeFormat(zone: string): Intl.DateTimeFormat {
-  let format = timeFormats.get(zone)
-  if (!format) {
-    format = new Intl.DateTimeFormat('en-US', {
-      timeZone: zone,
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23'
-    })
-    timeFormats.set(zone, format)
-  }
-  return format
-}
-
-/** An instant on `zone`'s clock, to the second: 'Nov 13, 14:05:09'. `zone` is the instrument's
- * own (`InstrumentInfo.timezone`, from its schedule), which is the clock its chart pane shows,
- * so a trade's times read as its candles do -- UTC on a Coinbase pair, New York on FX. With no
- * zone (the instrument's config not in hand yet, or none), the time is UTC and says so:
- * 'Nov 13, 19:05:09 UTC'. Never a guessed market zone: that reads as right and is not. */
-export function formatInstant(ms: number | null | undefined, zone: string | null): string {
-  if (ms === null || ms === undefined) return '—'
-  const text = timeFormat(zone ?? 'UTC').format(new Date(ms))
-  return zone ? text : `${text} UTC`
 }
 
 /** A trade's mark-to-market against a quote: a long exits on the bid, a short on the ask. */

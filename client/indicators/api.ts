@@ -1,4 +1,5 @@
 import { apiUrl, serverFetch } from '../config'
+import type { SeriesDoc } from '../ohlcv'
 
 // What is left of the client's own knowledge of the server-computed indicator surface
 // (wdashboard-server services/indicators.py): the node document a series is addressed by,
@@ -13,18 +14,6 @@ import { apiUrl, serverFetch } from '../config'
 //
 // The client never learns whether a series is ephemeral or persisted -- it asks for an
 // indicator on an instrument/interval and gets points.
-
-export interface SeriesDoc {
-  name: string
-  version?: string
-  params?: Record<string, number>
-  inputs?: Array<Record<string, unknown>>
-}
-
-export interface IndicatorPoint {
-  date: number
-  value: number | null
-}
 
 interface ResolveResult {
   seriesKey: string

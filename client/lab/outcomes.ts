@@ -12,7 +12,7 @@
 //
 // PURE.
 
-import type { ReplayBar } from '../replay/cache'
+import type { ReplayBar } from '../bars/cache'
 import type { LabEntry } from './entries'
 import type { OutcomeSpec } from './model'
 import { lastAtOrBefore } from './sorted'

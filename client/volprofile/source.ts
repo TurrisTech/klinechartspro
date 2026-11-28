@@ -1,17 +1,12 @@
-import { getReadClock } from '../config'
-import { closedBarPage } from '../plugins/bars'
+import { closedBarPage } from '../bars/closed'
 import { missingRanges, mergeRange, truncate } from '../plugins/store'
-import type { Page, Phase, PluginStream, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
-import {
-  type DayGeometry,
-  isInterval,
-  nominalMs,
-  parseInterval,
-  scheduleWireShift,
-  sessionDated
-} from '../replay/timeframes'
+import type { Phase, PluginStream, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
+import { type DayGeometry, scheduleWireShift, sessionDated } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { lowerBound, type SourceBar } from './atoms'
+import { isInterval, nominalMs, parseInterval } from '../time/intervals'
+import type { Page, Range } from '../paging'
+import { instrumentKey } from '../instrumentkey'
 
 // Which bars the profile is built from, and reading them.
 //
@@ -187,11 +182,13 @@ function barStore(key: string): BarStore {
 }
 
 export function barSourceKey(vendor: string, ticker: string, source: string): string {
-  return `vp-bars|${vendor}:${ticker}|${source}`
+  return `vp-bars|${instrumentKey(vendor, ticker)}|${source}`
 }
 
 interface BarSourceOptions {
   stream: PluginStream
+  /** The read clock (`PluginFacilities.readClock`): a replay's cursor, or null live. */
+  readClock: () => number | null
   vendor: string
   ticker: string
   source: string
@@ -214,7 +211,7 @@ function toSourceBar(bar: { timestamp?: number; date?: number; open: number; hig
 }
 
 export function barSource(o: BarSourceOptions): SourceSpec<SourceBar> {
-  const vendorSymbol = `${o.vendor}:${o.ticker}`
+  const vendorSymbol = instrumentKey(o.vendor, o.ticker)
   const sourceMs = nominalMs(o.source)
   const chartMs = nominalMs(o.chart)
   return {
@@ -235,11 +232,11 @@ export function barSource(o: BarSourceOptions): SourceSpec<SourceBar> {
     fetch: async (range: Range): Promise<Page<SourceBar>> => {
       // The window runs past the forming chart bar's end, which is in the future: nothing can
       // be read there yet, and the stream delivers it as it forms.
-      const clock = getReadClock()
+      const clock = o.readClock()
       if (range.from >= (clock ?? Date.now())) return { points: [], nextFrom: null }
       // Tiles first, in big pages; the API only for what they do not hold (the period still
       // forming), in pages under its cap -- and under a replay only the bars closed by its clock
-      // (plugins/bars.ts).
+      // (bars/closed.ts).
       const { bars, nextFrom } = await closedBarPage(vendorSymbol, o.source, range, { apiPage: API_PAGE_BARS, tilePage: TILE_PAGE_BARS })
       return { points: bars.map(toSourceBar), nextFrom }
     },

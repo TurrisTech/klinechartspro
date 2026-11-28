@@ -1,8 +1,9 @@
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { createDockableWindow } from '../chrome/window'
-import { fetchClosedBars } from '../plugins/bars'
-import { gridFor } from '../replay/timeframes'
-import { formatShare, formatPnl, symbolKey } from './format'
+import { fetchClosedBars } from '../bars/closed'
+import { gridFor } from '../time/timeframes'
+import { chartTheme } from '../ui/theme'
+import { formatShare, formatPnl } from './format'
 import { type AtrReading, atrReading } from './exits'
 import { PositionInspector } from './inspector'
 import { instrumentInfo, seedInstrument, type InstrumentInfo } from './instrument'
@@ -11,6 +12,7 @@ import { TradingOverlays } from './overlays'
 import { TradingPanel } from './panel'
 import type { TradingSession } from './session'
 import { OrderTicket } from './ticket'
+import { symbolKey } from '../instrumentkey'
 
 // The trading dock, mode-agnostic: the panel (account strip, tables), the order ticket, the
 // position popup, the per-pane overlays, the windows they live in, open/close and teardown --
@@ -78,7 +80,7 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
   let ticketOpen = false
   // The kc tokens are scoped under `.klinecharts-pro.dark`; the windows are body-level siblings
   // of the chart, so they carry the theme class themselves.
-  const theme = document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''
+  const theme = chartTheme()
 
   const activePane = (): ChartProPane | null => {
     const id = chartPro.getActivePaneId()
@@ -161,7 +163,7 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     amendments,
     // The Performance tab's periods are the active chart's candles; its clock is the replay's
     // under a replay. Past equity is marked on closed stored bars, which under a replay stop at
-    // the clock (plugins/bars.ts).
+    // the clock (bars/closed.ts).
     perf: {
       grid: () => gridFor(activeSymbol()),
       now: () => session.cursor ?? Date.now(),

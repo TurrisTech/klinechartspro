@@ -1,14 +1,16 @@
 import { OhlcvApiError } from '../config'
 import { createDockableWindow, type DockableWindow, type Point } from '../chrome/window'
+import { Arming } from '../ui/arming'
 import { amendmentRefusal, describeAmendment } from './amend'
 import type { InstrumentInfo } from './instrument'
-import { Arming, armKey, ConfirmBar, type ConfirmView, FigureList, h, kbtn, type TradeAction, TradeActions } from './kit'
+import { armKey, CONFIRM_MS, ConfirmBar, type ConfirmView, FigureList, h, kbtn, type TradeAction, TradeActions } from './kit'
 import { closeFraction, reverseTrade, tradeActionsView } from './manage'
 import { pricingContext } from './metrics'
 import type { PanelAmendments } from './panel'
 import { tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { findInspected, type Inspected, positionStats } from './stats'
+import { tickerOf } from '../instrumentkey'
 
 // The position popup: click a position -- its line or label on a pane, its row on the order card,
 // its row in the account window's tables -- and a small window opens beside the click with that
@@ -78,7 +80,7 @@ export class PositionInspector {
     })
     this.win.setVisible(false)
     this.win.body.classList.add('wd-tk')
-    this.arming = new Arming(() => this.render())
+    this.arming = new Arming(() => this.render(), CONFIRM_MS)
     this.headline = h('div', 'wd-pos-headline')
     this.figures = new FigureList('is-single')
     this.confirmBar = new ConfirmBar(
@@ -201,7 +203,7 @@ export class PositionInspector {
     this.closedActions.hidden = stats.kind !== 'closed'
     const onScreen = this.ctx.showsInstrument(key)
     this.showClosed.disabled = !onScreen
-    this.showClosed.title = onScreen ? 'Draw the history on the chart and bring this trade on screen' : `No pane shows ${key.split(':').pop()}`
+    this.showClosed.title = onScreen ? 'Draw the history on the chart and bring this trade on screen' : `No pane shows ${tickerOf(key)}`
     this.win.reflow()
   }
 

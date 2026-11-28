@@ -5,7 +5,7 @@ import type { SourceStore } from './types'
 // still computing a series, which only the registry's legend did.
 
 /** `name` alone on an error -- the legend's warning icon says that, next to the ×, and its card
- * says why (host.ts `problemOf`; user, 2026-11-26: "just put it once at the end next to the X")
+ * says why (apply.ts `problemOf`; user, 2026-11-26: "just put it once at the end next to the X")
  * -- `· loading`, `· computing 40%` (a server still building the series) or `· queued`, the
  * worst of `stores` in that order, or null once every store is ready, when the plugin says what
  * it draws. A store not there yet is loading. */

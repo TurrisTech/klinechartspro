@@ -1,21 +1,26 @@
-import { Arming, FigureList } from '../trading/kit'
+import { closeReasonWords } from '../trading/exits'
+import { FigureList } from '../trading/kit'
 import { type GoToMode, type GoToSpec, goToInstant } from './clock'
 import { blocked, describeBlockers, type FollowNotice, undoBlockers } from './follow'
-import { formatClock, formatSpan, zoneName } from './format'
-import { defaultRange, randomStart, type StartRange } from './pick'
+import { formatClock, zoneName } from '../time/format'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import { replayResults, resultHeadline, resultRows } from './results'
 import { describeQuiet, hhmm, localZone, parseHhmm, type QuietSetting } from './quiet'
-import { lastPlayed, type ReplaySessionSummary, resumable, sessionFacts } from './sessions'
 import type { AdvanceResult, ReplayController } from './session'
+import { createSessionList, type SessionList, type SessionsSource } from './sessionlist'
 import { describeStep, forgetStep, parseStep, readSavedSteps, rememberStep, sameStep, type StepSetting, stepKey } from './steps'
 import type { SimTrade } from '../trading/api'
-import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
-import { dragByHandle } from '../chrome/drag'
+import { toWall } from '../time/timeframes'
 import { createDockableWindow } from '../chrome/window'
+import { sortByLength, validateBase } from '../time/intervals'
+import { checkbox, dayInput, flash, REPLAY_SELECT, toggleButton } from './dom'
+import { button, el, select } from '../ui/dom'
+import { chartTheme } from '../ui/theme'
+import { tickerOf } from '../instrumentkey'
 
-// GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
-// (`kc-*` tokens, `wd-*` classes), driven by a `ReplayController` they do not implement.
+// GLUE (DOM). The replay controls: plain DOM in the house style (`kc-*` tokens, `wd-*` classes),
+// driven by a `ReplayController` they do not implement. The start dialog is ./startdialog.ts, the
+// list of past sessions both show ./sessionlist.ts, and the builders the three share ./dom.ts.
 //
 // The controls live in a DOCKABLE WINDOW (../chrome/window.ts) — floating over the chart by
 // default, docked below it on request — not in a strip nailed inside the trading panel. Only
@@ -313,7 +318,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     win.titleSlot.innerHTML = ''
     win.actions.innerHTML = ''
     const symbol = el('span', 'wd-replay-symbol')
-    symbol.textContent = controller.symbol.split(':')[1] ?? controller.symbol
+    symbol.textContent = tickerOf(controller.symbol)
     symbol.title = `The replay walks ${controller.symbol}`
     // The chart's position, which is where the running advance STARTED until it lands: a walk
     // moves `cursor` bar by bar far ahead of the panes, and this re-renders mid-walk (a Stop
@@ -432,7 +437,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const pace = select(
       PLAY_DELAYS_MS.map((ms) => ({ value: String(ms), label: delayLabel(ms) })),
       String(player.delayMs),
-      (value) => player.setDelay(Number(value))
+      (value) => player.setDelay(Number(value)),
+      REPLAY_SELECT
     )
     pace.classList.add('wd-replay-pace')
     pace.title = 'Play: the time between two steps (it also waits for the chart to load)'
@@ -479,7 +485,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         }
         const chosen = choices.find((c) => c.value === value)
         if (chosen) controller.setAdvance(chosen.step)
-      }
+      },
+      REPLAY_SELECT
     )
     picker.classList.add('wd-replay-step-size')
     picker.title = 'How far one Step goes. Custom step… takes any amount: 15h, 30h, 90m, 2D, 3 × 4h'
@@ -671,7 +678,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
           { value: 'local', label: `${zoneName(mine)} (yours)` }
         ],
         setting.zone,
-        (value) => quiet.set({ ...quiet.value, zone: value === 'local' ? 'local' : 'replay' })
+        (value) => quiet.set({ ...quiet.value, zone: value === 'local' ? 'local' : 'replay' }),
+        REPLAY_SELECT
       )
       zone.setAttribute('aria-label', 'Quiet hours clock')
       zone.title = 'The clock the hours are read on: the replay’s, as the title bar shows it, or your own'
@@ -877,7 +885,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     time.type = 'time'
     time.className = 'kc-input wd-replay-input wd-replay-goto-time'
     time.value = hhmm(goTo.minute)
-    time.title = `A time of day on ${controller.symbol.split(':')[1] ?? controller.symbol}'s clock (${zoneName(zone)})`
+    time.title = `A time of day on ${tickerOf(controller.symbol)}'s clock (${zoneName(zone)})`
     time.setAttribute('aria-label', 'Go to time')
     time.addEventListener('change', () => {
       const minute = parseHhmm(time.value)
@@ -903,7 +911,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         goTo = { ...goTo, mode: value as GoToMode, day: goTo.day ?? nextDayOf(controller.cursor, zone) }
         writeGoTo(goTo)
         renderBody()
-      }
+      },
+      REPLAY_SELECT
     )
     mode.title = 'Next trading day: that time on the first day after the replay’s own that the market trades. Next time: the next time the clock reads it.'
     mode.setAttribute('aria-label', 'Go to which day')
@@ -1004,7 +1013,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       (value) => {
         const check = controller.setBase(value)
         if (!check.ok) flash(win.element, check.reason ?? 'Invalid base')
-      }
+      },
+      REPLAY_SELECT
     )
     basePicker.disabled = busyShown()
     basePicker.title = baseCheck.ok
@@ -1149,11 +1159,10 @@ function describeStop(result: AdvanceResult, zone: string, timeframes: readonly 
       const last = [...result.events].reverse().find((e) => e.kind === 'fill' || e.kind === 'close' || e.kind === 'milestone')
       if (last?.kind === 'fill') return 'Order filled'
       if (last?.kind === 'milestone') return `Reached ${last.reason ?? 'a milestone'}`
-      if (last?.reason === 'stop_loss') {
-        const trade = trades?.find((t) => t.id === last.tradeId)
-        return trade?.stopMovedBy === 'trail' ? 'Trailing stop hit' : trade?.stopMovedBy === 'breakeven' ? 'Breakeven stop hit' : 'Stop loss hit'
-      }
-      return last?.reason === 'take_profit' ? 'Take profit hit' : 'Trade closed'
+      if (last?.kind !== 'close') return 'Trade closed'
+      // Named as the trading UI names a close (trading/exits.ts), so the status line and the card agree.
+      const trade = trades?.find((t) => t.id === last.tradeId)
+      return closeReasonWords({ closeReason: (last.reason as SimTrade['closeReason']) ?? null, stopMovedBy: trade?.stopMovedBy ?? null }, true)
     }
     case 'watch': {
       const [first, ...rest] = result.observed
@@ -1183,650 +1192,9 @@ const PLAY_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="
 const PAUSE_ICON =
   '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/><rect x="9.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/></svg>'
 
-// -- the start dialog ------------------------------------------------------------------------
-
-/** What every start dialog opens with: the wall it was asked from. */
-interface StartDialogBase {
-  anchor: HTMLElement
-  /** The active pane's instrument, `vendor:TICKER`. */
-  symbol: string
-  intervalsInUse: string[]
-}
-
-interface StartDialogOptions extends StartDialogBase {
-  /** The intervals the store holds for this instrument (probed by the caller). */
-  stored: string[]
-  /** Newest instant the store has for the instrument (the latest a replay can start). */
-  latest: number
-  /** The instrument's candle schedule: the default start and Random land on its candle opens,
-   * and every date in the dialog is read and written on its clock. */
-  grid: CandleGrid
-  /** Choose the start by clicking a bar on the chart (./pickbar.ts): the dialog steps aside
-   * while it runs and gets the bar's close back, or null when the pick was cancelled. Absent,
-   * there is no "On chart" button. */
-  pickOnChart?: (done: (startAt: number | null) => void) => void
-  onStart: (choice: { startAt: number; balance: number; base: string }) => void
-  /** This owner's past replays, for the Sessions tab. Absent, the dialog has no tabs. */
-  sessions?: SessionsSource
-}
-
-/** The active pane's instrument cannot start a replay -- no market hours, nothing stored. The
- * dialog opens anyway, on Sessions, so every other replay stays one press away instead of out of
- * reach until the pane is moved; its New replay tab says why in place of the form. */
-interface RefusedDialogOptions extends StartDialogBase {
-  /** Why, in a few words: "No market hours for GBPUSD". */
-  refusal: string
-  sessions: SessionsSource
-}
-
-/** A past replay as the Sessions tab lists it: its summary, and the zone its dates read in. */
-export interface ListedSession {
-  summary: ReplaySessionSummary
-  /** The instrument's own clock, as its chart and the replay's clock read; UTC when its market
-   * hours could not be resolved -- named so beside the dates. */
-  zone: string
-}
-
-export interface SessionsSource {
-  /** The list, most recently played first. */
-  load(): Promise<ListedSession[]>
-  /** Reopen it where it was left: the dialog has closed by then; the replay window's list says
-   * "Opening…" until the wall rebuilds, and that a rejection could not open it. */
-  resume(session: ReplaySessionSummary): void | Promise<void>
-  /** Delete it on the server; resolves once that is done. */
-  remove(id: string): Promise<void>
-}
-
-interface StartDialog {
-  close(): void
-}
-
-/** Which tab the dialog last showed: per browser, a convenience. */
-const DIALOG_TAB_KEY = 'wd.replay.dialogTab'
-type DialogTab = 'new' | 'sessions'
-
-function readTab(): DialogTab {
-  try {
-    return window.localStorage.getItem(DIALOG_TAB_KEY) === 'sessions' ? 'sessions' : 'new'
-  } catch {
-    return 'new'
-  }
-}
-
-function writeTab(tab: DialogTab): void {
-  try {
-    window.localStorage.setItem(DIALOG_TAB_KEY, tab)
-  } catch {
-    // storage unavailable: the dialog opens on New
-  }
-}
-
-export function openStartDialog(options: StartDialogOptions | RefusedDialogOptions): StartDialog {
-  // The kc tokens are scoped under the chart's themed root (`.klinecharts-pro.dark`); a
-  // body-level card has to carry the theme class itself or it renders in the light defaults.
-  const overlay = el('div', `wd-replay-dialog-backdrop ${chartTheme()}`)
-  // The card carries it too: src/app.css pins `.wd-replay-dialog` itself to a light
-  // `color-scheme` unless the SAME element is `.dark`, and that scheme is what draws the native
-  // parts -- the base select's popup, the session list's scrollbar -- which came out light on a
-  // dark chart while the theme class sat only on the backdrop.
-  const dialog = el('div', `wd-replay-dialog ${chartTheme()}`.trim())
-  overlay.appendChild(dialog)
-  const title = el('div', 'wd-replay-dialog-title')
-  title.textContent = options.sessions ? 'Bar replay' : 'Start bar replay'
-  title.title = 'Drag to move'
-  dialog.appendChild(title)
-  // Movable by its title, like the replay's own window: centred on the app is where it opens,
-  // not necessarily where it should sit over the bars you are choosing between.
-  const undrag = dragByHandle(dialog, title)
-
-  // Two panes behind two tabs when there is a session list: New (the start form, or why this
-  // instrument cannot start one) and Sessions (past replays: resume, score, delete).
-  const newPane = el('div', 'wd-replay-dialog-pane')
-  dialog.appendChild(newPane)
-
-  const info = el('div', 'wd-replay-dialog-info')
-  info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
-  newPane.appendChild(info)
-
-  // New replay: the start form, or -- when this instrument cannot start one -- why not.
-  const form = 'refusal' in options ? mountRefusal(newPane, options.refusal, close) : mountStartForm(newPane, options, { overlay, close })
-  // A refused dialog opens on Sessions (and does not remember it): that tab is the one with
-  // something to do.
-  const sessionsTab = options.sessions ? mountSessionsTab(dialog, options.sessions, () => close(), 'refusal' in options ? 'sessions' : null) : null
-
-  const onKey = (e: KeyboardEvent): void => {
-    // Stepped aside for a pick on the chart: the keys are the pick's (Escape cancels IT).
-    if (overlay.hidden) return
-    if (e.key === 'Escape') close()
-    // Enter starts, from any field of the form. Never from the Sessions tab, which has no Start
-    // to press.
-    else if (e.key === 'Enter' && !newPane.hidden) form.enter(e)
-  }
-  document.addEventListener('keydown', onKey)
-  // Only a click that both STARTED and ended on the backdrop closes it. A click is dispatched to
-  // the nearest common ancestor of the press and the release, so a drag of the title -- or a
-  // text selection in a field -- released over the backdrop arrives as a click on it.
-  let pressedBackdrop = false
-  overlay.addEventListener('pointerdown', (e) => {
-    pressedBackdrop = e.target === overlay
-  })
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay && pressedBackdrop) close()
-    pressedBackdrop = false
-  })
-  // Centred on the APP, not over the active pane (chrome/focus.ts's rule for a very wide page):
-  // a replay is the whole wall's mode -- it rebuilds every pane on one clock -- so the dialog
-  // that starts one belongs to no single pane (user, 2026-10-04).
-  document.body.appendChild(overlay)
-  if (!newPane.hidden) form.focus()
-
-  function close(): void {
-    document.removeEventListener('keydown', onKey)
-    sessionsTab?.dispose()
-    undrag()
-    overlay.remove()
-  }
-  return { close }
-
-  /** The Sessions tab and the tab bar: the bar goes in above the New pane, the list after it. */
-  function mountSessionsTab(root: HTMLElement, source: SessionsSource, closeDialog: () => void, opening: DialogTab | null): { dispose(): void } {
-    const tabs = el('div', 'wd-replay-dialog-tabs')
-    tabs.setAttribute('role', 'tablist')
-    root.insertBefore(tabs, newPane)
-    const pane = el('div', 'wd-replay-dialog-pane')
-    root.appendChild(pane)
-
-    let tab: DialogTab = opening ?? readTab()
-    let loaded = false
-    const list = createSessionList({
-      source,
-      empty: 'No past replays. Start one from New replay; it is kept here to resume.',
-      // The dialog goes first: a resume rebuilds the wall under it.
-      beforeResume: () => {
-        closeDialog()
-        return true
-      },
-      onRender: () => {
-        // Remembered on a list that has since emptied: open on what there is to do.
-        const switched = !loaded && list.count === 0 && tab === 'sessions'
-        if (list.count !== null) loaded = true
-        if (switched) tab = 'new'
-        renderTabs()
-        if (switched && document.activeElement === document.body) form.focus()
-      }
-    })
-    pane.appendChild(list.element)
-
-    function show(next: DialogTab): void {
-      tab = next
-      writeTab(next)
-      renderTabs()
-      if (next === 'new') form.focus()
-    }
-
-    function renderTabs(): void {
-      newPane.hidden = tab !== 'new'
-      pane.hidden = tab !== 'sessions'
-      tabs.innerHTML = ''
-      const newTab = toggleButton('New replay', '', tab === 'new', () => show('new'))
-      const count = list.count === null || list.count === 0 ? '' : String(list.count)
-      const listTab = toggleButton('Sessions', count, tab === 'sessions', () => show('sessions'))
-      for (const b of [newTab, listTab]) b.setAttribute('role', 'tab')
-      listTab.title = 'Your past replays: resume one, see its score, or delete it'
-      tabs.append(newTab, listTab)
-    }
-
-    renderTabs()
-    return { dispose: () => list.dispose() }
-  }
-}
-
-/** The New replay tab's content: the start form, or why there is none (`mountRefusal`). */
-interface NewReplayPane {
-  /** Its first field, or its one button. */
-  focus(): void
-  /** Enter, pressed while the tab shows. */
-  enter(e: KeyboardEvent): void
-}
-
-/** The start form, into the New replay pane. `dialog.overlay` is hidden while a pick on the chart
- * runs; `dialog.close` is Cancel, and what Start does after handing the choice over. */
-function mountStartForm(newPane: HTMLElement, options: StartDialogOptions, dialog: { overlay: HTMLElement; close: () => void }): NewReplayPane {
-  const suggested = defaultBase(options.intervalsInUse, options.stored)
-  const initialBase = suggested ?? options.stored[0] ?? '1m'
-
-  const grid = options.grid
-  const zone = grid.schedule.timezone
-  const toLocalInputValue = (ms: number): string => localInputValue(ms, zone)
-  const fromLocalInputValue = (value: string): number | null => instantOfInput(value, zone)
-  const toDayInputValue = (ms: number): string => localInputValue(ms, zone).slice(0, 10)
-  const defaultStart = defaultStartAt(initialBase, options.latest, grid)
-  // The instrument's own clock, named: a coinbase replay is chosen in UTC, as its chart reads.
-  const startField = field(`Start (${zoneName(zone)})`)
-  const startRow = el('div', 'wd-replay-dialog-row')
-  const startInput = dateInput(toLocalInputValue(defaultStart))
-  startInput.max = toLocalInputValue(options.latest)
-  startRow.appendChild(startInput)
-  // The two ways to set the start without typing a date sit next to the field they write.
-  // "On chart" first: pointing at the bar you want is how a start is usually found.
-  if (options.pickOnChart) {
-    const pickOnChart = options.pickOnChart
-    const pick = button('kc-button kc-button-outline wd-replay-pick-button', 'On chart', () => {
-      dialog.overlay.hidden = true
-      pickOnChart((startAt) => {
-        dialog.overlay.hidden = false
-        if (startAt !== null) {
-          startInput.value = toLocalInputValue(Math.min(startAt, options.latest))
-          baseError.textContent = ''
-          start.focus()
-        } else pick.focus()
-      })
-    })
-    pick.title = 'Click a bar on the chart: the replay opens with that bar as the last one shown'
-    startRow.appendChild(pick)
-  }
-  const random = button('kc-button kc-button-outline wd-replay-random', 'Random', () => roll())
-  random.title = 'Pick a random start date from the range'
-  startRow.appendChild(random)
-  startField.appendChild(startRow)
-  const startNote = el('div', 'wd-replay-dialog-note')
-  startNote.textContent = 'The replay opens with every bar that had closed by then.'
-  startField.appendChild(startNote)
-  newPane.appendChild(startField)
-
-  // -- the range Random draws from (optional; hidden until asked for) ---------------------
-
-  const initialRange = defaultRange(options.latest)
-  const rangeField = el('div', 'wd-replay-field')
-  const rangeBody = el('div', 'wd-replay-dialog-range')
-  rangeBody.hidden = true
-  const rangeError = el('div', 'kc-field-error wd-replay-dialog-error')
-  rangeField.appendChild(
-    checkbox('Draw from a date range', false, (on) => {
-      rangeBody.hidden = !on
-      rangeError.textContent = ''
-    })
-  )
-  // Day granularity: a draw range does not need a time of day, and two datetime-locals side
-  // by side in a 28rem dialog render their value under the picker icon.
-  const fromInput = dayInput(toDayInputValue(initialRange.from))
-  const toInput = dayInput(toDayInputValue(initialRange.to))
-  toInput.max = toDayInputValue(options.latest)
-  rangeBody.append(labelled('From', fromInput), labelled('To', toInput))
-  rangeField.appendChild(rangeBody)
-  const rangeNote = el('div', 'wd-replay-dialog-note')
-  rangeNote.textContent = 'Random picks a candle open inside this range. Unchecked, it draws from the last two years.'
-  rangeField.appendChild(rangeNote)
-  rangeField.appendChild(rangeError)
-  newPane.appendChild(rangeField)
-
-  /** The range Random draws from: the two inputs when they are showing, else the default. */
-  function drawRange(): StartRange | null {
-    if (rangeBody.hidden) return defaultRange(options.latest)
-    // From is that day's first instant, To its last: the range reads as inclusive of both days.
-    const from = fromLocalInputValue(`${fromInput.value}T00:00`)
-    const to = fromLocalInputValue(`${toInput.value}T23:59`)
-    if (from === null || to === null) {
-      rangeError.textContent = 'Enter both range dates'
-      return null
-    }
-    if (to <= from) {
-      rangeError.textContent = 'The range ends before it starts'
-      return null
-    }
-    return { from, to: Math.min(to, options.latest) }
-  }
-
-  function roll(): void {
-    const range = drawRange()
-    if (!range) return
-    rangeError.textContent = ''
-    startInput.value = toLocalInputValue(randomStart(range, basePicker.value, grid))
-    baseError.textContent = ''
-  }
-
-  const balanceField = field('Starting balance')
-  const balanceInput = numberInput('10000', () => {})
-  balanceField.appendChild(balanceInput)
-  newPane.appendChild(balanceField)
-
-  const baseField = field('Base timeframe')
-  const basePicker = select(
-    options.stored.map((s) => ({ value: s, label: s === suggested ? `${s} (recommended)` : s })),
-    initialBase,
-    () => validate()
-  )
-  baseField.appendChild(basePicker)
-  const baseNote = el('div', 'wd-replay-dialog-note')
-  baseNote.textContent = 'The interval the engine walks: a finer base gives more accurate fills and more bars to walk. It must divide every pane interval and be stored for the instrument.'
-  baseField.appendChild(baseNote)
-  const baseError = el('div', 'kc-field-error wd-replay-dialog-error')
-  baseField.appendChild(baseError)
-  newPane.appendChild(baseField)
-
-  const actions = el('div', 'wd-replay-dialog-actions')
-  const cancel = button('kc-button kc-button-outline', 'Cancel', () => dialog.close())
-  const start = button('kc-button kc-button-primary', 'Start', () => {
-    const check = validate()
-    if (!check.ok) return
-    const startAt = fromLocalInputValue(startInput.value)
-    if (startAt === null) {
-      baseError.textContent = 'Enter a start date and time'
-      return
-    }
-    const balance = Number(balanceInput.value)
-    if (!(balance > 0)) {
-      baseError.textContent = 'Balance must be positive'
-      return
-    }
-    options.onStart({ startAt: Math.min(startAt, options.latest), balance, base: basePicker.value })
-    dialog.close()
-  })
-  actions.append(cancel, start)
-  newPane.appendChild(actions)
-
-  function validate(): BaseCheck {
-    const check = validateBase(basePicker.value, options.intervalsInUse, options.stored)
-    baseError.textContent = check.ok ? '' : (check.reason ?? '')
-    start.disabled = !check.ok
-    return check
-  }
-  validate()
-
-  return {
-    focus: () => startInput.focus(),
-    enter: (e) => {
-      // A focused button answers Enter itself, and a select uses it to commit its list.
-      if (e.target instanceof HTMLButtonElement || e.target instanceof HTMLSelectElement || start.disabled) return
-      e.preventDefault()
-      start.click()
-    }
-  }
-}
-
-/** The New replay pane when this instrument cannot start a replay: the reason, what to do, and
- * Close -- no form to fill for a Start that could only fail. */
-function mountRefusal(pane: HTMLElement, refusal: string, close: () => void): NewReplayPane {
-  const reason = el('div', 'kc-field-error wd-replay-dialog-error')
-  reason.setAttribute('role', 'status')
-  reason.textContent = refusal
-  const note = el('div', 'wd-replay-dialog-note')
-  note.textContent = 'A new replay cannot start here. Move the active pane to another instrument to start one, or resume a past replay from Sessions.'
-  const actions = el('div', 'wd-replay-dialog-actions')
-  const done = button('kc-button kc-button-outline', 'Close', () => close())
-  actions.appendChild(done)
-  pane.append(reason, note, actions)
-  return { focus: () => done.focus(), enter: () => {} }
-}
-
-// -- past replays: the list the start dialog's Sessions tab and the replay window's Sessions
-// panel both show --------------------------------------------------------------------------------
-
-interface SessionListOptions {
-  source: SessionsSource
-  /** What it says when there is nothing to list. */
-  empty: string
-  /** Resume was pressed: true goes ahead at once, false refuses (the caller says why), and a
-   * promise goes ahead when it resolves true -- the replay window waiting out a step in flight. */
-  beforeResume?: () => boolean | Promise<boolean>
-  /** After every render but the first (which is inside the call that builds it): it loaded, a
-   * row went or opened its figures. */
-  onRender?: () => void
-}
-
-interface SessionList {
-  /** Mounted by the caller and kept for the list's life: it re-renders inside it. */
-  readonly element: HTMLElement
-  /** The rows listed; null while loading, or when the list would not load. */
-  readonly count: number | null
-  /** Where the rows scroll. Kept across the list's own renders, so a Stats or a Delete far down
-   * thirty replays does not jump back to the top; a caller that detaches `element` to re-render
-   * around it puts `scrollTop` back. */
-  readonly scroller: HTMLElement
-  dispose(): void
-}
-
-/** Past replays, loaded once, each with what it replayed, how far, its score, and Stats, Delete
- * (two presses) and Resume. */
-function createSessionList(options: SessionListOptions): SessionList {
-  const { source } = options
-  const element = el('div', 'wd-tk wd-replay-sessions')
-  const scroller = el('div', 'wd-replay-session-list')
-  let listed: ListedSession[] | null = null
-  let failed = false
-  let disposed = false
-  /** The row whose Resume is on its way: the rest wait for it. */
-  let resuming: string | null = null
-  /** The rows whose figures are showing. */
-  const expanded = new Set<string>()
-  /** The rows whose delete is on its way to the server. */
-  const deleting = new Set<string>()
-  const arming = new Arming(() => render())
-
-  function render(notify = true): void {
-    if (disposed) return
-    if (failed) element.replaceChildren(muted('Could not load your replays.'))
-    else if (listed === null) element.replaceChildren(muted('Loading your replays…'))
-    else if (listed.length === 0) element.replaceChildren(muted(options.empty))
-    else {
-      // The rows change, never the box they scroll in.
-      scroller.replaceChildren(...listed.map(row))
-      if (scroller.parentElement !== element) element.replaceChildren(scroller)
-    }
-    if (notify) options.onRender?.()
-  }
-
-  function pressResume(s: ReplaySessionSummary): void {
-    if (resuming !== null) return
-    // Not refused once disposed: the dialog's own `beforeResume` is what closed it.
-    const go = (): void => {
-      if (resuming !== null) return
-      resuming = s.id
-      render()
-      const fail = (err: unknown): void => {
-        console.error('[replay] could not resume session', s.id, err)
-        resuming = null
-        render()
-        if (!disposed) flash(element, 'Could not open that replay')
-      }
-      try {
-        void Promise.resolve(source.resume(s)).catch(fail)
-      } catch (err) {
-        fail(err)
-      }
-    }
-    const ready = options.beforeResume ? options.beforeResume() : true
-    if (ready === true) go()
-    // Waited for: the window may have gone in the meantime (the wall rebuilt by something else).
-    else if (ready !== false) void ready.then((ok) => ok && !disposed && go())
-  }
-
-  function row({ summary: s, zone }: ListedSession): HTMLElement {
-    const box = el('div', 'wd-replay-session')
-    box.dataset.session = s.id
-
-    const head = el('div', 'wd-replay-session-head')
-    const name = el('span', 'wd-replay-session-ticker')
-    name.textContent = s.ticker || 'Unknown instrument'
-    head.appendChild(name)
-    if (s.state) {
-      const base = el('span', 'wd-replay-session-base')
-      base.textContent = `${s.state.base} base`
-      head.appendChild(base)
-    }
-    // Net P&L only once something was traded: "0.00 USD · 0.00%" on every idle replay is noise.
-    if (s.results && s.results.closed + s.results.open > 0) {
-      const headline = resultHeadline(s.results)
-      const net = el('span', `wd-replay-session-net${headline.tone ? ` is-${headline.tone}` : ''}`)
-      net.textContent = headline.text
-      net.title = 'Net P&L: realised plus what is still open, against the starting balance'
-      head.appendChild(net)
-    }
-    box.appendChild(head)
-
-    if (s.state) {
-      const span = el('div', 'wd-replay-session-span')
-      span.textContent = formatSpan(s.state.startedAt, s.state.cursor, zone)
-      span.title = `Where the replay started and how far it got (${zoneName(zone)})`
-      box.appendChild(span)
-    }
-    const facts = el('div', 'wd-replay-session-facts')
-    facts.textContent = `${sessionFacts(s)} · ${s.savedAt === null ? 'started' : 'played'} ${formatLocal(lastPlayed(s))}`
-    box.appendChild(facts)
-
-    const actions = el('div', 'wd-replay-session-actions')
-    const open = expanded.has(s.id)
-    if (s.results && s.results.closed + s.results.open > 0) {
-      const stats = button(`kc-button kc-button-outline wd-replay-session-stats${open ? ' is-on' : ''}`, open ? 'Hide stats' : 'Stats', () => {
-        if (expanded.has(s.id)) expanded.delete(s.id)
-        else expanded.add(s.id)
-        render()
-      })
-      stats.setAttribute('aria-expanded', String(open))
-      actions.appendChild(stats)
-    }
-    const busy = deleting.has(s.id)
-    const armed = arming.key === `delete:${s.id}`
-    const remove = button(`kc-button kc-button-outline wd-replay-session-delete${armed ? ' is-armed' : ''}`, busy ? 'Deleting…' : armed ? 'Confirm delete' : 'Delete', () => {
-      if (deleting.has(s.id) || !arming.press(`delete:${s.id}`, false)) return
-      deleting.add(s.id)
-      render()
-      source
-        .remove(s.id)
-        .then(() => {
-          deleting.delete(s.id)
-          expanded.delete(s.id)
-          listed = (listed ?? []).filter((l) => l.summary.id !== s.id)
-          render()
-        })
-        .catch((err) => {
-          console.error('[replay] could not delete session', s.id, err)
-          deleting.delete(s.id)
-          render()
-          if (!disposed) flash(element, 'Could not delete that replay')
-        })
-    })
-    remove.disabled = busy || resuming !== null
-    remove.title = armed ? 'Press again to delete. This replay, its account and its trades are gone for good.' : 'Delete this replay'
-    actions.appendChild(remove)
-    const opening = resuming === s.id
-    const resume = button('kc-button kc-button-primary wd-replay-session-resume', opening ? 'Opening…' : 'Resume', () => pressResume(s))
-    resume.disabled = busy || resuming !== null || !resumable(s)
-    resume.title = resumable(s) ? 'Reopen this replay where you left it: its clock, account, orders and watches' : 'This replay was saved by another version and cannot be reopened'
-    actions.appendChild(resume)
-    box.appendChild(actions)
-
-    if (open && s.results) {
-      const figures = new FigureList('wd-replay-results-figures')
-      figures.update(resultRows(s.results))
-      box.appendChild(figures.element)
-    }
-    return box
-  }
-
-  function muted(text: string): HTMLElement {
-    const note = el('div', 'wd-replay-muted')
-    note.textContent = text
-    return note
-  }
-
-  source
-    .load()
-    .then((rows) => {
-      listed = rows
-      render()
-    })
-    .catch((err) => {
-      console.error('[replay] could not list sessions', err)
-      failed = true
-      render()
-    })
-  render(false)
-  return {
-    element,
-    scroller,
-    get count() {
-      return failed ? null : (listed?.length ?? null)
-    },
-    dispose(): void {
-      disposed = true
-      arming.disarm()
-    }
-  }
-}
-
-const localDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-const localDateThisYear = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-
-/** When a session was last played, on the VIEWER's clock -- this is when you sat at it, not a
- * market instant: "Nov 14, 10:22", with the year once it is not this one. */
-function formatLocal(ms: number, now = Date.now()): string {
-  const year = (t: number): number => new Date(t).getFullYear()
-  return (year(ms) === year(now) ? localDateThisYear : localDate).format(new Date(ms))
-}
-
-/** The start the dialog offers: a week before the newest bar, on a base candle open -- the
- * instant Start will actually use, not whatever minute the dialog happened to open at -- and
- * inside the market week. A week before a weekend afternoon is a weekend afternoon, and a
- * replay opened there shows Friday's close and makes the first Step cross two days of nothing;
- * this backs off, an hour at a time, to the last candle that opened while the market traded.
- * (Random is deliberately NOT treated like this: see pick.ts.) */
-export function defaultStartAt(base: string, latest: number, grid: CandleGrid): number {
-  let at = grid.start(base, latest - 7 * DAY_MS)
-  for (let i = 0; i < 24 * 7 && !grid.isOpen(at); i++) at = grid.start(base, at - HOUR_MS)
-  return at
-}
-
-const HOUR_MS = 3_600_000
-const DAY_MS = 24 * HOUR_MS
-
-// The instrument's wall clock <-> the datetime-local input, which is timezone-less text. Through
-// the replay's own wall-clock conversion (timeframes.ts), which resolves a DST gap and a repeated
-// hour the way wmarkettypes does.
-
-/** `YYYY-MM-DDTHH:MM` of an instant on `zone`'s wall clock. */
-function localInputValue(ms: number, zone: string): string {
-  return new Date(toWall(ms, zone)).toISOString().slice(0, 16)
-}
-
-/** The instant a `YYYY-MM-DDTHH:MM` reading names on `zone`'s wall clock; null when unreadable. */
-function instantOfInput(value: string, zone: string): number | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value)
-  if (!m) return null
-  const [y, mo, d, h, mi] = m.slice(1).map(Number)
-  return fromWall(Date.UTC(y, mo - 1, d, h, mi), zone)
-}
-
-// -- small DOM helpers -------------------------------------------------------------------------
-
-/** The mounted chart's theme class ('dark' or ''), for chrome mounted outside its root. */
-export function chartTheme(): string {
-  return document.querySelector('.klinecharts-pro.dark') ? 'dark' : ''
-}
-
-/** `EURUSD` of `oanda:EURUSD`. */
-function tickerOf(symbol: string): string {
-  return symbol.split(':').pop() ?? symbol
-}
-
 /** "No market hours for X" as it reads after a colon. */
 function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1)
-}
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = className
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
 }
 
 /** A button whose face is an inline SVG (Play/Pause): text glyphs like ▶ render as emoji on
@@ -1835,95 +1203,4 @@ function iconButton(className: string, svg: string, onClick: () => void): HTMLBu
   const b = button(className, '', onClick)
   b.innerHTML = svg
   return b
-}
-
-/** A toggle in the window's footer: label, optional count badge, on/off. */
-function toggleButton(label: string, badge: string, on: boolean, onClick: () => void): HTMLButtonElement {
-  const b = button(`kc-button wd-replay-toggle${on ? ' is-on' : ''}`, label, onClick)
-  b.setAttribute('aria-pressed', String(on))
-  if (badge) {
-    const count = el('span', 'wd-replay-badge')
-    count.textContent = badge
-    b.appendChild(count)
-  }
-  return b
-}
-
-function select(options: Array<{ value: string; label: string }>, current: string, onChange: (value: string) => void): HTMLSelectElement {
-  const s = document.createElement('select')
-  s.className = 'kc-input wd-replay-select'
-  for (const o of options) {
-    const opt = document.createElement('option')
-    opt.value = o.value
-    opt.textContent = o.label
-    s.appendChild(opt)
-  }
-  // By value once every option exists, not `option.selected` per option as it is appended:
-  // happy-dom (the controls' test DOM) loses track of which one was marked.
-  if (options.some((o) => o.value === current)) s.value = current
-  s.addEventListener('change', () => onChange(s.value))
-  return s
-}
-
-function numberInput(value: string, onCommit: (raw: string) => void): HTMLInputElement {
-  const input = document.createElement('input')
-  input.type = 'text'
-  input.inputMode = 'numeric'
-  input.className = 'kc-input wd-replay-input wd-replay-number'
-  input.value = value
-  input.addEventListener('change', () => onCommit(input.value))
-  return input
-}
-
-function checkbox(label: string, checked: boolean, onChange: (on: boolean) => void): HTMLElement {
-  const wrap = el('label', 'wd-replay-check')
-  const input = document.createElement('input')
-  input.type = 'checkbox'
-  input.checked = checked
-  input.addEventListener('change', () => onChange(input.checked))
-  const text = el('span', '')
-  text.textContent = label
-  wrap.append(input, text)
-  return wrap
-}
-
-function dateInput(value: string): HTMLInputElement {
-  const input = document.createElement('input')
-  input.type = 'datetime-local'
-  input.className = 'kc-input wd-replay-input'
-  input.step = '60'
-  input.value = value
-  return input
-}
-
-function dayInput(value: string): HTMLInputElement {
-  const input = document.createElement('input')
-  input.type = 'date'
-  input.className = 'kc-input wd-replay-input'
-  input.value = value
-  return input
-}
-
-/** A caption above a control, for the two range inputs sitting side by side. */
-function labelled(text: string, control: HTMLElement): HTMLElement {
-  const wrap = el('label', 'wd-replay-field')
-  const l = el('span', 'wd-replay-label')
-  l.textContent = text
-  wrap.append(l, control)
-  return wrap
-}
-
-function field(label: string): HTMLElement {
-  const wrap = el('label', 'wd-replay-field')
-  const l = el('span', 'wd-replay-label')
-  l.textContent = label
-  wrap.appendChild(l)
-  return wrap
-}
-
-function flash(root: HTMLElement, message: string): void {
-  const note = el('div', 'wd-replay-flash')
-  note.textContent = message
-  root.appendChild(note)
-  setTimeout(() => note.remove(), 3000)
 }

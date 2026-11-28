@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 import { priceCondition, PRICE_SOURCE } from '../watch/types'
-import type { BarSource, ReplayBar } from './cache'
-import { Engine, type EngineState } from './engine'
+import type { BarSource, ReplayBar } from '../bars/cache'
+import { Engine, type EngineState } from '../sim/engine'
 import { blocked, describeBlockers, type FollowResolution, type FollowTarget, followBase, followOnMount, followRequest, followTarget, movedState, undoBlockers } from './follow'
 import type { ReplayState } from './persist'
-import type { ObserverStop, ReplayObserver } from './session'
-import { CONTINUOUS_DAY, FX_GRID, FX_SCHEDULE, fromWall, gridOf, intervalEnd, toWireDate } from './timeframes'
+import type { ReplayObserver } from './session'
+import { CONTINUOUS_DAY, FX_GRID, FX_SCHEDULE, fromWall, gridOf, intervalEnd, toWireDate } from '../time/timeframes'
+import type { ObserverStop } from './walk'
 
 // A REPLAY FOLLOWING THE CHART to another instrument (follow.ts): the decisions alone, then a real
 // session over a synthetic path -- the follow made (the blob it writes, for the new instrument at

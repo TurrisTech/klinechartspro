@@ -1,7 +1,8 @@
 # client/chrome — the app's own window furniture
 
-Chrome the *app* owns, as opposed to the chart the library owns. Two modules: `window.ts`
-(dockable windows) and `focus.ts` (where on a very wide page a body-level card opens).
+Chrome the *app* owns, as opposed to the chart the library owns. Three modules are written up
+here: `window.ts` (dockable windows), `focus.ts` (where on a very wide page a body-level card
+opens) and `popover.ts` (a small panel hanging under the toolbar button that opens it).
 
 ## `window.ts` — dockable windows
 
@@ -66,7 +67,7 @@ taking the wall back uninvited.
 
 ## Tests
 
-`bun test client/chrome` — the geometry only (`clampPosition`, `defaultPosition`, `clampSize`,
+`bun test client/chrome/window.test.ts` — the geometry only (`clampPosition`, `defaultPosition`, `clampSize`,
 `clampDockHeight`, `inDropZone`), which is pure. The rest is DOM and is verified in a browser.
 
 ## `focus.ts` — the active pane on a page spanning displays
@@ -83,3 +84,21 @@ floated**, never per reflow — clicking a pane on another monitor must not make
 jump there. It imports `src/config/responsive` directly rather than the `../../src` barrel:
 `window.test.ts` imports this file, and the barrel loads klinecharts, which reads `window` at
 import.
+
+## `popover.ts` — anchored popovers
+
+`anchoredPopover(anchor, { build, onOpen, onClose })` makes a toolbar button the toggle of a
+panel: built afresh on every open, appended inside `.klinecharts-pro` (for the theme tokens) and
+`position: fixed` under the button (to escape the root's `overflow: hidden`), closed by a
+`mousedown` outside it and the button or by Escape. The button's `aria-expanded` follows it. The
+workspace switcher (`client/workspaces/menu.ts`) and the Revert confirmation beside it
+(`client/workspaces/save.ts`) are built on it.
+
+The outside press is listened for from one microtask after the open, so the click that opened the
+panel is not taken for one. The other hand-built popovers close the same way in outline but differ
+in when and to what they listen, so they keep their own code: the layer settings panel
+(`client/plugins/settings/settings.ts`) waits a whole task, because a control drawn on a canvas opens
+it; the bell's dropdown (`client/notifications/bell.ts`) listens in the capture phase from the next
+frame and follows a window resize; the watch menu (`client/watch/menu.ts`) and the price-alert card
+(`client/chartlayers/alerts/editor.ts`) listen for `pointerdown` in the capture phase, since a tap
+on the bare chart sends no mouse events. `bun test client/chrome/popover.test.ts` drives it in happy-dom.

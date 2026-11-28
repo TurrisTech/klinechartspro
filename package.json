@@ -40,7 +40,7 @@
   "private": false,
   "scripts": {
     "dev": "bun --hot examples/index.html",
-    "dev:client": "bun --hot client/serve.ts",
+    "dev:client": "bun --hot client/dev/serve.ts",
     "dev:client:bg": "scripts/dev-client.sh",
     "build:client": "bun run scripts/build-client.ts",
     "check": "svelte-check --tsconfig ./tsconfig.json",

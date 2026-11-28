@@ -2,12 +2,14 @@ import type { IndicatorGroup } from '../../src'
 import { loadServerCatalogue } from '../alerts/catalogue'
 import { phaseLabel } from '../plugins/legend'
 import { paneConfig } from '../plugins/paneconfig'
-import type { BindContext, BindingSpec, IndicatorPlugin, Phase, Range, SourceSpec, SourceStore } from '../plugins/types'
-import { gridFor } from '../replay/timeframes'
+import type { BindContext, BindingSpec, IndicatorPlugin, Phase, SourceSpec, SourceStore } from '../plugins/types'
+import { gridFor } from '../time/timeframes'
 import { HttpLabData, type LabData } from './data'
 import { DEFAULT_SHOW, LAB_TEMPLATE, publishRun, registerLabTemplate, type ShowOptions } from './overlay'
 import { type LabRun, runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'
+import type { Range } from '../paging'
+import { instrumentKey } from '../instrumentkey'
 
 // A SAVED STRATEGY ON A DASHBOARD PANE -- where a strategy developed in the Strategy Lab goes
 // once it is good. One template, `LAB:strategy` (./overlay.ts, the same drawing the lab's chart
@@ -176,7 +178,7 @@ export function createLabPlugin(options: LabPluginOptions = {}): IndicatorPlugin
         return { sources: [], label: () => `Strategy · ${why}`, extendData: () => ({ runKey: null, chartInterval: ctx.interval, show }) }
       }
       const id = strategy.id
-      const symbol = `${ctx.vendor}:${ctx.ticker}`
+      const symbol = instrumentKey(ctx.vendor, ctx.ticker)
       const key = `lab|${id}|${symbol}|${pane.trades ? 'sim' : 'nosim'}`
       const source: SourceSpec<RunPoint> = {
         id: 'run',

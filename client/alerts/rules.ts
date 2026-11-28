@@ -21,8 +21,10 @@
 // so this file can be tested without klinecharts.
 
 import { type Condition, ConditionError, OPS, parse } from './conditions'
-import { toWall } from '../replay/timeframes'
-import { ANY_LABEL, type Operand, type Rule, type RuleLeaf, type RuleRight, type TimeField } from './types'
+import { toWall } from '../time/timeframes'
+import { ANY_LABEL, type Operand, type Rule, type RuleLeaf, type RuleRight } from './types'
+import { isInterval } from '../time/intervals'
+import { isLabelOperand, operandKey, operandKind, plainLabel } from './operands'
 
 export class RuleError extends Error {
   constructor(message: string) {
@@ -67,40 +69,8 @@ export const OP_WORDS: Record<string, string> = {
 }
 
 const MAX_RULE_DEPTH = 6
-const INTERVAL = /^(\d+)([smhDWMY])$/
-
-/** An operand's identity -- its field name in an observation, and the key two leaves reading
- * the same thing share. Deterministic, so a rule compiles to the same document every time. */
-export function operandKey(operand: Operand): string {
-  switch (operand.kind) {
-    case 'bar':
-      return `bar:${operand.field}@${operand.interval}`
-    case 'indicator':
-      return `ind:${operand.name}(${operand.params.join(',')}).${operand.output}@${operand.interval}`
-    case 'series':
-      return `ser:${operand.indicator}.${operand.key}@${operand.interval}`
-    case 'signal':
-      return `sig:${operand.plugin}/${operand.variant}@${operand.interval}`
-    case 'graph':
-      return `graph:${operand.overlay}[${operand.timeframes.join(',')}|${operand.roots.join(',')}|${operand.maxStep}]@${operand.interval}`
-    case 'time':
-      return `time:${operand.field}/${operand.zone}@${operand.interval}`
-    case 'strategy':
-      return `strat:${operand.strategy}@${operand.interval}`
-  }
-}
-
-/** An operand whose values are labels (a signal's side, a graph entry's, a weekday), compared
- * with `is` / `is not` rather than with numbers. */
-export function isLabelOperand(operand: Operand): boolean {
-  return operand.kind === 'signal' || operand.kind === 'graph' || operand.kind === 'strategy' || (operand.kind === 'time' && operand.field === 'weekday')
-}
-
 /** The weekdays a `weekday` operand reads, in the order the editor offers them. */
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
-
-/** What each time field is called. */
-const TIME_FIELD_NAMES: Record<TimeField, string> = { minute: 'time of day', weekday: 'weekday', datetime: 'date and time' }
 
 /** `2026-11-03 09:30` for an instant, on `zone`'s wall clock. */
 export function formatDateTime(at: number, zone: string): string {
@@ -210,53 +180,13 @@ function leaf(node: RuleLeaf, use: (operand: Operand) => string, fields: Map<str
 
 function checkOperand(operand: Operand): void {
   if (typeof operand !== 'object' || operand === null) throw new RuleError('an operand must be an object')
-  if (typeof operand.interval !== 'string' || !INTERVAL.test(operand.interval)) {
+  if (typeof operand.interval !== 'string' || !isInterval(operand.interval)) {
     throw new RuleError(`not a timeframe: ${JSON.stringify((operand as { interval?: unknown }).interval)}`)
   }
-  switch (operand.kind) {
-    case 'bar':
-      if (!['open', 'high', 'low', 'close', 'volume'].includes(operand.field)) throw new RuleError(`not a bar field: ${operand.field}`)
-      return
-    case 'indicator':
-      if (!operand.name) throw new RuleError('choose an indicator')
-      if (!Array.isArray(operand.params) || !operand.params.every((p) => typeof p === 'number' && Number.isFinite(p))) {
-        throw new RuleError(`${operand.name}: its parameters must be numbers`)
-      }
-      if (!operand.output) throw new RuleError(`${operand.name}: choose which line`)
-      return
-    case 'series':
-      if (!operand.indicator || !operand.key) throw new RuleError('choose a server indicator and its series')
-      return
-    case 'signal':
-      if (!operand.plugin) throw new RuleError('choose a signal')
-      return
-    case 'graph': {
-      if (!operand.overlay) throw new RuleError('choose an overlay')
-      const intervals = (list: unknown): list is string[] => Array.isArray(list) && list.every((i) => typeof i === 'string' && INTERVAL.test(i))
-      if (!intervals(operand.timeframes) || !intervals(operand.roots)) throw new RuleError('graph timeframes must be timeframes')
-      if (!operand.timeframes.includes(operand.interval)) {
-        throw new RuleError(`the graph does not read ${operand.interval}, so it can have no entry there`)
-      }
-      if (!operand.roots.some((root) => operand.timeframes.includes(root))) {
-        throw new RuleError('switch on a root timeframe the graph reads')
-      }
-      if (!Number.isFinite(operand.maxStep) || operand.maxStep < 2) throw new RuleError('the largest step is at least 2')
-      return
-    }
-    case 'strategy':
-      if (!operand.strategy) throw new RuleError('choose a saved strategy')
-      return
-    case 'time':
-      if (!(operand.field in TIME_FIELD_NAMES)) throw new RuleError(`not a time field: ${operand.field}`)
-      try {
-        new Intl.DateTimeFormat('en-US', { timeZone: operand.zone })
-      } catch {
-        throw new RuleError(`not a time zone: ${JSON.stringify(operand.zone)}`)
-      }
-      return
-    default:
-      throw new RuleError(`unknown operand kind ${JSON.stringify((operand as { kind?: unknown }).kind)}`)
-  }
+  const kind = operandKind(operand)
+  if (!kind) throw new RuleError(`unknown operand kind ${JSON.stringify((operand as { kind?: unknown }).kind)}`)
+  const problem = kind.problem(operand)
+  if (problem !== null) throw new RuleError(problem)
 }
 
 // -- words -----------------------------------------------------------------------------------
@@ -264,25 +194,6 @@ function checkOperand(operand: Operand): void {
 /** How an operand reads in a sentence ("RSI(14)", "AREV21 p"). Supplied by the catalogue,
  * which knows the titles; the fallback here is the operand's own spelling. */
 export type Labeller = (operand: Operand) => string
-
-function plainLabel(operand: Operand): string {
-  switch (operand.kind) {
-    case 'bar':
-      return operand.field
-    case 'indicator':
-      return `${operand.name}(${operand.params.join(',')})${operand.output ? ` ${operand.output}` : ''}`
-    case 'series':
-      return `${operand.indicator} ${operand.key}`
-    case 'signal':
-      return `${operand.variant || operand.plugin} signal`
-    case 'graph':
-      return `${operand.overlay} graph entry`
-    case 'time':
-      return `${TIME_FIELD_NAMES[operand.field]} (${operand.zone})`
-    case 'strategy':
-      return `${operand.strategy} entry`
-  }
-}
 
 /** One line for a rule: `RSI(14) 1h crosses below 30 and close 1h > EMA(200) 4h`. Groups
  * are bracketed only where they are not the whole rule. */

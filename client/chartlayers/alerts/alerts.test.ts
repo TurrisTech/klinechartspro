@@ -21,6 +21,7 @@ const zones = await import('./zone')
 const figures = await import('./figures')
 const { overlaySignature } = await import('../paint')
 const { createLayerController } = await import('../controller')
+const { priceAlertDecorator } = await import('./view')
 const { fakePane, flush } = await import('../../plugins/testing')
 import type { Observation } from '../../alerts/conditions'
 import type { LocalWatchSource } from '../../watch/local'
@@ -320,7 +321,8 @@ async function mountPane(
   } = {}
 ) {
   const hub = options.alerts ?? backend().alerts
-  const controller = createLayerController(alertLayer(data, options.offer), TEMPLATE, hub)
+  const layer = alertLayer(data, options.offer)
+  const controller = createLayerController(layer, TEMPLATE, priceAlertDecorator(layer, hub))
   const pane = paneChart()
   const fake = fakePane('p1', pane.chart, 'EURUSD')
   ;(fake.getSymbol() as { pipSize?: number }).pipSize = 0.0001
@@ -736,7 +738,8 @@ describe('across panes', () => {
   /** Three panes on ONE controller, as a wall has them: two on EURUSD, one on GBPUSD. */
   async function wall() {
     const { alerts } = backend()
-    const controller = createLayerController(alertLayer([{ price: 1.085, live: true }]), TEMPLATE, alerts)
+    const layer = alertLayer([{ price: 1.085, live: true }])
+    const controller = createLayerController(layer, TEMPLATE, priceAlertDecorator(layer, alerts))
     const panes = (['EURUSD', 'EURUSD', 'GBPUSD'] as const).map((ticker, index) => {
       const pane = paneChart()
       const fake = fakePane(`p${index}`, pane.chart, ticker)

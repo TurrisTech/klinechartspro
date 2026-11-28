@@ -12,6 +12,9 @@
 // Plain DOM in the house style (`kc-*` tokens, `wd-*` classes), like the bell beside it.
 
 import { createDockableWindow, type DockableWindow } from '../../chrome/window'
+import { Arming } from '../../ui/arming'
+import { button, el } from '../../ui/dom'
+import { chartTheme } from '../../ui/theme'
 import { configOf, describeDelivery, type Draft, draftOf, hasUnsaved, missing, secretIsSet, secretPlaceholder } from './form'
 import type { ChannelAnswer, ChannelChoice, ChannelEntry, ChannelField, ChannelsApi } from './types'
 
@@ -47,7 +50,6 @@ interface CardState {
   status: Status | null
   options: { field: string; choices: ChannelChoice[] } | null
   busy: boolean
-  confirmRemove: boolean
 }
 
 export function createChannelSettings(options: ChannelSettingsOptions): ChannelSettingsWindow {
@@ -56,7 +58,8 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
   let entries: ChannelEntry[] | null = null
   let loadError: string | null = null
   const cards = new Map<string, CardState>()
-  let confirmTimer: ReturnType<typeof setTimeout> | null = null
+  /** The card whose Remove waits for its second press, keyed by channel kind. */
+  const removing = new Arming(() => render(), CONFIRM_MS)
   let disposed = false
 
   let made: DockableWindow | null = null
@@ -67,7 +70,7 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
       className: 'wd-delivery-window',
       title: 'Delivery',
       bounds: options.bounds,
-      theme: document.querySelector('.klinecharts-pro.dark') ? 'dark' : '',
+      theme: chartTheme(),
       defaultMode: 'float',
       floatAnchor: 'center',
       floatSize: { width: 520, height: 620 },
@@ -95,7 +98,7 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
     entries = list
     for (const entry of list) {
       if (!cards.has(entry.kind)) {
-        cards.set(entry.kind, { draft: draftOf(entry), status: null, options: null, busy: false, confirmRemove: false })
+        cards.set(entry.kind, { draft: draftOf(entry), status: null, options: null, busy: false })
       }
     }
   }
@@ -173,7 +176,7 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
     if (entry.setting) {
       const remove = button(
         'kc-button kc-button-outline wd-delivery-remove',
-        state.confirmRemove ? 'Press again to remove' : 'Remove',
+        removing.key === entry.kind ? 'Press again to remove' : 'Remove',
         () => void onRemove(entry)
       )
       remove.disabled = state.busy
@@ -347,19 +350,7 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
 
   function onRemove(entry: ChannelEntry): Promise<void> {
     const state = cards.get(entry.kind)
-    if (!state) return Promise.resolve()
-    if (!state.confirmRemove) {
-      state.confirmRemove = true
-      if (confirmTimer) clearTimeout(confirmTimer)
-      confirmTimer = setTimeout(() => {
-        state.confirmRemove = false
-        render()
-      }, CONFIRM_MS)
-      render()
-      return Promise.resolve()
-    }
-    state.confirmRemove = false
-    if (confirmTimer) clearTimeout(confirmTimer)
+    if (!state || !removing.press(entry.kind)) return Promise.resolve()
     return run(entry, async () => {
       replace(await api.remove(entry.kind))
       return { ok: true, text: `Removed: nothing will be sent to ${entry.title}.` }
@@ -375,6 +366,7 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
     cards.clear()
     entries = null
     loadError = null
+    removing.disarm()
     const win = windowFor()
     win.setVisible(true)
     render()
@@ -396,7 +388,7 @@ export function createChannelSettings(options: ChannelSettingsOptions): ChannelS
     },
     dispose(): void {
       disposed = true
-      if (confirmTimer) clearTimeout(confirmTimer)
+      removing.dispose()
       made?.element.remove()
       made = null
     }
@@ -411,22 +403,7 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = className
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
-}
-
-/** The library's `.kc-switch`, as client/chartlayers/settings.ts builds it. */
+/** The library's `.kc-switch`, as client/plugins/settings/settings.ts builds it. */
 function switchButton(checked: boolean, label: string, onToggle: () => void): HTMLButtonElement {
   const b = document.createElement('button')
   b.type = 'button'

@@ -1,5 +1,30 @@
 import { apiGet } from './config'
-import type { InstrumentConfig } from './symbols'
+import type { MarketHours } from './time/markethours'
+
+// The vendor's own configuration for an instrument (wdashboard-server's
+// InstrumentConfigModel, sourced from OANDA via wmarketdata). This is where display
+// precision comes from — see symbols.ts `resolvePrecision` for why it is not computed here.
+//
+// `instrumentType` is the vendor's word ('CURRENCY'); `assetClass` is the normalised one
+// ('forex', alongside 'equity' and 'crypto'). Fields prefixed `forex` are FX-only.
+export interface InstrumentConfig {
+  vendor: string
+  symbol: string
+  displayName: string
+  instrumentType: string
+  assetClass: string
+  displayPrecision: number
+  // null for an asset class with no pips (crypto).
+  forexPipLocation: number | null
+  tradeUnitsPrecision: number
+  minimumTradeSize: number | null
+  maximumOrderUnits: number | null
+  maximumPositionSize: number | null
+  minimumTrailingStopDistance: number | null
+  maximumTrailingStopDistance: number | null
+  marginRate: number | null
+  marketHours: MarketHours
+}
 
 // The one client-side cache of `GET /instrument`, keyed by `vendor:TICKER`.
 //

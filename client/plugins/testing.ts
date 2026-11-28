@@ -96,7 +96,8 @@ export function fakePane(id: string, chart: Chart, ticker = 'EURUSD', period: Pe
 
 export const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
 
-/** Facilities that fetch nothing: every server read answers empty, every feature is on. */
+/** Facilities that fetch nothing: every server read answers empty, every feature is on, and the
+ * wall is live (no read clock). */
 export function fakeFacilities(overrides: Partial<PluginFacilities> = {}): PluginFacilities {
   return {
     api: { get: async () => ({}) as never },
@@ -107,6 +108,8 @@ export function fakeFacilities(overrides: Partial<PluginFacilities> = {}): Plugi
     resolutionDurationMs: () => 3_600_000,
     symbolVendor: () => 'oanda',
     maxValuesPerRequest: 3,
+    maxBarsPerRequest: 5000,
+    readClock: () => null,
     ...overrides
   }
 }

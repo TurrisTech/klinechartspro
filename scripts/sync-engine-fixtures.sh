@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Vendor the parity fixtures from wdashboard-server into the client, or check that the two
-# copies are identical (`--check`, what `bun test` runs through client/replay/fixtures.test.ts
+# copies are identical (`--check`, what `bun test` runs through client/sim/fixtures.test.ts
 # when the server repo is reachable -- one run covers every pair below, and each area's own
 # suite asserts its file's provenance line for an environment without the sibling repo).
 #
@@ -29,8 +29,8 @@ root=${SERVER_ROOT:-$here/../../wdashboard-server/main}
 sim=${SERVER_FIXTURES:-$root/tests/sim/fixtures}
 # "<source dir>|<destination dir>|<file>"
 pairs=(
-  "$sim|$here/client/replay/fixtures|engine_cases.json"
-  "$sim|$here/client/replay/fixtures|boundaries.json"
+  "$sim|$here/client/sim/fixtures|engine_cases.json"
+  "$sim|$here/client/time/fixtures|boundaries.json"
   "$root/tests/watch/fixtures|$here/client/alerts/fixtures|watch_cases.json"
   "$root/tests/arevlab/fixtures|$here/client/arevlab/fixtures|rules_parity.json"
   "$root/tests/mtfgraph/fixtures|$here/client/lab/fixtures|graph_parity.json"

@@ -1,14 +1,17 @@
-import { offeredIntervalCodes, resolutionDurationMs } from '../periods'
+import { offeredIntervalCodes } from '../periods'
 import type { ServerCatalogue } from './catalogue'
-import { button, el, input, labelled, select } from './dom'
+import { labelled } from './dom'
 import { defaultLeaf, fromEditable, type GroupNode, group, toEditable } from './editable'
 import type { GraphSettings } from './graphentry'
 import { compile, describeRule, type Labeller, RuleError } from './rules'
-import { savedStrategies } from '../lab/store'
+import { strategies } from './strategies'
 import { createRuleTree } from './ruletree'
 import { normaliseSymbol } from './store'
 import type { Alert, AlertDefinition } from './types'
 import { DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
+import { resolutionDurationMs } from '../time/intervals'
+import { button, el, input, select } from '../ui/dom'
+import { splitInstrumentKey } from '../instrumentkey'
 
 // GLUE (DOM). The alert editor: a name, an instrument, a rule, and how it fires.
 //
@@ -97,8 +100,10 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
   }
 
   function intervals(): string[] {
-    const at = symbol.indexOf(':')
-    const offered = at > 0 ? offeredIntervalCodes(symbol.slice(0, at), symbol.slice(at + 1)) : []
+    const { vendor, ticker } = splitInstrumentKey(symbol)
+    // Only for a key that names its vendor: what is typed may be a bare ticker or ':EURUSD' on the
+    // way to one, and either offers nothing, rather than reading as the default vendor's.
+    const offered = symbol.includes(':') && vendor ? offeredIntervalCodes(vendor, ticker) : []
     return [...new Set(offered)].sort((a, b) => resolutionDurationMs(a) - resolutionDurationMs(b))
   }
 
@@ -110,7 +115,7 @@ export function createAlertEditor(options: AlertEditorOptions): AlertEditor {
     intervals,
     defaultInterval: () => options.context.interval,
     graphSettings: options.context.graphSettings,
-    strategies: savedStrategies,
+    strategies: () => strategies().list(),
     onChange: () => {
       failure = ''
       refreshSummary()

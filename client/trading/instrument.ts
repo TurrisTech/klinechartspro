@@ -1,6 +1,7 @@
 import { cachedInstrumentConfig, instrumentConfig } from '../instrumentconfig'
 import { pipSizeOf } from '../pipsize'
-import type { InstrumentConfig } from '../symbols'
+import type { InstrumentConfig } from '../instrumentconfig'
+import { instrumentKey, splitInstrumentKey } from '../instrumentkey'
 
 // Per-instrument facts the trading panel needs to price in pips the OANDA way, cached by
 // `vendor:TICKER` and fetched once from `GET /instrument`. A pip is the instrument's
@@ -44,7 +45,9 @@ function placeholder(vendorSymbol: string): InstrumentInfo {
 export function instrumentInfo(vendorSymbol: string, onLoad?: () => void): InstrumentInfo {
   const hit = cache.get(vendorSymbol)
   if (hit) return hit
-  const key = vendorSymbol.includes(':') ? vendorSymbol : `oanda:${vendorSymbol}`
+  // A bare ticker qualified with the default vendor; a key that has one is spelled as it was.
+  const { vendor, ticker } = splitInstrumentKey(vendorSymbol)
+  const key = instrumentKey(vendor, ticker)
   // Already fetched for the pane's own SymbolInfo: derive from it now rather than asking a
   // second time, which is what this module used to do for every instrument on the wall.
   const known = cachedInstrumentConfig(key)

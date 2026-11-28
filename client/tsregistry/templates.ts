@@ -1,11 +1,11 @@
 import { registerIndicator, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
-import type { SeriesDoc } from '../indicators/api'
 import { peekStore } from '../plugins/store'
 import { matches, readField, type MarkSpec, type RegistryIndicator, type RegistrySeries } from './api'
-import { drawLabel, drawMark, type Fill } from './marks'
 import type { BarValue, RegistryStore } from './store'
-import { timestampCalc } from '../plugins/calc'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
+import { drawShape, drawText, type Fill } from '../plugins/draw'
+import type { SeriesDoc } from '../ohlcv'
 
 // ONE klinecharts template, built from a registry row. It computes nothing: `calc` reads
 // the points the host fetched into the store and turns them into the figures the row
@@ -117,12 +117,7 @@ function makeCalc(entry: RegistryIndicator) {
   })
 }
 
-function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
-  const paramsChanged = JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
-  const dataChanged =
-    prev.extendData?.seriesKey !== cur.extendData?.seriesKey || prev.extendData?.rev !== cur.extendData?.rev
-  return { calc: paramsChanged || dataChanged, draw: true }
-}
+const shouldUpdate = shouldUpdateOn<ExtendData>({ keys: ['seriesKey', 'rev'], calcParams: true })
 
 function makeDraw(entry: RegistryIndicator) {
   const marked = markSeries(entry)
@@ -156,10 +151,13 @@ function makeDraw(entry: RegistryIndicator) {
           if (y == null) continue
           const color = mark.color ?? series.color ?? DEFAULT_MARK_COLOR
           const size = base * (mark.size ?? 1)
-          drawMark(ctx, mark, x, y, size, fillOf(mark, bar), color)
+          // A mark the row sizes under 0.35 of the bar's -- krev01's dot on a bar that neither
+          // votes nor leans -- is drawn at half strength, beneath the marks that say something.
+          const alpha = mark.size != null && mark.size < 0.35 ? 0.5 : 1
+          drawShape(ctx, mark.shape, x, y, size, color, { fill: fillOf(mark, bar), alpha })
           if (mark.labelField) {
             const raw = readField(bar, mark.labelField)
-            if (typeof raw === 'number') drawLabel(ctx, x + size + 3, y, raw.toFixed(2), color)
+            if (typeof raw === 'number') drawText(ctx, x + size + 3, y, raw.toFixed(2), color)
           }
           break // first match wins: the marks are an ordered rule, not a set
         }

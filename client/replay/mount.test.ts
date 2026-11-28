@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { KLineChartPro, PaneSnapshot, SymbolInfo } from '../../src'
-import type { EngineState } from './engine'
+import type { EngineState } from '../sim/engine'
 import type { ReplayState } from './persist'
 
 // THE REPLAY WALL'S GLUE (index.ts), mounted for real: `mountBarReplay` over a fake wall and a
@@ -17,9 +17,9 @@ GlobalRegistrator.register({ url: 'http://test/' })
 const { mountBarReplay, bootReplay, resumeReplay, takeReplayNotice, REPLAY_WALL_CLASS } = await import('./index')
 const { summarizeSessions } = await import('./sessions')
 const { writeIntent } = await import('./persist')
-const { FX_SCHEDULE, fromWall } = await import('./timeframes')
-const { resolutionToPeriod } = await import('../periods')
+const { FX_SCHEDULE, fromWall } = await import('../time/timeframes')
 const { resetInstrumentConfigCache } = await import('../instrumentconfig')
+const { resolutionToPeriod } = await import('../time/intervals')
 
 const pristineFetch = globalThis.fetch
 afterAll(() => {

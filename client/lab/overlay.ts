@@ -1,10 +1,11 @@
 import { type Indicator, type IndicatorTemplate, type KLineData, registerIndicator } from 'klinecharts'
 import { graphLineStyle, MTF_DEFAULTS } from '../mtf/config'
 import { chartBarAt, chartOpens } from '../mtf/shift'
-import { resolutionDurationMs } from '../periods'
-import { timestampCalc } from '../plugins/calc'
-import type { CandleGrid } from '../replay/timeframes'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
+import { arrowPath, drawGraphNode, shapePath } from '../plugins/draw'
+import type { CandleGrid } from '../time/timeframes'
 import type { LabRun } from './runner'
+import { resolutionDurationMs } from '../time/intervals'
 
 // THE STRATEGY OVERLAY: one price-pane template, `LAB:strategy`, drawing one run of a strategy
 // (runner.ts) -- its graphs, its entries, the signals of its pool and its simulated trades -- on
@@ -253,24 +254,7 @@ const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<Value, n
   return placeRun(dataList, run, extend)
 })
 
-function shouldUpdate(prev: Indicator<Value, number, LabExtendData>, cur: Indicator<Value, number, LabExtendData>) {
-  const a = prev.extendData
-  const b = cur.extendData
-  const changed =
-    a?.runKey !== b?.runKey || a?.rev !== b?.rev || a?.chartInterval !== b?.chartInterval || a?.selected !== b?.selected || JSON.stringify(a?.show) !== JSON.stringify(b?.show)
-  return { calc: changed, draw: true }
-}
-
-function star(ctx: CanvasRenderingContext2D, cx: number, cy: number, outer: number): void {
-  const inner = outer * 0.45
-  for (let k = 0; k < 10; k++) {
-    const r = k % 2 === 0 ? outer : inner
-    const a = -Math.PI / 2 + (k * Math.PI) / 5
-    if (k === 0) ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a))
-    else ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a))
-  }
-  ctx.closePath()
-}
+const shouldUpdate = shouldUpdateOn<LabExtendData>({ keys: ['runKey', 'rev', 'chartInterval', 'selected'], json: ['show'] })
 
 const WIDTH = 1.5
 const WIN = '#26A69A'
@@ -332,12 +316,7 @@ function draw(ctx: CanvasRenderingContext2D, result: Value[], data: KLineData[],
       // A pool signal outside any graph: a small triangle off the candle, its timeframe's colour.
       const above = mark.side === 'top'
       const tip = above ? y(bar.high) - 4 : y(bar.low) + 4
-      const dir = above ? -1 : 1
-      ctx.beginPath()
-      ctx.moveTo(cx, tip)
-      ctx.lineTo(cx - 3.5, tip + dir * 6)
-      ctx.lineTo(cx + 3.5, tip + dir * 6)
-      ctx.closePath()
+      arrowPath(ctx, cx, tip, 3.5, 6, !above)
       ctx.fillStyle = timeframeColor(mark.interval)
       ctx.globalAlpha = 0.7
       ctx.fill()
@@ -346,31 +325,9 @@ function draw(ctx: CanvasRenderingContext2D, result: Value[], data: KLineData[],
     for (const dot of value.dots ?? []) {
       const color = timeframeColor(dot.interval)
       const cy = y(dot.price)
-      ctx.beginPath()
       ctx.lineWidth = WIDTH
-      if (dot.entry) {
-        star(ctx, cx, cy, 4 * WIDTH + 8)
-        if (dot.filtered) {
-          ctx.strokeStyle = color
-          ctx.stroke()
-        } else {
-          ctx.fillStyle = color
-          ctx.fill()
-          ctx.save()
-          ctx.lineJoin = 'miter'
-          ctx.strokeStyle = MTF_DEFAULTS.graph.starOutline
-          ctx.stroke()
-          ctx.restore()
-        }
-      } else if (dot.root) {
-        ctx.arc(cx, cy, WIDTH + 3, 0, Math.PI * 2)
-        ctx.strokeStyle = color
-        ctx.stroke()
-      } else {
-        ctx.arc(cx, cy, WIDTH + 1.5, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.fill()
-      }
+      // The MTF overlay's node, with one more state: an entry the filter took out is a hollow star.
+      drawGraphNode(ctx, cx, cy, WIDTH, dot, color, dot.filtered ? null : color, MTF_DEFAULTS.graph.starOutline)
       if (dot.selected) {
         ctx.beginPath()
         ctx.arc(cx, cy, 4 * WIDTH + 14, 0, Math.PI * 2)
@@ -383,7 +340,8 @@ function draw(ctx: CanvasRenderingContext2D, result: Value[], data: KLineData[],
       const cy = y(trade.price)
       ctx.lineWidth = trade.selected ? 2.5 : 1.5
       if (trade.kind === 'open') {
-        // A triangle pointing the trade's way, at the fill.
+        // A triangle pointing the trade's way, at the fill. Its corners are offsets from the
+        // bar's x, beside the fill rather than on it, so it is not `arrowPath`'s arithmetic.
         const up = trade.direction === 'long'
         ctx.beginPath()
         ctx.moveTo(cx + 9, cy)
@@ -395,11 +353,7 @@ function draw(ctx: CanvasRenderingContext2D, result: Value[], data: KLineData[],
       } else {
         // An x at the close, in how it went.
         ctx.strokeStyle = trade.win ? WIN : LOSS
-        ctx.beginPath()
-        ctx.moveTo(cx - 4, cy - 4)
-        ctx.lineTo(cx + 4, cy + 4)
-        ctx.moveTo(cx + 4, cy - 4)
-        ctx.lineTo(cx - 4, cy + 4)
+        shapePath(ctx, 'cross', cx, cy, 4)
         ctx.stroke()
       }
     }

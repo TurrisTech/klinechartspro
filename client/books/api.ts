@@ -1,6 +1,8 @@
-import type { Page, PluginFacilities, SourceSpec } from '../plugins/types'
+import type { PluginFacilities, SourceSpec } from '../plugins/types'
 import { readHorizon, readTiled } from '../tiles/join'
 import { isTiledMetric, pointsFromTiles } from './tiles'
+import type { Page } from '../paging'
+import { instrumentKey } from '../instrumentkey'
 
 // The client half of the server's `books` plugin (`GET /plugins/books/values`,
 // wdashboard-server services/books.py): OANDA's 20-minute client order/position book
@@ -99,7 +101,7 @@ function fetchBooks<P extends { date: number }>(
   interval: string,
   params: Record<string, unknown>
 ): (range: { from: number; to: number }, limit: number) => Promise<Page<P>> {
-  const vendorSymbol = `${vendor}:${ticker}`
+  const vendorSymbol = instrumentKey(vendor, ticker)
   const fromApi = (range: { from: number; to: number }, limit: number) =>
     facilities.points<P>({
       pluginId: feed.pluginId,
@@ -148,7 +150,7 @@ export function profileSource(
 ): SourceSpec<BookProfilePoint> {
   return {
     id: 'profile',
-    key: `${feed.pluginId}|profile|${kind}|${vendor}:${ticker}|${interval}|d${PROFILE_DEPTH}`,
+    key: `${feed.pluginId}|profile|${kind}|${instrumentKey(vendor, ticker)}|${interval}|d${PROFILE_DEPTH}`,
     resolution: interval,
     fetch: fetchBooks<BookProfilePoint>(facilities, feed, kind, vendor, ticker, interval, {
       metric: 'profile',
@@ -167,7 +169,7 @@ export function totalsSource(
 ): SourceSpec<BookTotalsPoint> {
   return {
     id: 'totals',
-    key: `${feed.pluginId}|totals|${kind}|${vendor}:${ticker}|${interval}`,
+    key: `${feed.pluginId}|totals|${kind}|${instrumentKey(vendor, ticker)}|${interval}`,
     resolution: interval,
     fetch: fetchBooks<BookTotalsPoint>(facilities, feed, kind, vendor, ticker, interval, {
       metric: 'totals'
@@ -186,7 +188,7 @@ export function nearSource(
 ): SourceSpec<BookNearPoint> {
   return {
     id: 'near',
-    key: `${feed.pluginId}|near|${kind}|${vendor}:${ticker}|${interval}|r${rangePct}`,
+    key: `${feed.pluginId}|near|${kind}|${instrumentKey(vendor, ticker)}|${interval}|r${rangePct}`,
     resolution: interval,
     fetch: fetchBooks<BookNearPoint>(facilities, feed, kind, vendor, ticker, interval, {
       metric: 'near',

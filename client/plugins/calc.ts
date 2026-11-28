@@ -64,3 +64,38 @@ export function timestampCalc<D, I extends { extendData?: unknown; calcParams?: 
 ): (dataList: KLineData[], indicator: I) => D[] {
   return timestampMemo(calc)
 }
+
+/** What a template's `calc` is computed from beyond the bars, for `shouldUpdateOn`. */
+interface ComputedFrom<E> {
+  /** `extendData` keys compared by identity: the store keys, the host's `rev`, an interval. */
+  keys?: readonly (keyof E)[]
+  /** `extendData` keys holding plain data the host rebuilds on every apply -- a config, a list
+   * of timeframes -- so compared by value, as JSON. */
+  json?: readonly (keyof E)[]
+  /** Whether a params edit recomputes: `calcParams` compared as JSON. */
+  calcParams?: boolean
+}
+
+/**
+ * A template's `shouldUpdate`: recompute when anything `calc` reads changed, and redraw always
+ * -- the host replaces `extendData` whenever a store or a setting changes (plugins/README.md),
+ * and a style-only change still has to reach the pane. Every plugin template asked this one
+ * question in a copy of its own; a template whose answer needs more than a key comparison (a
+ * default for a missing config, one field of a nested one) keeps its own.
+ */
+export function shouldUpdateOn<E>(from: ComputedFrom<E>): (
+  prev: { extendData?: E; calcParams?: unknown },
+  cur: { extendData?: E; calcParams?: unknown }
+) => { calc: boolean; draw: boolean } {
+  const keys = from.keys ?? []
+  const json = from.json ?? []
+  return (prev, cur) => {
+    const a = prev.extendData
+    const b = cur.extendData
+    const calc =
+      keys.some((key) => a?.[key] !== b?.[key]) ||
+      json.some((key) => JSON.stringify(a?.[key]) !== JSON.stringify(b?.[key])) ||
+      (from.calcParams === true && JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams))
+    return { calc, draw: true }
+  }
+}

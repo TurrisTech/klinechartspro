@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimSnapshot, SimTrade } from './api'
 import type { InstrumentInfo } from './instrument'
-import { formatInstant } from './format'
 import { findInspected, type Inspected, positionStats } from './stats'
+import { formatInstant } from '../time/format'
 
 const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0, timezone: 'America/New_York' }
 const HOUR = 3_600_000

@@ -6,7 +6,8 @@ import type { RegistryStore } from '../tsregistry/store'
 import { LAB_DEFAULTS, enabledGenerations, type LabConfig } from './config'
 import { computeGeneration, figureKeys, labValues, sortedPoints, type GenerationResult, type LabMark, type LabValue } from './compute'
 import type { LabBar } from './labels'
-import { timestampCalc } from '../plugins/calc'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
+import { fillArrow } from '../plugins/draw'
 
 // ONE klinecharts template, in a sub-pane of its own, drawing the prediction line `p` of as
 // many AREV generations as the pane's settings switch on -- each in its own colour, each with
@@ -126,30 +127,7 @@ const calc = timestampCalc((dataList: KLineData[], indicator: Indicator<LabValue
   )
 })
 
-function shouldUpdate(prev: Indicator<LabValue, number, ExtendData>, cur: Indicator<LabValue, number, ExtendData>) {
-  const a = prev.extendData
-  const b = cur.extendData
-  const changed =
-    a?.rev !== b?.rev ||
-    JSON.stringify(a?.seriesKeys) !== JSON.stringify(b?.seriesKeys) ||
-    JSON.stringify(a?.config) !== JSON.stringify(b?.config)
-  return { calc: changed, draw: true }
-}
-
-function arrow(ctx: CanvasRenderingContext2D, x: number, tipY: number, size: number, color: string, up: boolean): void {
-  // The tip is the anchor and the body hangs away from it -- an up arrow points up at p from
-  // below, a down arrow down at it from above -- so the arrow never covers the line it marks.
-  const dir = up ? 1 : -1
-  ctx.save()
-  ctx.beginPath()
-  ctx.moveTo(x, tipY)
-  ctx.lineTo(x - size, tipY + dir * size * 1.4)
-  ctx.lineTo(x + size, tipY + dir * size * 1.4)
-  ctx.closePath()
-  ctx.fillStyle = color
-  ctx.fill()
-  ctx.restore()
-}
+const shouldUpdate = shouldUpdateOn<ExtendData>({ keys: ['rev'], json: ['seriesKeys', 'config'] })
 
 let registered = false
 
@@ -191,10 +169,13 @@ export function registerLabIndicator(): IndicatorGroup[] {
           for (const mark of marks) {
             const settings = config.generations[mark.generation]
             if (!settings?.enabled) continue
+            // The tip is the anchor and the body hangs away from it -- an up arrow points up at p
+            // from below, a down arrow down at it from above -- so the arrow never covers the line
+            // it marks.
             const y = yAxis.convertToPixel(mark.p)
             const gap = 2
-            if (mark.side === 1) arrow(ctx, x, y + gap, settings.arrowSize, settings.color, true)
-            else arrow(ctx, x, y - gap, settings.arrowSize, settings.color, false)
+            if (mark.side === 1) fillArrow(ctx, x, y + gap, settings.arrowSize, settings.color, true)
+            else fillArrow(ctx, x, y - gap, settings.arrowSize, settings.color, false)
           }
         }
         // FALSE keeps the figures rendering: klinecharts assigns this to `isCover`.

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
-import { assertSignedIn, liveHeaders } from '../livetest'
+import { assertSignedIn, liveHeaders } from '../dev/livetest'
 import { LAYOUT_VERSION, resetManifests } from './manifest'
 
 // The contract this whole layer has to hold: for any window, tiles-plus-API must return
@@ -12,7 +12,7 @@ import { LAYOUT_VERSION, resetManifests } from './manifest'
 // precisely the bug that /getbars' exclusive `to` bound produced here.
 //
 // Needs a tile store named by TILES_BASE_URL (anything serving the bucket's layout,
-// `<base>/v2/...`: a deployment's /tiles, the bucket over the port-forward, or client/serve.ts
+// `<base>/v2/...`: a deployment's /tiles, the bucket over the port-forward, or client/dev/serve.ts
 // over a local TILES_ROOT) and a server reading the same data, OHLCV_API_URL or else the dev
 // stack (bin/dev-stack.sh). Skipped without either, and says so. A deployment is both:
 //
@@ -20,7 +20,7 @@ import { LAYOUT_VERSION, resetManifests } from './manifest'
 //   OHLCV_API_URL=https://wdashboard.dev.turris.app/ohlcv OHLCV_API_TOKEN=... \
 //     bun test client/tiles/parity.test.ts
 //
-// A server with the login on wants OHLCV_API_TOKEN (client/livetest.ts says how to get one).
+// A server with the login on wants OHLCV_API_TOKEN (client/dev/livetest.ts says how to get one).
 // Without it the first read fails with "sign in: set OHLCV_API_TOKEN", not as a tile mismatch.
 
 const BASE = process.env.TILES_BASE_URL?.trim().replace(/\/+$/, '') || undefined

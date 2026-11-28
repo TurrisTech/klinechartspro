@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
-import { FX_DAY } from '../replay/timeframes'
+import { FX_DAY } from '../time/timeframes'
 
 // client/config.ts reads `window` at module load and this module reaches it through the bar
 // fetch; installed before the dynamic import, which a static one would be hoisted above.

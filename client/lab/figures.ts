@@ -3,11 +3,16 @@
 // One definition of each figure, with which way is better, so they are counted and coloured
 // alike everywhere.
 //
+// And the rest of what the results' Summary counts from a run (results.ts draws it): forward
+// pips horizon by horizon with how sure each mean is, the trades month by month, the entries the
+// account did not take and why, and the signals in the window.
+//
 // PURE.
 
+import type { LabEntry } from './entries'
 import type { LabRun } from './runner'
 import { type MeanStats, meanStats } from './stats'
-import { type LabTrade, tradeStats } from './trades'
+import { type LabTrade, type SimResult, tradeStats } from './trades'
 
 export interface Figures {
   entries: number
@@ -48,10 +53,7 @@ export function figuresOf(run: LabRun, part: Part = 'all'): Figures {
   const stats = run.sim ? tradeStats(trades, start) : null
   const horizons = [...run.strategy.outcomes.horizons].filter((h) => h >= 1).sort((a, b) => a - b)
   const longest = horizons.length - 1
-  const forwardPips = longest < 0 ? [] : entries.flatMap((e) => {
-    const pips = run.outcomes.get(e.id)?.forward[longest]?.pips
-    return pips === undefined || !Number.isFinite(pips) ? [] : [pips]
-  })
+  const longestPips = longest < 0 ? [] : forwardPips(run, entries, longest)
   return {
     entries: entries.length,
     longs: entries.filter((e) => e.direction === 'long').length,
@@ -64,7 +66,7 @@ export function figuresOf(run: LabRun, part: Part = 'all'): Figures {
     maxDrawdown: stats ? stats.maxDrawdown : null,
     netPips: stats?.netPips ?? 0,
     netPnl: stats?.netPnl ?? 0,
-    forward: meanStats(forwardPips),
+    forward: meanStats(longestPips),
     forwardBars: longest < 0 ? null : horizons[longest]
   }
 }
@@ -74,6 +76,69 @@ function balanceAt(run: LabRun, at: number): number {
   let balance = run.strategy.sizing.balance
   for (const p of run.sim?.equity ?? []) if (p.t < at) balance = p.balance
   return balance
+}
+
+/** The forward pips of `entries` after the outcome horizon at `index` (the horizons shortest
+ * first, as outcomes.ts measures them), each a finite number; an entry without one is left out. */
+function forwardPips(run: LabRun, entries: readonly LabEntry[], index: number): number[] {
+  return entries.flatMap((e) => {
+    const pips = run.outcomes.get(e.id)?.forward[index]?.pips
+    return pips === undefined || !Number.isFinite(pips) ? [] : [pips]
+  })
+}
+
+// -- the Summary's other counts -----------------------------------------------------------------
+
+export type EntrySide = 'all' | 'long' | 'short'
+
+/** How sure each horizon's mean forward pips is, over the entries on `side`: one per horizon of
+ * the run's outcome summary for that side, in its order. */
+export function forwardStats(run: LabRun, side: EntrySide): MeanStats[] {
+  const entries = run.entries.filter((e) => side === 'all' || e.direction === side)
+  return run.summary[side].horizons.map((_, h) => meanStats(forwardPips(run, entries, h)))
+}
+
+export interface MonthFigures {
+  /** Its name on the instrument's clock: "Mar 2026". */
+  month: string
+  trades: number
+  wins: number
+  r: number
+  pips: number
+  pnl: number
+}
+
+/** The closed trades by the month they closed in, on the instrument's clock, oldest first. */
+export function byMonth(run: LabRun): MonthFigures[] {
+  const zone = run.grid.schedule.timezone
+  const key = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit' })
+  const name = new Intl.DateTimeFormat('en-GB', { timeZone: zone, year: 'numeric', month: 'short' })
+  const out = new Map<string, MonthFigures>()
+  for (const t of run.sim?.trades ?? []) {
+    if (t.closedAt === null || t.pnl === null) continue
+    const k = key.format(t.closedAt)
+    const m = out.get(k) ?? { month: name.format(t.closedAt), trades: 0, wins: 0, r: 0, pips: 0, pnl: 0 }
+    m.trades++
+    if (t.pnl > 0) m.wins++
+    m.r += t.r ?? 0
+    m.pips += t.pips ?? 0
+    m.pnl += t.pnl
+    out.set(k, m)
+  }
+  return [...out.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([, m]) => m)
+}
+
+/** The entries the account did not take, counted by why, in the order each reason first came. */
+export function notTaken(sim: SimResult): Array<[reason: string, n: number]> {
+  const why = new Map<string, number>()
+  for (const k of sim.skipped) why.set(k.reason, (why.get(k.reason) ?? 0) + 1)
+  return [...why]
+}
+
+/** The pool's signals known inside the run's window -- not the lead-in read before it, for the
+ * graphs in force at its start. */
+export function signalsInWindow(run: LabRun): number {
+  return run.signals.filter((s) => s.knownAt >= run.from && s.knownAt <= run.to).length
 }
 
 // -- the figures as columns -------------------------------------------------------------------

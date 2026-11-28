@@ -20,10 +20,10 @@
 import { isMtfInterval, MTF_INTERVALS, type MtfGraphAnswer, type MtfGraphRequest, type MtfNodeRow } from '../mtf/api'
 import { enabledIntervals, graphConfig, graphRoots, type MtfConfig } from '../mtf/config'
 import { MTF_OVERLAYS, type MtfOverlay } from '../mtf/overlays'
-import { resolutionDurationMs } from '../periods'
-import type { CandleGrid } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import type { Point } from './data'
 import type { Operand } from './types'
+import { resolutionDurationMs } from '../time/intervals'
 
 /** The longest timeframe an entry may be cast on (the server's `ENTRY_MAX_INTERVAL`). */
 const ENTRY_MAX_INTERVAL = '5m'

@@ -19,9 +19,9 @@
 //
 // PURE.
 
-import { resolutionDurationMs } from '../periods'
 import type { LabSignal } from './graph'
 import { defaultStep, type GraphSpec, type Lookback, type SlotCondition, type StrategyRule } from './model'
+import { resolutionDurationMs } from '../time/intervals'
 
 /** The graph builder's spec for `rule`. */
 export function ruleGraphSpec(rule: StrategyRule, lookback: Lookback): GraphSpec {

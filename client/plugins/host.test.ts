@@ -8,8 +8,9 @@ const { peekStore, WindowStore } = await import('./store')
 const { fakeChart, fakeFacilities, fakeIndicator, fakePane, flush } = await import('./testing')
 const { paneConfig } = await import('./paneconfig')
 
-import type { SettingsPanelOptions } from '../chartlayers/settings'
-import type { BindContext, IndicatorPlugin, Page, Range, SourceNotify, SourceSpec, SourceStore } from './types'
+import type { SettingsPanelOptions } from './settings/settings'
+import type { BindContext, IndicatorPlugin, SourceNotify, SourceSpec, SourceStore } from './types'
+import type { Page, Range } from '../paging'
 
 type Point = { date: number; v: number }
 

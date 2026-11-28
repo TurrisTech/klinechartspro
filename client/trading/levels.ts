@@ -160,11 +160,30 @@ export function levelReadout(price: number, mode: ProtectMode, basis: LevelBasis
   return parts
 }
 
-/** Why a stop or target at `price` would be refused against `reference` (an open trade's closing
- * side, an order's own price, the draft's entry), or null. */
-export function levelRefusal(side: SimSide, role: LevelRole, price: number, reference: number | null, where: string): string | null {
+/** Whose stop or target is checked, which names it and says what it is checked against: an open
+ * trade's against its closing side, a resting order's against its own price, a market order's
+ * (the ticket's, the draft's) against the side it fills on. */
+export type LevelOwner = 'trade' | 'order' | 'market'
+
+/** Why the engine would refuse a stop or target at `price` against `reference`, or null -- worded
+ * the one way every surface says it (the trade box, the draft and a working position on the chart,
+ * the order card, the popup, the account tables): "A long's stop must be below the bid (1.10000)",
+ * "A buy order's target must be above its price (1.09500)". Mirrors `_check_protection`. */
+export function levelRefusal(
+  owner: LevelOwner,
+  side: SimSide,
+  role: LevelRole,
+  price: number,
+  reference: number | null,
+  precision: number
+): string | null {
   if (reference === null || protectionValid(side, role, price, reference)) return null
-  return `The ${role === 'stop' ? 'stop loss' : 'take profit'} must be ${lies(side, role)} ${where}`
+  const whose = owner === 'trade' ? `A ${side === 'buy' ? 'long' : 'short'}` : `A ${side} order`
+  // A buy fills on the ask and, once it is a long, closes on the bid; a sell the mirror.
+  const fills = side === 'buy' ? 'ask' : 'bid'
+  const closes = side === 'buy' ? 'bid' : 'ask'
+  const where = owner === 'order' ? 'its price' : `the ${owner === 'trade' ? closes : fills}`
+  return `${whose}'s ${role} must be ${lies(side, role)} ${where} (${formatPrice(reference, precision)})`
 }
 
 // -- resting orders ------------------------------------------------------------------------------

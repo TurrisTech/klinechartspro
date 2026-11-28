@@ -1,53 +1,11 @@
-// DOM helpers for the alert manager's forms (./editor.ts, ./ruletree.ts) and the Strategy Lab's
-// (client/lab), in the house style: `kc-*` tokens, `wd-*` classes, plain elements.
+// The alert editors' own inputs (./editor.ts, ./ruletree.ts): a number, a time of day and a date
+// that commit as they are typed and say so with a bubbling `wd-alert-edited` (the sentence above
+// the rule follows), and a captioned field. The plain builders they are made of, which the Lab and
+// every other hand-built surface share, are ../ui/dom.ts.
 
-import { fromWall, toWall } from '../replay/timeframes'
+import { fromWall, toWall } from '../time/timeframes'
+import { el } from '../ui/dom'
 import { formatMinute } from './rules'
-
-export function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-export function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = className
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
-}
-
-export function iconButton(text: string, title: string, onClick: () => void): HTMLButtonElement {
-  const b = button('kc-button wd-alert-icon', text, onClick)
-  b.title = title
-  b.setAttribute('aria-label', title)
-  return b
-}
-
-export function select(options: Array<{ value: string; label: string }>, value: string, onChange: (value: string) => void): HTMLSelectElement {
-  const s = document.createElement('select')
-  s.className = 'kc-input'
-  for (const o of options) {
-    const option = document.createElement('option')
-    option.value = o.value
-    option.textContent = o.label
-    s.appendChild(option)
-  }
-  s.value = value
-  s.addEventListener('change', () => onChange(s.value))
-  return s
-}
-
-export function input(type: string, value: string, onInput: (value: string) => void): HTMLInputElement {
-  const i = document.createElement('input')
-  i.type = type
-  i.className = 'kc-input'
-  i.value = value
-  i.addEventListener('input', () => onInput(i.value))
-  return i
-}
 
 /** A number committed on change; while typing, the model follows and the sentence with it. */
 export function numberInput(value: number, onValue: (value: number) => void): HTMLInputElement {

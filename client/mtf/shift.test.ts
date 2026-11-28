@@ -3,7 +3,7 @@ import { installWindow } from '../plugins/testing'
 
 installWindow()
 const { chartBarAt, chartOpens } = await import('./shift')
-const { CONTINUOUS_DAY, FX_GRID, gridOf } = await import('../replay/timeframes')
+const { CONTINUOUS_DAY, FX_GRID, gridOf } = await import('../time/timeframes')
 import type { KLineData } from 'klinecharts'
 
 // The chart's half of placing a signal: which of the pane's own bars was open at the instant the

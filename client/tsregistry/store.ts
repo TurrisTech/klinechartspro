@@ -1,5 +1,6 @@
 import { WindowStore } from '../plugins/store'
-import type { Range } from '../plugins/types'
+import type { Range } from '../paging'
+import { instrumentKey } from '../instrumentkey'
 
 // THE store class for every registry-driven source, and deliberately the only one.
 //
@@ -20,7 +21,7 @@ import type { Range } from '../plugins/types'
 // reference and cannot diverge.
 //
 // Two specs sharing a key must also agree on `resolution` -- both say the source interval --
-// or a replay step would forget different amounts of the one store (`plugins/horizon.ts`).
+// or a replay step would forget different amounts of the one store (`time/horizon.ts`).
 
 /** The auxiliary array a source ships a bar grid in (the MTF overlay's, for placing a vote
  * one source bar forward). */
@@ -132,5 +133,5 @@ export function storeFactory(foldBy: string | null | undefined): (key: string) =
  * the data, and nothing else. The format is the one the AREV sources have always used, so a
  * registry-driven arev21 source and the MTF overlay's land on the same store. */
 export function registrySourceKey(name: string, vendor: string, ticker: string, interval: string): string {
-  return `${name}|${vendor}:${ticker}|${interval}`
+  return `${name}|${instrumentKey(vendor, ticker)}|${interval}`
 }

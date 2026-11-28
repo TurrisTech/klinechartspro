@@ -5,7 +5,8 @@ import { MTF01_GENERATION, type Mtf01Event } from './api'
 import { isMtf01Indicator, registerMtf01Indicators } from './templates'
 import { Mtf01Store } from './store'
 import { phaseLabel } from '../plugins/legend'
-import { gridFor } from '../replay/timeframes'
+import { gridFor } from '../time/timeframes'
+import { instrumentKey } from '../instrumentkey'
 
 // mtf01 as a client plugin: one sub-pane template over one source, and that source reads
 // TWO kinds of row from one response -- the cascade events in `points`, the trades they
@@ -20,7 +21,7 @@ import { gridFor } from '../replay/timeframes'
 // looking at different data, not a redraw of the same data.
 
 function mtf01SourceKey(vendor: string, ticker: string, interval: string, cascade: string | null): string {
-  return `${MTF01_GENERATION}|${vendor}:${ticker}|${interval}|${cascade ?? 'default'}`
+  return `${MTF01_GENERATION}|${instrumentKey(vendor, ticker)}|${interval}|${cascade ?? 'default'}`
 }
 
 export function createMtf01Plugin(): IndicatorPlugin {
@@ -54,7 +55,7 @@ export function createMtf01Plugin(): IndicatorPlugin {
             fetch: (range, limit) =>
               f.points<Mtf01Event>({
                 pluginId: 'mtf01',
-                vendorSymbol: `${ctx.vendor}:${ctx.ticker}`,
+                vendorSymbol: instrumentKey(ctx.vendor, ctx.ticker),
                 resolution: ctx.interval,
                 from: range.from,
                 to: range.to,

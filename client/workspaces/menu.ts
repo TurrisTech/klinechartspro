@@ -1,13 +1,12 @@
+import { anchoredPopover } from '../chrome/popover'
 import { describeLayout } from '../layout'
 import { MAX_WORKSPACES, type Workspace, type WorkspaceStore } from './store'
 
 // The toolbar switcher: which workspace this device is on, and everything you can do to the
-// set (switch, rename, duplicate, delete, add). Plain imperative DOM, positioned and
-// dismissed exactly like client/chartlayers/settings.ts's panel -- `position: fixed` off the
-// anchor's viewport rect so it escapes `.klinecharts-pro`'s `overflow: hidden`, appended
-// inside `.klinecharts-pro` so it still resolves the chart's theme tokens. See that file's
-// header for why client/ builds its popovers by hand instead of reaching for the library's
-// bits-ui chain.
+// set (switch, rename, duplicate, delete, add). Plain imperative DOM, in an anchored popover
+// (client/chrome/popover.ts) -- `position: fixed` off the button's viewport rect so it escapes
+// `.klinecharts-pro`'s `overflow: hidden`, appended inside `.klinecharts-pro` so it still
+// resolves the chart's theme tokens.
 
 const SVG_NS = 'http://www.w3.org/2000/svg'
 
@@ -95,7 +94,6 @@ export function createWorkspaceSwitcher(options: WorkspaceSwitcherOptions): Work
   buttonLabel.className = 'kc-truncate'
   button.append(ICONS.grid(), buttonLabel, ICONS.chevron())
 
-  let panel: HTMLElement | null = null
   // The row currently showing an inline editor or a delete confirmation, so re-rendering the
   // list doesn't blow it away and reopening the menu doesn't restore it.
   let editing: string | null = null
@@ -293,64 +291,34 @@ export function createWorkspaceSwitcher(options: WorkspaceSwitcherOptions): Work
     footer.appendChild(add)
   }
 
-  function onOutsideClick(event: MouseEvent): void {
-    if (!panel) return
-    const target = event.target as Node
-    if (!panel.contains(target) && !button.contains(target)) close()
-  }
+  const popover = anchoredPopover(button, {
+    build: () => {
+      const panel = document.createElement('div')
+      panel.className = 'kc-popover wd-ws-panel'
+      panel.setAttribute('role', 'menu')
+      panel.setAttribute('aria-label', 'Workspaces')
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') close()
-  }
-
-  function close(): void {
-    if (!panel) return
-    document.removeEventListener('mousedown', onOutsideClick)
-    document.removeEventListener('keydown', onKeydown)
-    panel.remove()
-    panel = null
-    list = null
-    footer = null
-    editing = null
-    confirming = null
-    button.setAttribute('aria-expanded', 'false')
-  }
-
-  function open(): void {
-    panel = document.createElement('div')
-    panel.className = 'kc-popover wd-ws-panel'
-    panel.setAttribute('role', 'menu')
-    panel.setAttribute('aria-label', 'Workspaces')
-
-    const header = document.createElement('div')
-    header.className = 'kc-popover-header'
-    header.textContent = 'Workspaces'
-    list = document.createElement('div')
-    list.className = 'wd-ws-list'
-    footer = document.createElement('div')
-    footer.className = 'wd-ws-footer'
-    panel.append(header, list, footer)
-    renderList()
-
-    const mountPoint = button.closest('.klinecharts-pro') ?? document.body
-    mountPoint.appendChild(panel)
-
-    const rect = button.getBoundingClientRect()
-    panel.style.position = 'fixed'
-    panel.style.top = `${rect.bottom + 6}px`
-    const maxLeft = window.innerWidth - panel.offsetWidth - 8
-    panel.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`
-
-    // Deferred one microtask so the click that opened the panel doesn't immediately close it.
-    queueMicrotask(() => document.addEventListener('mousedown', onOutsideClick))
-    document.addEventListener('keydown', onKeydown)
-    button.setAttribute('aria-expanded', 'true')
-  }
-
-  button.addEventListener('click', () => {
-    if (panel) close()
-    else open()
+      const header = document.createElement('div')
+      header.className = 'kc-popover-header'
+      header.textContent = 'Workspaces'
+      list = document.createElement('div')
+      list.className = 'wd-ws-list'
+      footer = document.createElement('div')
+      footer.className = 'wd-ws-footer'
+      panel.append(header, list, footer)
+      renderList()
+      return panel
+    },
+    onClose: () => {
+      list = null
+      footer = null
+      editing = null
+      confirming = null
+    }
   })
+  function close(): void {
+    popover.close()
+  }
 
   syncButton()
 

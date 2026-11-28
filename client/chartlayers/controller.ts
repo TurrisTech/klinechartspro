@@ -1,13 +1,11 @@
 import type { Chart, OverlayEvent } from 'klinecharts'
 import type { ChartProPane, SymbolInfo } from '../../src'
 import { onViewMoved } from '../chartview'
-import { symbolVendor } from '../symbols'
-import type { PriceAlerts } from './alerts/hub'
-import { LayerAlertView } from './alerts/view'
 import { overlaySignature } from './paint'
-import { type LayerConfigCodec, layerConfigCodec } from './persist'
-import type { ChartLayer, LayerContext, LayerWindow } from './types'
+import { type LayerConfigCodec, layerConfigCodec } from '../plugins/settings/persist'
+import type { ChartLayer, LayerContext, LayerDecorator, LayerWindow } from './types'
 import { contains, missingWindows, PRICE_WINDOW_FRACTION, targetWindow } from './window'
+import { symbolVendor } from '../instrumentkey'
 
 // How a ChartLayer (types.ts) draws on a pane: coverage-gated drawing, a debounced redraw on
 // pan/zoom/data load/price-axis change, and a record of which price/time window the pane has
@@ -162,25 +160,23 @@ interface PaneHold<TDatum> {
   owner: object | null
 }
 
-/** `alerts`: the wall's price alerts, for a layer that offers its data to them
- * (`ChartLayer.alerts`); ignored for one that does not. */
+/** `decorator`: what is added to everything the layer paints (types.ts `LayerDecorator`) -- the
+ * wall's price alerts, for a layer that offers its data to them (`alerts/view.ts`
+ * `priceAlertDecorator`). Without one the layer paints exactly what it builds. */
 export function createLayerController<TDatum, TConfig extends object>(
   layer: ChartLayer<TDatum, TConfig>,
   template: string,
-  alerts?: PriceAlerts
+  decorator?: LayerDecorator<TConfig>
 ): LayerController<TConfig> {
   const codec = layerConfigCodec(layer.defaults, layer.fields)
   const holds = new WeakMap<Chart, PaneHold<TDatum>>()
   const views = new Set<{ invalidate(): void; repaint(): void }>()
-  // The clicks, hovers and bells of the layer's price alerts (alerts/view.ts), added to what
-  // the layer builds before it is compared with what is drawn. An alert made, edited, removed
-  // or fired changes which bells a pane draws, so each view repaints from what it holds.
-  const alertView = layer.alerts && alerts ? new LayerAlertView(layer.id, layer.label, alerts, layer.alerts) : null
-  if (alertView) {
-    alerts?.subscribe(() => {
-      for (const view of views) view.repaint()
-    })
-  }
+  // The decoration (the price alerts' clicks, hovers and bells) is added to what the layer builds
+  // before it is compared with what is drawn. When it changes on its own -- an alert made, edited,
+  // removed or fired changes which bells a pane draws -- each view repaints from what it holds.
+  decorator?.subscribe(() => {
+    for (const view of views) view.repaint()
+  })
 
   // Adjacent windows share an edge, and a level sitting on one is returned by both, so a
   // merge is a union by the layer's own datum identity rather than a concatenation.
@@ -240,7 +236,7 @@ export function createLayerController<TDatum, TConfig extends object>(
     }
 
     const clearOverlays = (): void => {
-      alertView?.clear(chart)
+      decorator?.clear(chart)
       if (owned.painted === '') return
       try {
         chart.removeOverlay({ groupId: layer.id })
@@ -258,7 +254,7 @@ export function createLayerController<TDatum, TConfig extends object>(
     const paint = (data: TDatum[], ctx: LayerContext): void => {
       const built = data.length === 0 ? [] : layer.toOverlays(data, ctx, config)
       // Decorated even with no data: a bell is how an alert whose line has gone is reached.
-      const overlays = (alertView ? alertView.decorate(built, ctx, config, editConfig) : built).map((overlay) => ({
+      const overlays = (decorator ? decorator.decorate(built, ctx, config, editConfig) : built).map((overlay) => ({
         onRightClick: keepOnRightClick,
         ...overlay,
         groupId: layer.id

@@ -11,8 +11,8 @@ const hadWindow = 'window' in globalThis
   location: { href: 'http://localhost/', origin: 'http://localhost' }
 }
 
-const { offeredIntervalCodes, periodToResolution, resolutionDurationMs, resolutionToPeriod } =
-  await import('./periods')
+const { offeredIntervalCodes } = await import('./periods')
+const { periodToResolution, resolutionDurationMs, resolutionToPeriod } = await import('./time/intervals')
 
 afterAll(() => {
   if (!hadWindow) delete (globalThis as Record<string, unknown>).window

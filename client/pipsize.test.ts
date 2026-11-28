@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { pipSizeOf } from './pipsize'
-import type { InstrumentConfig } from './symbols'
+import type { InstrumentConfig } from './instrumentconfig'
 
 const config = (assetClass: string, forexPipLocation: number | null) =>
   ({ assetClass, forexPipLocation }) as InstrumentConfig

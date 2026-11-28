@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { describeQuiet, inWindow, parseHhmm, QuietWindow, ReplayQuiet, readQuiet } from './quiet'
-import { fromWall, toWall } from './timeframes'
+import { fromWall, toWall } from '../time/timeframes'
 
 // Quiet hours: is an instant inside 22:00-06:00 on a clock. The window remembers how long its
 // last answer holds, so these sweep it minute by minute against the plain wall-clock rule.

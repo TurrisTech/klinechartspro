@@ -1,3 +1,4 @@
+import { button, el } from '../ui/dom'
 import type { NotificationCenter } from './center'
 import type { Notification } from './types'
 
@@ -12,7 +13,7 @@ import type { Notification } from './types'
 //           Clear all beneath them and a dismiss on each row.
 //
 // Plain DOM in the house style (`kc-*` tokens, `wd-*` classes), like every other control in
-// client/ -- see the note at the top of client/chartlayers/settings.ts for why this is not
+// client/ -- see the note at the top of client/plugins/settings/settings.ts for why this is not
 // Svelte. It reads a NotificationCenter and writes nothing else: no producer is imported
 // here, and the panel re-renders from `subscribe`, never from a local copy of the list.
 
@@ -91,7 +92,7 @@ export function createNotificationBell(center: NotificationCenter, actions: Bell
 
   function open(): void {
     // Appended into the themed chart root rather than the slot itself, for the reason
-    // client/chartlayers/settings.ts documents: `.klinecharts-pro` clips its overflow, and
+    // client/plugins/settings/settings.ts documents: `.klinecharts-pro` clips its overflow, and
     // the `--popover`/`--border` tokens are defined on it.
     const host = group.closest('.klinecharts-pro') ?? document.body
     panel = el('div', 'kc-popover wd-notify-panel')
@@ -243,19 +244,4 @@ export function relativeTime(at: number, now = Date.now()): string {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours}h ago`
   return `${Math.round(hours / 24)}d ago`
-}
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const node = document.createElement('button')
-  node.type = 'button'
-  node.className = className
-  node.textContent = text
-  node.addEventListener('click', onClick)
-  return node
 }

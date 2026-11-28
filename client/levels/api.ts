@@ -1,5 +1,6 @@
 import { apiGetResponse, getReadClock } from '../config'
 import { parseWatermark, type Watermark } from './freshness'
+import { instrumentKey } from '../instrumentkey'
 
 // `GET /levels` — precomputed support/resistance price levels. Mirrors the `Level` model in
 // wdashboard-server's schemas.py.
@@ -260,12 +261,13 @@ export function levelsRequestsInFlight(): number {
 // every pane on one symbol reads the same one and the narrowest band read updates it.
 const watermarks = new Map<string, Watermark>()
 
-function instrumentKey(vendor: string, symbol: string): string {
-  return `${vendor.toLowerCase()}:${symbol.toUpperCase()}`
+/** The map's key: one instrument's however a caller cases it. */
+function watermarkKey(vendor: string, symbol: string): string {
+  return instrumentKey(vendor.toLowerCase(), symbol.toUpperCase())
 }
 
 export function levelsComputedThrough(vendor: string, symbol: string): Watermark | null {
-  return watermarks.get(instrumentKey(vendor, symbol)) ?? null
+  return watermarks.get(watermarkKey(vendor, symbol)) ?? null
 }
 
 async function requestLevels(params: FetchLevelsParams, window: LevelsWindow, clock: number | null): Promise<Level[]> {
@@ -287,6 +289,6 @@ async function requestLevels(params: FetchLevelsParams, window: LevelsWindow, cl
     asof: clock
   })
   const watermark = parseWatermark(response.headers.get(COMPUTED_THROUGH_HEADER))
-  if (watermark !== null) watermarks.set(instrumentKey(params.vendor, params.symbol), watermark)
+  if (watermark !== null) watermarks.set(watermarkKey(params.vendor, params.symbol), watermark)
   return Array.isArray(levels) ? levels : []
 }

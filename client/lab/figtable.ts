@@ -1,5 +1,5 @@
-import { el } from '../alerts/dom'
 import { change, FIGURE_COLUMNS, type FigureColumn, type Figures } from './figures'
+import { el } from '../ui/dom'
 
 // GLUE (DOM). Rows of figures (figures.ts) as one table, the way every comparison in the lab
 // shows them: the Summary's this-run / fitting / holdout / baseline, the run history, a sweep's
