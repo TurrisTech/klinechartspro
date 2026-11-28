@@ -3,12 +3,22 @@
 // close fills at its bid or ask, a stop or target fills where OANDA's rules say it does, across a
 // gap at the worse (stop) or better (target) open, and a bar reaching both takes the stop.
 //
+// BREAKEVEN and the TRAILING STOP are the engine's own exit management, carried on the order as
+// a bar replay or the paper account carries them, so the three agree on where a stop is:
+//
+//   breakeven   the stop moves to the open price once a close is `breakevenAtR` R the trade's way
+//   trailing    the stop follows the best close at `distance` once a close is `activateR` R in,
+//               and only ever tightens
+//
+// Both judge the CLOSING SIDE's close (a long's bid, a short's ask), the price the trade would
+// exit at, not the mid; the trail's distance is set at the entry, from the entry bar's close.
+// They used to be written here a second time, on the mid, which put a long's trailed stop half a
+// spread above the engine's. The open price, and R, are this module's (the fill plus slippage),
+// so the engine's trigger and activation are offset by the slippage to measure from it.
+//
 // What the engine does not do, this does, at each path bar's CLOSE -- the only instant a decision
 // can be made on a bar:
 //
-//   breakeven   the stop moves to the entry once a close is `breakevenAtR` R the trade's way
-//   trailing    the stop follows the best close at `distance` once a close is `activateR` R in;
-//               it only ever tightens, and a stop that would sit beyond the price closes instead
 //   rule        a long (short) closes at the first close its exit rule holds
 //   time        after `maxBars` bars of the entry's timeframe
 //   opposite    an entry the other way closes what is open first
@@ -26,7 +36,7 @@
 // PURE.
 
 import type { ReplayBar } from '../replay/cache'
-import { type BidAskBar, Engine, type Event, SimError } from '../replay/engine'
+import { type BidAskBar, type BreakevenRequest, Engine, type Event, SimError, type Trade, type TrailRequest } from '../replay/engine'
 import { type CandleGrid, nominalMs } from '../replay/timeframes'
 import type { LabEntry } from './entries'
 import type { Compiled } from './expr'
@@ -180,9 +190,9 @@ export function financedCloses(grid: CandleGrid, from: number, to: number): Arra
 interface Open {
   trade: LabTrade
   engineId: string
-  bestClose: number
-  breakeven: boolean
-  trailing: boolean
+  /** The engine's own record of the trade: its stop as the trail and breakeven move it, and
+   * which of them moved it last. */
+  live: Trade
   deadline: number | null
 }
 
@@ -220,6 +230,37 @@ function levelPrice(
 function trailDistance(level: Level, entry: LabEntry, reference: number, input: SimInput): number | null {
   const price = levelPrice(level, 'trail', entry, reference, null, input)
   return price === null ? null : Math.abs(reference - price)
+}
+
+/** The engine's breakeven and trailing stop for an entry at `reference` (the entry bar's close)
+ * with `risk` (one R, a price distance) and the module's entry `slip`. The engine measures from
+ * its fill; the Lab's open price is the fill plus `slip`, so a trigger or an activation is `slip`
+ * further, and the breakeven lands at an offset of `slip` -- on the open price, as it always has. */
+export function exitManagement(
+  exits: Pick<ExitSpec, 'breakevenAtR' | 'trail'>,
+  entry: LabEntry,
+  reference: number,
+  risk: number | null,
+  slip: number,
+  input: SimInput
+): { trailingStop: TrailRequest | null; breakeven: BreakevenRequest | null } {
+  let breakeven: BreakevenRequest | null = null
+  if (exits.breakevenAtR !== null && risk) {
+    // The engine wants a trigger above the offset. 0 R is the open price itself, so the
+    // smallest one: a part in 1e9, the tolerance the engine compares the trigger within.
+    const least = 1e-9 * Math.max(1, Math.abs(reference))
+    breakeven = { trigger: slip + Math.max(exits.breakevenAtR * risk, least), offset: slip }
+  }
+  let trailingStop: TrailRequest | null = null
+  if (exits.trail) {
+    const { activateR } = exits.trail
+    const distance = trailDistance(exits.trail.distance, entry, reference, input)
+    // Activating at R needs R; with no stop to measure it by the trail never starts.
+    if (distance !== null && Number.isFinite(distance) && distance > 0 && (activateR <= 0 || risk)) {
+      trailingStop = { distance, activation: activateR > 0 && risk ? slip + activateR * risk : null }
+    }
+  }
+  return { trailingStop, breakeven }
 }
 
 export function simulate(input: SimInput): SimResult {
@@ -264,6 +305,7 @@ export function simulate(input: SimInput): SimResult {
     t.closedAt = at
     t.closePrice = close
     t.reason = reason
+    t.stop = state.live.stopLoss
     if (close !== price) t.slippage += slip * t.units
     t.commission += commissionOf(t.units)
     t.financing = financingOf(t, at)
@@ -289,7 +331,7 @@ export function simulate(input: SimInput): SimResult {
 
   const stopReason = (state: Open, event: Event): ExitReason => {
     if (event.reason === 'take_profit') return 'target'
-    if (event.reason === 'stop_loss') return state.trailing ? 'trail' : state.breakeven ? 'breakeven' : 'stop'
+    if (event.reason === 'stop_loss') return state.live.stopMovedBy === 'trail' ? 'trail' : state.live.stopMovedBy === 'breakeven' ? 'breakeven' : 'stop'
     return 'end'
   }
 
@@ -301,29 +343,18 @@ export function simulate(input: SimInput): SimResult {
     }
   }
 
-  /** Move a stop, or close at the market when the new stop would already be behind the price. */
-  const moveStop = (state: Open, stop: number, reason: ExitReason): void => {
-    try {
-      engine.modifyTrade(state.engineId, { stopLoss: stop })
-      state.trade.stop = stop
-    } catch (err) {
-      if (!(err instanceof SimError)) throw err
-      closeNow(state, reason)
-    }
-  }
-
   for (let b = 0; b < input.bars.length; b++) {
     const bar = input.bars[b]
     closed(engine.onBar(bidAsk(bar, symbol)), stopReason)
     const t = bar.end
     const mid = bar.c
 
-    // Management, at this close, of every trade opened before it.
+    // Management, at this close, of every trade opened before it. The engine has already moved
+    // its stop by the breakeven and the trail on this close.
     for (const state of [...open.values()]) {
       const trade = state.trade
+      trade.stop = state.live.stopLoss
       trade.barsHeld++
-      const dir = trade.direction === 'long' ? 1 : -1
-      if ((mid - state.bestClose) * dir > 0) state.bestClose = mid
       if (state.deadline !== null && t >= state.deadline) {
         closeNow(state, 'time')
         continue
@@ -332,26 +363,6 @@ export function simulate(input: SimInput): SimResult {
       if (rule?.(t)) {
         closeNow(state, 'rule')
         continue
-      }
-      const gain = (mid - trade.openPrice) * dir
-      if (exits.breakevenAtR !== null && !state.breakeven && trade.risk && gain >= exits.breakevenAtR * trade.risk) {
-        const better = trade.stop === null || (trade.openPrice - trade.stop) * dir > 0
-        state.breakeven = true
-        if (better) moveStop(state, trade.openPrice, 'breakeven')
-        if (!open.has(state.engineId)) continue
-      }
-      if (exits.trail) {
-        const activate = exits.trail.activateR <= 0 || (trade.risk !== null && gain >= exits.trail.activateR * trade.risk)
-        if (activate) {
-          const distance = trailDistance(exits.trail.distance, trade.entry, state.bestClose, input)
-          if (distance !== null) {
-            const candidate = state.bestClose - dir * distance
-            if (trade.stop === null || (candidate - trade.stop) * dir > 0) {
-              state.trailing = true
-              moveStop(state, candidate, 'trail')
-            }
-          }
-        }
       }
     }
 
@@ -392,7 +403,8 @@ export function simulate(input: SimInput): SimResult {
       }
       const fill = order.events.find((e) => e.kind === 'fill')
       const engineId = order.order.tradeId
-      if (!fill || !engineId) {
+      const live = engineId ? engine.openTrades(symbol).find((x) => x.id === engineId) : undefined
+      if (!fill || !engineId || !live) {
         skipped.push({ entry, reason: 'the order did not fill' })
         continue
       }
@@ -420,9 +432,17 @@ export function simulate(input: SimInput): SimResult {
         slippage: slip * units,
         barsHeld: 0
       }
+      // The breakeven and the trail, on the trade the order opened: one R is the trade's own,
+      // measured from its open price, which is known only now. Set at the fill's quote, as the
+      // engine applies an order's own at its fill -- and a trail with no stop has one from here.
+      const management = exitManagement(exits, entry, mid, trade.risk, slip, input)
+      if (management.trailingStop || management.breakeven) {
+        engine.modifyTrade(engineId, management)
+        trade.stop = live.stopLoss
+      }
       trades.push(trade)
       const deadline = exits.maxBars ? deadlineOf(exits.maxBars, entry.signal.durationMs, t, ends, b, input.pathMs, input.grid ?? null) : null
-      open.set(engineId, { trade, engineId, bestClose: mid, breakeven: false, trailing: false, deadline })
+      open.set(engineId, { trade, engineId, live, deadline })
     }
   }
 
