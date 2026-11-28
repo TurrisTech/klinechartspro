@@ -216,6 +216,11 @@ export interface PluginFacilities {
   symbolVendor(symbol: SymbolInfo): string
   /** The server's per-request values cap. */
   maxValuesPerRequest: number
+  /** The most bars one `/getbars` request may ask for, as `/capabilities` states it (`limits`). */
+  readonly maxBarsPerRequest: number
+  /** The read clock: a bar replay's cursor, or null on a live wall (config.ts). Read when it is
+   * needed and never kept, because a replay moves it. */
+  readClock(): number | null
 }
 
 /** One label a plugin publishes (the server's `signal()` row). `id` is what a point's

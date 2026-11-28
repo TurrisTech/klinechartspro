@@ -1,4 +1,3 @@
-import { getReadClock } from '../config'
 import { closedBarPage } from '../plugins/bars'
 import { missingRanges, mergeRange, truncate } from '../plugins/store'
 import type { Page, Phase, PluginStream, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
@@ -186,6 +185,8 @@ export function barSourceKey(vendor: string, ticker: string, source: string): st
 
 interface BarSourceOptions {
   stream: PluginStream
+  /** The read clock (`PluginFacilities.readClock`): a replay's cursor, or null live. */
+  readClock: () => number | null
   vendor: string
   ticker: string
   source: string
@@ -229,7 +230,7 @@ export function barSource(o: BarSourceOptions): SourceSpec<SourceBar> {
     fetch: async (range: Range): Promise<Page<SourceBar>> => {
       // The window runs past the forming chart bar's end, which is in the future: nothing can
       // be read there yet, and the stream delivers it as it forms.
-      const clock = getReadClock()
+      const clock = o.readClock()
       if (range.from >= (clock ?? Date.now())) return { points: [], nextFrom: null }
       // Tiles first, in big pages; the API only for what they do not hold (the period still
       // forming), in pages under its cap -- and under a replay only the bars closed by its clock

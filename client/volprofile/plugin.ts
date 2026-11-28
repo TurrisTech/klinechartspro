@@ -88,6 +88,7 @@ export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = 
           ? [
               barSource({
                 stream: f.stream,
+                readClock: () => f.readClock(),
                 vendor: ctx.vendor,
                 ticker: ctx.ticker,
                 source,

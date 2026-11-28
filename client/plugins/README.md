@@ -11,6 +11,12 @@ the values by replacing the indicator's `extendData` — which the plugin's `cal
 with `peekStore` (`store.ts`) — and, since 2026-10-11, every pane's **settings** for the
 plugins that have any (`paneconfig.ts`).
 
+Three of the host's jobs are modules of their own: every pane's settings (`panesettings.ts`:
+the gear's panel, the indicator manager's fields, the wall document, panes changing places),
+which bindings read which store (`storetable.ts`: a store lives while some filed binding reads
+it), and what one re-apply hands the chart, coalesced to one per binding per animation frame
+(`apply.ts`). `host.ts` keeps the reconcile loop and coverage.
+
 The "super indicators" are plugins on the same host, not a second system: the MTF overlays
 (sources on other timeframes), the AREV lab, the divergence and the volume profile (settings
 per pane), and Levels and Zones (price-anchored overlays drawn by a binding's own `attach`).
@@ -63,8 +69,9 @@ nothing this binding reads rebinds it anyway.
 
 Then add it to `registry.ts`. `PluginFacilities` is the whole of what a plugin may depend on:
 the API (`api.get`), the stream, `hasFeature`, the unified `points` fetch, the period/symbol
-helpers and the server's values cap. Everything a plugin used to reach for to keep its
-settings -- the panel, `paneInfo`, `requestReconcile`, `requestPersist` -- is the host's now.
+helpers, the server's values and bars caps, and the read clock (a replay's cursor). Everything
+a plugin used to reach for to keep its settings -- the panel, `paneInfo`, `requestReconcile`,
+`requestPersist` -- is the host's now.
 
 A template's `calc` reads its store back: `peekStore<WindowStore<P, V>>(indicator.extendData.seriesKey)`
 (`seriesKeys[id]` for a multi-source binding). The host replaces `extendData` on every store
@@ -145,9 +152,10 @@ edit, a symbol change) starts from it.
 ## Two bindings on one key
 
 Sources with the same `key` share one store — that is the point (a 15m, a 3m and a 1h pane
-all overlaying 4h arev21 pay for one fetch, not three). But `storeFor(key, create)` runs
-`create` only when the key is **absent**, so the binding that arrives first decides the class
-and the second silently gets it. Two rules follow, and both are load-bearing:
+all overlaying 4h arev21 pay for one fetch, not three). But `storeFor(key, create)` (which the
+host reaches through `storetable.ts`'s `open`) runs `create` only when the key is **absent**,
+so the binding that arrives first decides the class and the second silently gets it. Two rules
+follow, and both are load-bearing:
 
 - **Name the same factory.** Not an equivalent closure — the same module-level function, so
   there is one place to look. `mtf/store.ts`'s `createMtfGraphStore` is the pattern.
