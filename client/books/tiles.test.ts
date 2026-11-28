@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import type { PluginFacilities } from '../plugins/types'
 import { nearSource, totalsSource } from './api'
 import { tilesUpTo } from '../tiles/manifest'
@@ -271,4 +272,107 @@ describe.skipIf(!built)('the tile/API join, against real tiles', () => {
       resetBookTileCaches()
     }
   })
+})
+
+// -- the decoded tiles a page holds -----------------------------------------------------------
+//
+// A tile is decoded once and its rows held, so a window read again -- panning back across a tile,
+// a replay re-reading the period it stands in -- is not decoded again. Until 2026-11-28 nothing
+// ever let one go (`resetBookTileCaches` is a test seam): every tile a page read stayed decoded
+// until reload, ~60k bucket rows for a month of 1h profile, for every month, instrument and kind
+// panned through. Now they are held under one budget, least recently used out first.
+
+describe('the decoded tiles held', () => {
+  test('a tile held counts what it carries, and the least recently used goes past the budget', async () => {
+    const { DecodedBookTiles } = await import('./tiles')
+    const tiles = new DecodedBookTiles(100)
+    tiles.set('a', [1, 2], 40)
+    tiles.set('b', [1, 2], 40)
+    // Read, `a` is the most recently used: `b` goes when `c` is held.
+    expect(tiles.get('a')).toEqual([1, 2])
+    tiles.set('c', [1], 40)
+    expect(tiles.get('b')).toBeUndefined()
+    expect(tiles.get('a')).toEqual([1, 2])
+    expect(tiles.get('c')).toEqual([1])
+    expect(tiles.values).toBe(80)
+    // Held again, a tile's count replaces the old one.
+    tiles.set('c', [1], 10)
+    expect(tiles.values).toBe(50)
+  })
+
+  test('a single tile over the budget is kept while it is the one in use', async () => {
+    const { DecodedBookTiles } = await import('./tiles')
+    const tiles = new DecodedBookTiles(100)
+    tiles.set('a', [], 30)
+    tiles.set('big', [], 250)
+    expect(tiles.get('a')).toBeUndefined()
+    expect(tiles.get('big')).toEqual([])
+    expect(tiles.values).toBe(250)
+  })
+
+  test('over many tiles read, the first is decoded again while one read all along is not', async () => {
+    // A month of 1h position profile in the builder's own encoding (wmarketdata
+    // bin/build_book_tiles.py `encode`), real in size -- 730 served snapshots of 80 buckets -- and
+    // synthetic in value: no book tile has been published to either environment's bucket. Every
+    // tile of the manifest below serves these same bytes under its own name.
+    const fixture = (suffix: string): ArrayBuffer => {
+      const b = readFileSync(`${import.meta.dir}/fixtures/position-1h-month.${suffix}.parquet`)
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer
+    }
+    const bytes = { s: fixture('s'), p: fixture('p') }
+    const H = 3_600_000
+    const START = Date.UTC(2026, 0, 1)
+    const MONTH = 730 * H
+    const TILES = 40
+    const series: BookTileManifest = manifest({
+      symbol: 'TSTBOOK',
+      coveredFrom: START,
+      coveredTo: START + TILES * MONTH,
+      tiles: Array.from({ length: TILES }, (_, i) => ({
+        name: `t${i}`,
+        from: START + i * MONTH,
+        to: START + (i + 1) * MONTH - 1,
+        rows: 730,
+        bytes: 999,
+        profileRows: 58_400,
+        profileBytes: 19_896
+      }))
+    })
+
+    const { pointsFromTiles, resetBookTileCaches } = await import('./tiles')
+    resetBookTileCaches()
+    const fetched = new Map<string, number>()
+    const realFetch = globalThis.fetch
+    const realWindow = globalThis.window
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const name = String(input).split('/').at(-1) as string
+      fetched.set(name, (fetched.get(name) ?? 0) + 1)
+      if (name === 'manifest.json') return new Response(JSON.stringify(series))
+      return new Response(name.endsWith('.p.parquet') ? bytes.p : bytes.s)
+    }) as typeof fetch
+    globalThis.window = { location: { origin: 'http://localhost' } } as unknown as Window &
+      typeof globalThis
+    const read = (i: number) =>
+      pointsFromTiles('profile', 'position', 'oanda', 'TSTBOOK', '1h', START + i * MONTH, START + (i + 1) * MONTH)
+
+    try {
+      expect((await read(0))?.items.length).toBe(730)
+      for (let i = 2; i < TILES; i++) {
+        await read(i)
+        // A pane standing in tile 1 -- a replay's period -- reads it again at every step.
+        await read(1)
+      }
+      expect(fetched.get('t1.p.parquet')).toBe(1)
+      // Tile 0 was let go long ago: read again, it is decoded again (from the Cache API's bytes
+      // in a browser; from the network here, where there is none).
+      await read(0)
+      expect(fetched.get('t0.p.parquet')).toBe(2)
+      expect(fetched.get('t1.p.parquet')).toBe(1)
+      expect(fetched.get('manifest.json')).toBe(1)
+    } finally {
+      globalThis.fetch = realFetch
+      globalThis.window = realWindow
+      resetBookTileCaches()
+    }
+  }, 30_000)
 })
