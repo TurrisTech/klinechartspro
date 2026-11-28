@@ -141,7 +141,7 @@ body {
   cursor: pointer;
 }
 
-/* client/chartlayers/settings.ts's settings panel. Wider than the library's default
+/* client/plugins/settings/settings.ts's settings panel. Wider than the library's default
    `.kc-popover` (16rem) — a layer's field list runs several groups deep — and scrolls
    internally rather than growing past the viewport.
 

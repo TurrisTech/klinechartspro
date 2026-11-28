@@ -1,28 +1,16 @@
 import type { Chart, Indicator } from 'klinecharts'
 import type { ChartProPane, IndicatorGroup, IndicatorParamsCheck, IndicatorSettingsModel } from '../../src'
-import type { openSettingsPanel as openPanel } from '../chartlayers/settings'
+import type { openSettingsPanel as openPanel } from './settings/settings'
 import { onViewMoved } from '../chartview'
 import { gridFor } from '../time/timeframes'
 import { applyBinding, createApplyCoalescer } from './apply'
-import { knownThrough } from './horizon'
+import { knownThrough } from '../time/horizon'
 import type { PaneDoc } from './paneconfig'
 import { createPaneSettings } from './panesettings'
 import { liveStores, mergeRange, missingRanges, WindowStore } from './store'
 import { StoreTable } from './storetable'
-import type {
-  BindContext,
-  BindingSpec,
-  BindingState,
-  BoundSource,
-  IndicatorPlugin,
-  PluginFacilities,
-  Range,
-  SettingsRequest,
-  SourceSpec,
-  SourceStore,
-  SourceWarm,
-  ValidateRequest
-} from './types'
+import type { BindContext, BindingSpec, BindingState, BoundSource, IndicatorPlugin, PluginFacilities, SettingsRequest, SourceSpec, SourceStore, SourceWarm, ValidateRequest } from './types'
+import type { Range } from '../paging'
 
 // The plugin host: one controller for every indicator plugin on every live pane.
 //
@@ -699,7 +687,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       // 06:15, a 1h source's only through 06:00, and a 1D source's only through the
       // session's date. Forgetting from the cursor leaves each coarser source's forming bar
       // filed as fetched-and-empty for good, which draws as a permanent hole in the series
-      // -- one per stop (`horizon.ts`, and notes/architecture/freshness-horizons.md).
+      // -- one per stop (`time/horizon.ts`, and notes/architecture/freshness-horizons.md).
       const seen = new Set<string>()
       for (const entry of wired.values()) {
         // On the schedule of the instrument THIS pane shows: its forming bar is where it is.

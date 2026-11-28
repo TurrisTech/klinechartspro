@@ -69,6 +69,12 @@ export interface TileHint {
   minNeighbours?: number
 }
 
+/** Whether a page's `tiles` (client/paging.ts `Page.tiles`, which the plugin framework passes on
+ * unread) is a tile hint: it names where the series' tiles are. */
+export function isTileHint(value: unknown): value is TileHint {
+  return typeof value === 'object' && value !== null && typeof (value as { path?: unknown }).path === 'string'
+}
+
 const FORMAT = 1
 /** How long a manifest read is trusted before it is asked for again. It changes when a
  * partition closes -- once a day for the finest series -- and revalidating is a 304. */

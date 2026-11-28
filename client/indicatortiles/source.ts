@@ -11,10 +11,10 @@
 // replay the tiles stop at the bar forming at its clock and the server, clamped to the cursor,
 // answers from there (`tiles/join.ts`); until 2026-10-11 a replay gave the tiles up outright.
 
-import type { Page, Range } from '../plugins/types'
 import { type ReadHorizon, readTiled, type Tiled } from '../tiles/join'
-import { manifestFor, readSeries, type TileHint } from './index'
+import { isTileHint, manifestFor, readSeries, type TileHint } from './index'
 import { POINT_BUILDERS } from './points'
+import type { Page, Range } from '../paging'
 
 type Fetch<P> = (range: Range, limit: number) => Promise<Page<P>>
 
@@ -41,7 +41,7 @@ export function tieredFetch<P extends { date: number }>(
       tiles: (window, first) => fromTiles<P>(key, window, first),
       api: async (window, n) => {
         const page = await server(window, n ?? limit)
-        if (page.tiles !== undefined) hints.set(key, page.tiles)
+        if (isTileHint(page.tiles)) hints.set(key, page.tiles)
         return page
       },
       horizon: horizon()

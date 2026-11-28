@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { CONTINUOUS_DAY, FX_GRID, gridOf } from '../time/timeframes'
+import { CONTINUOUS_DAY, FX_GRID, gridOf } from './timeframes'
 import { answerableTo, knownThrough } from './horizon'
 
 // New York is UTC-5 on 2024-03-06 (EST), which is what every wall-clock time below is in.

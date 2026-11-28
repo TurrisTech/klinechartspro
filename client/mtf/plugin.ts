@@ -2,17 +2,7 @@ import type { IndicatorGroup } from '../../src'
 import { getReadClock } from '../config'
 import { type PaneConfig, paneConfig } from '../plugins/paneconfig'
 import { LIVE_LOADERS, type LiveLoaders, type LiveWire, liveWire } from '../tsregistry/plugin'
-import type {
-  BindContext,
-  BindingSpec,
-  BindingState,
-  IndicatorPlugin,
-  PluginFacilities,
-  Range,
-  SourceNotify,
-  SourceSpec,
-  SourceStore
-} from '../plugins/types'
+import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import type { PluginPointListener } from '../stream'
 import { describeUnavailable, fetchMtfGraph, type MtfInterval, type MtfSignalRow, warmMtfGraph } from './api'
 import {
@@ -32,6 +22,7 @@ import { AREV21_MTF, type MtfOverlay } from './overlays'
 import { phaseLabel } from '../plugins/legend'
 import { registerMtfIndicators } from './templates'
 import { createMtfGraphStore, type MtfGraphStore, NODES_ARRAY } from './store'
+import type { Range } from '../paging'
 
 // A multi-timeframe signal overlay as a client plugin -- AREV21 MTF, and the arev21_outlier
 // rank overlays (overlays.ts says what differs between them). Each binding reads ONE source: the
@@ -237,7 +228,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
       id: GRAPH_SOURCE,
       key: graphSourceKey(overlay, symbol, shown, roots, maxStep),
       // No `resolution`: the rows are instants, not bars of one interval, and the store's windows
-      // are absolute -- so a replay step forgets from the cursor itself (plugins/horizon.ts),
+      // are absolute -- so a replay step forgets from the cursor itself (time/horizon.ts),
       // which is exactly when each row came to exist.
       createStore: createMtfGraphStore,
       window: (chartRange: Range): Range => windowAt(chartRange, facilities?.readClock() ?? null),

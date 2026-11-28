@@ -42,7 +42,7 @@ globalThis.fetch = (async (input: URL | RequestInfo) => {
 }) as typeof fetch
 
 const { setReadClock } = await import('../config')
-const { closedBarPage, fetchClosedBars } = await import('./bars')
+const { closedBarPage, fetchClosedBars } = await import('./closed')
 
 describe('fetchClosedBars', () => {
   test('live, everything fetchBars returns', async () => {

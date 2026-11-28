@@ -1,4 +1,4 @@
-import type { SettingsField } from '../chartlayers/settings'
+import type { SettingsField } from '../plugins/settings/settings'
 import { MTF_INTERVALS, isMtfInterval, type MtfInterval } from './api'
 
 // The one AREV21 multi-timeframe overlay's settings: which timeframes it draws, and how
@@ -10,7 +10,7 @@ import { MTF_INTERVALS, isMtfInterval, type MtfInterval } from './api'
 // settings dialog edits, and klinecharts prints it into the legend (`MA(5,10,30,60)`), so
 // eight timeframes x four fields would render as a legend nobody could read and a dialog of
 // thirty-two anonymous number boxes. The config lives here instead, is edited by the
-// panel client/chartlayers/settings.ts already draws (it has `switch`, `color`, `number`
+// panel client/plugins/settings/settings.ts already draws (it has `switch`, `color`, `number`
 // and `group` — the exact vocabulary this needs, and the same one the Levels layer uses for
 // its per-timeframe colours), and reaches `calc`/`draw` through the indicator's extendData.
 //

@@ -250,6 +250,7 @@ them, and a replay's own price watches stay in its state blob.
 | `editor.ts` | DOM. The rule editor. |
 | `manager.ts` | DOM. The window: Client / Server tabs, the list, the editor in place. |
 | `index.ts` | `startAlerts` (page) and `mountAlertManager` (wall: the button and the window). |
+| `wallcontext.ts` | `wallEditorContext`: where a new alert starts and what it may copy, read off a wall as the editor asks -- the active pane's instrument and timeframe, the wall's instruments, an MTF overlay's graph settings from the pane carrying it. |
 
 Debug hook: `window.__wdAlerts.list()` / `.running()` / `.flush()`.
 

@@ -1,6 +1,6 @@
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { createDockableWindow } from '../chrome/window'
-import { fetchClosedBars } from '../plugins/bars'
+import { fetchClosedBars } from '../bars/closed'
 import { gridFor } from '../time/timeframes'
 import { chartTheme } from '../ui/theme'
 import { formatShare, formatPnl, symbolKey } from './format'
@@ -162,7 +162,7 @@ export function mountTradingDock(session: TradingSession, options: DockOptions):
     amendments,
     // The Performance tab's periods are the active chart's candles; its clock is the replay's
     // under a replay. Past equity is marked on closed stored bars, which under a replay stop at
-    // the clock (plugins/bars.ts).
+    // the clock (bars/closed.ts).
     perf: {
       grid: () => gridFor(activeSymbol()),
       now: () => session.cursor ?? Date.now(),

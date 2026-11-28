@@ -94,7 +94,7 @@ mode only for its title.
   toggle.
 - `index.ts` — `mountPaperTrading(chartPro, container)`: a `PaperTradingSession` on the dock;
   returns `{ toggle, toggleTicket, isOpen, sync, teardown }`. The "Paper" button in the drawing
-  rail's footer (`client/index.ts` `mountChartExtras`) calls `toggle`, "Trade" below it
+  rail's footer (`client/wall/extras.ts` `mountChartExtras`) calls `toggle`, "Trade" below it
   `toggleTicket`; "Replay" is `client/replay`, whose controls carry their own Account and Trade
   toggles.
 

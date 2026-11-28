@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import type { KLineData } from 'klinecharts'
-import type { Page, Range } from '../plugins/types'
 import { decodeTile } from './decode'
 import type { Tiled, TiledRead } from './join'
 import { LAYOUT_VERSION, type TileManifest } from './manifest'
+import type { Page, Range } from '../paging'
 
 // The one join every tile family makes (`join.ts`): tiles for what they hold of a window, the
 // API for the rest. The chart's bars read the LAST n of a window, the plugins page the FIRST n

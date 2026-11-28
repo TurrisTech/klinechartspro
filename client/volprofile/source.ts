@@ -1,10 +1,11 @@
-import { closedBarPage } from '../plugins/bars'
+import { closedBarPage } from '../bars/closed'
 import { missingRanges, mergeRange, truncate } from '../plugins/store'
-import type { Page, Phase, PluginStream, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
+import type { Phase, PluginStream, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import { type DayGeometry, scheduleWireShift, sessionDated } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { lowerBound, type SourceBar } from './atoms'
 import { isInterval, nominalMs, parseInterval } from '../time/intervals'
+import type { Page, Range } from '../paging'
 
 // Which bars the profile is built from, and reading them.
 //
@@ -234,7 +235,7 @@ export function barSource(o: BarSourceOptions): SourceSpec<SourceBar> {
       if (range.from >= (clock ?? Date.now())) return { points: [], nextFrom: null }
       // Tiles first, in big pages; the API only for what they do not hold (the period still
       // forming), in pages under its cap -- and under a replay only the bars closed by its clock
-      // (plugins/bars.ts).
+      // (bars/closed.ts).
       const { bars, nextFrom } = await closedBarPage(vendorSymbol, o.source, range, { apiPage: API_PAGE_BARS, tilePage: TILE_PAGE_BARS })
       return { points: bars.map(toSourceBar), nextFrom }
     },

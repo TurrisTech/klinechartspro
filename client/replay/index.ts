@@ -424,7 +424,7 @@ export async function mountBarReplay(
       // under the OLD clock forgets the coverage that clock made incomplete. The old cursor
       // is what is handed over, not a margin off it: each source's answer was final only
       // through the bar IT had forming at that instant, which the host works out per source
-      // from its own interval (plugins/horizon.ts).
+      // from its own interval (time/horizon.ts).
       setReadClock(result.to)
       hub.cursor = result.to
       hub.setBase(session.base)

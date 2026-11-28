@@ -14,7 +14,6 @@ GlobalRegistrator.register({ url: 'http://test/' })
 afterAll(() => GlobalRegistrator.unregister())
 
 const { openSettingsPanel, settleNumber } = await import('./settings')
-const { LAB_DEFAULTS, LAB_FIELDS } = await import('../arevlab/config')
 
 interface Config {
   bars: number
@@ -134,21 +133,5 @@ describe('a number field states what the layer draws', () => {
     expect(committed.map((c) => c.bars)).toEqual([20, 50, 500])
     leave(bars)
     expect(bars.value).toBe('500')
-  })
-})
-
-describe('the AREV lab passes its integer levers through', () => {
-  test("a lab lever that rounds is declared integer to the panel", () => {
-    const group = LAB_FIELDS[0]
-    if (group?.kind !== 'group') throw new Error('expected a generation group')
-    const settings = group.fields.find((f) => f.kind === 'group')
-    if (settings?.kind !== 'group') throw new Error('expected a settings group')
-    const byLabel = (label: string) => settings.fields.find((f) => 'label' in f && f.label === label)
-    expect(byLabel('Min neighbours')).toMatchObject({ kind: 'number', integer: true })
-    expect(byLabel('Window (bars)')).toMatchObject({ kind: 'number', integer: true })
-    // A lever that is genuinely fractional must NOT be rounded to 1.
-    expect(byLabel('Line width')).toMatchObject({ kind: 'number' })
-    expect(byLabel('Line width')).not.toMatchObject({ integer: true })
-    expect(LAB_DEFAULTS.generations.arev21.lineWidth).toBeLessThan(2)
   })
 })

@@ -1,5 +1,5 @@
 import type { Encoding, LinePattern } from '../chartlayers/encoding'
-import type { SettingsField } from '../chartlayers/settings'
+import type { SettingsField } from '../plugins/settings/settings'
 
 // Display order for the two intervals levels are computed on (wdashboard-server
 // levels.py: LEVELS_INTERVAL_ALLOWLIST = ["1M", "1W"]), short-to-long rather than the
@@ -9,7 +9,7 @@ import type { SettingsField } from '../chartlayers/settings'
 // took over (wtradingindicators feeds/levels_declare.py pins 1W and 1M), so a 1D toggle
 // asked for something the server silently ignored. A saved pane setting that still carries
 // `intervals.1D` or `base.intervalColors.1D` loses it on load: the layer codec
-// (chartlayers/persist.ts) drops a path the defaults do not have.
+// (plugins/settings/persist.ts) drops a path the defaults do not have.
 export const LEVELS_INTERVAL_ORDER = ['1W', '1M']
 
 // Metric names a Levels emphasis encoding can be pointed at (client/levels/layer.ts's

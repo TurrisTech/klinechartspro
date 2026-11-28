@@ -1,7 +1,7 @@
-import type { TileHint } from '../indicatortiles/index'
 import { hasFeature } from '../capabilities'
 import { apiGet, apiUrl, OhlcvApiError, serverFetch } from '../config'
-import type { Page, PointsRequest, SignalCatalogueEntry, SignalSpec } from './types'
+import type { PointsRequest, SignalCatalogueEntry, SignalSpec } from './types'
+import type { Page } from '../paging'
 
 // The unified plugin wire (wdashboard_server/plugins/host.py):
 //
@@ -101,8 +101,10 @@ export function toPage<P extends { date: number }>(envelope: PointsEnvelope<P>, 
   const points = envelope.points
   const last = points[points.length - 1]
   const full = points.length >= limit
-  const hint = (envelope as { tiles?: TileHint }).tiles
-  if (hint !== undefined && typeof hint?.path === 'string') {
+  // A tiered series' tile hint is passed on as the server sent it: the framework does not read
+  // it, the tiered source does, and says whether it is one (indicatortiles `isTileHint`).
+  const hint = (envelope as { tiles?: unknown }).tiles
+  if (hint !== undefined && hint !== null) {
     return { points, nextFrom: full && last ? last.date + 1 : null, ...extra, tiles: hint }
   }
   // `nextFrom` is driven by `points` alone. An auxiliary array is a different kind of row,

@@ -1,5 +1,5 @@
-import { layerConfigCodec } from '../chartlayers/persist'
-import type { SettingsField } from '../chartlayers/settings'
+import { layerConfigCodec } from '../plugins/settings/persist'
+import type { SettingsField } from '../plugins/settings/settings'
 import type { Mode } from './source'
 
 // The volume profile's settings for one chart pane: what it profiles, how finely, and how it is
@@ -113,7 +113,7 @@ export const VP_FIELDS: SettingsField[] = [
 ]
 
 // The stored form and its validation are derived from the defaults and the fields
-// (chartlayers/persist.ts): each value checked against its field's own options and bounds.
+// (plugins/settings/persist.ts): each value checked against its field's own options and bounds.
 const CODEC = layerConfigCodec(VP_DEFAULTS, VP_FIELDS)
 
 /** Any value -> a complete, drawable config: each field validated and clamped, anything

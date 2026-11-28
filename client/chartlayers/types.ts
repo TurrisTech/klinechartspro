@@ -1,7 +1,7 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
 import type { SymbolInfo } from '../../src'
 import type { PriceAlert } from './alerts/hub'
-import type { SettingsField } from './settings'
+import type { SettingsField } from '../plugins/settings/settings'
 
 // One rectangle of the price/time plane. A pane fetches these, not "whatever is on screen":
 // the controller remembers which window each pane already holds and asks only for the parts
@@ -73,8 +73,33 @@ export interface ChartLayer<TDatum, TConfig> {
   debounceMs?: number
   /** Price alerts on the layer's data (`alerts/`): a click on a datum's line enables an alert
    * when price enters a zone around it, an enabled one carries a bell at the pane's right
-   * edge, and hovering shows the zone. Omit it and the layer's lines are read-only. */
+   * edge, and hovering shows the zone -- drawn by the decorator the controller is given
+   * (`priceAlertDecorator`). Omit it and the layer's lines are read-only. */
   alerts?: LayerAlerts<TDatum>
+}
+
+/** What the controller adds to every set of overlays a layer paints on a pane, beside the layer's
+ * own: the price alerts' clicks, hovers and bells (`alerts/view.ts` `priceAlertDecorator`) for a
+ * layer that offers them. Handed to `createLayerController` by whoever builds it
+ * (client/levels/indicator.ts), so this folder's drawing never imports what decorates it; a
+ * controller given none paints exactly what the layer builds. */
+export interface LayerDecorator<TConfig> {
+  /** `overlays` with the decoration added. Called on every paint, before the result is compared
+   * with what is drawn (paint.ts) -- so what it adds is left alone when nothing changed, exactly
+   * as the layer's own lines are -- and even when the layer built nothing. `edit` writes one of
+   * the pane's layer settings (`BindContext.editConfig`), when the binding was given one. */
+  decorate(
+    overlays: OverlayCreate[],
+    ctx: LayerContext,
+    config: TConfig,
+    edit?: (key: string, value: unknown) => void
+  ): OverlayCreate[]
+  /** The layer stopped drawing on `chart`: nothing of the decoration may stay on it. */
+  clear(chart: Chart): void
+  /** Calls `repaint` whenever what `decorate` would add changes while the layer's data does not
+   * (an alert made, edited, removed or fired); the controller then repaints every pane from what
+   * it holds. Returns the unsubscribe. */
+  subscribe(repaint: () => void): () => void
 }
 
 /** What a datum is to a price alert: the price it watches, and the words that name it. */

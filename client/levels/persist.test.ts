@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { DEFAULT_LEVELS2_CONFIG, LEVELS2_FIELDS } from '../levels2/config'
-import { DEFAULT_LEVELS_CONFIG, LEVELS_FIELDS } from '../levels/config'
-import { layerConfigCodec } from './persist'
+import { DEFAULT_LEVELS_CONFIG, LEVELS_FIELDS } from './config'
+import { layerConfigCodec } from '../plugins/settings/persist'
 
 // What a pane stores for a layer, and what is allowed back in. A stored document may come
 // from another build, or from the wall-wide preference the layers kept before they were
 // indicators, so nothing reaches the drawing code unchecked.
+//
+// The codec is the plugin framework's (plugins/settings/persist.ts); it is held here to the two
+// configs it was written for, Levels' and Zones'.
 
 const levels = layerConfigCodec(DEFAULT_LEVELS_CONFIG, LEVELS_FIELDS)
 const zones = layerConfigCodec(DEFAULT_LEVELS2_CONFIG, LEVELS2_FIELDS)

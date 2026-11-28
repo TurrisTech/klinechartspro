@@ -67,9 +67,12 @@ of the followed indicator rebinds this one, exactly as an edit of its own parame
 settings the binding uses, not the other indicator's whole state), or an edit that changes
 nothing this binding reads rebinds it anyway.
 
-Then add it to `registry.ts`. `PluginFacilities` is the whole of what a plugin may depend on:
-the API (`api.get`), the stream, `hasFeature`, the unified `points` fetch, the period/symbol
-helpers, the server's values and bars caps, and the read clock (a replay's cursor). Everything
+Then add it to `client/builtins.ts` (`builtinPlugins`), at the client's root: this folder is the
+framework alone and imports no plugin built on it. `PluginFacilities` is the whole of what a
+plugin may depend on: the API (`api.get`), the stream, `hasFeature`, the unified `points` fetch,
+the period/symbol helpers, the server's values and bars caps, and the read clock (a replay's
+cursor). The app builds them (`client/facilities.ts` `createFacilities`; a replay wall's stream is
+its `inertStream`, which never delivers). Everything
 a plugin used to reach for to keep its settings -- the panel, `paneInfo`, `requestReconcile`,
 `requestPersist` -- is the host's now.
 
@@ -101,7 +104,7 @@ length, `trianglePath`'s base). `draw.test.ts` holds each template's drawing to 
 drew before they were shared, on a recording context (`testcanvas.ts`).
 
 **Bars a plugin reads for itself** (TradeTalk's daily candles, the AREV lab's prior, the MTF
-grid, the volume profile's finer bars) go through `bars.ts` (`fetchClosedBars`,
+grid, the volume profile's finer bars) go through `client/bars/closed.ts` (`fetchClosedBars`,
 `closedBarPage`): closed bars only, so under a bar replay the window ends at the bar forming at
 the cursor.
 
@@ -111,7 +114,7 @@ a chart window. The bars (`history.ts` `fetchBars`), the books and a tiered indi
 (`indicatortiles/source.ts`) all call it. Under a bar replay it stops the tiles at the bar
 forming at the clock (`readHorizon`, the host's own horizon) and lets the server, which clamps
 to the cursor, answer the rest. Nothing on the server clamps a tile, so a source with tiles must
-read through it. **It asks the server nothing that cannot be answered** (`horizon.ts`
+read through it. **It asks the server nothing that cannot be answered** (`client/time/horizon.ts`
 `answerableTo`): past the bar forming at the clock nothing exists, and when the clock sits on
 that bar's open -- where a Step leaves every pane whose interval divides the Step's -- not even that bar,
 so the remainder is not sent at all. Tested on the store clock, not the wire: a forex day dated
@@ -140,6 +143,12 @@ it), asks the app to save, writes the document's fields (`PluginHost.paneDocs`, 
 `client/layout.ts` merges into each pane's entry without reading them) and moves every pane's
 settings with it when panes change places. A config whose plugin this server does not mount is
 carried through verbatim, so a save there does not cost a pane its settings.
+
+The fields themselves are declarative (`settings/settings.ts`: `SettingsField`, and the plain-DOM
+panel that draws them) and so is their stored form (`settings/persist.ts`: `layerConfigCodec`, a
+config's difference from its defaults, flat by path, validated against the fields on the way back
+in). The host, every plugin with settings and the chart layers use them. They were in
+`client/chartlayers/` until 2026-11-28, which made this framework import a feature built on it.
 
 A binding that draws a control of its own can write a setting too: `ctx.editConfig(key, value)`
 (a dotted key into its config) goes through the same write as the panel and the manager -- kept
@@ -188,7 +197,7 @@ Declare `resolution` on every source. A replay clamps every read to its cursor
 (`services/asof.py`): **a point exists once its bar has closed**, so an answer fetched at the
 cursor is missing the bar that source still had forming — and the host must not record that
 bar's window as covered. `resolution` is what lets it work out how far the answer was final
-(`horizon.ts` `knownThrough`), per source rather than per wall, and forget exactly that much
+(`client/time/horizon.ts` `knownThrough`), per source rather than per wall, and forget exactly that much
 when the cursor moves (`invalidateFrom`).
 
 Getting this wrong is invisible until you look for it. Forgetting from the **cursor** is
@@ -198,7 +207,7 @@ is not refetched stays filed as fetched-and-empty for the rest of the session, w
 a permanent blank column — one per stop, widest on the coarsest pane. The measurement, on a
 3m+15m+1h+4h+8h+1D wall jumping between armed arev21 signals: eight jumps left 5 holes on the
 1h pane, 3 on the 4h and 1 on the 8h, with 15m and 3m clean, because every stop landed on a
-15m boundary. Tests: `horizon.test.ts`, and the invalidation cases in `host.test.ts`.
+15m boundary. Tests: `client/time/horizon.test.ts`, and the invalidation cases in `host.test.ts`.
 
 A source dated on a **wire clock** (daily-and-coarser bars are `open + 7h`,
 `services/wiredate.py`) needs nothing extra — `knownThrough` answers on the same clock the
@@ -244,7 +253,7 @@ never used by any plugin and was removed on 2026-10-11, along with `client/krev/
 
 The catalogue is gated on the `plugins.signals` feature (empty on an older server). A server
 from before it sent `signal` as a boolean, which the client no longer reads: every deployed
-server publishes the label. Tests: `signals.test.ts`.
+server publishes the label. Tests: `client/tsregistry/signals.test.ts`.
 
 ## Built-ins
 
@@ -261,7 +270,9 @@ server publishes the label. Tests: `signals.test.ts`.
 | `chartlayers/plugin.ts` (`levels`) | `LEVELS:levels`, `LEVELS:levels2` (price pane, the "Levels" group: Levels and Zones) | none: the template draws nothing; each binding `attach`es a view (`chartlayers/controller.ts`) that fetches `/levels` / `/levels2` by price band and draws overlays while the indicator is shown | the toolbar's Levels and Zones buttons until 2026-10-03; settings per pane (`ly.<layer>`), starting from the toolbar era's wall-wide ones; the legend names the timeframes drawn or why nothing is; built by `client/levels/indicator.ts` and handed to `builtinPlugins`, because the replay invalidates the Levels views directly on a day boundary (`chartlayers/README.md`) |
 | `volprofile/plugin.ts` | `VP:volume` (price pane) | at most one: bars of a stored interval finer than the chart (`vp-bars\|vendor:ticker\|<interval>`, a custom `BarStore` -- ascending, with a change log so a live tick rebuilds one chart bar), tiles first, `/getbars` for the forming period, the stream for the forming bar | volume at price over the visible range or one profile per session; the source is chosen for the PROFILE, not the chart (`source.ts`: a source bar should span no more than a display row, so `source <= chart * 150 / rows^2`, or the finest intraday base for sessions), which makes the same span give the same profile on every timeframe; each source bar's volume is spread evenly over its range onto a fixed price grid per chart bar (`atoms.ts`), and whatever of a chart bar's volume its source bars do not account for (out of reach, past the 250k-bar budget, not arrived yet) is spread from the chart bar itself so no volume is lost -- the legend names the source and the date it runs from; replay-clamped in the source, because tiles are read from the bucket and nothing on the server clamps them; settings per pane, persisted as `PersistedPane.vp`; no server change |
 
-Tests: `bun test client` (`*.test.ts` here, with `testing.ts`'s fake chart).
+The list itself is `client/builtins.ts`, at the client's root. Tests: `bun test client` (`*.test.ts`
+here, with `testing.ts`'s fake chart); the built-ins' settings through a real host are
+`client/builtins.test.ts`.
 
 ## The registry plugin (2026-09-11, `feat/ts-registry`)
 
