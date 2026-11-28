@@ -4,7 +4,7 @@ import type { WorkspaceStore } from './store'
 // Save and Revert, beside the workspace switcher. A wall is not written as it changes: every
 // change is a draft in the store (see store.ts's header), and this is where the user commits
 // it or throws it away. Plain imperative DOM, and the confirm is a popover built the way the
-// switcher's panel is (menu.ts) -- see client/plugins/settings/settings.ts's header for why client/
+// switcher's panel is (menu.ts) -- see client/chartlayers/settings.ts's header for why client/
 // builds its popovers by hand.
 //
 // Save has three looks, because a draft can differ from what is saved in two ways:

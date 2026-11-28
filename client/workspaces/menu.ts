@@ -3,7 +3,7 @@ import { MAX_WORKSPACES, type Workspace, type WorkspaceStore } from './store'
 
 // The toolbar switcher: which workspace this device is on, and everything you can do to the
 // set (switch, rename, duplicate, delete, add). Plain imperative DOM, positioned and
-// dismissed exactly like client/plugins/settings/settings.ts's panel -- `position: fixed` off the
+// dismissed exactly like client/chartlayers/settings.ts's panel -- `position: fixed` off the
 // anchor's viewport rect so it escapes `.klinecharts-pro`'s `overflow: hidden`, appended
 // inside `.klinecharts-pro` so it still resolves the chart's theme tokens. See that file's
 // header for why client/ builds its popovers by hand instead of reaching for the library's
