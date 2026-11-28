@@ -1,5 +1,6 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
 import { formatInstant } from '../../trading/format'
+import { instrumentZone } from '../../trading/instrument'
 import { flash } from '../../watch/menu'
 import { getByPath } from '../settings'
 import { DEFAULT_WATCH_COLORS } from '../../watch/overlays'
@@ -101,10 +102,10 @@ function nextClick(watch: Watch | null): string {
 
 function statusOf(watch: Watch): string {
   if (!watch.enabled || watch.status === 'disabled') return 'Switched off'
-  if (watch.status === 'fired') return `Fired ${formatInstant(watch.lastFiredAt)}${watch.repeat === 'once' ? ' · once, so done' : ''}`
+  if (watch.status === 'fired') return `Fired ${formatInstant(watch.lastFiredAt, instrumentZone(watch.target))}${watch.repeat === 'once' ? ' · once, so done' : ''}`
   if (watch.repeat === 'once') return 'Armed once: waiting for price to reach the zone'
   if (watch.fireCount > 0) {
-    return `Alerted ${watch.fireCount} ${watch.fireCount === 1 ? 'time' : 'times'}, last ${formatInstant(watch.lastFiredAt)}`
+    return `Alerted ${watch.fireCount} ${watch.fireCount === 1 ? 'time' : 'times'}, last ${formatInstant(watch.lastFiredAt, instrumentZone(watch.target))}`
   }
   return 'Waiting for price to reach the zone'
 }

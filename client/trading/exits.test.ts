@@ -27,8 +27,8 @@ const {
 } = await import('./exits')
 type ExitBasis = import('./exits').ExitBasis
 
-const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
-const SPX: InstrumentInfo = { precision: 1, pipSize: null, assetClass: 'cfd', marginRate: 0.05, unitsPrecision: 1 }
+const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0, timezone: 'America/New_York' }
+const SPX: InstrumentInfo = { precision: 1, pipSize: null, assetClass: 'cfd', marginRate: 0.05, unitsPrecision: 1, timezone: 'America/New_York' }
 
 /** A long at 1.10020 with a 20-pip stop, on a chart whose ATR is 15 pips. */
 const LONG: ExitBasis = { side: 'buy', entry: 1.1002, risk: 0.002, atr: { value: 0.0015, period: 14, interval: '1H' }, info: EURUSD }

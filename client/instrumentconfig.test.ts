@@ -112,5 +112,18 @@ describe('the trading panel reuses the pane fetch', () => {
     // Derived from the shared config, not a placeholder: EURUSD's pip is 1e-4.
     expect(info.pipSize).toBeCloseTo(0.0001, 10)
     expect(info.marginRate).toBe(0.02)
+    // And its clock, the one its chart pane shows: the trading UI prints its times on it.
+    expect(info.timezone).toBe('America/New_York')
+  })
+
+  test('an instrument whose config is not in hand has no zone yet, and says when it arrives', async () => {
+    const { instrumentInfo, instrumentZone } = await import('./trading/instrument')
+    let landed = 0
+    expect(instrumentZone('oanda:GBPUSD@1h', () => landed++)).toBeNull()
+    await instrumentConfig('oanda:GBPUSD')
+    await Promise.resolve()
+    expect(landed).toBe(1)
+    expect(instrumentZone('oanda:GBPUSD')).toBe('America/New_York')
+    expect(instrumentInfo('oanda:GBPUSD').timezone).toBe('America/New_York')
   })
 })

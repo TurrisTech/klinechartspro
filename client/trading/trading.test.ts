@@ -343,7 +343,11 @@ describe('closed trades on the chart', () => {
 describe('times to the second', () => {
   test('the trading UI and the replay clock both print seconds, and midnight is 00, not 24', () => {
     const at = Date.UTC(2026, 10, 13, 19, 5, 9) // 14:05:09 New York
-    expect(formatInstant(at)).toBe('Nov 13, 14:05:09')
+    expect(formatInstant(at, 'America/New_York')).toBe('Nov 13, 14:05:09')
+    // The instrument's own clock: a Coinbase pair's is UTC. With none known, UTC, and it says so.
+    expect(formatInstant(at, 'UTC')).toBe('Nov 13, 19:05:09')
+    expect(formatInstant(at, null)).toBe('Nov 13, 19:05:09 UTC')
+    expect(formatInstant(Date.UTC(2026, 10, 14, 5, 0, 7), 'America/New_York')).toBe('Nov 14, 00:00:07')
     expect(formatClock(at, 'America/New_York')).toBe('Fri, Nov 13, 14:05:09')
     expect(formatClock(Date.UTC(2026, 10, 14, 0, 0, 7), 'UTC')).toBe('Sat, Nov 14, 00:00:07')
   })

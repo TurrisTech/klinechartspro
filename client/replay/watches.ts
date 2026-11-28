@@ -1,5 +1,6 @@
 import type { NotificationSink } from '../notifications'
 import { formatInstant } from '../trading/format'
+import { instrumentZone } from '../trading/instrument'
 import { type LocalWatchSource, type LocalWatchState, type WatchFiring, LocalWatchRegistry } from '../watch/local'
 import type { Observation, Sample } from '../alerts/conditions'
 import { type WatchApi, WatchStore } from '../watch/store'
@@ -324,7 +325,7 @@ export class ReplayWatches implements ReplayObserver {
       // RAISED, on the wall clock the whole list sorts and ages by — dating this row 2024
       // would file it below everything else forever. The event instant rides in `data`, as
       // the server's does.
-      body: `${firing.body} · replay ${formatInstant(firing.at)}`,
+      body: `${firing.body} · replay ${formatInstant(firing.at, instrumentZone(firing.watch.target))}`,
       level: 'alert',
       // `replay`, NOT `watch`. The centre is a page-level singleton, so this row outlives
       // the wall that raised it and is still in the bell after Exit -- which is right, it is

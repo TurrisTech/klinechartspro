@@ -21,8 +21,8 @@ import {
 } from './metrics'
 
 const ACCOUNT: SimAccount = { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 }
-const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
-const USDJPY: InstrumentInfo = { precision: 3, pipSize: 0.01, assetClass: 'forex', marginRate: 0.04, unitsPrecision: 0 }
+const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0, timezone: 'America/New_York' }
+const USDJPY: InstrumentInfo = { precision: 3, pipSize: 0.01, assetClass: 'forex', marginRate: 0.04, unitsPrecision: 0, timezone: 'America/New_York' }
 
 function trade(over: Partial<SimTrade> = {}): SimTrade {
   return {
