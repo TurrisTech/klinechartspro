@@ -68,7 +68,15 @@ export function createMtf01Plugin(): IndicatorPlugin {
           }
         ],
         label: (state: BindingState) => phaseLabel(base, [state.sources[0]?.store]) ?? base,
-        extendData: () => ({ chartInterval: ctx.interval, schedule }),
+        // The P&L label's unit, from the instrument's configuration as the pane's SymbolInfo
+        // carries it (client/symbols.ts): its pip where it is priced in pips, else its display
+        // precision. Never a constant -- a JPY cross's pip is 0.01, a crypto pair has none.
+        extendData: () => ({
+          chartInterval: ctx.interval,
+          schedule,
+          pip: ctx.symbol.pipSize ?? null,
+          pricePrecision: ctx.symbol.pricePrecision ?? null
+        }),
         yAxisGap: AXIS_GAP
       }
     }
