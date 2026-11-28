@@ -283,6 +283,22 @@ describe('saving, reverting, deleting, new', () => {
     expect(store.get(id)?.name).toBe('Mine')
   })
 
+  test('after Save the editor still holds the draft: its next edit is unsaved work, and what a run reads', async () => {
+    // The editor keeps the object it was given. Until 2026-11-28 Save put a fresh copy in its
+    // place, so every edit after a visit's first Save went to an object nothing read: Save stayed
+    // disabled and runs ignored it.
+    const { session } = await setup()
+    const held = session.current
+    session.rename('Mine')
+    session.touch()
+    session.save()
+    expect(session.current).toBe(held)
+    held.rules[0].enabled = !held.rules[0].enabled
+    session.touch()
+    expect(session.unsaved(session.currentId)).toBe(true)
+    expect(session.current.rules[0].enabled).toBe(held.rules[0].enabled)
+  })
+
   test('a store that cannot save throws, and the draft stays unsaved', async () => {
     const { session, store } = await setup()
     store.loadError = 'cannot read'

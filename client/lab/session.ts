@@ -196,10 +196,12 @@ export class LabSession {
   }
 
   /** Keep the open draft (store.ts `save`; it throws with the reason it cannot). The draft is then
-   * what was saved. */
+   * what was saved -- written INTO the draft, not swapped for a copy: the editor holds the draft
+   * object, and a copy left it editing something nothing read (every edit after a visit's first
+   * Save was lost, until 2026-11-28). */
   save(): void {
     const saved = this.deps.store.save(this.current, this.deps.clock())
-    this.drafts.set(saved.id, structuredClone(saved))
+    Object.assign(this.current, structuredClone(saved))
   }
 
   /** Put the saved version back in the draft. False for a draft never saved. */
