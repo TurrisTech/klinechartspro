@@ -2,7 +2,7 @@ import type { Chart, OverlayCreate, OverlayEvent } from 'klinecharts'
 import type { ChartProPane } from '../../src'
 import { gridFor } from '../time/timeframes'
 import type { SimSide, SimSnapshot, SimTrade } from './api'
-import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText, symbolKey } from './format'
+import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText } from './format'
 import type { InstrumentInfo } from './instrument'
 import { closeReasonWords, distanceWords } from './exits'
 import { balancesBefore, closedMove, closedShareOfBalance } from './ledger'
@@ -38,6 +38,7 @@ import { OnChartLayer } from './onchart'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { periodToResolution } from '../time/intervals'
+import { symbolKey } from '../symbols'
 
 // Everything a trading session puts on the candle panes, one instance per mounted wall:
 //

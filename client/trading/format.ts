@@ -1,13 +1,6 @@
-import type { SymbolInfo } from '../../src'
-import { symbolVendor } from '../symbols'
 import type { SimTrade } from './api'
 
 // Small pure helpers shared by the panel, the ticket and the overlays.
-
-/** The engine's instrument key for a pane's symbol: `vendor:TICKER`. */
-export function symbolKey(symbol: SymbolInfo): string {
-  return `${symbolVendor(symbol)}:${symbol.ticker}`
-}
 
 export function formatPrice(price: number | null | undefined, precision: number): string {
   if (price === null || price === undefined || !Number.isFinite(price)) return '—'

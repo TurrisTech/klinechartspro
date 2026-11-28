@@ -1,6 +1,7 @@
 import { closedBarPage } from '../bars/closed'
 import type { SourceSpec } from '../plugins/types'
 import type { Page, Range } from '../paging'
+import { instrumentKey } from '../symbols'
 
 // The one thing TradeTalk reads that the chart does not already hold: DAILY bars.
 //
@@ -32,7 +33,7 @@ const DAY_MS = 86_400_000
 const MARGIN_MS = 7 * DAY_MS
 
 function dailySourceKey(vendor: string, ticker: string): string {
-  return `tradetalk-daily|${vendor}:${ticker}|${DAILY_RESOLUTION}`
+  return `tradetalk-daily|${instrumentKey(vendor, ticker)}|${DAILY_RESOLUTION}`
 }
 
 /** The window the map needs: back to the start of the calendar year before the chart's own
@@ -45,7 +46,7 @@ export function dailyWindow(range: Range): Range {
 }
 
 export function dailySource(vendor: string, ticker: string): SourceSpec<DailyPoint> {
-  const vendorSymbol = `${vendor}:${ticker}`
+  const vendorSymbol = instrumentKey(vendor, ticker)
   return {
     id: 'daily',
     key: dailySourceKey(vendor, ticker),

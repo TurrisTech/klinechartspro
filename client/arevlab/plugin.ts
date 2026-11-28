@@ -20,6 +20,7 @@ import { AREV22_HORIZON, type LabBar } from './labels'
 import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, registerLabIndicator } from './templates'
 import { phaseLabel } from '../plugins/legend'
 import type { Range } from '../paging'
+import { instrumentKey } from '../symbols'
 
 // The AREV lab as a client plugin: one sub-pane reading the prediction line of any AREV
 // generation, several at once, with each generation's arrows placed by the published rule or
@@ -87,11 +88,11 @@ export function windowTruncatedDays(settings: LabGeneration, barMs: number): num
 }
 
 export function barsSourceKey(vendor: string, ticker: string, interval: string): string {
-  return `arevlab-bars|${vendor}:${ticker}|${interval}`
+  return `arevlab-bars|${instrumentKey(vendor, ticker)}|${interval}`
 }
 
 function barsSource(ctx: BindContext, leadMs: number): SourceSpec<LabBar> {
-  const vendorSymbol = `${ctx.vendor}:${ctx.ticker}`
+  const vendorSymbol = instrumentKey(ctx.vendor, ctx.ticker)
   return {
     id: BARS_SOURCE_ID,
     key: barsSourceKey(ctx.vendor, ctx.ticker, ctx.interval),

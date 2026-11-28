@@ -38,6 +38,7 @@ import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings
 import { type SimResult, simulate } from './trades'
 import { defaultBase, nominalMs, STORED_LADDER, resolutionDurationMs } from '../time/intervals'
 import { operandKey } from '../alerts/operands'
+import { splitInstrumentKey } from '../symbols'
 
 export class RunError extends Error {
   constructor(
@@ -398,7 +399,7 @@ export async function runStrategy(strategy: Strategy, data: LabData, options: Ru
   stage('graphs')
 
   // -- path: outcomes and trades --------------------------------------------------------------
-  const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval), advertisedBaseIntervals(symbol.split(':', 2)[0]))
+  const pathInterval = strategy.pathInterval ?? autoPathInterval(entries.map((e) => e.signal.interval), advertisedBaseIntervals(splitInstrumentKey(symbol).vendor))
   const outcomes = new Map<string, EntryOutcome>()
   let sim: SimResult | null = null
   const perRule = options.perRule ?? options.simulate !== false

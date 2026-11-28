@@ -3,12 +3,11 @@ import { capabilities, hasFeature } from '../capabilities'
 import { OhlcvApiError, setReadClock } from '../config'
 import type { NotificationSink } from '../notifications'
 import type { PluginHost } from '../plugins/host'
-import { fetchSymbolInfo, symbolVendor } from '../symbols'
+import { fetchSymbolInfo, symbolVendor, symbolKey, splitInstrumentKey, tickerOf } from '../symbols'
 import { type SimQuote, simApi } from '../trading/api'
 import { mountTradingDock, type TradingDock } from '../trading/dock'
 import { milestoneNotice } from '../trading/exits'
 import { instrumentInfo } from '../trading/instrument'
-import { symbolKey } from '../trading/format'
 import type { ServerCatalogue } from '../alerts/catalogue'
 import type { AlertSearch } from '../alerts/search'
 import type { Alert } from '../alerts/types'
@@ -261,7 +260,7 @@ async function listSessions(): Promise<ListedSession[]> {
   const zoneOf = (symbol: string): Promise<string> => {
     let zone = zones.get(symbol)
     if (!zone) {
-      const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+      const { vendor, ticker } = splitInstrumentKey(symbol)
       zone = fetchSymbolInfo(ticker, vendor)
         .then((info) => scheduleOf(info)?.timezone ?? 'UTC')
         .catch(() => 'UTC')
@@ -284,7 +283,7 @@ export async function resumeReplay(chartPro: KLineChartPro, session: ReplaySessi
   if (!state) return
   const shown = chartPro.getPaneSnapshots()
   if (!shown.some((p) => symbolKey(p.symbol) === state.symbol)) {
-    const ticker = state.symbol.split(':').pop() ?? state.symbol
+    const ticker = tickerOf(state.symbol)
     const info = await fetchSymbolInfo(ticker, state.vendor)
     const active = chartPro.getPane(chartPro.getActivePaneId()) ?? chartPro.getPanes()[0]
     active?.setSymbol(info)
@@ -301,9 +300,9 @@ async function replayScheduleFor(chartPro: KLineChartPro, symbol: string) {
   const onWall = chartPro
     .getPanes()
     .map((p) => p.getSymbol())
-    .find((s) => `${symbolVendor(s)}:${s.ticker}` === symbol)
+    .find((s) => symbolKey(s) === symbol)
   if (onWall && scheduleOf(onWall)) return scheduleOf(onWall)
-  const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+  const { vendor, ticker } = splitInstrumentKey(symbol)
   try {
     return scheduleOf(await fetchSymbolInfo(ticker, vendor))
   } catch (err) {
@@ -339,7 +338,7 @@ export async function mountBarReplay(
   const schedule = await replayScheduleFor(chartPro, stored.symbol)
   if (!schedule) {
     console.error(`${REPLAY_LOG} no market hours for ${stored.symbol}; leaving replay`)
-    return abandonReplay(`no market hours for ${stored.symbol.split(':').pop() ?? stored.symbol}`, ctx)
+    return abandonReplay(`no market hours for ${tickerOf(stored.symbol)}`, ctx)
   }
   const grid = gridOf(schedule)
   const probed = followProbe?.symbol === stored.symbol && followProbe.at === stored.cursor ? followProbe.held : null
@@ -527,7 +526,7 @@ export async function mountBarReplay(
         ctx.notify.notify({
           title: result.alert.name,
           // The alert's own instrument: any on the Alerts list, not only the one replayed.
-          body: [result.alert.symbol.split(':')[1] ?? result.alert.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective, instrumentInfo(result.alert.symbol).timezone)}`].filter(Boolean).join(' · '),
+          body: [tickerOf(result.alert.symbol), result.alert.readings, `replay ${formatInstant(result.alert.effective, instrumentInfo(result.alert.symbol).timezone)}`].filter(Boolean).join(' · '),
           level: 'alert',
           source: 'replay',
           data: { alertId: result.alert.alertId, eventAt: result.alert.effective, replay: true }

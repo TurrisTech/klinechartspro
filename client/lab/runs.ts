@@ -4,6 +4,7 @@ import { type Figures, figuresOf } from './figures'
 import type { Strategy } from './model'
 import type { LabRun } from './runner'
 import { button, el } from '../ui/dom'
+import { tickerOf } from '../symbols'
 
 // THE RUNS OF THIS SESSION, and the BASELINE: every run the page makes is kept here -- the copy
 // of the strategy it ran, where and when, and its figures (figures.ts) -- with what changed since
@@ -115,7 +116,7 @@ export function createRunsPanel(handlers: { onPin(record: RunRecord | null): voi
         const isBaseline = baseline?.id === r.id
         const label = el('div', 'wd-lab-run-label')
         const headline = el('div', '')
-        headline.textContent = `${n} · ${time(r.ranAt)} · ${r.symbol.split(':')[1] ?? r.symbol} ${day(r.from)}–${day(r.to)}`
+        headline.textContent = `${n} · ${time(r.ranAt)} · ${tickerOf(r.symbol)} ${day(r.from)}–${day(r.to)}`
         const what = el('div', 'wd-lab-muted wd-lab-run-changes')
         what.textContent = r.changes === null ? 'first run' : describeChanges(r.changes)
         what.title = r.changes?.join('\n') ?? ''

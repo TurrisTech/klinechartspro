@@ -23,7 +23,7 @@ import { fetchBars } from '../history'
 import type { ReplayBar } from '../bars/cache'
 import { TiledBarSource } from '../bars/tiled'
 import type { CandleGrid } from '../time/timeframes'
-import { fetchSymbolInfo } from '../symbols'
+import { fetchSymbolInfo, splitInstrumentKey } from '../symbols'
 import type { SignalPoint } from './events'
 import { nominalMs } from '../time/intervals'
 
@@ -114,8 +114,8 @@ export class HttpLabData implements LabData {
   pip(symbol: string): Promise<number> {
     let pip = this.pips.get(symbol)
     if (!pip) {
-      const at = symbol.indexOf(':')
-      pip = fetchSymbolInfo(symbol.slice(at + 1), symbol.slice(0, at))
+      const { vendor, ticker } = splitInstrumentKey(symbol)
+      pip = fetchSymbolInfo(ticker, vendor)
         .then((info) => info.pipSize ?? 10 ** -(info.pricePrecision ?? 2))
         .catch(() => 0.0001)
       this.pips.set(symbol, pip)

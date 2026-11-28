@@ -3,6 +3,7 @@ import { formatDuration } from '../trading/format'
 import { Engine } from '../sim/engine'
 import { type ReplayState, restore } from './persist'
 import { type ReplayResults, replayResults } from './results'
+import { tickerOf } from '../symbols'
 
 // PURE. The replay sessions this owner has, as the start dialog's Sessions list shows them: which
 // instrument each walks, where it started and how far it got, when it was last played, and its
@@ -68,7 +69,7 @@ function summarize(session: SimSnapshot): ReplaySessionSummary {
   return {
     id: session.id,
     symbol,
-    ticker: symbol.split(':').pop() ?? symbol,
+    ticker: tickerOf(symbol),
     createdAt: session.createdAt,
     savedAt: state?.savedAt ?? null,
     state,

@@ -9,6 +9,7 @@ import { describeRule, type Labeller } from './rules'
 import type { ClientAlertStore } from './store'
 import type { Alert, AlertKind, AlertSource } from './types'
 import { formatInstant } from '../time/format'
+import { tickerOf } from '../symbols'
 
 // GLUE (DOM). THE ALERT MANAGER: one window listing every alert, by kind.
 //
@@ -195,7 +196,7 @@ export function createAlertManager(options: AlertManagerOptions): AlertManager {
     status.textContent = alert.status
     title.append(nameEl, status)
     const rule = el('div', 'wd-alert-rule-text')
-    rule.textContent = `${alert.symbol.split(':')[1] ?? alert.symbol} · ${describeRule(alert.rule, label)}`
+    rule.textContent = `${tickerOf(alert.symbol)} · ${describeRule(alert.rule, label)}`
     rule.title = rule.textContent
     const meta = el('div', 'wd-alert-meta')
     const fired = alert.fireCount > 0 ? `fired ${alert.fireCount}× · last ${formatInstant(alert.lastFiredAt, instrumentZone(alert.symbol, () => render()))}` : 'not fired yet'

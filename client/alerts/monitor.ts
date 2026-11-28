@@ -36,6 +36,7 @@ import { freshRun, type Instant, instants, type RunState, spend, stepInstant, ty
 import type { Alert, Operand } from './types'
 import { resolutionDurationMs } from '../time/intervals'
 import { operandKey, readsCatalogue } from './operands'
+import { splitInstrumentKey, tickerOf } from '../symbols'
 
 /** The stream, as much of it as the monitor uses -- the page's `stream` is one. */
 interface BarStream {
@@ -109,11 +110,11 @@ class Feed {
   }
 
   get vendor(): string {
-    return this.symbol.slice(0, this.symbol.indexOf(':'))
+    return splitInstrumentKey(this.symbol).vendor
   }
 
   get ticker(): string {
-    return this.symbol.slice(this.symbol.indexOf(':') + 1)
+    return splitInstrumentKey(this.symbol).ticker
   }
 
   watch(listener: () => void, depth: number): void {
@@ -426,7 +427,7 @@ class Runner {
     const alert = fired ?? this.alert
     this.owner.notify.notify({
       title: alert.name,
-      body: [alert.symbol.split(':')[1] ?? alert.symbol, readings(this.compiled, instant, this.owner.labelCatalogue), alert.note]
+      body: [tickerOf(alert.symbol), readings(this.compiled, instant, this.owner.labelCatalogue), alert.note]
         .filter(Boolean)
         .join(' · '),
       level: 'alert',

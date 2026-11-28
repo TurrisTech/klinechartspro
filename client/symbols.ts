@@ -40,9 +40,10 @@ function assetClassOf(config: InstrumentConfig | null | undefined): string {
 }
 
 function toSymbolInfo(result: SearchResult): SymbolInfo {
-  const [vendor, symbol] = result.description.includes(':')
-    ? result.description.split(':', 2)
-    : ['oanda', result.symbol]
+  // A bare description names the ticker in `symbol` instead: the vendor is the default one.
+  const { vendor, ticker: symbol } = result.description.includes(':')
+    ? splitInstrumentKey(result.description)
+    : { vendor: DEFAULT_VENDOR, ticker: result.symbol }
   const config = result.config
   return {
     ticker: symbol,
@@ -72,8 +73,46 @@ function toSymbolInfo(result: SearchResult): SymbolInfo {
   }
 }
 
+// -- the instrument key ------------------------------------------------------------------------
+//
+// `vendor:TICKER` ('oanda:EURUSD', 'coinbase:BTCUSD', 'schwab:$SPX') is how an instrument is named
+// everywhere a string has to carry it: the server's `symbol=` parameters, the paper engine's and a
+// replay's instrument, an alert's target, the Lab's strategies. These are its one spelling and its
+// one parse, so a reader and a writer cannot disagree about it.
+
+/** The vendor a bare ticker means. Older deep links and stored layouts named only the ticker, from
+ * before this client served anything but OANDA (and a stored pane still leaves its vendor out when
+ * it is this one, layout.ts), so a key or a SymbolInfo that names no vendor is read as OANDA rather
+ * than refused. */
+export const DEFAULT_VENDOR = 'oanda'
+
+/** The `vendor:TICKER` key, spelled exactly as given: no case is changed. */
+export function instrumentKey(vendor: string, ticker: string): string {
+  return `${vendor}:${ticker}`
+}
+
+/**
+ * A key's two halves, split at its first ':'. A bare ticker (no ':') is DEFAULT_VENDOR's; a key
+ * that has one is taken as written, so ':EURUSD' has an empty vendor and 'oanda:' an empty ticker
+ * -- the callers that refuse those check for them, rather than this guessing.
+ */
+export function splitInstrumentKey(key: string): { vendor: string; ticker: string } {
+  const at = key.indexOf(':')
+  return at < 0 ? { vendor: DEFAULT_VENDOR, ticker: key } : { vendor: key.slice(0, at), ticker: key.slice(at + 1) }
+}
+
+/** A key's ticker, for a label: the whole string when it names no vendor. */
+export function tickerOf(key: string): string {
+  return splitInstrumentKey(key).ticker
+}
+
 export function symbolVendor(symbol: SymbolInfo): string {
-  return symbol.exchange ?? 'oanda'
+  return symbol.exchange ?? DEFAULT_VENDOR
+}
+
+/** The instrument key of a pane's symbol. */
+export function symbolKey(symbol: SymbolInfo): string {
+  return instrumentKey(symbolVendor(symbol), symbol.ticker)
 }
 
 // GET /search requires the `query` param even when empty (empty string = list everything),
@@ -94,14 +133,15 @@ export async function fetchSymbols(search = ''): Promise<SymbolInfo[]> {
 
 // Resolve one instrument without running a search first — what the initial symbol needs,
 // since it is named in configuration rather than picked from search results.
-export async function fetchSymbolInfo(ticker: string, vendor = 'oanda'): Promise<SymbolInfo> {
+export async function fetchSymbolInfo(ticker: string, vendor = DEFAULT_VENDOR): Promise<SymbolInfo> {
   // Shared with the trading panel's own reader (client/instrumentconfig.ts): one request per
   // instrument per page, not one per caller per hydration. It never rejects -- a failure
   // reads as `null` here, exactly as the try/catch this replaced did.
-  const config = await instrumentConfig(`${vendor}:${ticker}`)
+  const key = instrumentKey(vendor, ticker)
+  const config = await instrumentConfig(key)
   return toSymbolInfo({
     symbol: ticker,
-    description: `${vendor}:${ticker}`,
+    description: key,
     // `/instrument` answers with the configuration alone, not the coarse asset class that
     // `/search` results carry, so derive it the same way the server does rather than
     // assuming forex — this client is pointed at metals and CFDs too.

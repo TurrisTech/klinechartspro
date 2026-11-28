@@ -17,6 +17,7 @@ import {
 import type { PriceAlerts } from './hub'
 import { describeZone, type Zone, zoneAround, zonePips, zoneUnit } from './zone'
 import { formatInstant } from '../../time/format'
+import { instrumentKey } from '../../symbols'
 
 // Price alerts ON A LAYER'S PANE: what a click, a hover and an enabled line look like, for any
 // chart layer that offers its data (types.ts `LayerAlerts`). This is the layer's DECORATOR
@@ -275,7 +276,7 @@ export class LayerAlertView<TDatum, TConfig> implements LayerDecorator<TConfig> 
     if (!state || !host || !this.alerts.available) return
     const { ctx } = state
     const precision = ctx.symbol.pricePrecision ?? 5
-    const key = `${ctx.vendor}:${ctx.symbol.ticker}|${target.price.toFixed(precision)}`
+    const key = `${instrumentKey(ctx.vendor, ctx.symbol.ticker)}|${target.price.toFixed(precision)}`
     if (this.landing.has(key)) return
     const existing = this.alerts.at(ctx.vendor, ctx.symbol.ticker, target.price, precision)
     const next = nextStage(existing?.watch ?? null)

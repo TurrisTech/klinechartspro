@@ -16,6 +16,7 @@ import { sortByLength, validateBase } from '../time/intervals'
 import { checkbox, dayInput, flash, REPLAY_SELECT, toggleButton } from './dom'
 import { button, el, select } from '../ui/dom'
 import { chartTheme } from '../ui/theme'
+import { tickerOf } from '../symbols'
 
 // GLUE (DOM). The replay controls: plain DOM in the house style (`kc-*` tokens, `wd-*` classes),
 // driven by a `ReplayController` they do not implement. The start dialog is ./startdialog.ts, the
@@ -317,7 +318,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     win.titleSlot.innerHTML = ''
     win.actions.innerHTML = ''
     const symbol = el('span', 'wd-replay-symbol')
-    symbol.textContent = controller.symbol.split(':')[1] ?? controller.symbol
+    symbol.textContent = tickerOf(controller.symbol)
     symbol.title = `The replay walks ${controller.symbol}`
     // The chart's position, which is where the running advance STARTED until it lands: a walk
     // moves `cursor` bar by bar far ahead of the panes, and this re-renders mid-walk (a Stop
@@ -884,7 +885,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     time.type = 'time'
     time.className = 'kc-input wd-replay-input wd-replay-goto-time'
     time.value = hhmm(goTo.minute)
-    time.title = `A time of day on ${controller.symbol.split(':')[1] ?? controller.symbol}'s clock (${zoneName(zone)})`
+    time.title = `A time of day on ${tickerOf(controller.symbol)}'s clock (${zoneName(zone)})`
     time.setAttribute('aria-label', 'Go to time')
     time.addEventListener('change', () => {
       const minute = parseHhmm(time.value)
@@ -1190,11 +1191,6 @@ const MOON_ICON =
 const PLAY_ICON = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4.5 2.75v10.5L13 8z" fill="currentColor"/></svg>'
 const PAUSE_ICON =
   '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><rect x="3.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/><rect x="9.5" y="2.75" width="3" height="10.5" rx="0.75" fill="currentColor"/></svg>'
-
-/** `EURUSD` of `oanda:EURUSD`. */
-function tickerOf(symbol: string): string {
-  return symbol.split(':').pop() ?? symbol
-}
 
 /** "No market hours for X" as it reads after a colon. */
 function lowerFirst(text: string): string {

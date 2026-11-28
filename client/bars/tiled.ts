@@ -9,6 +9,7 @@ import { HttpBarSource } from './source'
 import type { CandleGrid } from '../time/timeframes'
 import { nextTask } from './yield'
 import { nominalMs } from '../time/intervals'
+import { splitInstrumentKey } from '../symbols'
 
 // THE REPLAY'S BARS, FROM TILES WHERE THERE ARE TILES (user, 2026-10-28: "bar replay should cache
 // future data. the base timeframe should be pulled, so a whole tile from the current replay time
@@ -199,7 +200,7 @@ export class TiledBarSource implements BarSource {
   }
 
   private async withQuotes(symbol: string, interval: string, from: number, to: number, grid: CandleGrid): Promise<{ bars: ReplayBar[]; coveredTo: number } | null> {
-    const [vendor, ticker] = symbol.includes(':') ? symbol.split(':', 2) : ['oanda', symbol]
+    const { vendor, ticker } = splitInstrumentKey(symbol)
     const manifest = await this.tiles.manifest(vendor, ticker, interval).catch(() => null)
     if (manifest === null) return null
     const span = tilesUpTo(manifest, from, to)

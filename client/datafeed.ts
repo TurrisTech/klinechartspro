@@ -3,7 +3,7 @@ import type { Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '..
 import { fetchBarsWidened } from './history'
 import { barToKLineData, type OHLCVBar } from './ohlcv'
 import { stream, subscriptionKey, type StreamListener } from './stream'
-import { fetchSymbols, symbolVendor } from './symbols'
+import { fetchSymbols, instrumentKey, symbolVendor } from './symbols'
 import { periodToResolution } from './time/intervals'
 
 // KLineChart Pro asks for history one window at a time and caps a window at 500 bars
@@ -44,7 +44,7 @@ export class WdashboardDatafeed implements Datafeed {
     const interval = periodToResolution(period)
     try {
       const bars = await fetchBarsWidened(
-        `${vendor}:${symbol.ticker}`,
+        instrumentKey(vendor, symbol.ticker),
         interval,
         from,
         to,
