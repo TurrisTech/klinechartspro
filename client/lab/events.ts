@@ -22,10 +22,10 @@ import { buildTrack, type PointIndex } from '../alerts/compute'
 import { compile } from '../alerts/rules'
 import { freshRun, instants, stepInstant } from '../alerts/timeline'
 import type { Operand } from '../alerts/types'
-import { resolutionDurationMs } from '../periods'
 import type { ReplayBar } from '../replay/cache'
 import type { LabSignal } from './graph'
 import { type PriceAnchor, type PublishedSource, type RuleSource, type Side, withInterval } from './model'
+import { resolutionDurationMs } from '../time/intervals'
 
 /** A labelled point as the server sends it: its bar's wire date, its label, and its fields. */
 export type SignalPoint = { date: number; signal?: unknown } & Record<string, unknown>

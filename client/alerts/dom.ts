@@ -1,7 +1,7 @@
 // DOM helpers for the alert manager's forms (./editor.ts, ./ruletree.ts) and the Strategy Lab's
 // (client/lab), in the house style: `kc-*` tokens, `wd-*` classes, plain elements.
 
-import { fromWall, toWall } from '../replay/timeframes'
+import { fromWall, toWall } from '../time/timeframes'
 import { formatMinute } from './rules'
 
 export function el(tag: string, className: string): HTMLElement {

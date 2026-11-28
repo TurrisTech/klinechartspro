@@ -26,7 +26,7 @@ import {
   type MtfConfig,
   toStoredMtfConfig
 } from './config'
-import { type CandleGrid, gridFor } from '../replay/timeframes'
+import { type CandleGrid, gridFor } from '../time/timeframes'
 import { isFinerThan, toAbsolute } from './shift'
 import { AREV21_MTF, type MtfOverlay } from './overlays'
 import { phaseLabel } from '../plugins/legend'

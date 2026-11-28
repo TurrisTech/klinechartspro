@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
-import { FX_GRID } from '../replay/timeframes'
+import { FX_GRID } from '../time/timeframes'
 import type { SimSnapshot, SimTrade } from './api'
 import {
   accountStart,

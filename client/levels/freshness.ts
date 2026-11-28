@@ -1,4 +1,4 @@
-import type { CandleGrid } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 
 // PURE. When to look at a level book again.
 //
@@ -15,7 +15,7 @@ import type { CandleGrid } from '../replay/timeframes'
 // (`X-Levels-Computed-Through`, one watermark per interval) and not from the calendar alone.
 //
 // Every close and every calendar horizon below is on the INSTRUMENT'S schedule, handed in as its
-// `CandleGrid` (replay/timeframes.ts). Until 2026-10-04 it was the forex week for every
+// `CandleGrid` (time/timeframes.ts). Until 2026-10-04 it was the forex week for every
 // instrument, while prod computes levels for five coinbase pairs and ten schwab instruments: a
 // coinbase book recomputed at a 00:00 UTC close was not looked at until 17:00 New York, and its
 // watermark (dated by its open) was read through forex's 7h and judged against forex closes.

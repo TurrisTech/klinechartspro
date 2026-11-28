@@ -14,7 +14,7 @@ import { durableSink, mountNotificationCenter, notifications } from './notificat
 import { createChannelSettings, HttpChannelsApi } from './notifications/channels'
 import { builtinPlugins, createFacilities, createPluginHost } from './plugins'
 import { renderLogin } from './login'
-import { availablePeriods, periodToResolution } from './periods'
+import { availablePeriods } from './periods'
 import { loadStarredTimeframes, saveStarredTimeframes } from './preferences'
 import { stream, type StreamRefusal, type StreamStatus } from './stream'
 import {
@@ -38,6 +38,7 @@ import { createWorkspaceSaveControls, type WorkspaceSaveControls } from './works
 import { loadWorkspaces, type WorkspaceStore } from './workspaces/store'
 
 import './style.css'
+import { periodToResolution } from './time/intervals'
 
 // Used only when the server doesn't advertise 'preferences' (one without the dashboard login)
 // or a fetch of the user's own set fails — the account's real starred set otherwise comes from

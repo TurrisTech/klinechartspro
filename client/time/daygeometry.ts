@@ -1,5 +1,5 @@
-import type { DayGeometry, TradingWeek } from '../src'
-import type { MarketHours } from './symbols'
+import type { DayGeometry, TradingWeek } from '../../src'
+import type { MarketHours } from '../symbols'
 
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 const WEEK_SECONDS = 7 * 86_400

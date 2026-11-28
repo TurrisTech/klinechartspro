@@ -1,4 +1,4 @@
-import { divides, isInterval, parseInterval, type Unit } from './timeframes'
+import { divides, isInterval, parseInterval, type Unit } from '../time/intervals'
 
 // PURE (plus a localStorage pair). What one Step is, typed in words: "15h", "30h", "90m", "2D",
 // "3 × 4h" (user, 2026-11-24: "we should be able to configure any amount of step, for example,

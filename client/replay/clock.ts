@@ -1,6 +1,6 @@
 import type { SimOrder, SimTrade } from '../trading/api'
 import { rangeReaches } from './engine'
-import { type CandleGrid, fromWall, toWall } from './timeframes'
+import { type CandleGrid, fromWall, toWall } from '../time/timeframes'
 
 // PURE. Advance planning: given the cursor, what the user asked for, the next alert found
 // ahead of it and what is working in the account, decide where the walk stops and why, and

@@ -25,9 +25,8 @@ import { operandKey } from '../alerts/rules'
 import { pointSource } from '../alerts/catalogue'
 import type { Operand } from '../alerts/types'
 import { advertisedBaseIntervals } from '../capabilities'
-import { resolutionDurationMs } from '../periods'
 import type { ReplayBar } from '../replay/cache'
-import { type CandleGrid, defaultBase, nominalMs, STORED_LADDER } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import type { LabData } from './data'
 import { applyFilter, entriesOfEvents, entriesOfGraphs, graphStateAt, type LabEntry, RuleAtInstant, rootIndex } from './entries'
 import { type Ast, compileExpr, type ExprEnv } from './expr'
@@ -38,6 +37,7 @@ import { ruleEntryTest, ruleGraphSpec, ruleSignals as signalsOfRule, ruleTimefra
 import { type EntryOutcome, measureOutcome, type OutcomeSummary, pathIndex, summariseOutcomes } from './outcomes'
 import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings } from './readings'
 import { type SimResult, simulate } from './trades'
+import { defaultBase, nominalMs, STORED_LADDER, resolutionDurationMs } from '../time/intervals'
 
 export class RunError extends Error {
   constructor(

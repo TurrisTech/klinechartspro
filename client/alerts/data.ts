@@ -15,7 +15,7 @@ import { OhlcvApiError } from '../config'
 import { describeUnavailable, fetchMtfGraph, type MtfGraphAnswer, type MtfGraphRequest } from '../mtf/api'
 import { fetchPoints } from '../plugins/api'
 import { TiledBarSource } from '../replay/tiled'
-import { type CandleGrid, gridFor } from '../replay/timeframes'
+import { type CandleGrid, gridFor } from '../time/timeframes'
 import { fetchSymbolInfo } from '../symbols'
 import type { AlertBar, PointSource } from './compute'
 

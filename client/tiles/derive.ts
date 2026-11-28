@@ -5,7 +5,7 @@
 // 1Y) is folded here, from the tiles of the interval it derives from, rather than published as
 // a tree of its own. wmarketdata's `tiles/derived.py` does the identical thing server-side; the
 // grid arithmetic on both sides is `Interval`'s, and this file's half of it is the port in
-// `../replay/timeframes.ts`, which is asserted against wmarkettypes bar for bar by
+// `../time/timeframes.ts`, which is asserted against wmarkettypes bar for bar by
 // `../replay/fixtures/boundaries.json`.
 //
 // Two rules carry the whole thing, and neither is about the aggregation:
@@ -64,7 +64,7 @@ import {
   scheduleWireShift,
   type TradingWeek,
   tradingFilter
-} from '../replay/timeframes'
+} from '../time/timeframes'
 import type { TileManifest } from './manifest'
 
 const PATTERN = /^([1-9][0-9]*)([smhDWMY])$/

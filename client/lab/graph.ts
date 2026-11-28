@@ -25,9 +25,9 @@
 // PURE: signals and readings in, graphs out. What an `atr()` or `ind()` call reads comes from the
 // runner (`Readings`).
 
-import { resolutionDurationMs } from '../periods'
 import { type Compiled, compileExpr, type ExprEnv, type ExprValue } from './expr'
 import { type GraphSpec, SCOPES, type Side, type SlotCondition } from './model'
+import { resolutionDurationMs } from '../time/intervals'
 
 /** One signal of the pool, as the graph and the entries read it. The shape of the server
  * builder's signal (`services/mtfgraph.py`), so a parity case reads the same on both sides. */

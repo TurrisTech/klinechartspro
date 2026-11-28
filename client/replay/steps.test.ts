@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { describeStep, forgetStep, MAX_SAVED_STEPS, parseStep, readSavedSteps, rememberStep } from './steps'
-import { FX_GRID } from './timeframes'
+import { FX_GRID } from '../time/timeframes'
 
 // A step typed in words is the session's `{ interval, multiple }`: N whole candles of one
 // interval, the weekend skipped by the candle grid.

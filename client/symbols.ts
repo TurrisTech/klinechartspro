@@ -1,7 +1,7 @@
 import type { SymbolInfo } from '../src'
 import { offeredIntervalCodes } from './periods'
 import { apiGet } from './config'
-import { dayGeometryOf, tradingWeekOf } from './daygeometry'
+import { dayGeometryOf, tradingWeekOf } from './time/daygeometry'
 import { pipSizeOf } from './pipsize'
 import { instrumentConfig } from './instrumentconfig'
 

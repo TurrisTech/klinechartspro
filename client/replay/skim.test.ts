@@ -3,7 +3,7 @@ import { installWindow } from '../plugins/testing'
 import { evaluate, type Observation } from '../alerts/conditions'
 import type { BarSource, ReplayBar } from './cache'
 import { Engine } from './engine'
-import { FX_GRID, fromWall } from './timeframes'
+import { FX_GRID, fromWall } from '../time/timeframes'
 
 // THE SKIM: a walk with nothing that could fill and only price watches to answer reads coarser
 // stored candles wherever no watch could fire on them, and descends to the base bars only near a

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { BarCache, type BarSource, PREFETCH_BARS, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
-import { FX_GRID, fromWall, intervalEnd, toWireDate } from './timeframes'
+import { FX_GRID, fromWall, intervalEnd, toWireDate } from '../time/timeframes'
 
 function ny(text: string): number {
   const [d, t] = text.split(' ')

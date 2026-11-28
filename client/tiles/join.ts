@@ -1,9 +1,9 @@
 import { getReadClock } from '../config'
-import { dayGeometryOf } from '../daygeometry'
+import { dayGeometryOf } from '../time/daygeometry'
 import { instrumentConfig } from '../instrumentconfig'
 import { answerableTo, knownThrough } from '../plugins/horizon'
 import type { Page, Range } from '../plugins/types'
-import { gridFor } from '../replay/timeframes'
+import { gridFor } from '../time/timeframes'
 
 // The one read every tile family makes: the tiles for what they hold of a window, the API for
 // the rest. Tiles hold every CLOSED partition, so they answer the historical part of any window

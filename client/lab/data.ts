@@ -22,9 +22,10 @@ import { apiGet } from '../config'
 import { fetchBars } from '../history'
 import type { ReplayBar } from '../replay/cache'
 import { TiledBarSource } from '../replay/tiled'
-import { type CandleGrid, nominalMs } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import { fetchSymbolInfo } from '../symbols'
 import type { SignalPoint } from './events'
+import { nominalMs } from '../time/intervals'
 
 export interface SignalRequest {
   plugin: string

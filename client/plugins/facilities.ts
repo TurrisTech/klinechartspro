@@ -1,10 +1,10 @@
 import { hasFeature } from '../capabilities'
 import { apiGet } from '../config'
-import { periodToResolution, resolutionDurationMs } from '../periods'
 import { stream } from '../stream'
 import { symbolVendor } from '../symbols'
 import { fetchPoints } from './api'
 import type { PluginFacilities, PluginStream } from './types'
+import { periodToResolution, resolutionDurationMs } from '../time/intervals'
 
 // The app's shared services, bundled for plugin consumption. Built once per mount by
 // client/index.ts; a plugin gets this and nothing else, so what it may depend on is exactly

@@ -1,7 +1,7 @@
 import { Arming, FigureList } from '../trading/kit'
 import { type GoToMode, type GoToSpec, goToInstant } from './clock'
 import { blocked, describeBlockers, type FollowNotice, undoBlockers } from './follow'
-import { formatClock, formatSpan, zoneName } from './format'
+import { formatClock, formatSpan, zoneName } from '../time/format'
 import { defaultRange, randomStart, type StartRange } from './pick'
 import { DEFAULT_PLAY_DELAY_MS, PLAY_DELAYS_MS, ReplayPlayer } from './player'
 import { replayResults, resultHeadline, resultRows } from './results'
@@ -10,9 +10,10 @@ import { lastPlayed, type ReplaySessionSummary, resumable, sessionFacts } from '
 import type { AdvanceResult, ReplayController } from './session'
 import { describeStep, forgetStep, parseStep, readSavedSteps, rememberStep, sameStep, type StepSetting, stepKey } from './steps'
 import type { SimTrade } from '../trading/api'
-import { type BaseCheck, type CandleGrid, defaultBase, fromWall, sortByLength, toWall, validateBase } from './timeframes'
+import { type CandleGrid, fromWall, toWall } from '../time/timeframes'
 import { dragByHandle } from '../chrome/drag'
 import { createDockableWindow } from '../chrome/window'
+import { type BaseCheck, defaultBase, sortByLength, validateBase } from '../time/intervals'
 
 // GLUE (DOM). The replay controls and the start dialog: plain DOM in the house style
 // (`kc-*` tokens, `wd-*` classes), driven by a `ReplayController` they do not implement.

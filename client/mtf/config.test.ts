@@ -8,7 +8,7 @@ import { installWindow } from '../plugins/testing'
 installWindow()
 const { MTF_DEFAULTS, fromStoredMtfConfig, graphLineStyle, graphRoots, toStoredMtfConfig } = await import('./config')
 const { MTF_INTERVALS } = await import('./api')
-const { resolutionDurationMs } = await import('../periods')
+const { resolutionDurationMs } = await import('../time/intervals')
 
 describe('how a graph line is drawn', () => {
   test('solid and full width into 3m and 5m, thinner and more broken the higher it reaches', () => {

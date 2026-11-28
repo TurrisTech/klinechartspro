@@ -21,7 +21,7 @@ import {
   unitSize,
   usableExitUnit
 } from './exits'
-import { formatInstant, formatMoney, formatShare, formatPrice, formatUnitsShort, moveText } from './format'
+import { formatMoney, formatShare, formatPrice, formatUnitsShort, moveText } from './format'
 import {
   allow,
   armKey,
@@ -53,6 +53,7 @@ import { tradeActionsView } from './manage'
 import { orderFigures, outcome, type PricingContext, positionSummary, quoteToAccountRate, rewardToRisk, roundTo, targetForReward, tradeFigures } from './metrics'
 import type { ProtectMode } from './prefs'
 import { sizeRows, type StatRow } from './stats'
+import { formatInstant } from '../time/format'
 
 export { h } from './kit'
 // The order card: the collapsible widget in the candle pane's lower left that lists what is

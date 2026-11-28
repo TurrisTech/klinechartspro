@@ -18,14 +18,14 @@
 
 import type { KLineData } from 'klinecharts'
 import { advertisedBaseIntervals, baseIntervalsFor } from '../capabilities'
-import { tradingWeekOf } from '../daygeometry'
+import { tradingWeekOf } from '../time/daygeometry'
 import { instrumentConfig } from '../instrumentconfig'
-import { isIntraday } from '../replay/timeframes'
 import type { MarketHours } from '../symbols'
 import { barsForTile } from './cache'
 import { fold, foldedCoveredTo, manifestDay, manifestTz, sourceInterval, sourceWindow } from './derive'
 import type { Tiled } from './join'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
+import { isIntraday } from '../time/intervals'
 
 /** Every bar the manifest's tiles hold in `[from, to)`, or null if any of them will not load.
  * Null is never "no bars": a tile that will not load must fall back for the whole window

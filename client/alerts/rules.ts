@@ -21,7 +21,7 @@
 // so this file can be tested without klinecharts.
 
 import { type Condition, ConditionError, OPS, parse } from './conditions'
-import { toWall } from '../replay/timeframes'
+import { toWall } from '../time/timeframes'
 import { ANY_LABEL, type Operand, type Rule, type RuleLeaf, type RuleRight, type TimeField } from './types'
 
 export class RuleError extends Error {

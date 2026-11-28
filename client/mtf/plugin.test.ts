@@ -134,7 +134,7 @@ describe('each overlay', () => {
 
   test("live, Friday's last close is read once it has passed; a close the next bar opens at is not", async () => {
     const { closeKnown } = await import('./plugin')
-    const { FX_GRID } = await import('../replay/timeframes')
+    const { FX_GRID } = await import('../time/timeframes')
     const H = 3_600_000
     const { spec } = bound(2, '1h')
     // Friday 2026-10-02 16:00 New York (20:00Z): the week's last hour, closing 17:00 (21:00Z).

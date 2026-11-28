@@ -1,5 +1,4 @@
 import { createDockableWindow, type DockableWindow } from '../chrome/window'
-import { formatInstant } from '../trading/format'
 import { instrumentZone } from '../trading/instrument'
 import { Arming } from '../trading/kit'
 import { labelOperand, type ServerCatalogue } from './catalogue'
@@ -7,6 +6,7 @@ import { createAlertEditor, type EditorContext } from './editor'
 import { describeRule, type Labeller } from './rules'
 import type { ClientAlertStore } from './store'
 import type { Alert, AlertKind, AlertSource } from './types'
+import { formatInstant } from '../time/format'
 
 // GLUE (DOM). THE ALERT MANAGER: one window listing every alert, by kind.
 //

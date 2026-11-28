@@ -5,7 +5,7 @@ installWindow()
 const { createMtfPlugin, mtfLiveWire } = await import('./plugin')
 const { AREV21_MTF, AREV21_OUTLIER_RANK_85_MTF } = await import('./overlays')
 const { createMtfGraphStore } = await import('./store')
-const { FX_DAY } = await import('../replay/timeframes')
+const { FX_DAY } = await import('../time/timeframes')
 const { MTF_DEFAULTS } = await import('./config')
 const FX_DAY_TZ = 'America/New_York'
 import type { PluginCatalogue } from '../plugins/api'

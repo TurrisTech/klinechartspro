@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import type { KLineData } from 'klinecharts'
 import { legalCandleOpens } from './marketclosed'
-import type { MarketHours } from './symbols'
+import type { MarketHours } from '../symbols'
 
 const session = (openDay: string, openTime: string, closeDay: string, closeTime: string) => ({
   openDay,

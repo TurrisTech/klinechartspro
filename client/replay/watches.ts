@@ -1,5 +1,4 @@
 import type { NotificationSink } from '../notifications'
-import { formatInstant } from '../trading/format'
 import { instrumentZone } from '../trading/instrument'
 import { type LocalWatchSource, type LocalWatchState, type WatchFiring, LocalWatchRegistry } from '../watch/local'
 import type { Observation, Sample } from '../alerts/conditions'
@@ -8,6 +7,7 @@ import { PRICE_SOURCE, priceCondition, priceLevel } from '../watch/types'
 import type { SourceField } from '../watch/types'
 import type { ReplayBar } from './cache'
 import type { ObserverStop, ReplayObserver } from './session'
+import { formatInstant } from '../time/format'
 
 // PRICE WATCHES ON A REPLAY WALL: the same lines, the same right-click, the same dialog and
 // the same Notification Center as a live wall — over the replay's own market instead of the

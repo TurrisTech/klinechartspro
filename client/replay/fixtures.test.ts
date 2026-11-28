@@ -25,8 +25,8 @@ describe('engine fixtures', () => {
     expect(proc.exitCode).toBe(0)
   })
   test('carry their provenance', async () => {
-    for (const name of ['engine_cases.json', 'boundaries.json']) {
-      const doc = (await Bun.file(resolve(import.meta.dir, 'fixtures', name)).json()) as { $comment?: string }
+    for (const path of ['fixtures/engine_cases.json', '../time/fixtures/boundaries.json']) {
+      const doc = (await Bun.file(resolve(import.meta.dir, path)).json()) as { $comment?: string }
       expect(String(doc.$comment)).toContain('GENERATED')
     }
   })

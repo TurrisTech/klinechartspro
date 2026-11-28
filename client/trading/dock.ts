@@ -1,7 +1,7 @@
 import type { ChartProPane, KLineChartPro, SymbolInfo } from '../../src'
 import { createDockableWindow } from '../chrome/window'
 import { fetchClosedBars } from '../plugins/bars'
-import { gridFor } from '../replay/timeframes'
+import { gridFor } from '../time/timeframes'
 import { formatShare, formatPnl, symbolKey } from './format'
 import { type AtrReading, atrReading } from './exits'
 import { PositionInspector } from './inspector'

@@ -1,10 +1,10 @@
 import { type Indicator, type IndicatorTemplate, type KLineData, registerIndicator } from 'klinecharts'
 import { graphLineStyle, MTF_DEFAULTS } from '../mtf/config'
 import { chartBarAt, chartOpens } from '../mtf/shift'
-import { resolutionDurationMs } from '../periods'
 import { timestampCalc } from '../plugins/calc'
-import type { CandleGrid } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import type { LabRun } from './runner'
+import { resolutionDurationMs } from '../time/intervals'
 
 // THE STRATEGY OVERLAY: one price-pane template, `LAB:strategy`, drawing one run of a strategy
 // (runner.ts) -- its graphs, its entries, the signals of its pool and its simulated trades -- on

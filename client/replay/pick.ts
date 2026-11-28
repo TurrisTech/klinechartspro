@@ -1,4 +1,4 @@
-import type { CandleGrid } from './timeframes'
+import type { CandleGrid } from '../time/timeframes'
 
 // PURE. Picking a random start instant for a replay, out of a range of past dates.
 //

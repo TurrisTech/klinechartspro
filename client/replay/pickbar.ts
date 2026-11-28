@@ -1,9 +1,9 @@
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import { periodToResolution } from '../periods'
 import { chartTheme } from './controls'
-import { formatClock } from './format'
-import { gridFor } from './timeframes'
+import { formatClock } from '../time/format'
+import { gridFor } from '../time/timeframes'
+import { periodToResolution } from '../time/intervals'
 
 // GLUE (DOM). Choosing where a replay starts by pointing at the chart: hover a bar, see the
 // bars that will be hidden shaded out to its right, click it. The bar clicked is the LAST one

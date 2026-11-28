@@ -12,7 +12,6 @@
 // "next": with `edge` the next answer is where it starts holding again, and with `level` it is
 // the next bar close at which it holds.
 
-import { resolutionDurationMs } from '../periods'
 import { byInterval, leadInFor, pointSource, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { type AlertData, type Point, SpanCache } from './data'
@@ -21,6 +20,7 @@ import { GraphEntryEngine } from './graphentry'
 import { compile, operandKey } from './rules'
 import { freshRun, type Instant, instants, scan, type Track } from './timeline'
 import type { Alert, Operand } from './types'
+import { resolutionDurationMs } from '../time/intervals'
 
 /** Bars of the finest timeframe a rule reads, per chunk of a search -- the first chunk. */
 export const SEARCH_CHUNK_BARS = 3000

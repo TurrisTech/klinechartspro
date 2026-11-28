@@ -7,7 +7,7 @@ const { getIndicatorClass } = await import('klinecharts')
 const { registerMtf01Indicators } = await import('./templates')
 const { Mtf01Store } = await import('./store')
 const { storeFor } = await import('../plugins/store')
-const { FX_GRID, fromWall } = await import('../replay/timeframes')
+const { FX_GRID, fromWall } = await import('../time/timeframes')
 type Event = import('./api').Mtf01Event
 type Trade = import('./api').Mtf01Trade
 

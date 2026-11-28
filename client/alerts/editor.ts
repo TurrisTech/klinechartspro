@@ -1,4 +1,4 @@
-import { offeredIntervalCodes, resolutionDurationMs } from '../periods'
+import { offeredIntervalCodes } from '../periods'
 import type { ServerCatalogue } from './catalogue'
 import { button, el, input, labelled, select } from './dom'
 import { defaultLeaf, fromEditable, type GroupNode, group, toEditable } from './editable'
@@ -9,6 +9,7 @@ import { createRuleTree } from './ruletree'
 import { normaliseSymbol } from './store'
 import type { Alert, AlertDefinition } from './types'
 import { DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
+import { resolutionDurationMs } from '../time/intervals'
 
 // GLUE (DOM). The alert editor: a name, an instrument, a rule, and how it fires.
 //

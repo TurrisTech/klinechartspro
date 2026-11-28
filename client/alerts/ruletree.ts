@@ -1,15 +1,15 @@
 import { getReadClock } from '../config'
 import { MTF_INTERVALS } from '../mtf/api'
 import { GRAPH_ROOTS } from '../mtf/config'
-import { resolutionDurationMs } from '../periods'
 import { BAR_FIELDS, BUILTIN_INDICATORS, builtinInfo, builtinOutputs, graphTitle, type ServerCatalogue, TIME_ZONES } from './catalogue'
-import { fromWall, toWall } from '../replay/timeframes'
+import { fromWall, toWall } from '../time/timeframes'
 import { button, dateTimeInput, el, iconButton, input, numberInput, select, timeInput } from './dom'
 import { defaultLeaf, defaultRightOperand, type EditNode, type GroupMode, type GroupNode, group, leafCount } from './editable'
 import { defaultGraphSettings, entryIntervals, graphOverlays, type GraphSettings } from './graphentry'
 import { isLabelOperand, LABEL_OPS, NUMERIC_OPS, OP_WORDS, OPERAND_OPS, TIME_OP_WORDS, TIME_OPS, WEEKDAYS } from './rules'
 import type { Operand, RuleLeaf } from './types'
 import { ANY_LABEL } from './types'
+import { resolutionDurationMs } from '../time/intervals'
 
 // GLUE (DOM). A RULE as a tree of groups (all / any / none) of conditions (./editable.ts), each
 //

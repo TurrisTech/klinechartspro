@@ -4,7 +4,7 @@ import { MTF01_GENERATION, type Stage, type Mtf01Event, type Mtf01Trade } from '
 import { peekStore } from '../plugins/store'
 import type { Mtf01Store } from './store'
 import { timestampCalc } from '../plugins/calc'
-import { gridOf, type Schedule } from '../replay/timeframes'
+import { gridOf, type Schedule } from '../time/timeframes'
 
 // One klinecharts indicator template: mtf01's cascade as a SUB-PANE. Like the AREV and
 // KREV templates, `calc` computes nothing — it reads what the controller fetched from

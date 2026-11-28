@@ -6,7 +6,7 @@ import { darkenToward } from '../chartlayers/color'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
 import { applyEncodings, toLineStyle, type LineAppearance } from '../chartlayers/encoding'
 import { fetchLevels, levelsComputedThrough, type Level } from './api'
-import { gridFor } from '../replay/timeframes'
+import { gridFor } from '../time/timeframes'
 import { levelsStaleAt } from './freshness'
 import {
   DEFAULT_LEVELS_CONFIG,

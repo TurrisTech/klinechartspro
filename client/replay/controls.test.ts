@@ -17,12 +17,13 @@ GlobalRegistrator.register({ url: 'http://test/' })
 afterAll(() => GlobalRegistrator.unregister())
 
 const { createReplayControls, openStartDialog, defaultStartAt } = await import('./controls')
-const { formatClock } = await import('./format')
-const { validateBase, nominalMs, FX_GRID, CONTINUOUS_DAY, gridOf } = await import('./timeframes')
+const { formatClock } = await import('../time/format')
+const { FX_GRID, CONTINUOUS_DAY, gridOf } = await import('../time/timeframes')
 const { setFocusSource } = await import('../chrome/focus')
 const { Engine } = await import('./engine')
 const { serialize, stampSaved } = await import('./persist')
 const { summarizeSessions } = await import('./sessions')
+const { validateBase, nominalMs } = await import('../time/intervals')
 
 const SYM = 'oanda:EURUSD'
 const NY_TZ = 'America/New_York'

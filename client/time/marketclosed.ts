@@ -1,7 +1,7 @@
 import type { KLineData } from 'klinecharts'
 import { dayGeometryOf } from './daygeometry'
-import { scheduleIntervalStart, scheduleIsMarketOpen, scheduleWireShift } from './replay/timeframes'
-import type { MarketHours } from './symbols'
+import { scheduleIntervalStart, scheduleIsMarketOpen, scheduleWireShift } from './timeframes'
+import type { MarketHours } from '../symbols'
 
 // PURE. Drop bars the chart must not draw: rows whose label is not a legal candle open for
 // the instrument's own schedule.
@@ -32,13 +32,13 @@ import type { MarketHours } from './symbols'
 // deleted every weekend bar in that series. Cost is ~10 us/bar, so a 500-bar chart window is
 // ~5 ms and only the AREV lab's 40,000-bar read is anywhere near noticeable.
 //
-// THE TRAP this module exists to avoid: `replay/timeframes.ts` also exports a bare
+// THE TRAP this module exists to avoid: `time/timeframes.ts` also exports a bare
 // `isMarketOpen(ms, tz)`, and it is the WRONG predicate here -- it hardcodes the 24/5 FX week
 // and America/New_York and takes no schedule. Filtering with it would delete every coinbase
 // weekend bar (a continuous schedule: Saturday and Sunday are legal candle opens) and read
 // schwab on the FX week instead of its own 09:00 anchor. Everything below goes through the
 // instrument's resolved `MarketHours`, via the `schedule*` family, which is parity-tested
-// against wmarkettypes for all three schedules (`replay/timeframes.test.ts`).
+// against wmarkettypes for all three schedules (`time/timeframes.test.ts`).
 
 /** A test of one bar of `resolution` under `hours`: is its label -- on the WIRE clock -- a legal
  * candle open? Two conditions, and both are load-bearing:

@@ -17,7 +17,7 @@
 import { loadServerCatalogue } from '../alerts/catalogue'
 import type { Point } from '../alerts/data'
 import type { Operand } from '../alerts/types'
-import type { CandleGrid } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import { HttpLabData, type LabData } from './data'
 import { runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'

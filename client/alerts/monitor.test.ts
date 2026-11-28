@@ -4,7 +4,7 @@ import { installWindow } from '../plugins/testing'
 installWindow()
 const { AlertMonitor } = await import('./monitor')
 const { ClientAlertStore } = await import('./store')
-const { FX_GRID } = await import('../replay/timeframes')
+const { FX_GRID } = await import('../time/timeframes')
 const { AREV21_OUTLIER_RANK_85_MTF } = await import('../mtf/overlays')
 import type { MtfGraphRequest, MtfNodeRow } from '../mtf/api'
 import type { NotificationSpec } from '../notifications'

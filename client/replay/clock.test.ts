@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SimOrder, SimTrade } from '../trading/api'
 import { canFill, intersectsWorking, passesDailyClose, planAdvance, targetOf } from './clock'
-import { FX_GRID, fromWall } from './timeframes'
+import { FX_GRID, fromWall } from '../time/timeframes'
 
 function ny(text: string): number {
   const [d, t] = text.split(' ')

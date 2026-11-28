@@ -5,7 +5,7 @@ import type { BarSource, ReplayBar } from './cache'
 import type { AlertOccurrence } from './clock'
 import type { ObserverStop, ReplayObserver } from './session'
 import { Engine } from './engine'
-import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from './timeframes'
+import { CONTINUOUS_DAY, type CandleGrid, FX_GRID, fromWall, gridOf, intervalEnd, isMarketOpen, nextIntervalStart, toWireDate } from '../time/timeframes'
 
 // session.ts imports ../trading/api -> ../auth -> ../config, which read `window` at import.
 installWindow()

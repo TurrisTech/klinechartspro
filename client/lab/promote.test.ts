@@ -8,7 +8,7 @@ const { rank85Strategy } = await import('./model')
 const { RunStore } = await import('./plugin')
 const { StrategyEntryEngine, lastClosedOpen, LATE_MS } = await import('./alertentries')
 const { compile, operandKey, describeRule } = await import('../alerts/rules')
-const { FX_GRID } = await import('../replay/timeframes')
+const { FX_GRID } = await import('../time/timeframes')
 
 import type { StrategyPersistence } from './store'
 

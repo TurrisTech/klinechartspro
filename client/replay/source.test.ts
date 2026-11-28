@@ -8,7 +8,8 @@ import type { StoredProbeDeps } from './source'
 installWindow()
 const { OhlcvApiError } = await import('../config')
 const { probeStoredIntervals } = await import('./source')
-const { FX_GRID, gridOf, STORED_LADDER, storedLadderFor } = await import('./timeframes')
+const { FX_GRID, gridOf } = await import('../time/timeframes')
+const { STORED_LADDER, storedLadderFor } = await import('../time/intervals')
 
 const AT = Date.UTC(2026, 9, 21, 16, 0) // Wed 2026-10-21 12:00 New York
 const EQUITIES = gridOf({ timezone: 'America/New_York', day: { openOffset: 9, closeOffset: 16, everyDayTrades: false } })

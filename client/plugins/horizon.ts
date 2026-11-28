@@ -1,4 +1,5 @@
-import { type CandleGrid, isInterval, nominalMs } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
+import { isInterval, nominalMs } from '../time/intervals'
 
 // PURE. How far a source's answer is FINAL under a read clock.
 //

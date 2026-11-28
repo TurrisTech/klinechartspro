@@ -1,5 +1,4 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
-import { formatInstant } from '../../trading/format'
 import { instrumentZone } from '../../trading/instrument'
 import { flash } from '../../watch/menu'
 import { getByPath } from '../settings'
@@ -17,6 +16,7 @@ import {
 } from './figures'
 import type { PriceAlerts } from './hub'
 import { describeZone, type Zone, zoneAround, zonePips, zoneUnit } from './zone'
+import { formatInstant } from '../../time/format'
 
 // Price alerts ON A LAYER'S PANE: what a click, a hover and an enabled line look like, for any
 // chart layer that offers its data (types.ts `LayerAlerts`). The controller hands this every

@@ -6,7 +6,7 @@ import { Engine, type EngineState } from './engine'
 import { blocked, describeBlockers, type FollowResolution, type FollowTarget, followBase, followOnMount, followRequest, followTarget, movedState, undoBlockers } from './follow'
 import type { ReplayState } from './persist'
 import type { ObserverStop, ReplayObserver } from './session'
-import { CONTINUOUS_DAY, FX_GRID, FX_SCHEDULE, fromWall, gridOf, intervalEnd, toWireDate } from './timeframes'
+import { CONTINUOUS_DAY, FX_GRID, FX_SCHEDULE, fromWall, gridOf, intervalEnd, toWireDate } from '../time/timeframes'
 
 // A REPLAY FOLLOWING THE CHART to another instrument (follow.ts): the decisions alone, then a real
 // session over a synthetic path -- the follow made (the blob it writes, for the new instrument at

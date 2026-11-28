@@ -1,9 +1,9 @@
 import type { KLineData } from 'klinecharts'
 import { fetchBars } from '../history'
-import { nominalMs } from '../replay/timeframes'
 import { barsFromTiles } from '../tiles'
 import { readHorizon } from '../tiles/join'
 import type { Range } from './types'
+import { nominalMs } from '../time/intervals'
 
 // The bars a plugin reads for ITSELF -- TradeTalk's daily candles, the AREV lab's prior, the MTF
 // overlays' bar grid, the volume profile's finer bars -- as opposed to the bars a pane draws,

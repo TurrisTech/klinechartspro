@@ -1,4 +1,5 @@
-import { type CandleGrid, divides, nominalMs, sortByLength } from './timeframes'
+import type { CandleGrid } from '../time/timeframes'
+import { divides, nominalMs, sortByLength } from '../time/intervals'
 
 // BarCache: one per (instrument, timeframe), over an injected `BarSource`. Holds a
 // CONTIGUOUS run of bars at and ahead of an anchor, prefetched so a step consumes cache

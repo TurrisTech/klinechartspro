@@ -1,5 +1,6 @@
 import type { ReplayState } from './persist'
-import { type CandleGrid, type Schedule, gridOf, sortByLength, validateBase } from './timeframes'
+import { type CandleGrid, type Schedule, gridOf } from '../time/timeframes'
+import { sortByLength, validateBase } from '../time/intervals'
 
 // PURE. A replay FOLLOWING the chart to another instrument (2026-10-29; the user switched a
 // replaying pane from EURGBP to EURUSD and nothing followed: the replay kept walking EURGBP under

@@ -2,16 +2,10 @@ import { getReadClock } from '../config'
 import { closedBarPage } from '../plugins/bars'
 import { missingRanges, mergeRange, truncate } from '../plugins/store'
 import type { Page, Phase, PluginStream, Range, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
-import {
-  type DayGeometry,
-  isInterval,
-  nominalMs,
-  parseInterval,
-  scheduleWireShift,
-  sessionDated
-} from '../replay/timeframes'
+import { type DayGeometry, scheduleWireShift, sessionDated } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { lowerBound, type SourceBar } from './atoms'
+import { isInterval, nominalMs, parseInterval } from '../time/intervals'
 
 // Which bars the profile is built from, and reading them.
 //

@@ -1,9 +1,9 @@
 import type { KLineData } from 'klinecharts'
-import type { CandleGrid } from '../replay/timeframes'
-import { nominalMs } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import type { SimSnapshot } from './api'
 import { balanceSeries, equitySeries, type MarkAt, openAt } from './ledger'
 import type { PerfMetric, PerfRange } from './prefs'
+import { nominalMs } from '../time/intervals'
 
 // The account window's Performance tab, as numbers. PURE (performance.test.ts): what window a
 // range button means, how it is cut into periods, which bars the equity needs, and the bars the

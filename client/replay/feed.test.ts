@@ -3,13 +3,12 @@ import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Period, SymbolInfo } from '../../src'
 import type { BarSource, Columns, ReplayBar } from './cache'
-import { CONTINUOUS_DAY, type CandleGrid } from './timeframes'
+import { CONTINUOUS_DAY, type CandleGrid } from '../time/timeframes'
 
 // feed.ts reaches config.ts, which reads `window` at import: a DOM for this file only.
 GlobalRegistrator.register({ url: 'http://test/' })
 afterAll(() => GlobalRegistrator.unregister())
 const { ReplayFeedHub } = await import('./feed')
-const { resolutionToPeriod } = await import('../periods')
 
 // THE HUB ON ANOTHER MARKET'S CLOCK. Every pane is brought up to the cursor on the schedule of
 // the instrument IT shows, so a coinbase pane's forming day is labelled at UTC midnight -- the
@@ -79,7 +78,7 @@ describe('ReplayFeedHub on a pane\'s own schedule', () => {
 // the hour and 5s bars from the minute -- never the day's 5s bars, nor the gap the jump crossed --
 // and the candle is exactly the one the 5s bars make.
 
-const { FX_SCHEDULE, FX_GRID, fromWall } = await import('./timeframes')
+const { FX_SCHEDULE, FX_GRID, fromWall } = await import('../time/timeframes')
 const { composeForming } = await import('./cache')
 
 const ny = (d: number, h: number, m = 0, s = 0): number => fromWall(Date.UTC(2024, 2, d, h, m, s), 'America/New_York')
@@ -359,6 +358,7 @@ describe('ReplayFeedHub composes a folded candle from the rows the server folds'
 // ending at the cursor left it out: a 1D pane reloaded between 17:00 and midnight drew Tuesday
 // as its last candle (prod EURGBP at 2023-10-24 19:00 New York), the day it was in nowhere.
 const { setReadClock } = await import('../config')
+const { resolutionToPeriod } = await import('../time/intervals')
 
 describe('ReplayDatafeed re-anchors a window at what the cursor lets be answered', () => {
   const DAY = resolutionToPeriod('1D') as Period

@@ -1,20 +1,11 @@
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
-import {
-  formatDuration,
-  formatInstant,
-  formatLots,
-  formatMoney,
-  formatShare,
-  formatPrice,
-  formatUnits,
-  formatUnitsShort,
-  moveText
-} from './format'
+import { formatDuration, formatLots, formatMoney, formatShare, formatPrice, formatUnits, formatUnitsShort, moveText } from './format'
 import { closeReasonWords, managementRows } from './exits'
 import type { InstrumentInfo } from './instrument'
 import { balancesBefore, closedShareOfBalance } from './ledger'
 import { amountText, type LevelBasis, levelReadout } from './levels'
 import { orderFigures, outcome, type PricingContext, pricingContext, sizeFigures, tradeFigures } from './metrics'
+import { formatInstant } from '../time/format'
 
 // What the position popup (inspector.ts) says about one trade or order. PURE: the rows are
 // worked out from a snapshot here and only drawn there, so the figures are tested on their own

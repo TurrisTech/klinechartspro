@@ -11,7 +11,7 @@ installWindow()
 const { GraphEntryEngine, graphSettingsOf, entryIntervals, finalThrough } = await import('./graphentry')
 const { MTF_DEFAULTS } = await import('../mtf/config')
 const { AREV21_OUTLIER_RANK_85_MTF } = await import('../mtf/overlays')
-const { FX_GRID } = await import('../replay/timeframes')
+const { FX_GRID } = await import('../time/timeframes')
 import type { MtfGraphAnswer, MtfGraphRequest, MtfNodeRow } from '../mtf/api'
 import type { GraphData, GraphOperand } from './graphentry'
 

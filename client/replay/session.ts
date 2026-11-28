@@ -9,8 +9,9 @@ import { type BidAskBar, type Engine, SimError } from './engine'
 import { blocked, type FollowBlockers, type FollowNotice, type FollowResolution, type FollowTarget, followBase, movedState } from './follow'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
 import { snapshotOf } from './sessions'
-import { type BaseCheck, type CandleGrid, coarser, divides, finerStored, nominalMs, sortByLength, validateBase } from './timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import { nextTask } from './yield'
+import { type BaseCheck, coarser, divides, finerStored, nominalMs, sortByLength, validateBase } from '../time/intervals'
 
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50

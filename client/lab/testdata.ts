@@ -2,7 +2,7 @@
 // for the lab's runner, plugin and alert tests.
 
 import type { ReplayBar } from '../replay/cache'
-import { FX_GRID } from '../replay/timeframes'
+import { FX_GRID } from '../time/timeframes'
 import type { LabData, SignalRequest } from './data'
 import type { SignalPoint } from './events'
 import { defaultRule, type Strategy, type StrategyRule } from './model'

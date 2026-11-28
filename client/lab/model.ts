@@ -26,8 +26,8 @@
 // PURE: no fetch, no DOM.
 
 import type { Rule } from '../alerts/types'
-import { resolutionDurationMs } from '../periods'
 import { COMMON_FUNCTIONS, type ExprScope, exprProblem, type FieldSpec, type FnSpec } from './expr'
+import { resolutionDurationMs } from '../time/intervals'
 
 export const STRATEGY_VERSION = 2
 

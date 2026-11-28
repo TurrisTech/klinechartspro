@@ -4,11 +4,11 @@ import { baseIntervalsFor } from '../capabilities'
 import { fetchBarsWidened } from '../history'
 import { answerableTo } from '../plugins/horizon'
 import type { PluginStream, Range } from '../plugins/types'
-import { periodToResolution } from '../periods'
 import { fetchSymbols, symbolVendor } from '../symbols'
 import { foldsIntradayRows } from '../tiles/derive'
 import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
-import { type CandleGrid, gridFor, isIntraday, nominalMs } from './timeframes'
+import { type CandleGrid, gridFor } from '../time/timeframes'
+import { isIntraday, nominalMs, periodToResolution } from '../time/intervals'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
 // every pane. No stream: only this client moves the clock.

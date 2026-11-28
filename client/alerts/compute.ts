@@ -13,7 +13,7 @@
 
 import { getIndicatorClass, type Indicator, type KLineData } from 'klinecharts'
 import type { ReplayBar } from '../replay/cache'
-import { toWall } from '../replay/timeframes'
+import { toWall } from '../time/timeframes'
 import { readField } from '../tsregistry/api'
 import { operandKey, WEEKDAYS } from './rules'
 import type { Track, Value } from './timeline'

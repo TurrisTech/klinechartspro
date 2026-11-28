@@ -1,12 +1,13 @@
 import { type Indicator, type IndicatorTemplate, type KLineData, registerIndicator } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import { peekStore } from '../plugins/store'
-import { nominalMs, scheduleIntervalEnd, sessionDated } from '../replay/timeframes'
+import { scheduleIntervalEnd, sessionDated } from '../time/timeframes'
 import { periodKey, type SessionClock, sessionDay } from '../tradetalk/calendar'
 import { AtomIndex, type Atoms, quantumFor, type SourceBar } from './atoms'
 import { VP_DEFAULTS, type VpConfig } from './config'
 import { type Profile, sumAtoms, toProfile } from './profile'
 import type { BarStore, Schedule } from './source'
+import { nominalMs } from '../time/intervals'
 
 // The volume profile's one klinecharts template, on the price pane.
 //

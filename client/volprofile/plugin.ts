@@ -3,11 +3,11 @@ import { baseIntervalsFor } from '../capabilities'
 import { phaseLabel } from '../plugins/legend'
 import { paneConfig } from '../plugins/paneconfig'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities } from '../plugins/types'
-import { nominalMs } from '../replay/timeframes'
 import { clockFor } from '../tradetalk/plugin'
 import { fromStoredVpConfig, normaliseVpConfig, toStoredVpConfig, VP_DEFAULTS, VP_FIELDS, type VpConfig } from './config'
 import { type BarStore, barSource, barSourceKey, pickSource, type Schedule, wireShift } from './source'
 import { isVolumeProfileIndicator, registerVolumeProfileIndicator, TEMPLATE_NAME } from './templates'
+import { nominalMs } from '../time/intervals'
 
 // The volume profile as a client plugin: one template on the price pane, at most one source
 // (bars of a lower timeframe than the chart, source.ts), and no server change of any kind --

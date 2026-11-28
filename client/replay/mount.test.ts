@@ -17,9 +17,9 @@ GlobalRegistrator.register({ url: 'http://test/' })
 const { mountBarReplay, bootReplay, resumeReplay, takeReplayNotice, REPLAY_WALL_CLASS } = await import('./index')
 const { summarizeSessions } = await import('./sessions')
 const { writeIntent } = await import('./persist')
-const { FX_SCHEDULE, fromWall } = await import('./timeframes')
-const { resolutionToPeriod } = await import('../periods')
+const { FX_SCHEDULE, fromWall } = await import('../time/timeframes')
 const { resetInstrumentConfigCache } = await import('../instrumentconfig')
+const { resolutionToPeriod } = await import('../time/intervals')
 
 const pristineFetch = globalThis.fetch
 afterAll(() => {

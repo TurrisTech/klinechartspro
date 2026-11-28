@@ -37,13 +37,14 @@
 
 import type { ReplayBar } from '../replay/cache'
 import { type BidAskBar, type BreakevenRequest, Engine, type Event, SimError, type Trade, type TrailRequest } from '../replay/engine'
-import { type CandleGrid, nominalMs } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import type { LabEntry } from './entries'
 import type { Compiled } from './expr'
 import type { Readings } from './graph'
 import type { CostSpec, Direction, ExitSpec, Level, Sizing } from './model'
 import { lastAtOrBefore } from './sorted'
 import { maxDrawdown } from '../trading/ledger'
+import { nominalMs } from '../time/intervals'
 
 export type ExitReason = 'stop' | 'target' | 'breakeven' | 'trail' | 'rule' | 'time' | 'opposite' | 'end'
 

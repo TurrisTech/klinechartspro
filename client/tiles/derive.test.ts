@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { KLineData } from 'klinecharts'
-import { tradingWeekOf } from '../daygeometry'
+import { tradingWeekOf } from '../time/daygeometry'
 import type { MarketHours } from '../symbols'
-import { scheduleIsMarketOpen, type TradingWeek, tradingFilter } from '../replay/timeframes'
+import { scheduleIsMarketOpen, type TradingWeek, tradingFilter } from '../time/timeframes'
 import { fold, foldedCoveredFrom, foldedCoveredTo, foldsIntradayRows, manifestDay, sourceInterval, sourceWindow } from './derive'
 import prod from './fixtures/trading-folds.json'
 import type { TileManifest } from './manifest'
@@ -10,7 +10,7 @@ import type { TileManifest } from './manifest'
 // Folding a derived timeframe out of the base tiles, in the browser.
 //
 // The aggregation is the easy half and the boundary arithmetic is not this file's to prove --
-// `../replay/timeframes.test.ts` pins every open, close and next-open against wmarkettypes for
+// `../time/timeframes.test.ts` pins every open, close and next-open against wmarkettypes for
 // both schedules. What is proved here is the part that only exists because the tiles are being
 // folded rather than fetched: where coverage has to stop, how far the read has to widen, and
 // which manifests may be folded at all.

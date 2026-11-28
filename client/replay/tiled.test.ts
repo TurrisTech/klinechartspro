@@ -4,7 +4,7 @@ import { installWindow } from '../plugins/testing'
 import type { TileColumns } from '../tiles/decode'
 import type { TileEntry, TileManifest } from '../tiles/manifest'
 import type { BarSource, Columns, ReplayBar } from './cache'
-import type { CandleGrid } from './timeframes'
+import type { CandleGrid } from '../time/timeframes'
 
 // THE REPLAY'S BARS FROM TILES: a read inside the tiles is answered from whole tiles held in
 // memory (bid and ask joined row for row), the next tile starts loading as one is read, what lies
@@ -14,7 +14,7 @@ import type { CandleGrid } from './timeframes'
 
 installWindow()
 const { TiledBarSource, barsBetween, pairColumns } = await import('./tiled')
-const { FX_GRID } = await import('./timeframes')
+const { FX_GRID } = await import('../time/timeframes')
 
 const M = 60_000
 const DAY = 86_400_000

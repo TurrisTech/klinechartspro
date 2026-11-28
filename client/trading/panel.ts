@@ -1,17 +1,6 @@
 import { OhlcvApiError } from '../config'
 import type { SimSnapshot } from './api'
-import {
-  formatInstant,
-  formatMoney,
-  formatShare,
-  formatPips,
-  formatPnl,
-  formatPrice,
-  formatUnits,
-  toPips,
-  tradePips,
-  tradePnl
-} from './format'
+import { formatMoney, formatShare, formatPips, formatPnl, formatPrice, formatUnits, toPips, tradePips, tradePnl } from './format'
 import { amendmentRefusal, describeAmendment, type ProposedChange } from './amend'
 import { closeReasonWords } from './exits'
 import type { InstrumentInfo } from './instrument'
@@ -22,6 +11,7 @@ import { pricingContext, tradeFigures } from './metrics'
 import { type PerfContext, PerformanceView } from './perfview'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
+import { formatInstant } from '../time/format'
 
 // The trading panel: an account strip and the working-orders / open-positions / history tables.
 // It reads and acts ONLY through the `TradingSession` interface, so the same panel serves a

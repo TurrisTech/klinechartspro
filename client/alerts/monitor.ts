@@ -20,9 +20,8 @@
 
 import type { NotificationSink } from '../notifications'
 import type { OHLCVBar } from '../ohlcv'
-import { resolutionDurationMs } from '../periods'
 import { toReplayBar } from '../replay/source'
-import type { CandleGrid } from '../replay/timeframes'
+import type { CandleGrid } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { byInterval, labelOperand, leadInFor, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
@@ -35,6 +34,7 @@ import { pointSource } from './catalogue'
 import { type ClientAlertStore, signature } from './store'
 import { freshRun, type Instant, instants, type RunState, spend, stepInstant, type Track, unspent } from './timeline'
 import type { Alert, Operand } from './types'
+import { resolutionDurationMs } from '../time/intervals'
 
 /** The stream, as much of it as the monitor uses -- the page's `stream` is one. */
 interface BarStream {

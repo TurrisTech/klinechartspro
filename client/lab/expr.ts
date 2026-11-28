@@ -21,6 +21,8 @@
 // PURE: no data, no DOM. What a name or a function MEANS is the caller's (`ExprEnv`); this
 // module only knows how to read and combine them.
 
+import { isInterval, nominalMs, parseInterval } from '../time/intervals'
+
 export type ExprValue = number | boolean | string | undefined
 
 export type Ast =
@@ -118,13 +120,12 @@ function common(name: string, args: ExprValue[]): ExprValue | typeof NOT_COMMON 
 
 const NOT_COMMON = Symbol('not-common')
 
-const UNIT_MINUTES: Record<string, number> = { s: 1 / 60, m: 1, h: 60, D: 1440, W: 10080 }
-
-/** `'8h'` -> 480. Calendar months and years have no fixed length and are refused. */
+/** `'8h'` -> 480. Calendar months and years have no fixed length and are refused. Read with the
+ * client's one interval parser (time/intervals.ts). */
 export function timeframeMinutes(code: string): number | undefined {
-  const m = /^(\d+)([smhDW])$/.exec(code)
-  if (!m) return undefined
-  return Number(m[1]) * UNIT_MINUTES[m[2]]
+  if (!isInterval(code)) return undefined
+  const { unit } = parseInterval(code)
+  return unit === 'M' || unit === 'Y' ? undefined : nominalMs(code) / 60_000
 }
 
 // -- tokens ------------------------------------------------------------------------------------

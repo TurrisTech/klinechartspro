@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { goToInstant, isTradingDay, onBaseBoundary } from './clock'
-import { CONTINUOUS_DAY, FX_GRID, fromWall, gridOf, toWall } from './timeframes'
+import { CONTINUOUS_DAY, FX_GRID, fromWall, gridOf, toWall } from '../time/timeframes'
 
 // GO TO: a time of day on the instrument's own clock, on its next trading day, at its next
 // occurrence, or on a chosen date -- the target a Go to advance runs to (session.ts `goTo`).

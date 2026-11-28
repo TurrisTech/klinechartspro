@@ -4,11 +4,11 @@ import type { MtfInterval } from './api'
 import { GRAPH_ROOTS, MTF_DEFAULTS, graphConfig, graphLineStyle, type MtfConfig, type MtfTimeframeStyle } from './config'
 import type { MtfOverlay } from './overlays'
 import { chartBarAt, chartOpens } from './shift'
-import { resolutionDurationMs } from '../periods'
 import { peekStore } from '../plugins/store'
 import type { MtfGraphStore } from './store'
-import { gridOf, type Schedule } from '../replay/timeframes'
+import { gridOf, type Schedule } from '../time/timeframes'
 import { timestampCalc } from '../plugins/calc'
+import { resolutionDurationMs } from '../time/intervals'
 
 // ONE klinecharts indicator template per overlay (overlays.ts), on the price pane, drawing
 // that overlay's signals from as many timeframes as the user has switched on.
