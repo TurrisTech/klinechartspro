@@ -12,7 +12,19 @@ import { createBasketPanel } from './basketview'
 import { HttpLabData } from './data'
 import { download, fileStem, ImportError, readStrategyFile, strategyJson } from './export'
 import { createStrategyEditor } from './editor'
-import { newStrategyId, type Problem, rank85Strategy, ruleStrategy, type Strategy, strategyProblems } from './model'
+import {
+  normalInstrument,
+  type Problem,
+  rank85Strategy,
+  ruleStrategy,
+  type Strategy,
+  strategyCopy,
+  strategyProblems,
+  utcDay,
+  utcDayStart,
+  withHoldoutKind,
+  withWindowKind
+} from './model'
 import { DEFAULT_SHOW, LAB_DRAFT_TEMPLATE, type LabExtendData, publishRun, registerLabTemplate, type ShowOptions } from './overlay'
 import { createResultsView } from './results'
 import { createRunsPanel, type RunRecord, RunHistory } from './runs'
@@ -70,16 +82,6 @@ function storageSet(key: string, value: string): void {
   } catch {
     // A per-device convenience only.
   }
-}
-
-/** A `yyyy-mm-dd` day of a range window, which counts in UTC days, the last one included. */
-function dayOf(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10)
-}
-
-function dayStart(day: string): number | null {
-  const ms = Date.parse(`${day}T00:00:00Z`)
-  return Number.isFinite(ms) ? ms : null
 }
 
 /** Whether a key press belongs to a field being typed in rather than to the page. */
@@ -255,8 +257,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   /** A new draft: the rank 85 rules, the rule-event pair, or a copy of this one. */
   function createNew(kind: 'rank85' | 'rule' | 'copy'): void {
     const now = Date.now()
-    const fresh: Strategy =
-      kind === 'copy' ? { ...structuredClone(current()), id: newStrategyId(now), name: `${current().name} copy`, createdAt: now, updatedAt: now } : kind === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
+    const fresh: Strategy = kind === 'copy' ? strategyCopy(current(), now) : kind === 'rule' ? ruleStrategy(now) : rank85Strategy(now)
     fresh.instrument = current().instrument
     drafts.set(fresh.id, fresh)
     touched.add(fresh.id)
@@ -360,9 +361,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     })
     .catch(() => {})
   instrument.addEventListener('change', () => {
-    const raw = instrument.value.trim()
-    const at = raw.indexOf(':')
-    current().instrument = at > 0 ? `${raw.slice(0, at).toLowerCase()}:${raw.slice(at + 1).toUpperCase()}` : `oanda:${raw.toUpperCase()}`
+    current().instrument = normalInstrument(instrument.value)
     instrument.value = current().instrument
     editor.render()
     edited()
@@ -376,14 +375,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     ],
     'days',
     (value) => {
-      const w = current().window
-      if (value === 'range' && w.kind === 'days') {
-        // The same span, as dates: from N days ago through today.
-        const today = dayStart(dayOf(Date.now())) as number
-        current().window = { kind: 'range', from: today - (w.days - 1) * DAY_MS, to: today + DAY_MS }
-      } else if (value === 'days' && w.kind === 'range') {
-        current().window = { kind: 'days', days: Math.max(1, Math.round((w.to - w.from) / DAY_MS)) }
-      }
+      // The same span, as dates or as days. The draft is edited in place: the editor holds it.
+      Object.assign(current(), withWindowKind(current(), value, Date.now()))
       refreshHead()
       edited()
     }
@@ -412,8 +405,8 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     i.setAttribute('aria-label', label)
     i.title = `${label} (a UTC day; the last day is included)`
     i.addEventListener('change', () => {
-      const from = dayStart(fromDate.value)
-      const to = dayStart(toDate.value)
+      const from = utcDayStart(fromDate.value)
+      const to = utcDayStart(toDate.value)
       if (from === null || to === null) return
       current().window = { kind: 'range', from, to: to + DAY_MS }
       edited()
@@ -436,11 +429,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     ],
     '',
     (value) => {
-      if (value === 'percent') current().holdout = { kind: 'percent', percent: 30 }
-      else if (value === 'from') {
-        const { from, to } = runWindow(current())
-        current().holdout = { kind: 'from', at: dayStart(dayOf(to - (to - from) * 0.3)) as number }
-      } else current().holdout = null
+      Object.assign(current(), withHoldoutKind(current(), value, runWindow(current())))
       refreshHead()
       edited()
     }
@@ -469,7 +458,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
   holdoutDate.setAttribute('aria-label', 'Holdout from')
   holdoutDate.title = 'The first day held out (UTC)'
   holdoutDate.addEventListener('change', () => {
-    const at = dayStart(holdoutDate.value)
+    const at = utcDayStart(holdoutDate.value)
     if (at === null) return
     current().holdout = { kind: 'from', at }
     edited()
@@ -581,15 +570,15 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     windowKind.value = w.kind
     days.value = w.kind === 'days' ? String(w.days) : ''
     if (w.kind === 'range') {
-      if (document.activeElement !== fromDate) fromDate.value = dayOf(w.from)
-      if (document.activeElement !== toDate) toDate.value = dayOf(w.to - DAY_MS)
+      if (document.activeElement !== fromDate) fromDate.value = utcDay(w.from)
+      if (document.activeElement !== toDate) toDate.value = utcDay(w.to - DAY_MS)
     }
     for (const n of [days, daysWord]) n.hidden = w.kind !== 'days'
     for (const n of [fromDate, toWord, toDate]) n.hidden = w.kind !== 'range'
     const h = current().holdout
     holdoutKind.value = h?.kind ?? ''
     if (h?.kind === 'percent' && document.activeElement !== holdoutPercent) holdoutPercent.value = String(h.percent)
-    if (h?.kind === 'from' && document.activeElement !== holdoutDate) holdoutDate.value = dayOf(h.at)
+    if (h?.kind === 'from' && document.activeElement !== holdoutDate) holdoutDate.value = utcDay(h.at)
     for (const n of [holdoutPercent, holdoutPercentWord]) n.hidden = h?.kind !== 'percent'
     holdoutDate.hidden = h?.kind !== 'from'
     const dirty = unsaved(currentId)

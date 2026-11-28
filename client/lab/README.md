@@ -97,7 +97,7 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, âˆ
 
 | module | does | pure? |
 |---|---|---|
-| `model.ts` | the strategy and its rules, their defaults and presets, the slot scopes, `strategyProblems`, `readStrategy` and `migrateV1` | yes |
+| `model.ts` | the strategy and its rules, their defaults and presets, the slot scopes, `strategyProblems`, `readStrategy` and `migrateV1`; the edits the editor and the page make that are more than setting a field (a rule's new root, a step or an entry on or off, a rule added, copied or removed, a signal added or removed, the window or the holdout of another kind, a copy), each a new strategy or rule out, which the caller writes back into the draft it holds by reference | yes |
 | `rules.ts` | a rule as the graph builder's spec, its entry test, its signals, its timeframes | yes |
 | `expr.ts` | the expression language | yes |
 | `graph.ts` | the slotted graph builder (`buildRootGraphs`), `slotEnv` | yes |
