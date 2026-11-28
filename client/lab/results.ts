@@ -9,6 +9,7 @@ import type { LabRun } from './runner'
 import type { ExitReason, LabTrade } from './trades'
 import { resolutionDurationMs } from '../time/intervals'
 import { button, el } from '../ui/dom'
+import { tickerOf } from '../symbols'
 
 // GLUE (DOM). What a run found, in four views:
 //
@@ -821,7 +822,7 @@ export function createResultsView(handlers: ResultsHandlers): ResultsView {
 
 /** The instrument's quote currency (what P&L is counted in): EURUSD's USD. */
 function quoteOf(r: LabRun): string {
-  return r.symbol.split(':')[1]?.slice(3) || 'quote'
+  return tickerOf(r.symbol).slice(3) || 'quote'
 }
 
 // -- the equity curve -------------------------------------------------------------------------------

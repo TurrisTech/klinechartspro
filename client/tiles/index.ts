@@ -26,6 +26,7 @@ import type { Tiled } from './join'
 import { manifestFor, type TileManifest, tilesUpTo } from './manifest'
 import { isIntraday } from '../time/intervals'
 import type { MarketHours } from '../time/markethours'
+import { instrumentKey, splitInstrumentKey } from '../symbols'
 
 /** Every bar the manifest's tiles hold in `[from, to)`, or null if any of them will not load.
  * Null is never "no bars": a tile that will not load must fall back for the whole window
@@ -72,9 +73,7 @@ export async function barsFromTiles(
   advertised: (vendor: string) => string[] | null = advertisedBaseIntervals,
   hours: (vendorSymbol: string) => Promise<MarketHours | null> = marketHoursOf
 ): Promise<Tiled<KLineData> | null> {
-  const [vendor, symbol] = vendorSymbol.includes(':')
-    ? vendorSymbol.split(':', 2)
-    : ['oanda', vendorSymbol]
+  const { vendor, ticker: symbol } = splitInstrumentKey(vendorSymbol)
 
   // Only an interval the server lists as tiled has a tree of its own. Any other's manifest is a
   // certain 404 -- a round trip spent before the fold can start, and a red line in the console,
@@ -118,7 +117,7 @@ async function foldedFromTiles(
   if (code === null) return null
   // Asked alongside the manifest rather than after it: both are cached for the page, so only the
   // first fold per instrument waits on either, and then on the slower of the two, not the sum.
-  const week = isIntraday(code) ? hours(`${vendor}:${symbol}`).then(tradingWeekOf, () => null) : Promise.resolve(null)
+  const week = isIntraday(code) ? hours(instrumentKey(vendor, symbol)).then(tradingWeekOf, () => null) : Promise.resolve(null)
   const manifest = await manifestFor(vendor, symbol, code)
   if (manifest === null) return null
   const day = manifestDay(manifest)

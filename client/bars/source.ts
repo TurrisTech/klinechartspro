@@ -5,6 +5,7 @@ import { isNoData, type OHLCVBar } from '../ohlcv'
 import type { BarSource, Columns, ReplayBar } from './cache'
 import type { CandleGrid } from '../time/timeframes'
 import { nominalMs, storedLadderFor } from '../time/intervals'
+import { splitInstrumentKey } from '../symbols'
 
 // GLUE. `BarSource` over `/getbars` -- the only module in client/replay that fetches bars. It
 // reads PAST the page-wide read clock on purpose (`asof: null`): the caches are the replay's
@@ -32,7 +33,7 @@ const SERVER: StoredProbeDeps = { get: apiGet, advertised: advertisedBaseInterva
  * candle is composed from, the refinement ladder of the fill engine -- so an interval the server
  * would only fold (schwab's 1h) is never asked about: its bar is there, and proves nothing. */
 export async function probeStoredIntervals(symbol: string, at: number, grid: CandleGrid, deps: StoredProbeDeps = SERVER): Promise<string[]> {
-  const vendor = symbol.includes(':') ? symbol.split(':', 1)[0] : 'oanda'
+  const { vendor } = splitInstrumentKey(symbol)
   const candidates = storedLadderFor(deps.advertised(vendor))
   // All at once, not one after another: they are independent one-bar reads, and the user is
   // waiting on the last of them (the start dialog, or the replay wall's mount).

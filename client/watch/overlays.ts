@@ -1,6 +1,6 @@
 import type { Chart, Overlay, OverlayCreate } from 'klinecharts'
 import type { ChartProPane } from '../../src'
-import { symbolVendor } from '../symbols'
+import { symbolVendor, symbolKey } from '../symbols'
 import { registerWatchOverlay, WATCH_OVERLAY_NAME, type WatchOverlayData } from './template'
 import { instrumentTarget, priceLevel, type Watch } from './types'
 
@@ -186,7 +186,7 @@ export class WatchOverlays {
     const { pane, chart } = entry
     const anchor = anchorTimestamp(chart)
     const symbol = pane.getSymbol()
-    const drawn = `${anchor}|${symbolVendor(symbol)}:${symbol.ticker}`
+    const drawn = `${anchor}|${symbolKey(symbol)}`
     if (!force && drawn === entry.drawn) return
     entry.drawn = drawn
     this.clear(chart)

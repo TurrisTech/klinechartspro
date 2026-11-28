@@ -23,6 +23,7 @@ import { phaseLabel } from '../plugins/legend'
 import { registerMtfIndicators } from './templates'
 import { createMtfGraphStore, type MtfGraphStore, NODES_ARRAY } from './store'
 import type { Range } from '../paging'
+import { instrumentKey } from '../symbols'
 
 // A multi-timeframe signal overlay as a client plugin -- AREV21 MTF, and the arev21_outlier
 // rank overlays (overlays.ts says what differs between them). Each binding reads ONE source: the
@@ -210,7 +211,7 @@ export function createMtfPlugin(overlay: MtfOverlay = AREV21_MTF, load: LiveLoad
     maxStep: number,
     clock: CandleGrid
   ): SourceSpec<MtfSignalRow> => {
-    const symbol = `${ctx.vendor}:${ctx.ticker}`
+    const symbol = instrumentKey(ctx.vendor, ctx.ticker)
     const request = { symbol, source: overlay.source, params: overlay.params, timeframes: shown, roots, maxStep }
     /** The chart's loaded bars as instants: from the first one's open (less the gap before it) to
      * the last one's close -- and that close itself once the read clock has reached it and no bar

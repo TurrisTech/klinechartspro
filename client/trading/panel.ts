@@ -14,6 +14,7 @@ import { type PerfContext, PerformanceView } from './perfview'
 import { setTradePrefs, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { formatInstant } from '../time/format'
+import { tickerOf } from '../symbols'
 
 // The trading panel: an account strip and the working-orders / open-positions / history tables.
 // It reads and acts ONLY through the `TradingSession` interface, so the same panel serves a
@@ -308,7 +309,7 @@ export class TradingPanel {
       const row = this.row(trade.id)
       row.append(
         cell(sideBadge(trade.side)),
-        cell(shortSymbol(key)),
+        cell(tickerOf(key)),
         cell(formatUnits(trade.units)),
         cell(formatPrice(trade.entryPrice, prec)),
         cell(formatPrice(mark, prec)),
@@ -335,7 +336,7 @@ export class TradingPanel {
       const row = this.row(order.id)
       row.append(
         cell(sideBadge(order.side)),
-        cell(shortSymbol(order.symbol)),
+        cell(tickerOf(order.symbol)),
         cell(order.type.toUpperCase()),
         cell(formatUnits(order.units)),
         editableCell(formatPrice(order.price, prec), (raw) => this.edit('order', order.id, 'order', raw), this.proposedState('order', order.id, 'order')),
@@ -371,7 +372,7 @@ export class TradingPanel {
       const row = this.row(trade.id)
       row.append(
         cell(sideBadge(trade.side)),
-        cell(shortSymbol(trade.symbol)),
+        cell(tickerOf(trade.symbol)),
         cell(formatUnits(trade.units)),
         cell(formatPrice(trade.entryPrice, prec)),
         cell(formatPrice(trade.closePrice, prec)),
@@ -539,10 +540,6 @@ function emptyRow(text: string): HTMLElement {
   const div = el('div', 'wd-trade-empty')
   div.textContent = text
   return div
-}
-
-function shortSymbol(key: string): string {
-  return key.includes(':') ? key.split(':', 2)[1] : key
 }
 
 /** '' -> null (clear), a number -> that number, unparsable -> undefined (ignore). */

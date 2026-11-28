@@ -9,6 +9,7 @@ import type { ReplayBar } from '../bars/cache'
 import type { ReplayObserver } from './session'
 import { formatInstant } from '../time/format'
 import type { ObserverStop } from './walk'
+import { DEFAULT_VENDOR, instrumentKey, splitInstrumentKey, tickerOf } from '../symbols'
 
 // PRICE WATCHES ON A REPLAY WALL: the same lines, the same right-click, the same dialog and
 // the same Notification Center as a live wall — over the replay's own market instead of the
@@ -58,11 +59,11 @@ interface ReplayWatchesOptions {
 function normalise(target: string, fallbackVendor: string): string {
   const raw = target.trim()
   if (!raw) throw new Error('target is required')
-  const [head, ...rest] = raw.split(':')
-  const symbol = rest.length > 0 ? rest.join(':') : head
-  const vendor = rest.length > 0 ? head : fallbackVendor
+  // The replay's vendor for a bare symbol, not DEFAULT_VENDOR: a bare target on a coinbase replay
+  // means a coinbase instrument.
+  const { vendor, ticker: symbol } = raw.includes(':') ? splitInstrumentKey(raw) : { vendor: fallbackVendor, ticker: raw }
   if (!symbol) throw new Error(`not an instrument: '${target}'`)
-  return `${vendor.toLowerCase()}:${symbol.toUpperCase()}`
+  return instrumentKey(vendor.toLowerCase(), symbol.toUpperCase())
 }
 
 function field(name: string, label: string, description = ''): SourceField {
@@ -168,7 +169,8 @@ export class ReplayWatches implements ReplayObserver {
   private host: ReplayWatchHost | null = null
 
   constructor(private readonly opts: ReplayWatchesOptions) {
-    const vendor = opts.symbol.split(':')[0] || 'oanda'
+    // An empty vendor (':EURUSD') falls back as a bare one does.
+    const vendor = splitInstrumentKey(opts.symbol).vendor || DEFAULT_VENDOR
     this.source = new ReplayPriceSource(opts.symbol, vendor)
     this.registry = new LocalWatchRegistry({
       sources: [this.source],
@@ -316,7 +318,7 @@ export class ReplayWatches implements ReplayObserver {
   /** Why this instrument cannot be watched on this wall, or null when it can. The menu shows
    * it instead of offering rows that would create a watch nothing will ever evaluate. */
   canWatch(target: string): string | null {
-    return target === this.opts.symbol ? null : `Replay walks ${this.opts.symbol.split(':').pop()} only`
+    return target === this.opts.symbol ? null : `Replay walks ${tickerOf(this.opts.symbol)} only`
   }
 
   private raise(firing: WatchFiring): void {

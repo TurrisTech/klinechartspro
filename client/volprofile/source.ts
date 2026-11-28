@@ -6,6 +6,7 @@ import type { StreamListener } from '../stream'
 import { lowerBound, type SourceBar } from './atoms'
 import { isInterval, nominalMs, parseInterval } from '../time/intervals'
 import type { Page, Range } from '../paging'
+import { instrumentKey } from '../symbols'
 
 // Which bars the profile is built from, and reading them.
 //
@@ -181,7 +182,7 @@ function barStore(key: string): BarStore {
 }
 
 export function barSourceKey(vendor: string, ticker: string, source: string): string {
-  return `vp-bars|${vendor}:${ticker}|${source}`
+  return `vp-bars|${instrumentKey(vendor, ticker)}|${source}`
 }
 
 interface BarSourceOptions {
@@ -210,7 +211,7 @@ function toSourceBar(bar: { timestamp?: number; date?: number; open: number; hig
 }
 
 export function barSource(o: BarSourceOptions): SourceSpec<SourceBar> {
-  const vendorSymbol = `${o.vendor}:${o.ticker}`
+  const vendorSymbol = instrumentKey(o.vendor, o.ticker)
   const sourceMs = nominalMs(o.source)
   const chartMs = nominalMs(o.chart)
   return {

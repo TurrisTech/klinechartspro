@@ -3,7 +3,7 @@ import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolI
 import { baseIntervalsFor } from '../capabilities'
 import { fetchBarsWidened } from '../history'
 import { answerableTo } from '../time/horizon'
-import { fetchSymbols, symbolVendor } from '../symbols'
+import { fetchSymbols, symbolVendor, instrumentKey, symbolKey } from '../symbols'
 import { foldsIntradayRows } from '../tiles/derive'
 import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from '../bars/cache'
 import { type CandleGrid, gridFor } from '../time/timeframes'
@@ -82,7 +82,7 @@ class ReplayDatafeed implements Datafeed {
     }
     this.hub.loadsInFlight++
     try {
-      return await fetchBarsWidened(`${vendor}:${symbol.ticker}`, interval, f, t, direction === 'older' ? HISTORY_WINDOW_BARS : null, direction)
+      return await fetchBarsWidened(instrumentKey(vendor, symbol.ticker), interval, f, t, direction === 'older' ? HISTORY_WINDOW_BARS : null, direction)
     } catch (err) {
       console.error('[replay] history fetch failed', err)
       return []
@@ -106,7 +106,7 @@ class ReplayDatafeed implements Datafeed {
 }
 
 function feedKey(vendor: string, ticker: string, interval: string): string {
-  return `${vendor}:${ticker}|${interval}`
+  return `${instrumentKey(vendor, ticker)}|${interval}`
 }
 
 interface PushReport {
@@ -263,7 +263,7 @@ export class ReplayFeedHub {
     if (!held || !reloads(held.interval, held.grid.fromWire(held.interval, held.last), previous, this.cursor)) return null
     const symbolInfo = pane.getSymbol()
     const vendor = symbolVendor(symbolInfo)
-    this.reload(pane, `${vendor}:${symbolInfo.ticker}`, held.interval, held.grid)
+    this.reload(pane, instrumentKey(vendor, symbolInfo.ticker), held.interval, held.grid)
     return { paneId: pane.id, key: feedKey(vendor, symbolInfo.ticker, held.interval), pushed: 0, forming: false, reloaded: true, problem: null }
   }
 
@@ -321,7 +321,7 @@ export class ReplayFeedHub {
         const info = pane.getSymbol()
         const grid = gridFor(info)
         if (!grid) return
-        const symbol = `${symbolVendor(info)}:${info.ticker}`
+        const symbol = symbolKey(info)
         const interval = periodToResolution(pane.getPeriod())
         const bucketOpen = grid.start(interval, this.cursor - 1)
         if (bucketOpen >= this.cursor) return
@@ -344,7 +344,7 @@ export class ReplayFeedHub {
     const vendor = symbolVendor(symbolInfo)
     const ticker = symbolInfo.ticker
     const interval = periodToResolution(pane.getPeriod())
-    const symbol = `${vendor}:${ticker}`
+    const symbol = instrumentKey(vendor, ticker)
     const key = feedKey(vendor, ticker, interval)
     const feed = pane.getDatafeed() as ReplayDatafeed
     const callback = typeof feed?.callbackFor === 'function' ? feed.callbackFor(vendor, ticker, interval) : undefined

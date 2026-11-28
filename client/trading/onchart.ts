@@ -2,7 +2,7 @@ import type { Chart, Coordinate, Crosshair, Point } from 'klinecharts'
 import type { ChartProPane } from '../../src'
 import { OhlcvApiError } from '../config'
 import type { SimOrder, SimSnapshot, SimTrade } from './api'
-import { formatMoney, formatShare, formatPrice, formatUnitsShort, symbolKey } from './format'
+import { formatMoney, formatShare, formatPrice, formatUnitsShort } from './format'
 import { type InstrumentInfo, seedInstrument } from './instrument'
 import {
   type Amendment,
@@ -41,6 +41,7 @@ import { type CardAction, h, moveText, OrderCard } from './ordercard'
 import { setTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
 import { Arming } from '../ui/arming'
+import { symbolKey } from '../symbols'
 
 // The HTML half of what a trading session puts on one candle pane: a LABEL on every trade line
 // and the ORDER CARD (ordercard.ts). Mounted inside klinecharts' own price-area container

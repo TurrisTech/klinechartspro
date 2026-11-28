@@ -9,6 +9,7 @@ import { DEFAULT_SHOW, LAB_TEMPLATE, publishRun, registerLabTemplate, type ShowO
 import { type LabRun, runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'
 import type { Range } from '../paging'
+import { instrumentKey } from '../symbols'
 
 // A SAVED STRATEGY ON A DASHBOARD PANE -- where a strategy developed in the Strategy Lab goes
 // once it is good. One template, `LAB:strategy` (./overlay.ts, the same drawing the lab's chart
@@ -177,7 +178,7 @@ export function createLabPlugin(options: LabPluginOptions = {}): IndicatorPlugin
         return { sources: [], label: () => `Strategy · ${why}`, extendData: () => ({ runKey: null, chartInterval: ctx.interval, show }) }
       }
       const id = strategy.id
-      const symbol = `${ctx.vendor}:${ctx.ticker}`
+      const symbol = instrumentKey(ctx.vendor, ctx.ticker)
       const key = `lab|${id}|${symbol}|${pane.trades ? 'sim' : 'nosim'}`
       const source: SourceSpec<RunPoint> = {
         id: 'run',

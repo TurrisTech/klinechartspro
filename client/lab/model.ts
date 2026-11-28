@@ -626,7 +626,11 @@ export function utcDayStart(day: string): number | null {
 }
 
 /** An instrument as the header takes it -- `vendor:TICKER`, or a bare ticker for OANDA -- as the
- * lab names it: the vendor in lower case, the ticker in upper. */
+ * lab names it: the vendor in lower case, the ticker in upper.
+ *
+ * Parsed and spelled here rather than with symbols.ts's helpers, and 'oanda' written out where that
+ * module says DEFAULT_VENDOR, because this module is pure and tested without a `window`, which
+ * symbols.ts reads at import (through config.ts); symbols.test.ts holds the two together. */
 export function normalInstrument(raw: string): string {
   const text = raw.trim()
   const at = text.indexOf(':')

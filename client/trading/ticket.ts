@@ -19,7 +19,7 @@ import {
   trailReadout,
   unitSize
 } from './exits'
-import { formatMoney, formatPrice, formatUnits, formatUnitsShort, symbolKey, toPips } from './format'
+import { formatMoney, formatPrice, formatUnits, formatUnitsShort, toPips } from './format'
 import type { InstrumentInfo } from './instrument'
 import { allow, armKey, CONFIRM_MS, ExitField, FigureList, h, kbtn, LevelField, NumberField } from './kit'
 import {
@@ -73,6 +73,7 @@ import {
 } from './order'
 import { type ProtectMode, SIZE_MODES, type SizeMode, setTradePrefs, sizedByStop, subscribeTradePrefs, tradePrefs } from './prefs'
 import type { TradingSession } from './session'
+import { symbolKey, tickerOf } from '../symbols'
 
 // The order ticket: the TRADE BOX's contents. Side, type, size, price, stop and target -- and what
 // they add up to before anything is sent.
@@ -853,7 +854,7 @@ export class OrderTicket implements DraftController {
     const sell = this.side === 'sell'
 
     this.element.dataset.side = this.side
-    this.symbolNode.textContent = this.key.includes(':') ? this.key.split(':', 2)[1] : this.key
+    this.symbolNode.textContent = tickerOf(this.key)
     this.renderPosition(ctx)
     const spread = quote ? toPips(quote.ask - quote.bid, info.pipSize) : null
     this.sides.set(

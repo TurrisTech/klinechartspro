@@ -1,5 +1,6 @@
 import { WindowStore } from '../plugins/store'
 import type { Range } from '../paging'
+import { instrumentKey } from '../symbols'
 
 // THE store class for every registry-driven source, and deliberately the only one.
 //
@@ -132,5 +133,5 @@ export function storeFactory(foldBy: string | null | undefined): (key: string) =
  * the data, and nothing else. The format is the one the AREV sources have always used, so a
  * registry-driven arev21 source and the MTF overlay's land on the same store. */
 export function registrySourceKey(name: string, vendor: string, ticker: string, interval: string): string {
-  return `${name}|${vendor}:${ticker}|${interval}`
+  return `${name}|${instrumentKey(vendor, ticker)}|${interval}`
 }

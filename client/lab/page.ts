@@ -9,7 +9,7 @@ import { builtinPlugins } from '../builtins'
 import { createFacilities } from '../facilities'
 import { createPluginHost } from '../plugins'
 import type { CandleGrid } from '../time/timeframes'
-import { fetchSymbolInfo, fetchSymbols } from '../symbols'
+import { fetchSymbolInfo, fetchSymbols, DEFAULT_VENDOR, splitInstrumentKey, symbolKey } from '../symbols'
 import { loadLabCatalogue, labIntervals, type LabCatalogue } from './catalogue'
 import { createBasketPanel } from './basketview'
 import { HttpLabData } from './data'
@@ -172,7 +172,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
 
   const basketPanel = createBasketPanel({
     strategy: () => session.current,
-    symbols: () => fetchSymbols('').then((list) => list.map((s) => `${s.exchange ?? 'oanda'}:${s.ticker}`)),
+    symbols: () => fetchSymbols('').then((list) => list.map(symbolKey)),
     run: (strategy, symbol, isCancelled) => session.basketRun(strategy, symbol, isCancelled),
     open: (symbol) => {
       session.setInstrument(symbol)
@@ -304,7 +304,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     .then((list) => {
       for (const s of list) {
         const option = document.createElement('option')
-        option.value = `${s.exchange ?? 'oanda'}:${s.ticker}`
+        option.value = symbolKey(s)
         symbols.appendChild(option)
       }
     })
@@ -765,9 +765,9 @@ async function mountLabChart(
   view: () => { runKey: string; show: ShowOptions; selected: string | null }
 ): Promise<LabChart> {
   registerLabTemplate()
-  const [vendor, ticker] = instrument.split(':')
+  const { vendor, ticker } = splitInstrumentKey(instrument)
   const layout = defaultLayout(instrument)
-  layout.panes = [{ s: ticker, ...(vendor !== 'oanda' ? { v: vendor } : {}), p: DEFAULT_PERIOD, mi: [], si: [] }]
+  layout.panes = [{ s: ticker, ...(vendor !== DEFAULT_VENDOR ? { v: vendor } : {}), p: DEFAULT_PERIOD, mi: [], si: [] }]
   const hydrated = await hydrateLayout(layout)
   const levels = createLevelsIndicators()
   const pluginHost = await createPluginHost({
@@ -837,8 +837,8 @@ async function mountLabChart(
     async setInstrument(next: string) {
       if (next === symbol) return
       symbol = next
-      const at = next.indexOf(':')
-      const info: SymbolInfo = await fetchSymbolInfo(next.slice(at + 1), next.slice(0, at))
+      const parts = splitInstrumentKey(next)
+      const info: SymbolInfo = await fetchSymbolInfo(parts.ticker, parts.vendor)
       pane()?.setSymbol(info)
     },
     draw,

@@ -5,6 +5,7 @@ import type { InstrumentInfo } from './instrument'
 import type { Amendment } from './lines'
 import { levelRefusal, restingRefusal } from './levels'
 import { closingPrice, fillingPrice, outcome, pricingContext, protectionValid } from './metrics'
+import { tickerOf } from '../symbols'
 
 // A change to a working stop, target or pending price, put to the user before it is sent -- in
 // words, and checked against what the engine would refuse. PURE, and shared: the chart's labels and
@@ -66,7 +67,7 @@ export function describeAmendment(
   const position = trade ?? order
   if (!position) return null
   const precision = info.precision
-  const ticker = position.symbol.includes(':') ? position.symbol.split(':', 2)[1] : position.symbol
+  const ticker = tickerOf(position.symbol)
   if (a.role === 'manage') return describeManagement(a.manage ?? {}, position, trade !== undefined, ticker, snapshot, info)
   const what = a.role === 'stop' ? 'stop loss' : a.role === 'target' ? 'take profit' : `${order?.type ?? 'order'} price`
   const whose = trade

@@ -14,8 +14,10 @@ export function availablePeriods(): Period[] {
   return periods.length > 0 ? periods : [{ multiplier: 1, timespan: 'hour', text: '1h' }]
 }
 
-/** The canonical `vendor:SYMBOL` spelling `scopedIntervals` names instruments by. */
-function instrumentKey(vendor: string, ticker: string): string {
+/** The canonical `vendor:SYMBOL` spelling `scopedIntervals` names instruments by: a key to match
+ * the server's list against whatever case either side wrote, so not symbols.ts's `instrumentKey`,
+ * which spells a key exactly as given. */
+function scopedKey(vendor: string, ticker: string): string {
   return `${vendor.toLowerCase()}:${ticker.toUpperCase()}`
 }
 
@@ -35,15 +37,17 @@ export function offeredIntervalCodes(
 ): string[] {
   const scoped = caps.scopedIntervals ?? {}
   const scoping = caps.features.includes('scopedIntervals')
-  const key = instrumentKey(vendor, ticker)
+  const key = scopedKey(vendor, ticker)
   return caps.intervals.filter((code) => {
     const named = scoped[code]
-    if (named) return named.some((item) => instrumentKey(...splitKey(item)) === key)
+    if (named) return named.some((item) => scopedKey(...splitScopedItem(item)) === key)
     return scoping || !(isInterval(code) && parseInterval(code).unit === 's')
   })
 }
 
-function splitKey(item: string): [string, string] {
+// Not symbols.ts's `splitInstrumentKey` either: a bare item here gets an empty vendor, so it names
+// no vendor's instrument, where a bare key there is the default vendor's.
+function splitScopedItem(item: string): [string, string] {
   const at = item.indexOf(':')
   return at < 0 ? ['', item] : [item.slice(0, at), item.slice(at + 1)]
 }

@@ -6,6 +6,7 @@ import { balancesBefore, closedShareOfBalance } from './ledger'
 import { amountText, type LevelBasis, levelReadout } from './levels'
 import { orderFigures, outcome, type PricingContext, pricingContext, sizeFigures, tradeFigures } from './metrics'
 import { formatInstant } from '../time/format'
+import { tickerOf } from '../symbols'
 
 // What the position popup (inspector.ts) says about one trade or order. PURE: the rows are
 // worked out from a snapshot here and only drawn there, so the figures are tested on their own
@@ -48,10 +49,6 @@ export function findInspected(snapshot: SimSnapshot, id: string): Inspected | nu
 function tone(value: number | null | undefined): StatTone {
   if (value === null || value === undefined || !Number.isFinite(value) || value === 0) return ''
   return value > 0 ? 'up' : 'down'
-}
-
-function ticker(key: string): string {
-  return key.includes(':') ? key.split(':', 2)[1] : key
 }
 
 /** A stop or target as every surface states it: the price, then what the readout beside a level
@@ -103,7 +100,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     rows.push(...noteRows(order.label))
     return {
       kind: 'order',
-      title: `${order.side === 'buy' ? 'Buy' : 'Sell'} ${order.type} ${formatUnitsShort(order.units)} ${ticker(key)}`,
+      title: `${order.side === 'buy' ? 'Buy' : 'Sell'} ${order.type} ${formatUnitsShort(order.units)} ${tickerOf(key)}`,
       side: order.side,
       headline: null,
       rows
@@ -111,7 +108,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
   }
 
   const { trade } = item
-  const title = `${trade.side === 'buy' ? 'Long' : 'Short'} ${formatUnitsShort(trade.units)} ${ticker(key)}`
+  const title = `${trade.side === 'buy' ? 'Long' : 'Short'} ${formatUnitsShort(trade.units)} ${tickerOf(key)}`
   if (trade.closedAt !== null) {
     const exit = trade.closePrice !== null ? outcome(trade.side, trade.units, trade.entryPrice, trade.closePrice, ctx) : null
     const pnl = trade.realizedPnl ?? exit?.amount ?? null

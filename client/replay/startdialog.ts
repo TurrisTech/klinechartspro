@@ -7,6 +7,7 @@ import { defaultRange, randomStart, type StartRange } from './pick'
 import { createSessionList, type SessionsSource } from './sessionlist'
 import { button, el, select } from '../ui/dom'
 import { chartTheme } from '../ui/theme'
+import { tickerOf } from '../symbols'
 
 // GLUE (DOM). The start dialog the rail's Replay button opens: plain DOM in the house style
 // (`kc-*` tokens, `wd-replay-*` classes), centred on the app and dragged by its title. Two tabs
@@ -101,7 +102,7 @@ export function openStartDialog(options: StartDialogOptions | RefusedDialogOptio
   dialog.appendChild(newPane)
 
   const info = el('div', 'wd-replay-dialog-info')
-  info.textContent = `${options.symbol.split(':')[1] ?? options.symbol} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
+  info.textContent = `${tickerOf(options.symbol)} · panes: ${sortByLength(options.intervalsInUse).join(', ') || '—'}`
   newPane.appendChild(info)
 
   // New replay: the start form, or -- when this instrument cannot start one -- why not.

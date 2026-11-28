@@ -16,7 +16,7 @@ import { describeUnavailable, fetchMtfGraph, type MtfGraphAnswer, type MtfGraphR
 import { fetchPoints } from '../plugins/api'
 import { TiledBarSource } from '../bars/tiled'
 import { type CandleGrid, gridFor } from '../time/timeframes'
-import { fetchSymbolInfo } from '../symbols'
+import { fetchSymbolInfo, splitInstrumentKey } from '../symbols'
 import type { AlertBar, PointSource } from './compute'
 
 export type Point = { date: number } & Record<string, unknown>
@@ -49,8 +49,8 @@ export class HttpAlertData implements AlertData {
   grid(symbol: string): Promise<CandleGrid | null> {
     let grid = this.grids.get(symbol)
     if (!grid) {
-      const at = symbol.indexOf(':')
-      grid = fetchSymbolInfo(symbol.slice(at + 1), symbol.slice(0, at))
+      const { vendor, ticker } = splitInstrumentKey(symbol)
+      grid = fetchSymbolInfo(ticker, vendor)
         .then((info) => gridFor(info))
         .catch(() => null)
       this.grids.set(symbol, grid)

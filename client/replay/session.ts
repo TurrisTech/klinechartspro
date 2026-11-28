@@ -13,6 +13,7 @@ import { snapshotOf } from './sessions'
 import type { CandleGrid } from '../time/timeframes'
 import { type BaseCheck, nominalMs, validateBase } from '../time/intervals'
 import { type ObserverStop, ReplayWalker, summaryIntervals, type WalkObserver, type WalkState } from './walk'
+import { tickerOf } from '../symbols'
 
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
 const QUOTE_PROBE_BARS = 50
@@ -941,9 +942,4 @@ class ReplayRequestError extends OhlcvApiError {
     super(400, 'invalid_request', message)
     this.name = 'ReplayRequestError'
   }
-}
-
-/** `EURUSD` of `oanda:EURUSD`: how the controls and the refusals name an instrument. */
-function tickerOf(symbol: string): string {
-  return symbol.split(':').pop() ?? symbol
 }

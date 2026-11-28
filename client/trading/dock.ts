@@ -3,7 +3,7 @@ import { createDockableWindow } from '../chrome/window'
 import { fetchClosedBars } from '../bars/closed'
 import { gridFor } from '../time/timeframes'
 import { chartTheme } from '../ui/theme'
-import { formatShare, formatPnl, symbolKey } from './format'
+import { formatShare, formatPnl } from './format'
 import { type AtrReading, atrReading } from './exits'
 import { PositionInspector } from './inspector'
 import { instrumentInfo, seedInstrument, type InstrumentInfo } from './instrument'
@@ -12,6 +12,7 @@ import { TradingOverlays } from './overlays'
 import { TradingPanel } from './panel'
 import type { TradingSession } from './session'
 import { OrderTicket } from './ticket'
+import { symbolKey } from '../symbols'
 
 // The trading dock, mode-agnostic: the panel (account strip, tables), the order ticket, the
 // position popup, the per-pane overlays, the windows they live in, open/close and teardown --

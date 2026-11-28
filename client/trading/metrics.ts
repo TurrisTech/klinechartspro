@@ -27,6 +27,8 @@ export interface Currencies {
 /** The currencies of a pair ticker -- `EURUSD`, `EUR_USD`, `SPX500_USD` (quote only is
  * meaningful there) -- or null for a ticker that names none (`SPY`). */
 export function pairCurrencies(key: string): Currencies | null {
+  // symbols.ts's `tickerOf`, written out: this module is pure and tested without a `window`, which
+  // symbols.ts reads at import (through config.ts). symbols.test.ts holds the two together.
   const ticker = (key.includes(':') ? key.split(':', 2)[1] : key).toUpperCase()
   const six = /^([A-Z]{3})([A-Z]{3})$/.exec(ticker)
   if (six) return { base: six[1], quote: six[2] }
