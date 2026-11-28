@@ -1,5 +1,6 @@
 import { KLineChartPro, type Period, type SymbolInfo } from '../../src'
-import { button, el, input, select } from '../alerts/dom'
+import { Arming } from '../ui/arming'
+import { button, el, input, select } from '../ui/dom'
 import { WdashboardDatafeed } from '../datafeed'
 import { defaultLayout, hydrateLayout, toPaneOptions } from '../layout'
 import { createLevelsIndicators } from '../levels/indicator'
@@ -54,6 +55,8 @@ const CURRENT_KEY = 'wd.lab.current'
 const AUTO_KEY = 'wd.lab.autorun'
 const SPLIT_KEY = 'wd.lab.split'
 const AUTO_DELAY_MS = 700
+/** How long an armed Delete (or Discard) waits for its second press. */
+const DELETE_CONFIRM_MS = 3000
 const DEFAULT_PERIOD = '5m'
 const DAY_MS = 86_400_000
 /** Where a picked entry lands across the chart: 40% from the left, 60% of the view after it. */
@@ -259,23 +262,21 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     scheduleRun()
   })
   revert.title = 'Discard the changes since the last Save'
-  let deleteArmed: ReturnType<typeof setTimeout> | null = null
   /** A saved strategy is deleted; a draft never saved is discarded -- the same button. */
   const removeWord = (): string => (session.isSaved() ? 'Delete' : 'Discard')
+  const paintRemove = (): void => {
+    const armed = deleteArming.key !== null
+    remove.textContent = armed ? `${removeWord()}?` : removeWord()
+    remove.classList.toggle('is-armed', armed)
+  }
+  const deleteArming = new Arming(paintRemove, DELETE_CONFIRM_MS)
+  /** Unarmed, with the word repainted either way: how a strategy just opened gets its own. */
   const disarm = (): void => {
-    if (deleteArmed) clearTimeout(deleteArmed)
-    deleteArmed = null
-    remove.textContent = removeWord()
-    remove.classList.remove('is-armed')
+    deleteArming.disarm()
+    paintRemove()
   }
   const remove = button('wd-lab-menu-item wd-lab-delete', 'Delete', () => {
-    if (!deleteArmed) {
-      remove.textContent = `${removeWord()}?`
-      remove.classList.add('is-armed')
-      deleteArmed = setTimeout(disarm, 3000)
-      return
-    }
-    disarm()
+    if (!deleteArming.press('delete')) return
     closePops()
     try {
       session.remove()
@@ -517,7 +518,7 @@ export async function runLab(container: HTMLElement, params: URLSearchParams): P
     revert.disabled = !dirty || !saved
     save.textContent = saved ? 'Save' : 'Save new'
     revert.hidden = !saved
-    if (!deleteArmed) remove.textContent = removeWord()
+    if (deleteArming.key === null) remove.textContent = removeWord()
     remove.title = saved ? 'Delete this strategy (press twice)' : 'Discard this draft, never saved (press twice)'
     // A fresh default nobody has touched holds nothing to discard.
     remove.disabled = !session.removable

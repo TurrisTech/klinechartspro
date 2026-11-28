@@ -36,7 +36,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`) and their keys (plain DOM, `kc-*`/`wd-replay-*`). |
 | `startdialog.ts` | The start dialog: its New replay tab (the start form, or why this instrument cannot start one) and its Sessions tab. |
 | `sessionlist.ts` | The list of past replays the dialog's Sessions tab and the window's Sessions panel both show: each row's facts and score, Stats, Delete, Resume. |
-| `dom.ts` | The small DOM builders those three share (`el`, `button`, `toggleButton`, `select`, `checkbox`, `dayInput`, `flash`, `chartTheme`). |
+| `dom.ts` | The DOM builders those three share whose markup is the replay's own (`toggleButton`, `checkbox`, `dayInput`, `flash`, and `REPLAY_SELECT`, how every replay picker is built). The plain ones -- `el`, `button`, `select` -- are every surface's, `../ui/dom.ts`; the chart's theme is `../ui/theme.ts`. |
 | `pickbar.ts` | The start dialog's **On chart**: hover a bar, see what the replay will hide, click it. |
 | `index.ts` | `mountBarReplay` — mirrors `mountPaperTrading` on the shared `mountTradingDock`; `startReplayFlow`, `bootReplay`, `clearReplay`. |
 
@@ -143,7 +143,7 @@ chart grid (`.wd-replay-wall`, on the container), so the wall reads as history a
 far away or rolled up the controls are. Round the grid rather than each pane: every pane is on the
 one replay clock, and a per-pane edge would collide with the active pane's ring.
 
-**Exit is one press** (since 2026-11-15). It took two -- the trading kit's `Arming`, its rule for
+**Exit is one press** (since 2026-11-15). It took two -- `Arming` (`../ui/arming.ts`), the rule for
 buttons that cannot be taken back -- while nothing listed a replay to reopen. The start dialog's
 **Sessions** tab now does ("Past sessions", below), and so does the window's own **Sessions**
 panel, so leaving is no longer losing, and its title says where to find the replay again. The rail's Replay button is one press too while in

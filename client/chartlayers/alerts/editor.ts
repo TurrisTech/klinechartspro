@@ -13,6 +13,8 @@
 // client/watch/menu.ts gives (`.klinecharts-pro` clips its overflow and defines the `kc-*`
 // tokens). Plain DOM, like every control in client/.
 
+import { el } from '../../ui/dom'
+
 interface PriceAlertEditorOptions {
   /** An element inside the pane, whose themed root the card is appended into. */
   host: HTMLElement
@@ -61,13 +63,6 @@ export interface PriceAlertEditor {
 
 const EDGE_MARGIN = 8
 const ANCHOR_GAP = 12
-
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  node.className = className
-  if (text !== undefined) node.textContent = text
-  return node
-}
 
 /** A buffer the box can hold: a finite number, not negative. */
 function parsePips(raw: string): number | null {

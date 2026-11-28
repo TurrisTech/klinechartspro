@@ -1,4 +1,5 @@
 import type { SymbolInfo } from '../../src'
+import { Arming } from '../ui/arming'
 import { OhlcvApiError } from '../config'
 import type { SimOrderType, SimSide } from './api'
 import {
@@ -20,7 +21,7 @@ import {
 } from './exits'
 import { formatMoney, formatPrice, formatUnits, formatUnitsShort, symbolKey, toPips } from './format'
 import type { InstrumentInfo } from './instrument'
-import { Arming, allow, armKey, ExitField, FigureList, h, kbtn, LevelField, NumberField } from './kit'
+import { allow, armKey, CONFIRM_MS, ExitField, FigureList, h, kbtn, LevelField, NumberField } from './kit'
 import {
   defaultRestingPrice,
   type LevelRole,
@@ -244,7 +245,7 @@ export class OrderTicket implements DraftController {
   ) {
     this.symbol = ctx.activeSymbol()
     this.key = symbolKey(this.symbol)
-    this.arming = new Arming(() => this.refresh())
+    this.arming = new Arming(() => this.refresh(), CONFIRM_MS)
     this.element = h('div', 'wd-tk wd-trade-ticket')
 
     const head = h('div', 'wd-tk-head')

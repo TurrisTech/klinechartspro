@@ -18,6 +18,9 @@ import type { StatRow } from './stats'
 // Styles are `wd-tk-*`, scoped under a `.wd-tk` root (each surface puts it on its own root) so a
 // rule that colours a border beats the library's `.klinecharts-pro * { border-color }` on the pane.
 
+/** An element, its classes and its text. Not client/ui/dom.ts's `el`, which every other surface
+ * builds with: `h` leaves the class attribute out when there are no classes, where `el` writes an
+ * empty one, and the kit's markup is written that way. */
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text?: string): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag)
   if (className) node.className = className
@@ -50,7 +53,8 @@ export function allow(b: HTMLButtonElement, refusal: string | null, title = ''):
 
 // -- two presses -------------------------------------------------------------------------------
 
-const CONFIRM_MS = 3_000
+/** How long a trading surface's armed button waits for its second press (client/ui/arming.ts). */
+export const CONFIRM_MS = 3_000
 
 /** The keys a pending second press is held under, one spelling for every surface. */
 export const armKey = {
@@ -59,36 +63,6 @@ export const armKey = {
   close: (id: string, fraction: number) => `close:${id}:${fraction}`,
   reverse: (id: string) => `reverse:${id}`,
   cancel: (id: string) => `cancel:${id}`
-}
-
-/** Two-press confirmation with no modal: the first press relabels the button, a second within
- * `CONFIRM_MS` goes ahead -- or the first does, with one-click trading on. */
-export class Arming {
-  key: string | null = null
-  private timer: ReturnType<typeof setTimeout> | null = null
-
-  constructor(private readonly onChange: () => void) {}
-
-  /** True when the action should happen now. */
-  press(key: string, oneClick: boolean): boolean {
-    if (oneClick || this.key === key) {
-      this.disarm()
-      return true
-    }
-    this.key = key
-    if (this.timer) clearTimeout(this.timer)
-    this.timer = setTimeout(() => this.disarm(), CONFIRM_MS)
-    this.onChange()
-    return false
-  }
-
-  disarm(): void {
-    if (this.timer) clearTimeout(this.timer)
-    this.timer = null
-    if (this.key === null) return
-    this.key = null
-    this.onChange()
-  }
 }
 
 // -- a number with steps -----------------------------------------------------------------------

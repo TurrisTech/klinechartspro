@@ -13,7 +13,9 @@ import type { SimTrade } from '../trading/api'
 import { toWall } from '../time/timeframes'
 import { createDockableWindow } from '../chrome/window'
 import { sortByLength, validateBase } from '../time/intervals'
-import { button, chartTheme, checkbox, dayInput, el, flash, select, toggleButton } from './dom'
+import { checkbox, dayInput, flash, REPLAY_SELECT, toggleButton } from './dom'
+import { button, el, select } from '../ui/dom'
+import { chartTheme } from '../ui/theme'
 
 // GLUE (DOM). The replay controls: plain DOM in the house style (`kc-*` tokens, `wd-*` classes),
 // driven by a `ReplayController` they do not implement. The start dialog is ./startdialog.ts, the
@@ -434,7 +436,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     const pace = select(
       PLAY_DELAYS_MS.map((ms) => ({ value: String(ms), label: delayLabel(ms) })),
       String(player.delayMs),
-      (value) => player.setDelay(Number(value))
+      (value) => player.setDelay(Number(value)),
+      REPLAY_SELECT
     )
     pace.classList.add('wd-replay-pace')
     pace.title = 'Play: the time between two steps (it also waits for the chart to load)'
@@ -481,7 +484,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         }
         const chosen = choices.find((c) => c.value === value)
         if (chosen) controller.setAdvance(chosen.step)
-      }
+      },
+      REPLAY_SELECT
     )
     picker.classList.add('wd-replay-step-size')
     picker.title = 'How far one Step goes. Custom step… takes any amount: 15h, 30h, 90m, 2D, 3 × 4h'
@@ -673,7 +677,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
           { value: 'local', label: `${zoneName(mine)} (yours)` }
         ],
         setting.zone,
-        (value) => quiet.set({ ...quiet.value, zone: value === 'local' ? 'local' : 'replay' })
+        (value) => quiet.set({ ...quiet.value, zone: value === 'local' ? 'local' : 'replay' }),
+        REPLAY_SELECT
       )
       zone.setAttribute('aria-label', 'Quiet hours clock')
       zone.title = 'The clock the hours are read on: the replay’s, as the title bar shows it, or your own'
@@ -905,7 +910,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
         goTo = { ...goTo, mode: value as GoToMode, day: goTo.day ?? nextDayOf(controller.cursor, zone) }
         writeGoTo(goTo)
         renderBody()
-      }
+      },
+      REPLAY_SELECT
     )
     mode.title = 'Next trading day: that time on the first day after the replay’s own that the market trades. Next time: the next time the clock reads it.'
     mode.setAttribute('aria-label', 'Go to which day')
@@ -1006,7 +1012,8 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
       (value) => {
         const check = controller.setBase(value)
         if (!check.ok) flash(win.element, check.reason ?? 'Invalid base')
-      }
+      },
+      REPLAY_SELECT
     )
     basePicker.disabled = busyShown()
     basePicker.title = baseCheck.ok

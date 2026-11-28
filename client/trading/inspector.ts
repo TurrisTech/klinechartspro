@@ -1,8 +1,9 @@
 import { OhlcvApiError } from '../config'
 import { createDockableWindow, type DockableWindow, type Point } from '../chrome/window'
+import { Arming } from '../ui/arming'
 import { amendmentRefusal, describeAmendment } from './amend'
 import type { InstrumentInfo } from './instrument'
-import { Arming, armKey, ConfirmBar, type ConfirmView, FigureList, h, kbtn, type TradeAction, TradeActions } from './kit'
+import { armKey, CONFIRM_MS, ConfirmBar, type ConfirmView, FigureList, h, kbtn, type TradeAction, TradeActions } from './kit'
 import { closeFraction, reverseTrade, tradeActionsView } from './manage'
 import { pricingContext } from './metrics'
 import type { PanelAmendments } from './panel'
@@ -78,7 +79,7 @@ export class PositionInspector {
     })
     this.win.setVisible(false)
     this.win.body.classList.add('wd-tk')
-    this.arming = new Arming(() => this.render())
+    this.arming = new Arming(() => this.render(), CONFIRM_MS)
     this.headline = h('div', 'wd-pos-headline')
     this.figures = new FigureList('is-single')
     this.confirmBar = new ConfirmBar(

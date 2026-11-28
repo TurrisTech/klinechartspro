@@ -1,6 +1,8 @@
 import { createDockableWindow, type DockableWindow } from '../chrome/window'
 import { instrumentZone } from '../trading/instrument'
-import { Arming } from '../trading/kit'
+import { Arming } from '../ui/arming'
+import { button, el } from '../ui/dom'
+import { chartTheme } from '../ui/theme'
 import { labelOperand, type ServerCatalogue } from './catalogue'
 import { createAlertEditor, type EditorContext } from './editor'
 import { describeRule, type Labeller } from './rules'
@@ -11,8 +13,8 @@ import { formatInstant } from '../time/format'
 // GLUE (DOM). THE ALERT MANAGER: one window listing every alert, by kind.
 //
 //   Client  this browser's alerts (./store.ts): switch one on or off, re-arm one that fired,
-//           edit it, delete it (two presses -- the trading kit's rule for anything that
-//           cannot be taken back), or write a new one (./editor.ts, in this same window)
+//           edit it, delete it (two presses, ../ui/arming.ts -- the house rule for anything
+//           that cannot be taken back), or write a new one (./editor.ts, in this same window)
 //   Server  alerts the server evaluates, which fire with every tab closed. Not built: the tab
 //           says so, and says what does run on the server today (price watches)
 //
@@ -22,6 +24,8 @@ import { formatInstant } from '../time/format'
 
 const WINDOW_KEY = 'alerts'
 const DOCK_ORDER = 30
+/** How long an armed Delete waits for its second press. */
+const CONFIRM_MS = 3_000
 
 interface AlertManagerOptions {
   store: ClientAlertStore
@@ -57,7 +61,7 @@ export function createAlertManager(options: AlertManagerOptions): AlertManager {
   let tab: AlertKind = 'client'
   let catalogue: ServerCatalogue | null = null
   const label: Labeller = (operand) => labelOperand(operand, catalogue)
-  const arming = new Arming(() => render())
+  const arming = new Arming(() => render(), CONFIRM_MS)
 
   // Built on first open, not with the wall: a window clamps its size to the chart as it stands
   // when it is made, and while the wall is still mounting the chart is a fraction of its
@@ -70,7 +74,7 @@ export function createAlertManager(options: AlertManagerOptions): AlertManager {
       className: 'wd-alerts-window',
       title: 'Alerts',
       bounds: options.bounds,
-      theme: document.querySelector('.klinecharts-pro.dark') ? 'dark' : '',
+      theme: chartTheme(),
       defaultMode: 'float',
       floatAnchor: 'center',
       floatSize: { width: 660, height: 540 },
@@ -278,19 +282,4 @@ export function createAlertManager(options: AlertManagerOptions): AlertManager {
       made?.dispose()
     }
   }
-}
-
-function el(tag: string, className: string): HTMLElement {
-  const node = document.createElement(tag)
-  node.className = className
-  return node
-}
-
-function button(className: string, text: string, onClick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.type = 'button'
-  b.className = className
-  b.textContent = text
-  b.addEventListener('click', onClick)
-  return b
 }

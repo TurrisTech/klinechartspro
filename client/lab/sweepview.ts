@@ -1,8 +1,8 @@
-import { button, el } from '../alerts/dom'
 import { figuresTable } from './figtable'
 import type { Strategy } from './model'
 import type { LabRun } from './runner'
 import { defaultRange, formatNumber, type ParamInfo, runSweep, type SweepRow, type SweepTarget, sweepTargets, sweepValues } from './sweep'
+import { button, el } from '../ui/dom'
 
 // GLUE (DOM). The Sweep panel: pick one number of the draft (sweep.ts lists every one), a range
 // and how many values, and run the draft once per value; a row of figures per value. "Use" puts a
