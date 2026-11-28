@@ -10,7 +10,7 @@ import { getIndicatorClass } from 'klinecharts'
 import { BUILTIN_INDICATORS, loadServerCatalogue, type ServerCatalogue, type SignalFamily } from '../alerts/catalogue'
 import { offeredIntervalCodes } from '../periods'
 import { loadRegistry, type RegistryParam } from '../tsregistry/api'
-import libraryIndicators from '../../src/indicators'
+import { libraryIndicators } from '../../src'
 import type { Side } from './model'
 import { resolutionDurationMs } from '../time/intervals'
 

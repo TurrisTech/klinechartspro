@@ -1,3 +1,4 @@
+// The pure module rather than the '../../src' barrel, as in ./calendar.ts.
 import { wallClock } from '../../src/indicators/sessions'
 import type { HeathLevel } from './heathlevels'
 import {

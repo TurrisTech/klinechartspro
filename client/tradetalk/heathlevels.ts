@@ -1,3 +1,4 @@
+// The pure module rather than the '../../src' barrel, as in ./calendar.ts.
 import { swingMask } from '../../src/indicators/swing'
 import type { Candle } from './calendar'
 
