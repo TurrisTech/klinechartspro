@@ -648,7 +648,11 @@ describe('the status line', () => {
     // What was asked for -- never "0 bars" or "nothing working" for a step that seeked.
     ['a walked step', { reason: 'target', walked: true, bars: [{}, {}] as never }, 'Stepped 5m'],
     ['a seeked step', { reason: 'target', walked: false }, 'Stepped 5m'],
-    ['a step of several candles', { reason: 'target', request: { interval: '15m', multiple: 3 } }, 'Stepped 3 × 15m']
+    ['a step of several candles', { reason: 'target', request: { interval: '15m', multiple: 3 } }, 'Stepped 3 × 15m'],
+    // As the step picker words it: 5m is a timeframe here (a pane shows it), so five 1m candles
+    // are not "5m"; 15m is not, so fifteen read as the span.
+    ['five 1m candles where 5m is a timeframe', { reason: 'target', request: { interval: '1m', multiple: 5 } }, 'Stepped 5 × 1m'],
+    ['fifteen 1m candles where 15m is not', { reason: 'target', request: { interval: '1m', multiple: 15 } }, 'Stepped 15m']
   ]
 
   test('is absent until an advance has stopped', () => {

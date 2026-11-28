@@ -603,7 +603,7 @@ export function createReplayControls(options: ReplayControlsOptions): ReplayCont
     } else if (last) {
       // Absent until an advance has stopped.
       const reason = el('span', `wd-replay-stop-reason is-${last.reason}`)
-      reason.textContent = describeStop(last, controller.grid.schedule.timezone, controller.snapshot.trades)
+      reason.textContent = describeStop(last, controller.grid.schedule.timezone, timeframes(), controller.snapshot.trades)
       reason.title = last.alert?.readings ? `${reason.textContent} — ${last.alert.readings}` : reason.textContent
       row.appendChild(reason)
     }
@@ -1070,11 +1070,6 @@ function advanceChoices(controller: ReplayController, inUse: string[]): string[]
   return sortByLength([...new Set([controller.base, ...controller.storedIntervals, ...inUse, controller.advance.interval])])
 }
 
-/** "1h" for one candle, "15h" for fifteen hourly ones, "3 × 4h" for several longer ones. */
-function describeAdvance(advance: { interval: string; multiple: number }): string {
-  return describeStep(advance)
-}
-
 /** "¼ s", "1 s": the pace picker's labels. */
 function delayLabel(ms: number): string {
   const fractions: Record<number, string> = { 250: '¼ s', 500: '½ s' }
@@ -1139,7 +1134,9 @@ function isEditable(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable || target.closest('.klinecharts-pro-pane-grip') !== null
 }
 
-function describeStop(result: AdvanceResult, zone: string, trades?: readonly SimTrade[]): string {
+/** Why the last advance stopped. `timeframes` are the step picker's, so a step reads as it does
+ * there: fifteen 1m candles are "15 × 1m" where 15m is a timeframe of its own, not "15m". */
+function describeStop(result: AdvanceResult, zone: string, timeframes: readonly string[], trades?: readonly SimTrade[]): string {
   switch (result.reason) {
     case 'alert':
       return `Alert: ${result.alert?.name ?? ''}`
@@ -1172,7 +1169,7 @@ function describeStop(result: AdvanceResult, zone: string, trades?: readonly Sim
       // What was asked for, which is what happened. Not the bars walked: whether the engine
       // walked them or seeked over the span (nothing working could fill) is the replay's
       // business, and "Jumped — nothing working" on a plain one-candle step read as an error.
-      if ('interval' in result.request) return `Stepped ${describeAdvance(result.request)}`
+      if ('interval' in result.request) return `Stepped ${describeStep(result.request, timeframes)}`
       return 'to' in result.request ? `Went to ${formatClock(result.to, zone)}` : 'Advanced'
   }
 }

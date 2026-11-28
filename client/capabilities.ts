@@ -215,6 +215,10 @@ export function loadCapabilities(): Promise<Capabilities> {
   if (inflight) return inflight
   inflight = apiGet<Capabilities>('/capabilities')
     .then((value) => {
+      // An empty 200 decodes to null: no document, so the defaults below.
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('/capabilities answered no capabilities document')
+      }
       cached = value
       return value
     })

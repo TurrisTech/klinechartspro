@@ -84,7 +84,8 @@ describe('the legend', () => {
     const spec = plugin.bind(ctx('1h'))
     expect(spec?.label(state({ phase: 'idle', bars: [] }))).toBe('VP 1m · loading')
     expect(spec?.label(state({ phase: 'ready', bars: [{ date: 10 * D }] }))).toBe('VP 1m · tick count')
-    expect(spec?.label(state({ phase: 'error', bars: [] }))).toBe('VP 1m · unavailable')
+    // Once, by the host: the ⚠ beside the × and its card, never the legend text as well.
+    expect(spec?.label(state({ phase: 'error', bars: [] }))).toBe('VP 1m')
   })
 
   test('says from when the source runs when it does not reach the first chart bar', () => {

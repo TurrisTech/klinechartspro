@@ -1,5 +1,6 @@
 import type { IndicatorGroup } from '../../src'
 import { baseIntervalsFor } from '../capabilities'
+import { phaseLabel } from '../plugins/legend'
 import { paneConfig } from '../plugins/paneconfig'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities } from '../plugins/types'
 import { nominalMs } from '../replay/timeframes'
@@ -109,8 +110,11 @@ export function createVolumeProfilePlugin(bases: (vendor: string) => string[] = 
         if (!chartHasVolume(ctx)) return 'VP · no volume'
         if (source === null) return `VP ${ctx.interval} · ${what}`
         const store = state.sources[0]?.store as BarStore | undefined
-        if (!store || store.phase === 'idle' || store.phase === 'loading') return `VP ${source} · loading`
-        if (store.phase === 'error') return `VP ${source} · unavailable`
+        // A failed source is the host's ⚠ beside the ×, and its card says why: the legend names
+        // the indicator alone (plugins/legend.ts).
+        if (!store) return `VP ${source} · loading`
+        const waiting = phaseLabel(`VP ${source}`, [store])
+        if (waiting !== null) return waiting
         const first = store.bars[0]
         let firstChart: number | undefined
         try {

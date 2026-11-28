@@ -38,6 +38,9 @@ const server = {
   /** How many of the next GETs answer 503, and likewise PUTs. */
   getFailures: 0,
   putFailures: 0,
+  /** How many of the next GETs, and likewise PUTs, a proxy answers 200 with an HTML page. */
+  getPages: 0,
+  putPages: 0,
   /** Every PUT's If-Match, null where it carried none. */
   ifMatches: [] as (string | null)[],
   /** Runs before each PUT is applied — lets a test move the revision under the client. */
@@ -53,6 +56,8 @@ function resetServer(overrides: Partial<typeof server> = {}): void {
     conflicts: 0,
     getFailures: 0,
     putFailures: 0,
+    getPages: 0,
+    putPages: 0,
     ifMatches: [],
     beforePut: null,
     ...overrides
@@ -69,7 +74,13 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       headers: { 'Content-Type': 'application/json' }
     })
 
+  const page = () => new Response('<!doctype html><title>Gateway</title>', { status: 200, headers: { 'Content-Type': 'text/html' } })
+
   if (method === 'GET') {
+    if (server.getPages > 0) {
+      server.getPages -= 1
+      return page()
+    }
     if (server.getFailures > 0) {
       server.getFailures -= 1
       return json(503, { code: 'unavailable', detail: 'appstate database unreachable' })
@@ -85,6 +96,11 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
     server.beforePut?.()
     const ifMatch = new Headers(init?.headers).get('If-Match')
     server.ifMatches.push(ifMatch)
+    if (server.putPages > 0) {
+      // A proxy's page in place of the answer: the server never saw the write.
+      server.putPages -= 1
+      return page()
+    }
     if (server.putFailures > 0) {
       server.putFailures -= 1
       return json(503, { code: 'unavailable', detail: 'appstate database unreachable' })
@@ -269,6 +285,43 @@ test('a server error on the write keeps the change and tries it again', async ()
     resetServer({ putFailures: 1 })
     server.data = { workspaces: 'theirs' }
     server.revision = 40
+    const prefs = await freshPreferences()
+    await prefs.loadPreferences()
+
+    prefs.savePreference('mine', 'landed')
+    await sleep(DEBOUNCE_MS + 50)
+    await prefs.settled()
+
+    expect(server.puts).toBe(2)
+    expect(server.data).toEqual({ workspaces: 'theirs', mine: 'landed' })
+  })
+})
+
+test('a read answered by a page that is not JSON is a failed read, and is tried again', async () => {
+  await quietly(async () => {
+    resetServer({ getPages: 2 })
+    server.data = { workspaces: 'theirs' }
+    server.revision = 30
+    const prefs = await freshPreferences()
+
+    expect(await prefs.loadPreferences()).toEqual({}) // GET 1: the page
+    expect(prefs.preferencesLoaded()).toBe(false)
+
+    prefs.savePreference('mine', 'landed')
+    await sleep(DEBOUNCE_MS + 50) // GET 2: the page again, so nothing is written
+    expect(server.puts).toBe(0)
+
+    await prefs.settled() // the retry reads the document, then writes on top of it
+    expect(server.ifMatches).toEqual(['"30"'])
+    expect(server.data).toEqual({ workspaces: 'theirs', mine: 'landed' })
+  })
+})
+
+test('a write answered by a page that is not JSON keeps the change and tries it again', async () => {
+  await quietly(async () => {
+    resetServer({ putPages: 1 })
+    server.data = { workspaces: 'theirs' }
+    server.revision = 50
     const prefs = await freshPreferences()
     await prefs.loadPreferences()
 

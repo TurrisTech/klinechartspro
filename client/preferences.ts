@@ -198,7 +198,9 @@ export async function settled(): Promise<void> {
 // (400, 413) would be repeated word for word.
 function transient(err: unknown): boolean {
   if (!(err instanceof OhlcvApiError)) return true
-  return err.status === 401 || err.status === 429 || err.status >= 500
+  // A success that is not JSON (a proxy's page, a cut-off body) does not say whether the write
+  // landed; the retry is conditional, so one that did is answered 412 and re-read.
+  return err.status === 401 || err.status === 429 || err.status >= 500 || err.code === 'not_json'
 }
 
 // Resolves a 412 by re-reading the current document and replaying the same changes on top of
