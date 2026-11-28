@@ -1,6 +1,7 @@
 import type { Chart, OverlayEvent } from 'klinecharts'
 import type { ChartProPane, SymbolInfo } from '../../src'
 import { onViewMoved } from '../chartview'
+import { getReadClock } from '../config'
 import { overlaySignature } from './paint'
 import { type LayerConfigCodec, layerConfigCodec } from '../plugins/settings/persist'
 import type { ChartLayer, LayerContext, LayerDecorator, LayerWindow } from './types'
@@ -137,10 +138,13 @@ export interface LayerController<TConfig extends object = object> {
 }
 
 // What one pane has fetched so far: `data` is everything the layer returned for `window`,
-// which grows as the view moves and is thrown away whenever `key` changes or the clock
-// passes `staleAt`.
+// which grows as the view moves and is thrown away whenever `key` or `clockToken` changes or
+// the clock passes `staleAt`.
 interface LayerCache<TDatum> {
   key: string
+  /** The layer's `readClockToken` for the read clock `data` was read under: what of a replay's
+   * clock decided the answer. '' for a layer that declares none. */
+  clockToken: string
   data: TDatum[]
   window: LayerWindow
   fetchedAt: number
@@ -197,6 +201,15 @@ export function createLayerController<TDatum, TConfig extends object>(
   const staleAt = (fetchedAt: number, ctx: LayerContext): number =>
     layer.staleAt ? layer.staleAt(fetchedAt, ctx) : fetchedAt + CACHE_TTL_MS
 
+  // What of the read clock decided what a pane reads now (types.ts `readClockToken`). Live (no
+  // read clock) is a token of its own, so a pane read under a replay's clock is not taken for
+  // the live answer or the other way round.
+  const clockToken = (ctx: LayerContext, config: TConfig): string => {
+    if (!layer.readClockToken) return ''
+    const clock = getReadClock()
+    return clock === null ? 'live' : layer.readClockToken(clock, ctx, config)
+  }
+
   const attach = (
     pane: ChartProPane,
     indicatorId: string,
@@ -224,6 +237,8 @@ export function createLayerController<TDatum, TConfig extends object>(
     let generation = 0
     /** Last price band seen by the axis watcher, as a change-detection signature. */
     let axisSignature = ''
+    /** The read clock as of the last sample, for a layer whose answer follows it. */
+    let sampledClock = layer.readClockToken ? getReadClock() : null
 
     // Whether the indicator is shown. klinecharts is the source of truth: the legend's eye
     // hides it without telling anyone, which is why this is sampled.
@@ -277,9 +292,14 @@ export function createLayerController<TDatum, TConfig extends object>(
       if (!ctx) return
 
       const key = layer.cacheKey(ctx, config)
+      // Taken with the request it is filed with: the read below is sent under the same clock.
+      const token = clockToken(ctx, config)
       const needed = windowOf(ctx)
       let held = owned.cache
-      if (held && (held.key !== key || Date.now() >= held.staleAt)) held = null
+      // A new token is a new answer for ALL of what is held, not only for ground the view has
+      // not covered yet: a zone already drawn can have been broken or retired since, and a merge
+      // keeps the copy it holds. So it is read again whole.
+      if (held && (held.key !== key || held.clockToken !== token || Date.now() >= held.staleAt)) held = null
 
       // Everything on screen is already in hand: restyle from it, no request. This is the
       // common case while panning, while rescaling the price axis within the band the pane
@@ -306,7 +326,7 @@ export function createLayerController<TDatum, TConfig extends object>(
         // Recomputed on every fetch, not carried over with `fetchedAt`: a layer whose horizon
         // depends on what the server has computed learns that from the answer it just got, so
         // an extension of the window is also the moment its horizon can move.
-        owned.cache = { key, data, window: target, fetchedAt, staleAt: staleAt(fetchedAt, ctx) }
+        owned.cache = { key, clockToken: token, data, window: target, fetchedAt, staleAt: staleAt(fetchedAt, ctx) }
         paint(data, ctx)
       } catch (err) {
         console.error(`[chartlayers] ${layer.id} fetch failed for pane ${pane.id}`, err)
@@ -339,18 +359,23 @@ export function createLayerController<TDatum, TConfig extends object>(
       clearOverlays()
     }
 
-    // Two things raise nothing a subscription could hear. The legend's eye hides and shows the
-    // indicator as klinecharts' own business. And rescaling the PRICE axis: klinecharts'
+    // Three things raise nothing a subscription could hear. The legend's eye hides and shows the
+    // indicator as klinecharts' own business. Rescaling the PRICE axis: klinecharts'
     // ActionType has no y-axis member, and the drag calls YAxis.setRange directly, so sampling
     // the band is the only way to notice that the view now reaches prices the pane never
-    // fetched. A sample where neither moved costs two cheap calls and schedules nothing; a
-    // moved band usually resolves to a repaint from what the pane already holds, and only
-    // reaches the network when it grew past it.
+    // fetched. And a replay step moving the read clock (client/config.ts): a pane coarser than
+    // the step gets no new bar, so no view event, while the zones it draws on a finer timeframe
+    // can have changed. A sample where none moved costs a few cheap calls and schedules nothing;
+    // a moved band usually resolves to a repaint from what the pane already holds, and only
+    // reaches the network when it grew past it, and a moved clock only when its token changed.
     const sample = (): void => {
       if (released) return
       const now = shown()
       const band = now ? visiblePriceBand(chart) : null
       const signature = band ? `${band.low}|${band.high}` : ''
+      const clock = layer.readClockToken ? getReadClock() : null
+      const clockMoved = clock !== sampledClock
+      sampledClock = clock
       if (now !== on) {
         if (!now) {
           turnOff()
@@ -364,7 +389,7 @@ export function createLayerController<TDatum, TConfig extends object>(
         void redraw()
         return
       }
-      if (!on || signature === axisSignature) return
+      if (!on || (signature === axisSignature && !clockMoved)) return
       axisSignature = signature
       scheduleRedraw()
     }

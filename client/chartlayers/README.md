@@ -154,9 +154,26 @@ what is left and work:
    behind — **bounded**, because "late" and "never coming" are indistinguishable from one
    observation. A layer that declares nothing falls back to a flat five-minute timer, which
    for levels meant a full refetch per pane twelve times an hour to be handed the same book.
-   `client/levels2/` is on that fallback today; its producer is manual, so it wants a
-   validator rather than a calendar horizon. The general pattern, and what each plugin would
-   need, is `notes/architecture/freshness-horizons.md` in the workspace.
+   `client/levels2/` is on that fallback live; its producer is manual, so it wants a
+   validator rather than a calendar horizon, and the server states none for it yet. The general
+   pattern, and what each plugin would need, is `notes/architecture/freshness-horizons.md` in
+   the workspace.
+
+   **Under a bar replay the read clock is the other half of that question.** Every read is
+   clamped to it (`client/config.ts` sends `asof`), so what a pane holds is the answer as of the
+   clock it was read under. `ChartLayer.readClockToken(clock, ctx, config)` says what of the
+   clock decides the answer: equal tokens, equal answers. The controller samples the clock with
+   the price band for a layer that declares one, and re-reads the pane's WHOLE window when the
+   token now differs from the one its data was read under -- a zone already drawn can have been
+   broken or retired since, and a merge would keep the copy held -- and nothing when it does not.
+   Zones declare it (`client/levels2/freshness.ts`): `/levels2` answers each zone as it stood at
+   the clock (wdashboard-server `clamp_zone_asof`), testing every stamp of an interval's zones
+   against one instant per (interval, clock), the open after the last bar closed by then
+   (`services/asof.py` `known_next_start_ms`), so the token is that instant for each timeframe
+   the pane draws, and a step re-reads exactly when it closes a bar of one of them. Until
+   2026-11-28 Zones had nothing, and a replay kept drawing them as of where it started. Levels
+   declares no token: the replay invalidates its views itself when a step passes a daily close
+   (`client/replay/index.ts`), which is when a 1W or 1M close can fall.
 3. **Would the picture differ?** `paint.ts`'s `overlaySignature` is taken over the overlays
    just built and compared with what is on the chart; equal means the chart is left alone
    instead of tearing down and rebuilding several hundred overlays. This is safe because of
@@ -196,10 +213,15 @@ through the real controller in happy-dom: click, bell, hover, editor, remove, re
 and across panes -- a bell on every pane of the instrument, one editor at a time, an edit or a
 removal on one pane reaching the others),
 `indicator.test.ts` (drawn only on panes carrying the template, off when
-hidden or removed, settings per pane, the wall document's shape, the legend, and what a
-decorator adds), `../levels/persist.test.ts` (what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
+hidden or removed, settings per pane, the wall document's shape, the legend, what a
+decorator adds, and that only a layer declaring a read-clock token follows the clock),
+`../levels/persist.test.ts` (what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
 `paint.test.ts` (the signature is blind to nothing visible and to everything invisible),
 `../levels/freshness.test.ts` (the horizon in all three states, both DST directions, and that
-a dead feed is still bounded), `../levels/levels.test.ts` (what identifies a request, what is
+a dead feed is still bounded), `../levels2/freshness.test.ts` (the read clock's token for zones:
+what the server's clamp knows through at a close, inside a bar, across the weekend and on a
+coinbase day), `../levels2/layer.test.ts` (Zones through the real controller under a moving
+read clock: re-read at a close of a timeframe drawn, drawn as of the new clock, and not
+otherwise), `../levels/levels.test.ts` (what identifies a request, what is
 drawn, the tick case end to end, that the horizon is read per instrument, and that a wall reads
 once per instrument while every pane draws what it drew reading alone).
