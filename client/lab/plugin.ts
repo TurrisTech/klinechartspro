@@ -2,7 +2,8 @@ import type { IndicatorGroup } from '../../src'
 import { loadServerCatalogue } from '../alerts/catalogue'
 import { phaseLabel } from '../plugins/legend'
 import { paneConfig } from '../plugins/paneconfig'
-import type { BindContext, BindingSpec, IndicatorPlugin, Phase, SourceSpec, SourceStore } from '../plugins/types'
+import { StoreStatus } from '../plugins/store'
+import type { BindContext, BindingSpec, IndicatorPlugin, SourceSpec, SourceStore } from '../plugins/types'
 import { gridFor } from '../time/timeframes'
 import { HttpLabData, type LabData } from './data'
 import { DEFAULT_SHOW, LAB_TEMPLATE, publishRun, registerLabTemplate, type ShowOptions } from './overlay'
@@ -42,18 +43,16 @@ interface RunPoint {
 }
 
 /** A source store holding one run over the union of every span asked of it. */
-export class RunStore implements SourceStore<RunPoint> {
-  rev = 0
-  phase: Phase = 'idle'
-  progress: number | null = null
-  error: string | null = null
+export class RunStore extends StoreStatus implements SourceStore<RunPoint> {
   run: LabRun | null = null
   /** The absolute span the run covers. */
   span: Range | null = null
   /** Set to make the next cover run again over the whole span. */
   stale = false
 
-  constructor(readonly key: string) {}
+  constructor(readonly key: string) {
+    super()
+  }
 
   get size(): number {
     return this.run ? this.run.entries.length + 1 : 0
@@ -76,13 +75,6 @@ export class RunStore implements SourceStore<RunPoint> {
     const held = this.span
     if (held && !this.stale && held.from <= window.from && held.to >= window.to) return []
     return [held ? { from: Math.min(held.from, window.from), to: Math.max(held.to, window.to) } : window]
-  }
-
-  setPhase(phase: Phase, progress: number | null = null, error: string | null = null): void {
-    this.phase = phase
-    this.progress = progress
-    this.error = error
-    this.rev++
   }
 }
 

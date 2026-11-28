@@ -278,6 +278,37 @@ describe('the view', () => {
     await flush()
     expect(fetches).toEqual(['EURUSD', 'EURUSD'])
   })
+
+  // types.ts `readClockToken`: a layer that says what of a replay's read clock decides its answer
+  // is read again when that changes, and only then, even with no view event (a pane coarser than
+  // the step gets no new bar); a layer that says nothing is not watched (Levels, which the replay
+  // invalidates itself, the test above). Zones end to end: levels2/layer.test.ts.
+  test('the read clock is followed by a layer that declares what of it decides the answer, and only by one', async () => {
+    const { setReadClock } = await import('../config')
+    cleanup.push(() => setReadClock(null))
+    setReadClock(5_000)
+    const followed: string[] = []
+    const ignored: string[] = []
+    const views = [
+      { fetches: followed, layer: { ...testLayer(followed), debounceMs: 1, readClockToken: (clock: number) => String(Math.floor(clock / 1_000)) } },
+      { fetches: ignored, layer: { ...testLayer(ignored), debounceMs: 1 } }
+    ]
+    for (const { layer } of views) {
+      const chart = testChart()
+      chart.indicators.push(indicator())
+      cleanup.push(createLayerController(layer, TEMPLATE).attach(fakePane('p1', chart.chart), 'ind1', DEFAULTS))
+    }
+    await flush()
+    expect([followed, ignored]).toEqual([['EURUSD'], ['EURUSD']])
+    // The same token: nothing to read.
+    setReadClock(5_500)
+    await sleep(SAMPLE)
+    expect([followed, ignored]).toEqual([['EURUSD'], ['EURUSD']])
+    // A new one: the layer that follows the clock reads again, the other does not.
+    setReadClock(6_000)
+    await sleep(SAMPLE)
+    expect([followed, ignored]).toEqual([['EURUSD', 'EURUSD'], ['EURUSD']])
+  })
 })
 
 describe('the plugin', () => {

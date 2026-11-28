@@ -69,6 +69,16 @@ export interface ChartLayer<TDatum, TConfig> {
    * identical at the moment of asking. `client/levels/freshness.ts` is the worked example.
    */
   staleAt?(fetchedAt: number, ctx: LayerContext): number
+  /** What of a bar replay's read clock decides the answer, as a token: two clocks with the same
+   * token are answered identically. Every read is clamped to that clock (`client/config.ts`
+   * sends it as `asof`), so what a pane holds is the answer as of the clock it was read under,
+   * and stops being it when the producer's record says more at a later one -- for zones, when a
+   * bar of a timeframe the pane draws closes (`client/levels2/freshness.ts`). The controller
+   * watches the clock for a layer that declares this, and re-reads a pane's whole window once
+   * the token of the clock now differs from the one its data was read under; a step that leaves
+   * the token alone reads nothing. Omit it and the clock is not watched: Levels is re-read by
+   * the replay itself, on a daily close (client/replay/index.ts `invalidate`). */
+  readClockToken?(clock: number, ctx: LayerContext, config: TConfig): string
   /** Defaults to the controller's own redraw debounce when omitted. */
   debounceMs?: number
   /** Price alerts on the layer's data (`alerts/`): a click on a datum's line enables an alert
