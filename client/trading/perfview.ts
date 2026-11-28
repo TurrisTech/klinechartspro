@@ -212,7 +212,7 @@ export class PerformanceView {
 
   private when(ms: number): string {
     const grid = this.ctx.grid()
-    return grid ? formatClock(ms, grid.schedule.timezone) : formatInstant(ms)
+    return grid ? formatClock(ms, grid.schedule.timezone) : formatInstant(ms, null)
   }
 
   private drawSummary(frame: Frame): void {

@@ -348,11 +348,11 @@ export class StreamClient {
       }
       return
     }
-    const max = capabilities().limits.maxSubscriptionsPerConnection
-    if (this.subscriptions.size + this.indicatorSubscriptions.size >= max) {
-      console.error(`[stream] refusing indicator ${seriesKey} — at the server's limit of ${max} subscriptions per connection`)
-      return
-    }
+    // Not charged against `maxSubscriptionsPerConnection`: that is the server's cap on BAR keys
+    // (livestream.py, the Rust subscribe.rs `claim`), and an indicator series has no cap there.
+    // Counting the two together refused a wall's last indicators with only a console line --
+    // 12 panes of two indicators got 20 of 24. A refusal the server does send still reaches the
+    // listener as an error status.
     this.indicatorSubscriptions.set(seriesKey, { vendor, symbol, interval, series, listeners: new Set([listener]) })
     this.send(this.indicatorSubscribeFrame(vendor, symbol, interval, series))
     this.connect()

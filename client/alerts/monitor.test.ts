@@ -79,7 +79,14 @@ class FakeData implements AlertData {
 
 function setup(history: AlertBar[], at: number) {
   let clock = at
-  const store = new ClientAlertStore({ load: async () => undefined, save: () => {} })
+  let stored: unknown
+  const store = new ClientAlertStore({
+    load: async () => undefined,
+    update: (apply, written) => {
+      stored = apply(stored)
+      written(stored)
+    }
+  })
   const stream = new FakeStream()
   const data = new FakeData(history)
   const raised: NotificationSpec[] = []

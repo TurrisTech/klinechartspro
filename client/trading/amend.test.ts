@@ -8,7 +8,7 @@ installWindow()
 const { amendmentRefusal, describeAmendment } = await import('./amend')
 
 const KEY = 'oanda:EURUSD'
-const INFO: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
+const INFO: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0, timezone: 'America/New_York' }
 
 const trade: SimTrade = {
   id: 't1', symbol: KEY, side: 'buy', units: 10_000, entryPrice: 1.1, openedAt: 0, orderId: 'o0',

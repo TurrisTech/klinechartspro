@@ -7,9 +7,19 @@
 //
 // A rule is compiled on every write (./rules.ts), so a rule that could never be evaluated is
 // refused when it is written instead of being an alert that silently never fires.
+//
+// EVERY WRITE IS AN EDIT BY ID, never this tab's whole list. The user runs a dozen tabs and more
+// than one device, and every tab's monitor records its firings: a tab that saved its copy of the
+// list on a firing erased every alert made elsewhere since it loaded, and switched back on any
+// it still held as on. Now an edit -- create, change, switch, re-arm, delete, a firing -- is
+// one function over the rows, run on this tab's at once and on the STORED list when the write
+// goes out (`AlertPersistence.update`, which preferences.ts runs again on a conflict). A firing
+// touches only the firing fields, skips an alert switched off or deleted elsewhere, and counts
+// one bar close once however many tabs saw it. Once written, the tab adopts the stored list --
+// every tab's alerts -- under its own edits still on their way.
 
 import { hasFeature } from '../capabilities'
-import { loadPreferences, preferencesLoaded, savePreference } from '../preferences'
+import { loadPreferences, preferencesLoaded, updatePreference } from '../preferences'
 import { compile, describeRule, type Labeller, RuleError } from './rules'
 import { type Alert, type AlertDefinition, type AlertSource, DEFAULT_REPEAT, DEFAULT_TRIGGER } from './types'
 
@@ -21,38 +31,44 @@ const DOCUMENT_VERSION = 1
 /** Where the list lives. */
 export interface AlertPersistence {
   load(): Promise<unknown>
-  save(document: unknown): void
+  /** Write `apply(stored)`, where `stored` is the document as it is when the write goes out --
+   * not as this tab last read it -- then tell `written` what was stored. */
+  update(apply: (stored: unknown) => unknown, written: (stored: unknown) => void): void
 }
 
 function preferencesPersistence(): AlertPersistence {
   return {
     load: async () => {
       const data = await loadPreferences()
-      // A failed read answers `{}`, which would read as "no alerts" -- and the next save would
-      // write that list over the stored one.
+      // A failed read answers `{}`, which would read as "no alerts".
       if (!preferencesLoaded()) throw new Error('the preferences store could not be read')
       return data[PREFERENCE_KEY]
     },
-    save: (document) => savePreference(PREFERENCE_KEY, document)
+    update: (apply, written) => updatePreference(PREFERENCE_KEY, apply, written)
   }
 }
 
 function localPersistence(storage: () => Storage | null = () => window.localStorage): AlertPersistence {
+  const read = (): unknown => {
+    try {
+      const raw = storage()?.getItem(STORAGE_KEY)
+      return raw ? JSON.parse(raw) : undefined
+    } catch {
+      return undefined
+    }
+  }
   return {
-    load: async () => {
+    load: async () => read(),
+    // Synchronous, and every tab of this browser shares the one storage: read, edit, write.
+    update: (apply, written) => {
+      const next = apply(read())
       try {
-        const raw = storage()?.getItem(STORAGE_KEY)
-        return raw ? JSON.parse(raw) : undefined
-      } catch {
-        return undefined
-      }
-    },
-    save: (document) => {
-      try {
-        storage()?.setItem(STORAGE_KEY, JSON.stringify(document))
+        storage()?.setItem(STORAGE_KEY, JSON.stringify(next))
       } catch (err) {
         console.warn('[alerts] could not save to localStorage', err)
+        return
       }
+      written(next)
     }
   }
 }
@@ -73,6 +89,50 @@ export function normaliseSymbol(symbol: string): string {
 /** A stored alert with its internal status: `disabled` is derived from `enabled`, never kept. */
 type Row = Omit<Alert, 'status'> & { status: 'armed' | 'fired' }
 
+/** One change to the list, by id. Run on this tab's rows and on the stored ones, which may lack
+ * its row or hold another version of it, so it decides from the row it is given. */
+type Edit = (rows: Map<string, Row>) => void
+
+function arm(row: Row, at: number): void {
+  row.status = 'armed'
+  row.armedAt = at
+}
+
+/** A stored document's rows, by id, and the entries this client cannot read (a newer client's,
+ * or a rule that no longer compiles), which a write keeps as they are. */
+function storedRows(document: unknown): { rows: Map<string, Row>; unread: unknown[] } {
+  const rows = new Map<string, Row>()
+  const unread: unknown[] = []
+  const list = isRecord(document) && Array.isArray(document.alerts) ? document.alerts : []
+  for (const raw of list) {
+    const row = readRow(raw)
+    if (row) rows.set(row.id, row)
+    else unread.push(raw)
+  }
+  return { rows, unread }
+}
+
+/** `edit` applied to a stored document: every stored alert is kept unless the edit is about it. */
+function applyToStored(document: unknown, edit: Edit): unknown {
+  const { rows, unread } = storedRows(document)
+  edit(rows)
+  return { version: DOCUMENT_VERSION, alerts: [...rows.values(), ...unread] }
+}
+
+/** A firing at the bar close `at`. Not on an alert switched off or deleted since, nor on a `once`
+ * alert that has already fired; and a bar close already counted -- by another tab that saw it
+ * too -- is not counted again. */
+function fired(id: string, at: number): Edit {
+  return (rows) => {
+    const row = rows.get(id)
+    if (!row?.enabled || (row.repeat === 'once' && row.status === 'fired')) return
+    if (row.lastFiredAt !== null && at <= row.lastFiredAt) return
+    row.fireCount += 1
+    row.lastFiredAt = at
+    if (row.repeat === 'once') row.status = 'fired'
+  }
+}
+
 let counter = 0
 function newId(now: number): string {
   counter += 1
@@ -84,6 +144,10 @@ export class ClientAlertStore implements AlertSource {
   readonly available = true
   readonly unavailable = ''
   private rows = new Map<string, Row>()
+  /** This tab's edits not yet confirmed written, in order: laid over the stored list it adopts. */
+  private unwritten: Edit[] = []
+  /** Inside `change`, which tells the listeners itself once it is done. */
+  private changing = false
   private readonly listeners = new Set<() => void>()
   private loaded = false
   /** Set when the stored list could not be read. Nothing is written then: a save would replace
@@ -111,13 +175,10 @@ export class ClientAlertStore implements AlertSource {
       this.loadError = 'Your saved alerts could not be read, so nothing is saved until they are. Reload the page to try again.'
       document = undefined
     }
-    this.rows.clear()
-    const list = isRecord(document) && Array.isArray(document.alerts) ? document.alerts : []
-    for (const raw of list) {
-      const row = readRow(raw)
-      if (row) this.rows.set(row.id, row)
-      else console.warn('[alerts] dropping a stored alert that no longer reads', raw)
-    }
+    const { rows, unread } = storedRows(document)
+    for (const raw of unread) console.warn('[alerts] a stored alert that no longer reads is not shown', raw)
+    for (const edit of this.unwritten) edit(rows)
+    this.rows = rows
     this.loaded = true
     this.emit()
   }
@@ -160,8 +221,9 @@ export class ClientAlertStore implements AlertSource {
       lastFiredAt: null,
       fireCount: 0
     }
-    this.rows.set(row.id, row)
-    this.commit()
+    this.change((rows) => {
+      if (!rows.has(row.id)) rows.set(row.id, structuredClone(row))
+    })
     return toAlert(row)
   }
 
@@ -169,48 +231,56 @@ export class ClientAlertStore implements AlertSource {
    * a `once` alert that fired on the old rule has said nothing yet about the new one. */
   async update(id: string, definition: AlertDefinition): Promise<Alert> {
     this.writable()
-    const row = this.require(id)
+    this.require(id)
     const next = this.validated(definition)
-    const rearm = signature(row) !== signature(next) || (next.enabled && !row.enabled)
-    Object.assign(row, next, { updatedAt: this.now() })
-    if (rearm) this.arm(row)
-    this.commit()
-    return toAlert(row)
+    const at = this.now()
+    this.change((rows) => {
+      const row = rows.get(id)
+      if (!row) return
+      const rearm = signature(row) !== signature(next) || (next.enabled && !row.enabled)
+      Object.assign(row, structuredClone(next), { updatedAt: at })
+      if (rearm) arm(row, at)
+    })
+    return toAlert(this.require(id))
   }
 
   async setEnabled(id: string, enabled: boolean): Promise<void> {
     this.writable()
-    const row = this.require(id)
-    if (row.enabled === enabled) return
-    row.enabled = enabled
-    row.updatedAt = this.now()
-    if (enabled) this.arm(row)
-    this.commit()
+    if (this.require(id).enabled === enabled) return
+    const at = this.now()
+    this.change((rows) => {
+      const row = rows.get(id)
+      if (!row || row.enabled === enabled) return
+      row.enabled = enabled
+      row.updatedAt = at
+      if (enabled) arm(row, at)
+    })
   }
 
   async rearm(id: string): Promise<void> {
     this.writable()
-    const row = this.require(id)
-    row.enabled = true
-    this.arm(row)
-    row.updatedAt = this.now()
-    this.commit()
+    this.require(id)
+    const at = this.now()
+    this.change((rows) => {
+      const row = rows.get(id)
+      if (!row) return
+      row.enabled = true
+      arm(row, at)
+      row.updatedAt = at
+    })
   }
 
   async remove(id: string): Promise<void> {
     this.writable()
-    if (this.rows.delete(id)) this.commit()
+    if (this.rows.has(id)) this.change((rows) => void rows.delete(id))
   }
 
   /** A firing, as the live monitor saw it: `at` is the bar close it was about. */
   recordFiring(id: string, at: number): Alert | null {
+    if (!this.rows.has(id)) return null
+    this.change(fired(id, at))
     const row = this.rows.get(id)
-    if (!row) return null
-    row.fireCount += 1
-    row.lastFiredAt = at
-    if (row.repeat === 'once') row.status = 'fired'
-    this.commit()
-    return toAlert(row)
+    return row ? toAlert(row) : null
   }
 
   subscribe(listener: () => void): () => void {
@@ -246,20 +316,38 @@ export class ClientAlertStore implements AlertSource {
     if (this.loadError) throw new RuleError(this.loadError)
   }
 
-  private arm(row: Row): void {
-    row.status = 'armed'
-    row.armedAt = this.now()
-  }
-
   private require(id: string): Row {
     const row = this.rows.get(id)
     if (!row) throw new RuleError(`unknown alert ${id}`)
     return row
   }
 
-  private commit(): void {
-    this.persistence.save({ version: DOCUMENT_VERSION, alerts: [...this.rows.values()] })
+  /** `edit` on this tab's rows now, and on the stored list when it is written. */
+  private change(edit: Edit): void {
+    edit(this.rows)
+    this.unwritten.push(edit)
+    // A persistence may write at once (this browser's storage) and adopt before it returns.
+    this.changing = true
+    try {
+      this.persistence.update(
+        (stored) => applyToStored(stored, edit),
+        (stored) => this.adopt(stored, edit)
+      )
+    } finally {
+      this.changing = false
+    }
     this.emit()
+  }
+
+  /** The stored list as written -- every tab's and device's alerts, `written` and the edits before
+   * it among them -- with this tab's later edits, still on their way, laid over it. */
+  private adopt(stored: unknown, written: Edit): void {
+    const at = this.unwritten.indexOf(written)
+    if (at >= 0) this.unwritten.splice(0, at + 1)
+    const { rows } = storedRows(stored)
+    for (const edit of this.unwritten) edit(rows)
+    this.rows = rows
+    if (!this.changing) this.emit()
   }
 
   private emit(): void {

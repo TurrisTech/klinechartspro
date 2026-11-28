@@ -185,7 +185,8 @@ export interface ExitSpec {
   target: Level | null
   /** Move the stop to the entry once price has gone this many R the trade's way. */
   breakevenAtR: number | null
-  /** A trailing stop `distance` behind the best close, once price has gone `activateR` R. */
+  /** A trailing stop `distance` behind the best close (the closing side's: a long's bid), once
+   * price has gone `activateR` R. The engine's own trail (lab/trades.ts). */
   trail: { distance: Level; activateR: number } | null
   /** Close a long (short) at the first close where its rule holds. */
   ruleLong: Rule | null

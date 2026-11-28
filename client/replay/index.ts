@@ -497,10 +497,11 @@ export async function mountBarReplay(
       if (event.kind !== 'milestone' || event.tradeId === null) continue
       const trade = snapshot.trades.find((t) => t.id === event.tradeId)
       if (!trade) continue
-      const { title, body } = milestoneNotice(trade, event, instrumentInfo(trade.symbol))
+      const info = instrumentInfo(trade.symbol)
+      const { title, body } = milestoneNotice(trade, event, info)
       ctx.notify.notify({
         title,
-        body: `${body} · replay ${formatInstant(event.time)}`,
+        body: `${body} · replay ${formatInstant(event.time, info.timezone)}`,
         level: 'info',
         source: 'replay',
         data: { tradeId: trade.id, symbol: trade.symbol, label: event.reason, eventAt: event.time, replay: true }
@@ -523,7 +524,7 @@ export async function mountBarReplay(
         ctx.notify.notify({
           title: result.alert.name,
           // The alert's own instrument: any on the Alerts list, not only the one replayed.
-          body: [result.alert.symbol.split(':')[1] ?? result.alert.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective)}`].filter(Boolean).join(' · '),
+          body: [result.alert.symbol.split(':')[1] ?? result.alert.symbol, result.alert.readings, `replay ${formatInstant(result.alert.effective, instrumentInfo(result.alert.symbol).timezone)}`].filter(Boolean).join(' · '),
           level: 'alert',
           source: 'replay',
           data: { alertId: result.alert.alertId, eventAt: result.alert.effective, replay: true }

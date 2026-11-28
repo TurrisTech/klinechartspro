@@ -1,5 +1,6 @@
 import { createDockableWindow, type DockableWindow } from '../chrome/window'
 import { formatInstant } from '../trading/format'
+import { instrumentZone } from '../trading/instrument'
 import { Arming } from '../trading/kit'
 import { labelOperand, type ServerCatalogue } from './catalogue'
 import { createAlertEditor, type EditorContext } from './editor'
@@ -193,7 +194,7 @@ export function createAlertManager(options: AlertManagerOptions): AlertManager {
     rule.textContent = `${alert.symbol.split(':')[1] ?? alert.symbol} · ${describeRule(alert.rule, label)}`
     rule.title = rule.textContent
     const meta = el('div', 'wd-alert-meta')
-    const fired = alert.fireCount > 0 ? `fired ${alert.fireCount}× · last ${formatInstant(alert.lastFiredAt)}` : 'not fired yet'
+    const fired = alert.fireCount > 0 ? `fired ${alert.fireCount}× · last ${formatInstant(alert.lastFiredAt, instrumentZone(alert.symbol, () => render()))}` : 'not fired yet'
     const how = alert.trigger === 'edge' ? 'when it starts holding' : 'at every close it holds'
     meta.textContent = [fired, how, alert.repeat === 'once' ? 'once' : '', alert.note].filter(Boolean).join(' · ')
     main.append(title, rule, meta)

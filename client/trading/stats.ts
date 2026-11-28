@@ -108,7 +108,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     if (f.rewardToRisk !== null) rows.push({ label: 'R:R', value: f.rewardToRisk.toFixed(2) })
     rows.push(...managementRows(order, info).map(({ label, value }) => ({ label, value })))
     rows.push(...sizeRows(order.units, ctx))
-    rows.push({ label: 'Placed', value: `${formatInstant(order.createdAt)}${now !== null ? ` · ${formatDuration(now - order.createdAt)} ago` : ''}` })
+    rows.push({ label: 'Placed', value: `${formatInstant(order.createdAt, info.timezone)}${now !== null ? ` · ${formatDuration(now - order.createdAt)} ago` : ''}` })
     rows.push(...noteRows(order.label))
     return {
       kind: 'order',
@@ -135,8 +135,8 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
     if (share !== null) rows.push({ label: 'Of balance', value: formatShare(share), tone: tone(share) })
     rows.push(
       { label: 'Size', value: `${formatUnits(trade.units)} units` },
-      { label: 'Opened', value: formatInstant(trade.openedAt) },
-      { label: 'Closed', value: formatInstant(trade.closedAt) },
+      { label: 'Opened', value: formatInstant(trade.openedAt, info.timezone) },
+      { label: 'Closed', value: formatInstant(trade.closedAt, info.timezone) },
       { label: 'Held', value: formatDuration(trade.closedAt - trade.openedAt) },
       ...noteRows(trade.label)
     )
@@ -170,7 +170,7 @@ export function positionStats(item: Inspected, snapshot: SimSnapshot, info: Inst
   if (f.rewardToRisk !== null) rows.push({ label: 'R:R', value: f.rewardToRisk.toFixed(2) })
   rows.push(...managementRows(trade, info).map(({ label, value }) => ({ label, value })))
   rows.push(...sizeRows(trade.units, ctx))
-  rows.push({ label: 'Opened', value: `${formatInstant(trade.openedAt)}${now !== null ? ` · ${formatDuration(now - trade.openedAt)}` : ''}` })
+  rows.push({ label: 'Opened', value: `${formatInstant(trade.openedAt, info.timezone)}${now !== null ? ` · ${formatDuration(now - trade.openedAt)}` : ''}` })
   rows.push(...noteRows(trade.label))
   return {
     kind: 'trade',

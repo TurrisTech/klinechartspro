@@ -25,8 +25,8 @@ const {
 const { pricingContext } = await import('./metrics')
 
 const ACCOUNT: SimAccount = { currency: 'USD', initialBalance: 10_000, balance: 10_000, unrealizedPnl: 0, equity: 10_000 }
-const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
-const SPX: InstrumentInfo = { precision: 1, pipSize: null, assetClass: 'cfd', marginRate: 0.05, unitsPrecision: 1 }
+const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0, timezone: 'America/New_York' }
+const SPX: InstrumentInfo = { precision: 1, pipSize: null, assetClass: 'cfd', marginRate: 0.05, unitsPrecision: 1, timezone: 'America/New_York' }
 const QUOTE: SimQuote = { time: 0, bid: 1.1, ask: 1.1002 }
 
 const eurusd = (over: Partial<LevelBasis> = {}): LevelBasis => ({
@@ -139,7 +139,7 @@ describe('the readout', () => {
   })
 
   test('an amount in another currency carries the account figure only where it converts', () => {
-    const jpy: InstrumentInfo = { precision: 3, pipSize: 0.01, assetClass: 'forex', marginRate: 0.04, unitsPrecision: 0 }
+    const jpy: InstrumentInfo = { precision: 3, pipSize: 0.01, assetClass: 'forex', marginRate: 0.04, unitsPrecision: 0, timezone: 'America/New_York' }
     const ctx = pricingContext('oanda:USDJPY', jpy, ACCOUNT, { time: 0, bid: 150, ask: 150.02 })
     expect(amountText(-3000, -20, ctx)).toBe('−3,000 JPY ≈ −20.00 USD')
     expect(amountText(-20, -20, eurusd().ctx)).toBe('−20.00 USD')

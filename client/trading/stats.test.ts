@@ -4,7 +4,7 @@ import type { InstrumentInfo } from './instrument'
 import { formatInstant } from './format'
 import { findInspected, type Inspected, positionStats } from './stats'
 
-const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0 }
+const EURUSD: InstrumentInfo = { precision: 5, pipSize: 0.0001, assetClass: 'forex', marginRate: 0.0333, unitsPrecision: 0, timezone: 'America/New_York' }
 const HOUR = 3_600_000
 
 function trade(over: Partial<SimTrade> = {}): SimTrade {
@@ -102,8 +102,17 @@ describe('position stats', () => {
     expect(row(stats, 'Held')).toBe('2h 00m')
     // Of the balance it was realised against: 10,000 now, so 10,020 before the −20.
     expect(row(stats, 'Of balance')).toBe('−0.20%')
-    expect(row(stats, 'Opened')).toBe(formatInstant(0))
+    expect(row(stats, 'Opened')).toBe(formatInstant(0, 'America/New_York'))
     expect(row(stats, 'Opened')).toMatch(/:\d\d:\d\d$/)
+  })
+
+  test("a trade's times are on its own instrument's clock, as its chart shows them", () => {
+    const at = Date.UTC(2026, 10, 13, 19, 5, 9)
+    const s = snapshot([trade({ openedAt: at, closedAt: at + HOUR, closePrice: 1.101, closeReason: 'manual', realizedPnl: 10 })])
+    // A Coinbase pair's chart is on UTC; an FX pair's on New York; an unknown one says UTC.
+    expect(row(positionStats(found(s, 't1'), s, { ...EURUSD, timezone: 'UTC' }), 'Opened')).toBe('Nov 13, 19:05:09')
+    expect(row(positionStats(found(s, 't1'), s, EURUSD), 'Opened')).toBe('Nov 13, 14:05:09')
+    expect(row(positionStats(found(s, 't1'), s, { ...EURUSD, timezone: null }), 'Closed')).toBe('Nov 13, 20:05:09 UTC')
   })
 
   test('nothing by that id, or an order no longer pending, is not found', () => {

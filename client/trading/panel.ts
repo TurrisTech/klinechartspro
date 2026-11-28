@@ -387,8 +387,8 @@ export class TradingPanel {
         cell(formatPips(pips), dir),
         cell(formatPnl(pnl), dir),
         cell(formatShare(share), dir),
-        cell(formatInstant(trade.openedAt)),
-        cell(formatInstant(trade.closedAt))
+        cell(formatInstant(trade.openedAt, info.timezone)),
+        cell(formatInstant(trade.closedAt, info.timezone))
       )
       if (trade.label) row.title = `${trade.label} — show this trade`
       tbody.appendChild(row)

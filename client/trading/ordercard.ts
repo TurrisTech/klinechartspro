@@ -887,7 +887,7 @@ class TradeRow {
     this.stop.update(working, model)
     this.target.update(working, model)
     this.exits.update(trade, model)
-    this.figures.update(workingRows(trade.units, ctx, f.rewardToRisk, { label: 'Opened', value: formatInstant(trade.openedAt) }, trade.label))
+    this.figures.update(workingRows(trade.units, ctx, f.rewardToRisk, { label: 'Opened', value: formatInstant(trade.openedAt, ctx.info.timezone) }, trade.label))
     this.actions.update(tradeActionsView(trade, ctx, model.armed))
   }
 }
@@ -1001,7 +1001,7 @@ class OrderRow {
     this.stop.update(working, model)
     this.target.update(working, model)
     this.exits.update(order, model)
-    this.figures.update(workingRows(order.units, ctx, f.rewardToRisk, { label: 'Placed', value: formatInstant(order.createdAt) }, order.label))
+    this.figures.update(workingRows(order.units, ctx, f.rewardToRisk, { label: 'Placed', value: formatInstant(order.createdAt, ctx.info.timezone) }, order.label))
     const armed = model.armed === armKey.cancel(order.id)
     this.cancel.textContent = armed ? 'Confirm cancel' : 'Cancel order'
     this.cancel.classList.toggle('is-armed', armed)

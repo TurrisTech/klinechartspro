@@ -310,6 +310,49 @@ describe('a refused subscription', () => {
   })
 })
 
+// The server caps a connection's BAR keys at maxSubscriptionsPerConnection (32) and nothing
+// else; an indicator series is not charged against it on either server.
+describe('the subscription cap', () => {
+  const frames = (kind: 'bars' | 'indicator') =>
+    sockets[0].sent.filter((f) => f.action === 'subscribe' && (kind === 'indicator') === 'indicator' in f)
+
+  test('counts bar keys only: a full wall of panes still subscribes every indicator', () => {
+    const errors = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const client = new StreamClient()
+      // 12 panes, each its own bars and two indicators: 12 keys against the cap, 24 series not.
+      for (let pane = 0; pane < 12; pane += 1) {
+        const interval = `${pane + 1}m`
+        client.subscribe('oanda', 'EURUSD', interval, barListener().listener)
+        for (const name of ['rsi', 'atr']) {
+          client.subscribeIndicator('oanda', 'EURUSD', interval, { name, params: {} } as never, `${name}|${interval}`, { onPoint: () => {} })
+        }
+      }
+      sockets[0].open()
+      expect(frames('bars')).toHaveLength(12)
+      expect(frames('indicator')).toHaveLength(24)
+      expect(errors).not.toHaveBeenCalled()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  test('still refuses the bar key past the cap, before the server has to', () => {
+    const errors = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const client = new StreamClient()
+      for (let n = 1; n <= 33; n += 1) client.subscribe('oanda', `S${n}`, '1m', barListener().listener)
+      client.subscribeIndicator('oanda', 'S1', '1m', { name: 'rsi', params: {} } as never, 'rsi|S1', { onPoint: () => {} })
+      sockets[0].open()
+      expect(frames('bars')).toHaveLength(32)
+      expect(frames('indicator')).toHaveLength(1)
+      expect(errors).toHaveBeenCalledTimes(1)
+    } finally {
+      errors.mockRestore()
+    }
+  })
+})
+
 describe('close 4401', () => {
   test('signs out once and stops reconnecting', async () => {
     storage.set(TOKEN_KEY, 'tok-1')

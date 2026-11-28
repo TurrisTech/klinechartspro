@@ -4,6 +4,7 @@ import type { LabEntry } from './entries'
 import type { LabSignal, Readings } from './graph'
 import { type CandleGrid, FX_GRID } from '../replay/timeframes'
 import { defaultExits, defaultSizing, type ExitSpec, type Sizing } from './model'
+import { Engine } from '../replay/engine'
 import { simulate, type SimInput } from './trades'
 
 // The simulated trades, bar by bar, against the fill engine's rules: a long buys the ask at the
@@ -41,7 +42,11 @@ function entry(at: number, direction: 'long' | 'short', interval = '1m'): LabEnt
 const readings: Readings = { pip: PIP, atr: () => 0.001, ind: () => undefined }
 
 function run(bars: ReplayBar[], entries: LabEntry[], exits: Partial<ExitSpec> = {}, sizing: Partial<Sizing> = {}, exitRule?: (t: number) => boolean, path: { ms: number; grid: CandleGrid | null } = { ms: M, grid: null }) {
-  const input: SimInput = {
+  return simulate(runInput(bars, entries, exits, sizing, exitRule, path))
+}
+
+function runInput(bars: ReplayBar[], entries: LabEntry[], exits: Partial<ExitSpec> = {}, sizing: Partial<Sizing> = {}, exitRule?: (t: number) => boolean, path: { ms: number; grid: CandleGrid | null } = { ms: M, grid: null }): SimInput {
+  return {
     symbol: 'oanda:EURUSD',
     entries,
     bars,
@@ -55,7 +60,6 @@ function run(bars: ReplayBar[], entries: LabEntry[], exits: Partial<ExitSpec> = 
     levelEnv: () => ({ get: () => undefined, call: () => undefined }),
     exitRule: () => exitRule ?? null
   }
-  return simulate(input)
 }
 
 const flat = (i: number, p = 1.1) => bar(i, p, p, p, p)
@@ -145,18 +149,82 @@ describe('management at the close', () => {
   })
 
   test('breakeven: the stop moves to the entry and the trade is then stopped there', () => {
-    const bars = [flat(0), bar(1, 1.1, 1.1012, 1.1, 1.1012), bar(2, 1.1012, 1.1012, 1.0995, 1.0996)]
+    // In at the 1.1001 ask with the stop at 1.0990: one R is 11 pips. Bar 1 closes 11 pips in on
+    // the bid a long exits at (1.1012), and the stop goes to the entry.
+    const bars = [flat(0), bar(1, 1.1, 1.1013, 1.1, 1.1013), bar(2, 1.1013, 1.1013, 1.0995, 1.0996)]
     const [trade] = run(bars, [entry(bars[0].end, 'long')], { stop: { kind: 'pips', value: 10 }, target: null, breakevenAtR: 1 }).trades
     expect(trade.reason).toBe('breakeven')
+    expect(trade.stop).toBeCloseTo(1.1001, 10)
     expect(trade.closePrice).toBeCloseTo(1.1001, 10)
+  })
+
+  test('breakeven is judged on the closing side, not the mid', () => {
+    // The mid closes 11 pips in (1.1012), the bid a long would exit at only 10 (1.1011): no
+    // breakeven, as the engine has it, and the original stop takes the trade.
+    const bars = [flat(0), bar(1, 1.1, 1.1012, 1.1, 1.1012), bar(2, 1.1012, 1.1012, 1.0985, 1.0986)]
+    const [trade] = run(bars, [entry(bars[0].end, 'long')], { stop: { kind: 'pips', value: 10 }, target: null, breakevenAtR: 1 }).trades
+    expect(trade.reason).toBe('stop')
+    expect(trade.closePrice).toBeCloseTo(1.099, 10)
+  })
+
+  test('breakeven at 0 R moves the stop at the first close at the open price', () => {
+    const bars = [flat(0), bar(1, 1.1, 1.1002, 1.1, 1.1002), bar(2, 1.1002, 1.1002, 1.0995, 1.0996)]
+    const [trade] = run(bars, [entry(bars[0].end, 'long')], { stop: { kind: 'pips', value: 10 }, target: null, breakevenAtR: 0 }).trades
+    expect(trade.reason).toBe('breakeven')
+    expect(trade.closePrice).toBeCloseTo(1.1001, 10)
+  })
+
+  test("with slippage, breakeven still lands on the open price: the fill plus the entry's slippage", () => {
+    const bars = [flat(0), bar(1, 1.1, 1.1016, 1.1, 1.1016), bar(2, 1.1016, 1.1016, 1.0995, 1.0996)]
+    const input = { stop: { kind: 'pips', value: 10 }, target: null, breakevenAtR: 1 } as Partial<ExitSpec>
+    const base = run(bars, [entry(bars[0].end, 'long')], input)
+    const slipped = simulate({ ...runInput(bars, [entry(bars[0].end, 'long')], input), costs: { commission: 0, slippagePips: 1, financing: null } })
+    expect(base.trades[0].stop).toBeCloseTo(1.1001, 10)
+    const [trade] = slipped.trades
+    expect(trade.openPrice).toBeCloseTo(1.1002, 10)
+    expect(trade.reason).toBe('breakeven')
+    expect(trade.stop).toBeCloseTo(1.1002, 10)
   })
 
   test('a trailing stop follows the best close and only tightens', () => {
     const bars = [flat(0), bar(1, 1.1, 1.102, 1.1, 1.102), bar(2, 1.102, 1.103, 1.101, 1.1015), bar(3, 1.1015, 1.1016, 1.1005, 1.1008)]
     const [trade] = run(bars, [entry(bars[0].end, 'long')], { stop: { kind: 'pips', value: 10 }, target: null, trail: { distance: { kind: 'pips', value: 10 }, activateR: 0 } }).trades
-    // Best close 1.1020 after bar 1: the stop is 1.1010, and stays there through bar 2's lower close.
+    // The best close a long can exit at is bar 1's bid, 1.1019: the stop is 1.1009 (not 1.1010,
+    // ten pips under the mid), and stays there through bar 2's lower close until bar 2 reaches it.
     expect(trade.reason).toBe('trail')
-    expect(trade.closePrice).toBeCloseTo(1.101, 10)
+    expect(trade.closePrice).toBeCloseTo(1.1009, 10)
+  })
+
+  test("the Lab's breakeven and trail are the engine's: a replay of the same trade stops where it does", () => {
+    const bars = [
+      flat(0),
+      bar(1, 1.1, 1.1014, 1.0999, 1.1013),
+      bar(2, 1.1013, 1.1031, 1.1008, 1.1029),
+      bar(3, 1.1029, 1.1033, 1.1021, 1.1024),
+      bar(4, 1.1024, 1.1026, 1.1009, 1.1012)
+    ]
+    const exits: Partial<ExitSpec> = { stop: { kind: 'pips', value: 10 }, target: null, breakevenAtR: 1, trail: { distance: { kind: 'pips', value: 6 }, activateR: 1.5 } }
+    const [lab] = run(bars, [entry(bars[0].end, 'long')], exits).trades
+
+    // The same trade, as a bar replay's engine runs it: in at bar 0's close, one R = 11 pips.
+    const engine = new Engine(10_000, 'quote')
+    const fold = (b: ReplayBar) => {
+      const [bid, ask] = [b.bid ?? b, b.ask ?? b]
+      return { symbol: 'oanda:EURUSD', time: b.open, end: b.end, bidOpen: bid.o, bidHigh: bid.h, bidLow: bid.l, bidClose: bid.c, askOpen: ask.o, askHigh: ask.h, askLow: ask.l, askClose: ask.c }
+    }
+    engine.onBar(fold(bars[0]))
+    const R = 0.0011
+    engine.submit({
+      symbol: 'oanda:EURUSD', side: 'buy', type: 'market', units: 10_000, stopLoss: 1.099,
+      breakeven: { trigger: R, offset: 0 }, trailingStop: { distance: 0.0006, activation: 1.5 * R }
+    })
+    const closes = bars.slice(1).flatMap((b) => engine.onBar(fold(b))).filter((e) => e.kind === 'close')
+    const [replayed] = engine.closedTrades()
+    expect(closes).toHaveLength(1)
+    expect(lab.closedAt).toBe(replayed.closedAt as number)
+    expect(lab.closePrice).toBeCloseTo(replayed.closePrice as number, 12)
+    expect(lab.reason).toBe(replayed.stopMovedBy === 'trail' ? 'trail' : 'breakeven')
+    expect(lab.stop).toBeCloseTo(replayed.stopLoss as number, 12)
   })
 
   test('a rule exit at the first close it holds', () => {

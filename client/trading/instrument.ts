@@ -23,6 +23,10 @@ export interface InstrumentInfo {
   /** Decimal places a units amount may carry (OANDA forex 0); a size computed from a risk
    * budget is floored to it. */
   unitsPrecision: number
+  /** The instrument's own timezone, from its schedule: the clock its chart pane shows, and so
+   * the one its trades' times are printed on (`formatInstant`). Null until the config lands,
+   * or when the server resolved no market hours for it. */
+  timezone: string | null
 }
 
 const cache = new Map<string, InstrumentInfo>()
@@ -32,7 +36,7 @@ const seeds = new Map<string, number>()
 const inflight = new Set<string>()
 
 function placeholder(vendorSymbol: string): InstrumentInfo {
-  return { precision: seeds.get(vendorSymbol) ?? 5, pipSize: null, assetClass: 'forex', marginRate: null, unitsPrecision: 0 }
+  return { precision: seeds.get(vendorSymbol) ?? 5, pipSize: null, assetClass: 'forex', marginRate: null, unitsPrecision: 0, timezone: null }
 }
 
 /** The cached info for `vendor:TICKER`, or a sane placeholder while it loads; `onLoad` fires
@@ -70,8 +74,16 @@ function fromConfig(config: InstrumentConfig): InstrumentInfo {
     assetClass: config.assetClass ?? 'forex',
     marginRate: typeof config.marginRate === 'number' && config.marginRate > 0 ? config.marginRate : null,
     unitsPrecision:
-      typeof config.tradeUnitsPrecision === 'number' && config.tradeUnitsPrecision >= 0 ? config.tradeUnitsPrecision : 0
+      typeof config.tradeUnitsPrecision === 'number' && config.tradeUnitsPrecision >= 0 ? config.tradeUnitsPrecision : 0,
+    timezone: config.marketHours?.timezone ?? null
   }
+}
+
+/** The timezone of the instrument a key names -- `vendor:TICKER`, or a watch target's
+ * `vendor:TICKER@1h` -- as `instrumentInfo` has it: null while its config loads, and `onLoad`
+ * fires when it lands, so the caller can print the time again on the instrument's clock. */
+export function instrumentZone(key: string, onLoad?: () => void): string | null {
+  return instrumentInfo(key.split('@')[0], onLoad).timezone
 }
 
 /** Seed the placeholder precision from a SymbolInfo the pane already holds. */

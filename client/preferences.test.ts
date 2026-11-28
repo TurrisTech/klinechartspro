@@ -333,3 +333,32 @@ test('a write answered by a page that is not JSON keeps the change and tries it 
     expect(server.data).toEqual({ workspaces: 'theirs', mine: 'landed' })
   })
 })
+
+test('a change made from the stored value is made again from what another tab stored meanwhile', async () => {
+  await quietly(async () => {
+    resetServer()
+    server.data = { alerts: ['a'] }
+    server.revision = 60
+    const prefs = await freshPreferences()
+    await prefs.loadPreferences()
+
+    // Another tab adds 'b' after this page read the list, before its PUT lands: the PUT 412s.
+    let moved = false
+    server.beforePut = () => {
+      if (moved) return
+      moved = true
+      server.data = { alerts: ['a', 'b'] }
+      server.revision += 1
+    }
+    const told: unknown[] = []
+    prefs.updatePreference('alerts', (stored) => [...(stored as string[]), 'c'], (value) => told.push(value))
+    prefs.updatePreference('alerts', (stored) => (stored as string[]).filter((x) => x !== 'a'))
+    await sleep(DEBOUNCE_MS + 50)
+    await prefs.settled()
+
+    // Both edits, in order, on the list as it was stored -- 'b' kept -- not on this page's copy.
+    expect(server.conflicts).toBe(1)
+    expect(server.data).toEqual({ alerts: ['b', 'c'] })
+    expect(told).toEqual([['b', 'c']])
+  })
+})

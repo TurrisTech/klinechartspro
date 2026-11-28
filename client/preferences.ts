@@ -86,10 +86,36 @@ export async function loadStarredTimeframes(): Promise<string[]> {
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
-// Keys changed since the last successful PUT, merged into `known.data` only at flush time —
+
+/** A key's change, held until it is written. `apply` makes the key's new value from its STORED
+ * one -- the document as read when the write goes out, and as re-read after a 412 -- so a
+ * change that merges into what is stored (an alert list, by id) never writes over what another
+ * tab or device stored since this page read it. A plain value ignores what is stored. `written`
+ * is told the value the server confirmed for the key. */
+interface Change {
+  apply: (stored: unknown) => unknown
+  written: Array<(stored: unknown) => void>
+}
+
+// Keys changed since the last successful PUT, applied to `known.data` only at flush time —
 // not eagerly — so a starred-timeframe change and a settings-panel or layout change made
 // within the same debounce window land in one PUT even though they touch different keys.
-let pending: Record<string, unknown> = {}
+let pending: Record<string, Change> = {}
+
+/** `later` on top of `earlier`: the stored value goes through both, and both are told. */
+function compose(earlier: Change, later: Change): Change {
+  return { apply: (stored) => later.apply(earlier.apply(stored)), written: [...earlier.written, ...later.written] }
+}
+
+function queue(key: string, change: Change): void {
+  const held = pending[key]
+  pending[key] = held ? compose(held, change) : change
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    saveTimer = null
+    void drain()
+  }, SAVE_DEBOUNCE_MS)
+}
 // The write loop, while one is running. This module is SINGLE-FLIGHT: at most one PUT is ever
 // in the air for this tab. Without it the debounce alone is no protection — it only spaces
 // flushes 500ms apart, and a flush that takes longer than that (or two flushes started by
@@ -110,12 +136,16 @@ const MAX_WRITE_ATTEMPTS = 4
 // panel's onChange, the wall's onPaneLayoutChange) is a UI event handler with no way to
 // await or surface an error itself.
 export function savePreference(key: string, value: unknown): void {
-  pending[key] = value
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    saveTimer = null
-    void drain()
-  }, SAVE_DEBOUNCE_MS)
+  queue(key, { apply: () => value, written: [] })
+}
+
+/** A change to a key MADE FROM ITS STORED VALUE: `apply` is given the value stored when the
+ * write goes out (again after a 412, with what the winning writer stored) and returns the new
+ * one, so it must be pure. For a key several tabs or devices write parts of -- the alert list --
+ * where `savePreference` would write this tab's whole copy over theirs. `written` is told the
+ * value the server confirmed. Changes to one key compose in the order they were made. */
+export function updatePreference(key: string, apply: (stored: unknown) => unknown, written?: (stored: unknown) => void): void {
+  queue(key, { apply, written: written ? [written] : [] })
 }
 
 // Deleting a key is a `savePreference(key, undefined)`: `flush` spreads pending changes over
@@ -175,7 +205,9 @@ function drain(): Promise<void> {
         if (!(await flush(changes))) {
           // Not written, and worth trying again. Anything saved since sits in `pending` and
           // is newer, so it goes on top.
-          pending = { ...changes, ...pending }
+          const newer = pending
+          pending = { ...changes }
+          for (const [key, change] of Object.entries(newer)) pending[key] = pending[key] ? compose(pending[key], change) : change
           scheduleRetry()
           return
         }
@@ -210,17 +242,30 @@ function transient(err: unknown): boolean {
 //
 // False when the changes were not written and should be tried again. True when they were
 // written, or refused in a way a retry would not change; those are dropped, as before.
-async function flush(changes: Record<string, unknown>): Promise<boolean> {
+async function flush(changes: Record<string, Change>): Promise<boolean> {
   for (let attempt = 1; ; attempt += 1) {
     // Always conditional. There is no first-ever-write exception: a user with nothing stored
     // reads as revision 0, and "0" is the server's create (appstate.py).
     if (!known) return false
+    // Each key from what is stored NOW: on a retry after a 412, the winning writer's document.
+    const stored = known.data
+    const data = { ...stored }
+    for (const [key, change] of Object.entries(changes)) data[key] = change.apply(stored[key])
     try {
-      const { data } = await apiSend<PreferencesDocument>('PUT', '/preferences', {
-        body: { data: { ...known.data, ...changes } },
+      const { data: confirmed } = await apiSend<PreferencesDocument>('PUT', '/preferences', {
+        body: { data },
         headers: { 'If-Match': `"${known.revision}"` }
       })
-      known = data
+      known = confirmed
+      for (const [key, change] of Object.entries(changes)) {
+        for (const told of change.written) {
+          try {
+            told(confirmed.data[key])
+          } catch (err) {
+            console.error('[preferences] a write listener failed', err)
+          }
+        }
+      }
       return true
     } catch (err) {
       if (transient(err)) {
