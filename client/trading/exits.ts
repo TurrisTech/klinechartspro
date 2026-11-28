@@ -354,10 +354,21 @@ export function managementOf(record: SimTrade | SimOrder): { trailingStop: Trail
   }
 }
 
-/** Why a trade closed, in words: a stop the trail or the breakeven placed says so. */
-export function closeReasonWords(trade: Pick<SimTrade, 'closeReason' | 'stopMovedBy'>): string {
-  if (trade.closeReason === 'stop_loss') return trade.stopMovedBy === 'trail' ? 'Trailing stop' : trade.stopMovedBy === 'breakeven' ? 'Breakeven stop' : 'Stop loss'
-  if (trade.closeReason === 'take_profit') return 'Take profit'
+/** Why a trade closed, in words -- the one naming of a close every surface uses (History, the
+ * popup, the card's announcement): a stop the trail or the breakeven placed says so. `asEvent`
+ * words a level as what happened, "Stop loss hit", for an announcement of the close. */
+export function closeReasonWords(trade: Pick<SimTrade, 'closeReason' | 'stopMovedBy'>, asEvent = false): string {
+  if (trade.closeReason === 'stop_loss' || trade.closeReason === 'take_profit') {
+    const level =
+      trade.closeReason === 'take_profit'
+        ? 'Take profit'
+        : trade.stopMovedBy === 'trail'
+          ? 'Trailing stop'
+          : trade.stopMovedBy === 'breakeven'
+            ? 'Breakeven stop'
+            : 'Stop loss'
+    return asEvent ? `${level} hit` : level
+  }
   if (trade.closeReason === 'flatten') return 'Flattened'
   return 'Closed by hand'
 }

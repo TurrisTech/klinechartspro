@@ -145,9 +145,14 @@ describe('the readout', () => {
     expect(amountText(-20, -20, eurusd().ctx)).toBe('−20.00 USD')
   })
 
-  test('a level on the wrong side says which side it belongs on', () => {
-    expect(levelRefusal('buy', 'stop', 1.101, 1.1, 'the ask')).toBe('The stop loss must be below the ask')
-    expect(levelRefusal('sell', 'target', 1.099, 1.1, 'the order price')).toBeNull()
+  test('a level on the wrong side says which side it belongs on, one way for every owner', () => {
+    expect(levelRefusal('market', 'buy', 'stop', 1.101, 1.1002, 5)).toBe("A buy order's stop must be below the ask (1.10020)")
+    expect(levelRefusal('market', 'sell', 'target', 1.1001, 1.1, 5)).toBe("A sell order's target must be below the bid (1.10000)")
+    expect(levelRefusal('order', 'buy', 'target', 1.094, 1.095, 5)).toBe("A buy order's target must be above its price (1.09500)")
+    expect(levelRefusal('trade', 'buy', 'stop', 1.1001, 1.1, 5)).toBe("A long's stop must be below the bid (1.10000)")
+    expect(levelRefusal('trade', 'sell', 'stop', 1.1001, 1.1002, 5)).toBe("A short's stop must be above the ask (1.10020)")
+    expect(levelRefusal('order', 'sell', 'target', 1.099, 1.1, 5)).toBeNull()
+    expect(levelRefusal('trade', 'buy', 'stop', 1.2, null, 5)).toBeNull()
   })
 })
 
