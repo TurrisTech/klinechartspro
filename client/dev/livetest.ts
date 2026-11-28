@@ -11,7 +11,7 @@
 //   export OHLCV_API_TOKEN=$(curl -s https://wdashboard.dev.turris.app/ohlcv/auth/login \
 //     -H 'content-type: application/json' -d '{"username":"...","password":"..."}' | jq -r .token)
 
-import { setToken } from './authtoken'
+import { setToken } from '../authtoken'
 
 const fromEnvironment = () => process.env.OHLCV_API_TOKEN?.trim() || undefined
 

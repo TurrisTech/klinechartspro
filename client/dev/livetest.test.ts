@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { authHeaders } from './authtoken'
+import { authHeaders } from '../authtoken'
 import { assertSignedIn, holdLiveToken, liveHeaders } from './livetest'
 
 describe('the login for live tests', () => {

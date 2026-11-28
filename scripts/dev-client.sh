@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Start/stop the client dev server (client/serve.ts) as a background job, so restarting after a
+# Start/stop the client dev server (client/dev/serve.ts) as a background job, so restarting after a
 # hostname/port/upstream change doesn't require hunting down the old bun process by hand.
 # Logs go to .dev-client.log (gitignored).
 #
 # No pid file: the server is identified by its command line plus its working directory, which
 # stays correct even when a server outlives the shell that started it (Ctrl-C'd terminal, killed
-# agent session, a `bun --hot client/serve.ts` run by hand). A pid file goes stale in exactly
+# agent session, a `bun --hot client/dev/serve.ts` run by hand). A pid file goes stale in exactly
 # those cases, and the orphan it loses track of then holds the port and breaks the next start.
 set -euo pipefail
 # readlink -f, not just dirname "$BASH_SOURCE": a symlink to this script (e.g.
@@ -70,9 +70,9 @@ start() {
   local bun
   bun="$(resolve_bun)"
   stop
-  nohup "$bun" --hot client/serve.ts >"$LOG_FILE" 2>&1 &
+  nohup "$bun" --hot client/dev/serve.ts >"$LOG_FILE" 2>&1 &
   local pid=$!
-  # client/serve.ts prints its "ready at" line once Bun.serve() has bound the port; poll for it
+  # client/dev/serve.ts prints its "ready at" line once Bun.serve() has bound the port; poll for it
   # instead of a fixed sleep, since bun's startup time varies with HMR cache state. Bail the
   # moment the process dies so real errors surface immediately rather than after the timeout.
   for _ in $(seq 1 50); do

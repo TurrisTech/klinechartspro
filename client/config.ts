@@ -5,7 +5,7 @@ import { isErrorBody } from './ohlcv'
 //
 // Defaults to the current page's origin, which is correct in both topologies this client
 // runs in: deployed, the bundle is served from the same host Traefik routes /ohlcv on; in
-// local dev, client/serve.ts proxies /ohlcv to the dev cluster. Same-origin is not just
+// local dev, client/dev/serve.ts proxies /ohlcv to the dev cluster. Same-origin is not just
 // convenience — the server's CORS allowlist names one production origin, so a cross-origin
 // fetch from anywhere else is refused outright.
 //

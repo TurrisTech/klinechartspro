@@ -1,4 +1,4 @@
-// The dev server's `/tiles/*` route (client/serve.ts), kept out of that file so the decisions
+// The dev server's `/tiles/*` route (client/dev/serve.ts), kept out of that file so the decisions
 // in it -- where tiles come from, which paths are allowed, which headers go back -- can be
 // tested without binding a port. serve.ts cannot be imported by a test: loading it starts
 // the server.

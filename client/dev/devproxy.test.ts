@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { forwardedClose, forwardHeaders } from './devproxy'
 
-// client/serve.ts proxies /ohlcv (REST and WS /stream) to a real server in local dev. With the
+// client/dev/serve.ts proxies /ohlcv (REST and WS /stream) to a real server in local dev. With the
 // login enforced on every route, the proxy has to pass the bearer through on HTTP, and pass
 // the server's close code through on the socket -- 4401 is how the server says the session is
 // gone, and a proxy that closes with its own code would hide that from the browser.

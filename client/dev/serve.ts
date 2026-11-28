@@ -14,12 +14,12 @@
 //     CORS-only code path.
 import { forwardedClose, forwardHeaders } from './devproxy'
 import { describeTileSource, tileHandler, tileSourceFromEnv } from './devtiles'
-import index from './index.html'
+import index from '../index.html'
 
 // Where /tiles/* comes from: TILES_UPSTREAM (a tiles bucket over HTTP, proxied the way
 // client/nginx.conf proxies it deployed), else TILES_ROOT (a local directory, for fixtures),
 // else nowhere -- a 404 the client answers from /getbars. No local directory is read unless
-// one is named. See client/devtiles.ts.
+// one is named. See client/dev/devtiles.ts.
 const TILES = tileSourceFromEnv(process.env)
 
 const PORT = Number(process.env.CLIENT_PORT ?? process.env.PORT0 ?? process.env.PORT ?? 3000)

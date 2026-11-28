@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { assertSignedIn, holdLiveToken, liveHeaders } from '../livetest'
+import { assertSignedIn, holdLiveToken, liveHeaders } from '../dev/livetest'
 
 // THE LAB AGAINST THE OVERLAY'S GRAPH, on a real server: a long and a short rule from one root,
 // every slot at the rank 85 overlay's setting, must enter on exactly the 5m and 3m signals the
@@ -15,7 +15,7 @@ import { assertSignedIn, holdLiveToken, liveHeaders } from '../livetest'
 // against a wdashboard-server with arev21 rows (the dev stack). Passed 2026-10-15 on dev EURUSD,
 // 30 days, three root sets (28/3, 4/3 and 28/3 entries) against the client-built graph, and again
 // 2026-10-20 against the server's. A server with the login on also wants OHLCV_API_TOKEN
-// (client/livetest.ts says how to get one).
+// (client/dev/livetest.ts says how to get one).
 
 const BASE_URL = process.env.LAB_LIVE
 

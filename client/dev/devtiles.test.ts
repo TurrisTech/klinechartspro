@@ -12,7 +12,7 @@ import {
   upstreamTileUrl
 } from './devtiles'
 
-// The dev server's /tiles/* route (client/serve.ts). Every fetch here is an injected stub and
+// The dev server's /tiles/* route (client/dev/serve.ts). Every fetch here is an injected stub and
 // every file a temporary one: nothing reaches a real bucket or a real tile tree.
 
 const BASE = 'http://127.0.0.1:18493/marketdata-tiles-dev'

@@ -1,4 +1,4 @@
-// The pure halves of client/serve.ts's /ohlcv proxy (REST and WS /stream), kept apart so they
+// The pure halves of client/dev/serve.ts's /ohlcv proxy (REST and WS /stream), kept apart so they
 // can be tested: serve.ts starts a server at import. Bun-side only; never in the browser bundle.
 
 /** Request headers for the upstream. Everything the browser sent -- `Authorization` included,
