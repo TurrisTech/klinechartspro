@@ -97,7 +97,7 @@ workspace switcher (`client/workspaces/menu.ts`) and the Revert confirmation bes
 The outside press is listened for from one microtask after the open, so the click that opened the
 panel is not taken for one. The other hand-built popovers close the same way in outline but differ
 in when and to what they listen, so they keep their own code: the layer settings panel
-(`client/chartlayers/settings.ts`) waits a whole task, because a control drawn on a canvas opens
+(`client/plugins/settings/settings.ts`) waits a whole task, because a control drawn on a canvas opens
 it; the bell's dropdown (`client/notifications/bell.ts`) listens in the capture phase from the next
 frame and follows a window resize; the watch menu (`client/watch/menu.ts`) and the price-alert card
 (`client/chartlayers/alerts/editor.ts`) listen for `pointerdown` in the capture phase, since a tap

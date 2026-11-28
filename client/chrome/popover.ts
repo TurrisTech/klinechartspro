@@ -5,7 +5,7 @@
 // `position: fixed` off the button's viewport rect, so the panel escapes `.klinecharts-pro`'s
 // `overflow: hidden`, and appended INSIDE `.klinecharts-pro` (the element src/KLineChartPro.ts puts
 // the `dark` class on), so it still resolves the chart's theme tokens. See the header of
-// client/chartlayers/settings.ts for why client/ builds its popovers by hand rather than through
+// client/plugins/settings/settings.ts for why client/ builds its popovers by hand rather than through
 // the library's bits-ui chain.
 //
 // The other hand-built popovers close the same way in outline but differ in when and to what they

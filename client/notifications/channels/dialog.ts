@@ -403,7 +403,7 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** The library's `.kc-switch`, as client/chartlayers/settings.ts builds it. */
+/** The library's `.kc-switch`, as client/plugins/settings/settings.ts builds it. */
 function switchButton(checked: boolean, label: string, onToggle: () => void): HTMLButtonElement {
   const b = document.createElement('button')
   b.type = 'button'
