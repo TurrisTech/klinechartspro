@@ -28,6 +28,7 @@
 import type { Rule } from '../alerts/types'
 import { COMMON_FUNCTIONS, type ExprScope, exprProblem, type FieldSpec, type FnSpec } from './expr'
 import { resolutionDurationMs } from '../time/intervals'
+import { isInterval } from '../time/intervals'
 
 export const STRATEGY_VERSION = 2
 
@@ -613,8 +614,6 @@ export interface Problem {
   message: string
 }
 
-const INTERVAL = /^(\d+)([smhDWMY])$/
-
 /** Everything that stops the strategy running, in the order the editor shows its sections. An
  * empty list means it can be run. Rules are compiled by the runner (they need the catalogue); the
  * expressions and the structure are checked here. */
@@ -658,10 +657,10 @@ export function strategyProblems(strategy: Strategy): Problem[] {
       })
     }
     if (!ids.has(rule.source)) add(`${name} · signal`, `no signal '${rule.source}' in Signals`)
-    if (!INTERVAL.test(rule.root)) add(`${name} · root`, `not a timeframe: '${rule.root}'`)
+    if (!isInterval(rule.root)) add(`${name} · root`, `not a timeframe: '${rule.root}'`)
     const rootMs = resolutionDurationMs(rule.root)
     for (const tf of rule.steps) {
-      if (!INTERVAL.test(tf)) add(`${name} · steps`, `not a timeframe: '${tf}'`)
+      if (!isInterval(tf)) add(`${name} · steps`, `not a timeframe: '${tf}'`)
       else if (!(resolutionDurationMs(tf) < rootMs)) add(`${name} · steps`, `${tf} is not shorter than the root, ${rule.root}`)
     }
     const enterable = rule.steps.length > 0 ? rule.steps : [rule.root]
@@ -674,7 +673,7 @@ export function strategyProblems(strategy: Strategy): Problem[] {
       const problem = exprProblem(rule.end.when, SCOPES.end)
       if (problem) add(`${name} · ends when`, problem)
     }
-    if (rule.end.watch !== null && !INTERVAL.test(rule.end.watch)) add(`${name} · ends when`, `not a timeframe: '${rule.end.watch}'`)
+    if (rule.end.watch !== null && !isInterval(rule.end.watch)) add(`${name} · ends when`, `not a timeframe: '${rule.end.watch}'`)
     if (rule.end.rootBars !== null && !(rule.end.rootBars >= 1)) add(`${name} · ends`, 'the root-bar limit is at least 1')
   }
   if (!(strategy.lookback.rootBars >= 1) || !(strategy.lookback.maxBars >= 1)) add('Simulation', 'the read bounds are at least one bar')
@@ -714,7 +713,7 @@ export function strategyProblems(strategy: Strategy): Problem[] {
   if (holdout?.kind === 'percent' && !(holdout.percent > 0 && holdout.percent < 100)) add('Window', 'the holdout is between 0 and 100% of the window')
   if (holdout?.kind === 'from' && !Number.isFinite(holdout.at)) add('Window', 'the holdout has no start')
   if (strategy.outcomes.horizons.some((h) => !(h >= 1))) add('Outcomes', 'a horizon is at least one bar')
-  if (strategy.pathInterval !== null && !INTERVAL.test(strategy.pathInterval)) add('Simulation', `not a timeframe: '${strategy.pathInterval}'`)
+  if (strategy.pathInterval !== null && !isInterval(strategy.pathInterval)) add('Simulation', `not a timeframe: '${strategy.pathInterval}'`)
   return out
 }
 

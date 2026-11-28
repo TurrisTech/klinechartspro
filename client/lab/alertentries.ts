@@ -16,22 +16,15 @@
 
 import { loadServerCatalogue } from '../alerts/catalogue'
 import type { Point } from '../alerts/data'
-import type { Operand } from '../alerts/types'
+import type { StrategyEntries, StrategyEntryReader, StrategyOperand } from '../alerts/strategies'
 import type { CandleGrid } from '../time/timeframes'
 import { HttpLabData, type LabData } from './data'
 import { runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'
 
-type StrategyOperand = Extract<Operand, { kind: 'strategy' }>
 
 /** How long after a bar's close a strategy's answer on it is taken as final. */
 export const LATE_MS = 2 * 60_000
-
-interface StrategyEntries {
-  points: Point[]
-  /** The newest wire date on the operand's timeframe whose answer is final, or null. */
-  through: number | null
-}
 
 /** The open of the last `interval` bar closed by `at`. */
 export function lastClosedOpen(grid: CandleGrid, interval: string, at: number): number {
@@ -39,7 +32,7 @@ export function lastClosedOpen(grid: CandleGrid, interval: string, at: number): 
   return grid.end(interval, open) <= at ? open : grid.start(interval, open - 1)
 }
 
-export class StrategyEntryEngine {
+export class StrategyEntryEngine implements StrategyEntryReader {
   constructor(
     private readonly data: LabData = new HttpLabData(),
     private readonly store: () => Promise<StrategyStore> = sharedStrategyStore,

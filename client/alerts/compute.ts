@@ -15,9 +15,10 @@ import { getIndicatorClass, type Indicator, type KLineData } from 'klinecharts'
 import type { ReplayBar } from '../bars/cache'
 import { toWall } from '../time/timeframes'
 import { readField } from '../tsregistry/api'
-import { operandKey, WEEKDAYS } from './rules'
+import { WEEKDAYS } from './rules'
 import type { Track, Value } from './timeline'
 import type { Operand, TimeField } from './types'
+import { operandKey } from './operands'
 
 /** A stored bar: the store-clock open, its close (the effective instant), the wire date the
  * server files it and its points under, and the prices. `ReplayBar` is one. */

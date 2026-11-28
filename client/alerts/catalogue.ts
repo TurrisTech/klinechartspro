@@ -21,9 +21,9 @@ import { loadRegistry, type RegistryIndicator, type RegistrySeries } from '../ts
 import { type Feature, hasFeature } from '../capabilities'
 import { instantiate, type PointSource } from './compute'
 import { graphOverlays } from './graphentry'
-import { savedStrategyName } from '../lab/store'
-import { operandKey } from './rules'
+import { strategies } from './strategies'
 import type { BarField, Operand } from './types'
+import { operandKey } from './operands'
 
 export const BAR_FIELDS: ReadonlyArray<{ field: BarField; label: string }> = [
   { field: 'close', label: 'Close' },
@@ -198,7 +198,7 @@ export function labelOperand(operand: Operand, catalogue: ServerCatalogue | null
     case 'graph':
       return `${graphTitle(operand.overlay)} graph entry`
     case 'strategy':
-      return `${savedStrategyName(operand.strategy) ?? operand.strategy} entry`
+      return `${strategies().name(operand.strategy) ?? operand.strategy} entry`
     case 'time':
       return `${operand.field === 'minute' ? 'Time of day' : operand.field === 'weekday' ? 'Weekday' : 'Date and time'} (${zoneLabel(operand.zone)})`
   }

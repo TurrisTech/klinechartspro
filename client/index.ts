@@ -1,5 +1,7 @@
 import { KLineChartPro, type ChartProPane } from '../src'
 import { mountAlertManager, startAlerts } from './alerts'
+import { provideStrategies } from './alerts/strategies'
+import { labStrategies } from './lab/alertsource'
 import { defaultGraphSettings, graphOverlays, graphSettingsOf } from './alerts/graphentry'
 import type { MtfConfig } from './mtf/config'
 import { currentSession, logout } from './auth'
@@ -506,6 +508,9 @@ async function mountWall(container: HTMLElement, options: WallOptions): Promise<
   // feature `notification_raise`): stored, shown on every tab, and delivered to the account's
   // channels (Pushover, Telegram) like a watch's. A bar replay's notifications never go this way
   // -- the replay raises its own into the centre directly.
+  // An alert can watch a saved strategy's entries: the Lab is registered with the alerts here,
+  // which never import it (alerts/strategies.ts).
+  provideStrategies(labStrategies)
   const alertsRuntime = await startAlerts(
     hasFeature('notification_raise') ? durableSink(notifications, raiseNotification) : notifications
   )

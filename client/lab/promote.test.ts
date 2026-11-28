@@ -7,8 +7,9 @@ const { StrategyStore, localPersistence } = await import('./store')
 const { rank85Strategy } = await import('./model')
 const { RunStore } = await import('./plugin')
 const { StrategyEntryEngine, lastClosedOpen, LATE_MS } = await import('./alertentries')
-const { compile, operandKey, describeRule } = await import('../alerts/rules')
+const { compile, describeRule } = await import('../alerts/rules')
 const { FX_GRID } = await import('../time/timeframes')
+const { operandKey } = await import('../alerts/operands')
 
 import type { StrategyPersistence } from './store'
 

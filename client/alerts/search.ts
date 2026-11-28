@@ -15,12 +15,13 @@
 import { byInterval, leadInFor, pointSource, type ServerCatalogue } from './catalogue'
 import { type AlertBar, buildTrack, indexPoints, type PointIndex, type PointSource } from './compute'
 import { type AlertData, type Point, SpanCache } from './data'
-import { StrategyEntryEngine } from '../lab/alertentries'
+import { strategyEntryReader } from './strategies'
 import { GraphEntryEngine } from './graphentry'
-import { compile, operandKey } from './rules'
+import { compile } from './rules'
 import { freshRun, type Instant, instants, scan, type Track } from './timeline'
 import type { Alert, Operand } from './types'
 import { resolutionDurationMs } from '../time/intervals'
+import { operandKey, readsCatalogue } from './operands'
 
 /** Bars of the finest timeframe a rule reads, per chunk of a search -- the first chunk. */
 export const SEARCH_CHUNK_BARS = 3000
@@ -67,7 +68,7 @@ export class AlertSearch {
   private readonly points = new Map<string, SpanCache<Point>>()
   private readonly graphs: GraphEntryEngine
   /** A saved strategy's entries (client/lab), run over each window. */
-  private readonly strategies = new StrategyEntryEngine()
+  private readonly strategies = strategyEntryReader()
 
   constructor(
     private readonly data: AlertData,
@@ -96,7 +97,7 @@ export class AlertSearch {
     const groups = byInterval(operands)
     const intervals = [...groups.keys()]
     if (intervals.length === 0) return null
-    const catalogue = operands.some((o) => o.kind === 'series' || o.kind === 'signal') ? await this.catalogue() : null
+    const catalogue = operands.some(readsCatalogue) ? await this.catalogue() : null
     const lengths = intervals.map(resolutionDurationMs)
     const firstChunk = SEARCH_CHUNK_BARS * Math.min(...lengths)
     let chunk = firstChunk

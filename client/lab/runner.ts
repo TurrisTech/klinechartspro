@@ -21,7 +21,6 @@
 import type { Point } from '../alerts/data'
 import { indexPoints, type PointIndex } from '../alerts/compute'
 import { leadInFor, type ServerCatalogue } from '../alerts/catalogue'
-import { operandKey } from '../alerts/rules'
 import { pointSource } from '../alerts/catalogue'
 import type { Operand } from '../alerts/types'
 import { advertisedBaseIntervals } from '../capabilities'
@@ -38,6 +37,7 @@ import { type EntryOutcome, measureOutcome, type OutcomeSummary, pathIndex, summ
 import { computeReadings, leadIn, needsOf, type ReadingNeed, type SeriesReadings } from './readings'
 import { type SimResult, simulate } from './trades'
 import { defaultBase, nominalMs, STORED_LADDER, resolutionDurationMs } from '../time/intervals'
+import { operandKey } from '../alerts/operands'
 
 export class RunError extends Error {
   constructor(

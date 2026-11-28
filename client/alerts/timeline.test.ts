@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { compile, operandKey } from './rules'
+import { compile } from './rules'
 import { freshRun, instants, scan, type Track } from './timeline'
 import { ANY_LABEL, type Operand, type Rule } from './types'
+import { operandKey } from './operands'
 
 const H = 3_600_000
 const close1h: Operand = { kind: 'bar', interval: '1h', field: 'close' }

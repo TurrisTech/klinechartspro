@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { evaluate } from './conditions'
-import { compile, describeRule, formatMinute, operandKey, RuleError } from './rules'
+import { compile, describeRule, formatMinute, RuleError } from './rules'
 import { ANY_LABEL, type Operand, type Rule } from './types'
+import { operandKey } from './operands'
 
 const rsi: Operand = { kind: 'indicator', interval: '1h', name: 'RSI', params: [14], output: 'rsi1' }
 const close: Operand = { kind: 'bar', interval: '1h', field: 'close' }
