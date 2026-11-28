@@ -178,7 +178,7 @@ multiples) from entry", then "make sure that these will stop at Next alert on ba
 **In the engine, not the browser.** A paper account fills on the server, on ticks, with no tab
 open, so a trail the browser moved would stop trailing when the tab closed. The three pieces live
 in the fill engine (`wdashboard-server` 0.58.0 `sim/engine.py`, its Rust twin, and the replay's
-port `client/replay/engine.ts`, held together by the shared parity cases): an order carries them
+port `client/sim/engine.ts`, held together by the shared parity cases): an order carries them
 to its trade. Read `wdashboard-server/docs/replay.md` "Exit management" for the rules; in short:
 
 - **Trailing stop** — the trade's one stop loss follows the best closing-side price at a

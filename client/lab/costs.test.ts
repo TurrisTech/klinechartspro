@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ReplayBar } from '../replay/cache'
+import type { ReplayBar } from '../bars/cache'
 import { FX_GRID } from '../time/timeframes'
 import type { LabEntry } from './entries'
 import type { LabSignal, Readings } from './graph'

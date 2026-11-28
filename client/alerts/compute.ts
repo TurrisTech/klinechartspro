@@ -12,7 +12,7 @@
 // bar and the plugin's point are filed under.
 
 import { getIndicatorClass, type Indicator, type KLineData } from 'klinecharts'
-import type { ReplayBar } from '../replay/cache'
+import type { ReplayBar } from '../bars/cache'
 import { toWall } from '../time/timeframes'
 import { readField } from '../tsregistry/api'
 import { operandKey, WEEKDAYS } from './rules'

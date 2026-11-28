@@ -6,7 +6,7 @@
 // a tree of its own. wmarketdata's `tiles/derived.py` does the identical thing server-side; the
 // grid arithmetic on both sides is `Interval`'s, and this file's half of it is the port in
 // `../time/timeframes.ts`, which is asserted against wmarkettypes bar for bar by
-// `../replay/fixtures/boundaries.json`.
+// `../time/fixtures/boundaries.json`.
 //
 // Two rules carry the whole thing, and neither is about the aggregation:
 //

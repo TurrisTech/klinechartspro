@@ -16,7 +16,7 @@
 import type { KLineData } from 'klinecharts'
 import { averageTrueRange } from '../../src/indicators/nnfx/atr'
 import { indicatorValues } from '../alerts/compute'
-import type { ReplayBar } from '../replay/cache'
+import type { ReplayBar } from '../bars/cache'
 import { type Ast, callsOf } from './expr'
 import type { Readings } from './graph'
 import { lastAtOrBefore } from './sorted'

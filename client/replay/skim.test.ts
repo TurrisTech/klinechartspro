@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 import { evaluate, type Observation } from '../alerts/conditions'
-import type { BarSource, ReplayBar } from './cache'
-import { Engine } from './engine'
+import type { BarSource, ReplayBar } from '../bars/cache'
+import { Engine } from '../sim/engine'
 import { FX_GRID, fromWall } from '../time/timeframes'
 
 // THE SKIM: a walk with nothing that could fill and only price watches to answer reads coarser

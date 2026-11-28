@@ -1,5 +1,5 @@
 import type { LocalWatchState } from '../watch/local'
-import type { EngineState } from './engine'
+import type { EngineState } from '../sim/engine'
 
 // The replay state blob: what `PUT /sim/sessions/{id}/state` stores and a reload restores.
 // The engine runs client-side, so the client computes this and saves it on each change; the

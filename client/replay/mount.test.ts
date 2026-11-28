@@ -1,7 +1,7 @@
 import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { KLineChartPro, PaneSnapshot, SymbolInfo } from '../../src'
-import type { EngineState } from './engine'
+import type { EngineState } from '../sim/engine'
 import type { ReplayState } from './persist'
 
 // THE REPLAY WALL'S GLUE (index.ts), mounted for real: `mountBarReplay` over a fake wall and a

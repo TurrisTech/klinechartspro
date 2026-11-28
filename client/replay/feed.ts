@@ -6,7 +6,7 @@ import { answerableTo } from '../plugins/horizon'
 import type { PluginStream, Range } from '../plugins/types'
 import { fetchSymbols, symbolVendor } from '../symbols'
 import { foldsIntradayRows } from '../tiles/derive'
-import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from './cache'
+import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from '../bars/cache'
 import { type CandleGrid, gridFor } from '../time/timeframes'
 import { isIntraday, nominalMs, periodToResolution } from '../time/intervals'
 

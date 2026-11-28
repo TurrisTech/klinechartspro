@@ -74,16 +74,16 @@ describe.skipIf(!BASE_URL || !TILES_URL)('bar replay end to end (real server, re
     const { HttpAlertData } = await import('../alerts/data')
     const { ReplayAlerts } = await import('./alerts')
     const { simApi } = await import('../trading/api')
-    const { Engine } = await import('./engine')
+    const { Engine } = await import('../sim/engine')
     const { ReplayFeedHub, HISTORY_WINDOW_BARS } = await import('./feed')
     const { restore } = await import('./persist')
     const { ReplayTradingSession } = await import('./session')
-    const { HttpBarSource } = await import('./source')
-    const { TiledBarSource } = await import('./tiled')
+    const { HttpBarSource } = await import('../bars/source')
+    const { TiledBarSource } = await import('../bars/tiled')
     const { FX_GRID, FX_SCHEDULE, fromWall, intervalStart, nonWeekendGaps, toWireDate } = await import('../time/timeframes')
 .then(async (tf) => ({
       ...tf,
-      nonWeekendGaps: (await import('./cache')).nonWeekendGaps
+      nonWeekendGaps: (await import('../bars/cache')).nonWeekendGaps
     }))
 
     await loadCapabilities()

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { installWindow } from '../plugins/testing'
 import type { SimSnapshot } from '../trading/api'
-import { Engine } from './engine'
+import { Engine } from '../sim/engine'
 import { formatSpan } from '../time/format'
 import { type ReplayState, serialize, stampSaved } from './persist'
 

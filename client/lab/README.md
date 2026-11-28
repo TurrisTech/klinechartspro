@@ -105,7 +105,7 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `readings.ts` | what `atr()` / `ind()` read | klinecharts templates |
 | `entries.ts` | a rule's entries from its graphs or its events, the filter (`RuleAtInstant`) | klinecharts templates |
 | `outcomes.ts` | forward returns, MFE/MAE, first touch of ±k ATR, on the path bars, mid prices | yes |
-| `trades.ts` | entries as trades through the paper-trading fill engine (`client/replay/engine.ts`), plus breakeven, trailing, rule and time exits; the leverage cap, slippage, commission and financing (`financedCloses`) | yes |
+| `trades.ts` | entries as trades through the paper-trading fill engine (`client/sim/engine.ts`), plus breakeven, trailing, rule and time exits; the leverage cap, slippage, commission and financing (`financedCloses`) | yes |
 | `runner.ts` | one run: check, read (each source and timeframe once, longest first), then rule by rule signals → graphs → entries → filter, outcomes → trades for the rules together and each alone; the holdout's split instant | — |
 | `stats.ts` | a mean's t-statistic and its seeded bootstrap interval | yes |
 | `figures.ts` | a run (or its fitting part, or its holdout) as one row of figures, which way each is better, and a change between two | yes |

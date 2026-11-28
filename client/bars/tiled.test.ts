@@ -13,7 +13,7 @@ import type { CandleGrid } from '../time/timeframes'
 // days and Thursday besides -- the period the tiles do not cover yet.
 
 installWindow()
-const { TiledBarSource, barsBetween, pairColumns } = await import('./tiled')
+const { HeldTiles, TiledBarSource, barsBetween, pairColumns } = await import('./tiled')
 const { FX_GRID } = await import('../time/timeframes')
 
 const M = 60_000
@@ -65,11 +65,25 @@ class FakeApi implements BarSource {
 const make = (maxBars?: number) => {
   const layer = new FakeLayer()
   const api = new FakeApi()
-  return { layer, api, source: new TiledBarSource(api, layer, maxBars) }
+  return { layer, api, source: new TiledBarSource(api, layer, new HeldTiles(maxBars)) }
 }
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('TiledBarSource', () => {
+  test('two sources over one store hold a tile once: the second read decodes nothing', async () => {
+    const held = new HeldTiles()
+    const layer = new FakeLayer()
+    const replay = new TiledBarSource(new FakeApi(), layer, held)
+    const alerts = new TiledBarSource(new FakeApi(), layer, held)
+    await replay.fetch('oanda:EURUSD', '1m', T0, T0 + 10 * M, 'all', FX_GRID)
+    await settle()
+    const loads = layer.pairs.length
+    const bars = await alerts.fetch('oanda:EURUSD', '1m', T0 + 60 * M, T0 + 120 * M, 'all', FX_GRID)
+    expect(bars).toHaveLength(60)
+    expect(layer.pairs.length).toBe(loads)
+    expect(alerts.size).toBe(replay.size)
+  })
+
   test("a read inside the tiles is the server's answer, from a whole tile held in memory", async () => {
     const { layer, api, source } = make()
     const from = T0 + 600 * M

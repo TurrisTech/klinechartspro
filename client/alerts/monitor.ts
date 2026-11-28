@@ -20,7 +20,7 @@
 
 import type { NotificationSink } from '../notifications'
 import type { OHLCVBar } from '../ohlcv'
-import { toReplayBar } from '../replay/source'
+import { toReplayBar } from '../bars/source'
 import type { CandleGrid } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { byInterval, labelOperand, leadInFor, type ServerCatalogue } from './catalogue'

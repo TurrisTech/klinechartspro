@@ -1,5 +1,5 @@
 import type { SimOrder, SimTrade } from '../trading/api'
-import { rangeReaches } from './engine'
+import { rangeReaches } from '../sim/engine'
 import { type CandleGrid, fromWall, toWall } from '../time/timeframes'
 
 // PURE. Advance planning: given the cursor, what the user asked for, the next alert found

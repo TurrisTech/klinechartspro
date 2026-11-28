@@ -2,15 +2,16 @@ import { OhlcvApiError } from '../config'
 import type { LocalWatchState } from '../watch/local'
 import type { OrderPatch, OrderRequest, SimEvent, SimSnapshot, TradePatch } from '../trading/api'
 import type { SessionListener, TradingSession } from '../trading/session'
-import { BarCache, type BarSource, type ReplayBar } from './cache'
+import { BarCache, type BarSource, type ReplayBar } from '../bars/cache'
 import type { ReplayAlertBook } from './alerts'
 import { type AdvanceRequest, type AlertOccurrence, type StopReason, canFill, intersectsWorking, onBaseBoundary, planAdvance, targetOf } from './clock'
-import { type BidAskBar, type Engine, SimError } from './engine'
+import { type Engine, SimError } from '../sim/engine'
+import { toBidAsk } from '../sim/bidask'
 import { blocked, type FollowBlockers, type FollowNotice, type FollowResolution, type FollowTarget, followBase, movedState } from './follow'
 import { type AdvanceSetting, type ReplayState, serialize } from './persist'
 import { snapshotOf } from './sessions'
 import type { CandleGrid } from '../time/timeframes'
-import { nextTask } from './yield'
+import { nextTask } from '../bars/yield'
 import { type BaseCheck, coarser, divides, finerStored, nominalMs, sortByLength, validateBase } from '../time/intervals'
 
 /** How far back `quoteAt` looks for the last closed base bar, before widening. */
@@ -1194,24 +1195,6 @@ class ReplayRequestError extends OhlcvApiError {
 /** `EURUSD` of `oanda:EURUSD`: how the controls and the refusals name an instrument. */
 function tickerOf(symbol: string): string {
   return symbol.split(':').pop() ?? symbol
-}
-
-function toBidAsk(bar: ReplayBar, symbol: string): BidAskBar {
-  const bid = bar.bid ?? { o: bar.o, h: bar.h, l: bar.l, c: bar.c }
-  const ask = bar.ask ?? { o: bar.o, h: bar.h, l: bar.l, c: bar.c }
-  return {
-    symbol,
-    time: bar.open,
-    end: bar.end,
-    bidOpen: bid.o,
-    bidHigh: bid.h,
-    bidLow: bid.l,
-    bidClose: bid.c,
-    askOpen: ask.o,
-    askHigh: ask.h,
-    askLow: ask.l,
-    askClose: ask.c
-  }
 }
 
 /** What ends a run to the next event (and a Step or Play with Pause on fill): a fill, a close --

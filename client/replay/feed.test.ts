@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Period, SymbolInfo } from '../../src'
-import type { BarSource, Columns, ReplayBar } from './cache'
+import type { BarSource, Columns, ReplayBar } from '../bars/cache'
 import { CONTINUOUS_DAY, type CandleGrid } from '../time/timeframes'
 
 // feed.ts reaches config.ts, which reads `window` at import: a DOM for this file only.
@@ -79,7 +79,7 @@ describe('ReplayFeedHub on a pane\'s own schedule', () => {
 // and the candle is exactly the one the 5s bars make.
 
 const { FX_SCHEDULE, FX_GRID, fromWall } = await import('../time/timeframes')
-const { composeForming } = await import('./cache')
+const { composeForming } = await import('../bars/cache')
 
 const ny = (d: number, h: number, m = 0, s = 0): number => fromWall(Date.UTC(2024, 2, d, h, m, s), 'America/New_York')
 

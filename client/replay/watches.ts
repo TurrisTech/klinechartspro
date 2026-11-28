@@ -5,7 +5,7 @@ import type { Observation, Sample } from '../alerts/conditions'
 import { type WatchApi, WatchStore } from '../watch/store'
 import { PRICE_SOURCE, priceCondition, priceLevel } from '../watch/types'
 import type { SourceField } from '../watch/types'
-import type { ReplayBar } from './cache'
+import type { ReplayBar } from '../bars/cache'
 import type { ObserverStop, ReplayObserver } from './session'
 import { formatInstant } from '../time/format'
 

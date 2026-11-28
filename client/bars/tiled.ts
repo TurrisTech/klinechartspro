@@ -98,7 +98,15 @@ export function pairColumns(mid: TileColumns, quote: TileColumns): HeldTile | nu
  * FX major is 55-85k rows (~8 MB of columns), so a few weeks of 5s, or years of 1m and coarser. */
 const MAX_HELD_BARS = 400_000
 
-export class TiledBarSource implements BarSource {
+/**
+ * Decoded bid/ask tiles held in memory, least recently used out first, under one budget.
+ *
+ * The page holds ONE (`sharedHeldTiles`), which every `TiledBarSource` reads through -- the
+ * replay's, the alert search's, the Lab's -- so a tile two of them read is fetched, decoded and
+ * held once, and the page's memory has one ceiling. Until 2026-11-28 each source held its own:
+ * the Lab page alone built two, so one tile could sit decoded twice under two 400k-row budgets.
+ */
+export class HeldTiles {
   private readonly held = new Map<string, HeldTile>()
   private heldBars = 0
   private readonly loading = new Map<string, Promise<HeldTile | null>>()
@@ -106,10 +114,57 @@ export class TiledBarSource implements BarSource {
    * answered 404 every time, and asking again at every read would put that round trip on each. */
   private readonly failed = new Set<string>()
 
+  constructor(private readonly maxBars = MAX_HELD_BARS) {}
+
+  /** How many rows are held decoded. */
+  get size(): number {
+    return this.heldBars
+  }
+
+  /** `key`'s tile: held, loading, or loaded now by `load`. A tile `load` answers null for is
+   * remembered as failed and not asked for again. */
+  get(key: string, load: () => Promise<HeldTile | null>): Promise<HeldTile | null> {
+    if (this.failed.has(key)) return Promise.resolve(null)
+    const hit = this.held.get(key)
+    if (hit) {
+      this.held.delete(key)
+      this.held.set(key, hit)
+      return Promise.resolve(hit)
+    }
+    let pending = this.loading.get(key)
+    if (!pending) {
+      pending = load()
+        .catch(() => null)
+        .then((tile) => {
+          if (tile !== null) this.hold(key, tile)
+          else this.failed.add(key)
+          return tile
+        })
+        .finally(() => this.loading.delete(key))
+      this.loading.set(key, pending)
+    }
+    return pending
+  }
+
+  private hold(key: string, tile: HeldTile): void {
+    this.held.set(key, tile)
+    this.heldBars += tile.ts.length
+    while (this.heldBars > this.maxBars && this.held.size > 1) {
+      const [oldest, evicted] = this.held.entries().next().value as [string, HeldTile]
+      this.held.delete(oldest)
+      this.heldBars -= evicted.ts.length
+    }
+  }
+}
+
+/** The page's one store of held tiles. */
+export const sharedHeldTiles = new HeldTiles()
+
+export class TiledBarSource implements BarSource {
   constructor(
     private readonly api: BarSource = new HttpBarSource(),
     private readonly tiles: TileLayer = HTTP_TILES,
-    private readonly maxBars = MAX_HELD_BARS
+    private readonly held: HeldTiles = sharedHeldTiles
   ) {}
 
   async fetch(symbol: string, interval: string, from: number, to: number, columns: Columns, grid: CandleGrid): Promise<ReplayBar[]> {
@@ -131,9 +186,10 @@ export class TiledBarSource implements BarSource {
     await Promise.all(intervals.map((interval) => this.fetch(symbol, interval, at, at + nominalMs(interval), 'all', grid).catch(() => [])))
   }
 
-  /** How many bars are held decoded (for a test, and the curious). */
+  /** How many bars are held decoded in the store this source reads through (for a test, and the
+   * curious). */
   get size(): number {
-    return this.heldBars
+    return this.held.size
   }
 
   private async midOnly(symbol: string, interval: string, from: number, to: number, grid: CandleGrid): Promise<{ bars: ReplayBar[]; coveredTo: number } | null> {
@@ -164,37 +220,7 @@ export class TiledBarSource implements BarSource {
   /** One tile with bid and ask, as columns: held, loading, or loaded now. */
   private tile(manifest: TileManifest, entry: TileEntry): Promise<HeldTile | null> {
     const key = `${manifest.vendor}:${manifest.symbol}:${manifest.interval}:${entry.name}`
-    if (this.failed.has(key)) return Promise.resolve(null)
-    const hit = this.held.get(key)
-    if (hit) {
-      this.held.delete(key)
-      this.held.set(key, hit)
-      return Promise.resolve(hit)
-    }
-    let pending = this.loading.get(key)
-    if (!pending) {
-      pending = this.tiles
-        .pair(manifest, entry)
-        .catch(() => null)
-        .then((tile) => {
-          if (tile !== null) this.hold(key, tile)
-          else this.failed.add(key)
-          return tile
-        })
-        .finally(() => this.loading.delete(key))
-      this.loading.set(key, pending)
-    }
-    return pending
-  }
-
-  private hold(key: string, tile: HeldTile): void {
-    this.held.set(key, tile)
-    this.heldBars += tile.ts.length
-    while (this.heldBars > this.maxBars && this.held.size > 1) {
-      const [oldest, evicted] = this.held.entries().next().value as [string, HeldTile]
-      this.held.delete(oldest)
-      this.heldBars -= evicted.ts.length
-    }
+    return this.held.get(key, () => this.tiles.pair(manifest, entry))
   }
 }
 

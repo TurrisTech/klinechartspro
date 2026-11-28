@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { LocalWatchState } from '../watch/local'
-import { Engine } from './engine'
+import { Engine } from '../sim/engine'
 import { readIntent, restore, serialize, stampSaved, writeIntent } from './persist'
 
 /** A stored replay watch, as `LocalWatchRegistry.toState()` writes one. */

@@ -199,7 +199,7 @@ export interface ExitSpec {
 
 export interface Sizing {
   /** The simulated account's opening balance, in the instrument's QUOTE currency -- the
-   * currency the fill engine counts P&L in (client/replay/engine.ts). */
+   * currency the fill engine counts P&L in (client/sim/engine.ts). */
   balance: number
   mode: 'units' | 'risk'
   units: number

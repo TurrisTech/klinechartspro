@@ -1,6 +1,6 @@
 import type { SimSnapshot } from '../trading/api'
 import { formatDuration } from '../trading/format'
-import { Engine } from './engine'
+import { Engine } from '../sim/engine'
 import { type ReplayState, restore } from './persist'
 import { type ReplayResults, replayResults } from './results'
 

@@ -14,7 +14,7 @@ import { capabilities } from '../capabilities'
 import { OhlcvApiError } from '../config'
 import { describeUnavailable, fetchMtfGraph, type MtfGraphAnswer, type MtfGraphRequest } from '../mtf/api'
 import { fetchPoints } from '../plugins/api'
-import { TiledBarSource } from '../replay/tiled'
+import { TiledBarSource } from '../bars/tiled'
 import { type CandleGrid, gridFor } from '../time/timeframes'
 import { fetchSymbolInfo } from '../symbols'
 import type { AlertBar, PointSource } from './compute'
@@ -41,7 +41,7 @@ export interface AlertData {
 const MAX_POINT_PAGES = 200
 
 export class HttpAlertData implements AlertData {
-  // Closed periods from the tiles the chart reads (replay/tiled.ts), the forming one from `/getbars`.
+  // Closed periods from the tiles the chart reads (bars/tiled.ts), the forming one from `/getbars`.
   private readonly source = new TiledBarSource()
   private readonly grids = new Map<string, Promise<CandleGrid | null>>()
 

@@ -22,7 +22,7 @@ export type { ExitUnit }
 // options to notify when price goes a certain multiple (or multiples) from entry"). PURE
 // (exits.test.ts).
 //
-// The engine (wdashboard-server sim/engine.py, and its port client/replay/engine.ts) knows three
+// The engine (wdashboard-server sim/engine.py, and its port client/sim/engine.ts) knows three
 // things, every figure a PRICE distance:
 //
 // - a TRAILING STOP: the stop follows the best closing-side price at a distance, from the fill or
