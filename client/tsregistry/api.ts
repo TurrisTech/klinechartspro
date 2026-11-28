@@ -1,4 +1,5 @@
 import { apiGet } from '../config'
+import type { MarkShape } from '../plugins/draw'
 
 // The timeseries indicator registry, as wdashboard-server serves it
 // (`GET /indicators/registry`, services/tsregistry.py; the schema and the rows are
@@ -48,16 +49,6 @@ interface PredicateTerm {
   lt?: number
   lte?: number
 }
-
-export type MarkShape =
-  | 'arrow-up'
-  | 'arrow-down'
-  | 'triangle-up'
-  | 'triangle-down'
-  | 'circle'
-  | 'square'
-  | 'diamond'
-  | 'cross'
 
 /** One per-bar mark. The first whose `when` holds is drawn, so the order is the rule. */
 export interface MarkSpec {

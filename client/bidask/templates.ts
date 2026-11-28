@@ -2,7 +2,7 @@ import { registerIndicator, type IndicatorTemplate, type KLineData } from 'kline
 import { registerIndicatorSettings, type IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
 import type { QuotePoint } from './api'
-import { timestampCalc } from '../plugins/calc'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
 
 // QUOTE:bidask -- the bid and the ask of every bar on the price pane.
 //
@@ -81,13 +81,7 @@ export function registerBidAskIndicator(): IndicatorGroup[] {
           { color: BID, size: 1, style: 'solid', smooth: false, dashedValue: [2, 2] }
         ]
       },
-      shouldUpdate: (prev, cur) => {
-        const a = prev.extendData
-        const b = cur.extendData
-        const changed =
-          a?.seriesKey !== b?.seriesKey || a?.rev !== b?.rev || JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
-        return { calc: changed, draw: true }
-      },
+      shouldUpdate: shouldUpdateOn<ExtendData>({ keys: ['seriesKey', 'rev'], calcParams: true }),
       calc: calc as IndicatorTemplate<QuoteValue, number, ExtendData>['calc'],
       regenerateFigures: null,
       createTooltipDataSource: null,

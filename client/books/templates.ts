@@ -1,7 +1,7 @@
 import { registerIndicator, type Chart, type Indicator, type IndicatorTemplate, type KLineData } from 'klinecharts'
 import type { IndicatorGroup } from '../../src'
 import { peekStore, type WindowStore } from '../plugins/store'
-import { timestampCalc } from '../plugins/calc'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
 import {
   DEFAULT_FLOW_RANGE_PCT,
   GRID_MS,
@@ -159,12 +159,7 @@ function profileCalc(forwardFill: boolean) {
   })
 }
 
-function shouldUpdate<D>(prev: Indicator<D, number, ExtendData>, cur: Indicator<D, number, ExtendData>) {
-  const a = prev.extendData
-  const b = cur.extendData
-  const dataChanged = a?.seriesKey !== b?.seriesKey || a?.rev !== b?.rev || a?.chartInterval !== b?.chartInterval
-  return { calc: dataChanged, draw: true }
-}
+const shouldUpdate = shouldUpdateOn<ExtendData>({ keys: ['seriesKey', 'rev', 'chartInterval'] })
 
 function formatTs(ts: number): string {
   return `${new Date(ts).toISOString().slice(0, 16).replace('T', ' ')}Z`

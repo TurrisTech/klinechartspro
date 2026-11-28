@@ -266,6 +266,9 @@ const draw: NonNullable<IndicatorTemplate<VpValue, number, ExtendData>['draw']> 
   return true
 }
 
+/** Not `shouldUpdateOn`, which compares whole keys: of the config only the mode and the session
+ * decide what `calc` files each bar under, and the rest of it (rows, value area, colours, width)
+ * is read in `draw`. */
 function shouldUpdate(prev: Indicator<VpValue, number, ExtendData>, cur: Indicator<VpValue, number, ExtendData>) {
   const a = prev.extendData
   const b = cur.extendData

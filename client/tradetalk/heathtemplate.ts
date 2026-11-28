@@ -14,7 +14,7 @@ import {
   paneBackground,
   type ExtendData
 } from './levelmap'
-import { timestampMemo } from '../plugins/calc'
+import { shouldUpdateOn, timestampMemo } from '../plugins/calc'
 
 // TT:heathlevels -- "Heath levels", the method's supply and demand lines (dossier §3), drawn
 // on the price pane from the bars the pane already holds: a Heath level is a statement about
@@ -152,13 +152,7 @@ export function registerHeathLevelsIndicator(): IndicatorGroup['items'] {
       // No clock until the plugin host binds: a guessed zone would put every calendar line in
       // the wrong place without looking wrong.
       extendData: { seriesKey: '', rev: 0, clock: null, barMs: 0, tick: 0 },
-      shouldUpdate: (prev, cur) => {
-        const a = prev.extendData
-        const b = cur.extendData
-        const changed =
-          a?.seriesKey !== b?.seriesKey || a?.rev !== b?.rev || JSON.stringify(prev.calcParams) !== JSON.stringify(cur.calcParams)
-        return { calc: changed, draw: true }
-      },
+      shouldUpdate: shouldUpdateOn<ExtendData>({ keys: ['seriesKey', 'rev'], calcParams: true }),
       calc,
       draw: ({ ctx, chart, indicator, bounding, xAxis, yAxis }) => {
         const data = chart.getDataList()

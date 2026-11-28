@@ -7,7 +7,8 @@ import { chartBarAt, chartOpens } from './shift'
 import { peekStore } from '../plugins/store'
 import type { MtfGraphStore } from './store'
 import { gridOf, type Schedule } from '../time/timeframes'
-import { timestampCalc } from '../plugins/calc'
+import { shouldUpdateOn, timestampCalc } from '../plugins/calc'
+import { ARROW_LENGTH, drawGraphNode, drawText, fillArrow } from '../plugins/draw'
 import { resolutionDurationMs } from '../time/intervals'
 
 // ONE klinecharts indicator template per overlay (overlays.ts), on the price pane, drawing
@@ -113,7 +114,7 @@ const LANE_INSET = 6
 const LANE_GAP = 4
 
 function laneHeight(style: MtfTimeframeStyle): number {
-  return style.arrowSize * 1.4 + (style.textSize > 0 ? style.textSize + 2 : 0) + LANE_GAP
+  return style.arrowSize * ARROW_LENGTH + (style.textSize > 0 ? style.textSize + 2 : 0) + LANE_GAP
 }
 
 /**
@@ -221,74 +222,13 @@ function placeGraphs(valueAt: (index: number) => Value, store: MtfGraphStore, ex
   }
 }
 
-function shouldUpdate(prev: Indicator<Value, number, ExtendData>, cur: Indicator<Value, number, ExtendData>) {
-  const a = prev.extendData
-  const b = cur.extendData
-  const dataChanged =
-    a?.rev !== b?.rev ||
-    a?.chartInterval !== b?.chartInterval ||
-    JSON.stringify(a?.schedule) !== JSON.stringify(b?.schedule) ||
-    JSON.stringify(a?.graphRoots) !== JSON.stringify(b?.graphRoots) ||
-    JSON.stringify(a?.intervals) !== JSON.stringify(b?.intervals) ||
-    JSON.stringify(a?.seriesKeys) !== JSON.stringify(b?.seriesKeys) ||
-    // A style-only edit still has to recalc, because which timeframes are ENABLED decides
-    // both what `calc` places and each one's lane. Comparing the whole config rather than
-    // just the enabled set keeps that honest if a future field affects placement too.
-    JSON.stringify(a?.config) !== JSON.stringify(b?.config)
-  return { calc: dataChanged, draw: true }
-}
-
-function arrow(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  tipY: number,
-  size: number,
-  color: string,
-  pointingUp: boolean
-): void {
-  // `tipY` is the point of the arrow; the base is `size * 1.4` away, on the side it came
-  // from — so an up arrow's body hangs BELOW its tip and a down arrow's above.
-  const dir = pointingUp ? 1 : -1
-  ctx.save()
-  ctx.beginPath()
-  ctx.moveTo(x, tipY)
-  ctx.lineTo(x - size, tipY + dir * size * 1.4)
-  ctx.lineTo(x + size, tipY + dir * size * 1.4)
-  ctx.closePath()
-  ctx.fillStyle = color
-  ctx.fill()
-  ctx.restore()
-}
-
-function label(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  text: string,
-  color: string,
-  size: number,
-  above: boolean
-): void {
-  ctx.save()
-  ctx.font = `${size}px sans-serif`
-  ctx.textAlign = 'center'
-  ctx.textBaseline = above ? 'bottom' : 'top'
-  ctx.fillStyle = color
-  ctx.fillText(text, x, y)
-  ctx.restore()
-}
-
-/** A five-pointed star centred on (`cx`, `cy`), point up, as a path for the caller to fill. */
-function star(ctx: CanvasRenderingContext2D, cx: number, cy: number, outer: number): void {
-  const inner = outer * 0.45
-  for (let k = 0; k < 10; k++) {
-    const r = k % 2 === 0 ? outer : inner
-    const a = -Math.PI / 2 + (k * Math.PI) / 5
-    if (k === 0) ctx.moveTo(cx + r * Math.cos(a), cy + r * Math.sin(a))
-    else ctx.lineTo(cx + r * Math.cos(a), cy + r * Math.sin(a))
-  }
-  ctx.closePath()
-}
+// A style-only edit still has to recalc, because which timeframes are ENABLED decides both what
+// `calc` places and each one's lane. Comparing the whole config rather than just the enabled set
+// keeps that honest if a future field affects placement too.
+const shouldUpdate = shouldUpdateOn<ExtendData>({
+  keys: ['rev', 'chartInterval'],
+  json: ['schedule', 'graphRoots', 'intervals', 'seriesKeys', 'config']
+})
 
 /** The signal graphs: every edge whose span reaches the visible range, then every node in
  * it. Edges are filed on their later end, so one reaching in from the right has its child
@@ -343,32 +283,12 @@ function drawGraphs(
     for (const dot of dots) {
       const color = config.timeframes[dot.interval]?.color
       if (!color) continue
-      const cx = x(i)
-      const cy = y(dot.price)
-      ctx.beginPath()
-      if (dot.entry) {
-        // A star where a path reaches 5m or below: the entry the graph exists to find. Several
-        // times the step dot's size (user, 2026-10-01: "twice as big" as the first cut, which
-        // was 2 * width + 4), outlined so a dark 5m or 3m fill still reads on a dark chart.
-        star(ctx, cx, cy, 4 * width + 8)
-        ctx.fillStyle = graph.starTimeframeColour === false ? (graph.starColor ?? color) : color
-        ctx.fill()
-        ctx.save()
-        // Mitred, so the points stay points; the lines above are drawn with round joins.
-        ctx.lineJoin = 'miter'
-        ctx.strokeStyle = graph.starOutline ?? MTF_DEFAULTS.graph.starOutline
-        ctx.stroke()
-        ctx.restore()
-      } else if (dot.root) {
-        // A ring, so where a graph starts reads apart from the steps it takes.
-        ctx.arc(cx, cy, width + 3, 0, Math.PI * 2)
-        ctx.strokeStyle = color
-        ctx.stroke()
-      } else {
-        ctx.arc(cx, cy, width + 1.5, 0, Math.PI * 2)
-        ctx.fillStyle = color
-        ctx.fill()
-      }
+      // A star where a path reaches 5m or below: the entry the graph exists to find. Several
+      // times the step dot's size (user, 2026-10-01: "twice as big" as the first cut, which
+      // was 2 * width + 4), outlined so a dark 5m or 3m fill still reads on a dark chart --
+      // mitred, where the lines above are drawn with round joins.
+      const starFill = graph.starTimeframeColour === false ? (graph.starColor ?? color) : color
+      drawGraphNode(ctx, x(i), y(dot.price), width, dot, color, starFill, graph.starOutline ?? MTF_DEFAULTS.graph.starOutline)
     }
   }
   ctx.restore()
@@ -451,22 +371,22 @@ export function registerMtfIndicators(overlay: MtfOverlay): IndicatorGroup[] {
             // `'zone'` placement puts a long above the high and a short below the low; the
             // arrow still points the signal's way, so there it points away from the candle.
             const above = zoneAbove ? mark.up : !mark.up
-            const armLength = size * 1.4
+            const armLength = size * ARROW_LENGTH
             if (!above) {
               // Below the low: an up arrow's tip touches the lane, a down arrow's base does.
               const nearY = yAxis.convertToPixel(bar.low) + belowOffset
               const tipY = mark.up ? nearY : nearY + armLength
-              arrow(ctx, x, tipY, size, style.color, mark.up)
+              fillArrow(ctx, x, tipY, size, style.color, mark.up)
               if (style.textSize > 0) {
-                label(ctx, x, nearY + armLength + 2, text, style.color, style.textSize, false)
+                drawText(ctx, x, nearY + armLength + 2, text, style.color, { size: style.textSize, align: 'center', baseline: 'top' })
               }
               belowOffset += laneHeight(style)
             } else {
               const nearY = yAxis.convertToPixel(bar.high) - aboveOffset
               const tipY = mark.up ? nearY - armLength : nearY
-              arrow(ctx, x, tipY, size, style.color, mark.up)
+              fillArrow(ctx, x, tipY, size, style.color, mark.up)
               if (style.textSize > 0) {
-                label(ctx, x, nearY - armLength - 2, text, style.color, style.textSize, true)
+                drawText(ctx, x, nearY - armLength - 2, text, style.color, { size: style.textSize, align: 'center', baseline: 'bottom' })
               }
               aboveOffset += laneHeight(style)
             }
