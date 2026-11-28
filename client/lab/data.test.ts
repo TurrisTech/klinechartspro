@@ -81,6 +81,34 @@ test('a read replacing the span while another extends it leaves no hole read as 
   expect(cache.slice(0, 100)).toEqual(keys(5, 60))
 })
 
+// The data layer behind an alert on a strategy (lab/alertentries.ts) reads on as a replay's search
+// walks forward, and as a live tab stays open: bounded, a series forgets what its reads walked past.
+test('a bounded span forgets its oldest rows as forward reads walk on, never a row a read asked for', async () => {
+  const reads: Array<[number, number]> = []
+  const fetch = async (from: number, to: number) => {
+    reads.push([from, to])
+    return keys(Math.ceil(from), to)
+  }
+  const cache = new TailCache<number>(fetch, (n) => n, 0, 10)
+  await cache.ensure(0, 8)
+  await cache.ensure(6, 14)
+  // Fourteen held, over the bound of ten: down to the newest ten.
+  expect(cache.slice(0, 100)).toEqual(keys(4, 14))
+  // A read longer than the bound keeps all of itself.
+  await cache.ensure(12, 30)
+  expect(cache.slice(0, 100)).toEqual(keys(12, 30))
+  // What is held is not read again; what was dropped is, when asked for.
+  await cache.ensure(12, 30)
+  expect(reads).toEqual([
+    [0, 8],
+    [8, 14],
+    [14, 30]
+  ])
+  await cache.ensure(8, 30)
+  expect(reads[3]).toEqual([8, 12])
+  expect(cache.slice(0, 100)).toEqual(keys(8, 30))
+})
+
 test('extending backwards prepends, and a disjoint range replaces the run', async () => {
   const fetch = async (from: number, to: number) => {
     const out: number[] = []

@@ -115,13 +115,13 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `runs.ts` | this session's runs, the baseline, and the Runs panel | history yes |
 | `figtable.ts` | rows of figures as a table, each change under its value | — |
 | `export.ts` | entries and trades as CSV, a strategy to and from a JSON file | but `download` |
-| `data.ts` | `LabData` / `HttpLabData`: bars through the tiled path (bid/ask through `/getbars?columns=all`), `GET /plugins/{id}/signals`, points; held per page (`TailCache`) | — |
+| `data.ts` | `LabData` / `HttpLabData`: bars through the tiled path (bid/ask through `/getbars?columns=all`), `GET /plugins/{id}/signals`, points; held per page (`TailCache`, one read at a time), and for an alert's engine bounded at the alert search's 60,000 rows a series | — |
 | `store.ts` | saved strategies under `/preferences` (localStorage without it), one key each plus an index; saves announced on a BroadcastChannel | — |
 | `catalogue.ts` | signal families with their registry params, the indicators a rule may compute, timeframes | — |
 | `session.ts` | `LabSession`, the page's state and actions: which strategy is open, the drafts and which are touched or unsaved, Save / Revert / Delete / New / a file read back, the header's instrument, window and holdout, running the draft (a newer run or Stop abandons the one before) and this session's runs -- given the store, the data layers, the catalogue and the clock | logic yes |
 | `editor.ts`, `results.ts`, `page.ts`, `overlay.ts` | the page (DOM); `page.ts` draws what the session holds after each action | — |
 | `plugin.ts` | a saved strategy on a dashboard pane | — |
-| `alertentries.ts` | a saved strategy's entries as an alert operand | — |
+| `alertentries.ts` | a saved strategy's entries as an alert operand; reads of one saved version over one window at once are one run | — |
 
 ## Using the page
 

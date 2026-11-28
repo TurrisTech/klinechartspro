@@ -72,7 +72,9 @@ export class TailCache<R> {
   constructor(
     private readonly fetch: (from: number, to: number) => Promise<R[]>,
     private readonly keyOf: (row: R) => number,
-    private readonly tailMs: number
+    private readonly tailMs: number,
+    /** Rows held before a forward read forgets the oldest; unbounded unless given. */
+    private readonly maxRows = Number.POSITIVE_INFINITY
   ) {}
 
   ensure(from: number, to: number): Promise<void> {
@@ -100,6 +102,17 @@ export class TailCache<R> {
       const after = await this.fetch(edge, to)
       this.rows = [...this.rows.filter((r) => this.keyOf(r) < edge), ...after.filter((r) => this.keyOf(r) >= edge)]
       this.hi = to
+      if (this.rows.length > this.maxRows) {
+        // Walked past: the oldest rows go, down to the bound -- but never one this read asked for.
+        // Not everything before this read's start, as the alert search drops from its own caches
+        // (alerts/search.ts): the search reads a series once a chunk, while one run can read a
+        // series from several starts, and the next run's earlier read would fetch it all again.
+        const at = Math.min(from, this.keyOf(this.rows[this.rows.length - this.maxRows]))
+        if (at > this.lo) {
+          this.rows = this.rows.filter((r) => this.keyOf(r) >= at)
+          this.lo = at
+        }
+      }
     }
   }
 
@@ -118,6 +131,12 @@ export class HttpLabData implements LabData {
   private readonly signals_ = new Map<string, TailCache<SignalPoint>>()
   private readonly points_ = new Map<string, TailCache<Point>>()
   private readonly pips = new Map<string, Promise<number>>()
+
+  /** `maxHeldRows`: what each series holds before its forward reads forget the oldest rows
+   * (`TailCache`). Unbounded for the Lab's page, whose runs read one window again and again;
+   * bounded for the engine behind an alert on a strategy (./alertentries.ts), which reads on for
+   * as long as a replay's search walks forward or a live tab stays open. */
+  constructor(private readonly maxHeldRows = Number.POSITIVE_INFINITY) {}
 
   grid(symbol: string): Promise<CandleGrid | null> {
     return this.alertData.grid(symbol)
@@ -144,7 +163,8 @@ export class HttpLabData implements LabData {
       cache = new TailCache<ReplayBar>(
         (a, b) => (columns === 'all' ? this.barSource.fetch(symbol, interval, a, b, 'all', grid) : this.coreBars(symbol, interval, a, b, grid)),
         (bar) => bar.open,
-        TAIL_BARS * nominalMs(interval)
+        TAIL_BARS * nominalMs(interval),
+        this.maxHeldRows
       )
       this.bars_.set(key, cache)
     }
@@ -174,7 +194,7 @@ export class HttpLabData implements LabData {
     const key = `${request.plugin}|${request.variant}|${JSON.stringify(request.params)}|${symbol}|${interval}`
     let cache = this.signals_.get(key)
     if (!cache) {
-      cache = new TailCache<SignalPoint>((a, b) => readSignals(request, symbol, interval, a, b), (p) => p.date, TAIL_BARS * nominalMs(interval))
+      cache = new TailCache<SignalPoint>((a, b) => readSignals(request, symbol, interval, a, b), (p) => p.date, TAIL_BARS * nominalMs(interval), this.maxHeldRows)
       this.signals_.set(key, cache)
     }
     await cache.ensure(from, to)
@@ -186,7 +206,7 @@ export class HttpLabData implements LabData {
     const key = `${source.plugin}|${source.variant}|${symbol}|${interval}`
     let cache = this.points_.get(key)
     if (!cache) {
-      cache = new TailCache<Point>((a, b) => this.alertData.points(source, symbol, interval, a, b), (p) => p.date, TAIL_BARS * nominalMs(interval))
+      cache = new TailCache<Point>((a, b) => this.alertData.points(source, symbol, interval, a, b), (p) => p.date, TAIL_BARS * nominalMs(interval), this.maxHeldRows)
       this.points_.set(key, cache)
     }
     await cache.ensure(from, to)
