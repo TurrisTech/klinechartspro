@@ -46,6 +46,10 @@ mode only for its title.
 - `ordercard.ts` — the collapsible order card in that layer, built from the kit.
 - `ticket.ts` — the order ticket (below), built from the kit, once, and updated in place. It lives
   in the **trade box**, a window of its own.
+- `order.ts` — PURE (tested): what the ticket's fields add up to — the entry, the units from any of
+  the six ways of sizing, the stop and target, the exits, the request it sends, the draft it draws,
+  and why it cannot be sent yet, by field; the size's steps and the presets' levels. The ticket holds
+  what is typed and draws what this works out.
 - `kit.ts` — **the trading kit**: the controls every surface is built from (below) — `LevelField`
   (a stop, target or price: label, presets, `[− | 20.0 | pips ▾ | +]`, readout), `NumberField`,
   `ExitField` (a trailing stop, a breakeven or Notify at, with its unit and secondary numbers),
