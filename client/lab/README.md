@@ -97,7 +97,7 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 
 | module | does | pure? |
 |---|---|---|
-| `model.ts` | the strategy and its rules, their defaults and presets, the slot scopes, `strategyProblems`, `readStrategy` and `migrateV1` | yes |
+| `model.ts` | the strategy and its rules, their defaults and presets, the slot scopes, `strategyProblems`, `readStrategy` and `migrateV1`; the edits the editor and the page make that are more than setting a field (a rule's new root, a step or an entry on or off, a rule added, copied or removed, a signal added or removed, the window or the holdout of another kind, a copy), each a new strategy or rule out, which the caller writes back into the draft it holds by reference | yes |
 | `rules.ts` | a rule as the graph builder's spec, its entry test, its signals, its timeframes | yes |
 | `expr.ts` | the expression language | yes |
 | `graph.ts` | the slotted graph builder (`buildRootGraphs`), `slotEnv` | yes |
@@ -108,7 +108,7 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `trades.ts` | entries as trades through the paper-trading fill engine (`client/sim/engine.ts`), plus breakeven, trailing, rule and time exits; the leverage cap, slippage, commission and financing (`financedCloses`) | yes |
 | `runner.ts` | one run: check, read (each source and timeframe once, longest first), then rule by rule signals → graphs → entries → filter, outcomes → trades for the rules together and each alone; the holdout's split instant | — |
 | `stats.ts` | a mean's t-statistic and its seeded bootstrap interval | yes |
-| `figures.ts` | a run (or its fitting part, or its holdout) as one row of figures, which way each is better, and a change between two | yes |
+| `figures.ts` | a run (or its fitting part, or its holdout) as one row of figures, which way each is better, and a change between two; the rest of what the Summary counts -- forward pips per horizon with their t and interval, the trades month by month, the entries not taken and why, the signals in the window | yes |
 | `changes.ts` | what an edit changed, in the editor's words | yes |
 | `sweep.ts`, `sweepview.ts` | every number a strategy holds (a signal's parameter, a number written in a condition, a stop, a cost...), a sweep over one, and its panel | logic yes |
 | `basket.ts`, `basketview.ts` | one strategy over many instruments (the 7 majors, the 28 FX pairs), the pooled trades, and its panel | logic yes |
@@ -118,7 +118,8 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `data.ts` | `LabData` / `HttpLabData`: bars through the tiled path (bid/ask through `/getbars?columns=all`), `GET /plugins/{id}/signals`, points; held per page (`TailCache`) | — |
 | `store.ts` | saved strategies under `/preferences` (localStorage without it), one key each plus an index; saves announced on a BroadcastChannel | — |
 | `catalogue.ts` | signal families with their registry params, the indicators a rule may compute, timeframes | — |
-| `editor.ts`, `results.ts`, `page.ts`, `overlay.ts` | the page (DOM) | — |
+| `session.ts` | `LabSession`, the page's state and actions: which strategy is open, the drafts and which are touched or unsaved, Save / Revert / Delete / New / a file read back, the header's instrument, window and holdout, running the draft (a newer run or Stop abandons the one before) and this session's runs -- given the store, the data layers, the catalogue and the clock | logic yes |
+| `editor.ts`, `results.ts`, `page.ts`, `overlay.ts` | the page (DOM); `page.ts` draws what the session holds after each action | — |
 | `plugin.ts` | a saved strategy on a dashboard pane | — |
 | `alertentries.ts` | a saved strategy's entries as an alert operand | — |
 

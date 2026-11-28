@@ -7,21 +7,22 @@ import { defaultSide, labIndicators, type LabCatalogue, type LabSignalFamily } f
 import { exprProblem } from './expr'
 import {
   byLength,
-  defaultEntryOn,
-  defaultRule,
+  defaultRuleSource,
   type Direction,
   followsFor,
+  freshSourceId,
   type Level,
-  newRuleId,
   type ParentRule,
   type PriceAnchor,
   type Problem,
   type PublishedSource,
   RANK_TIMEFRAMES,
-  ROOT_TIMEFRAMES,
   type RootJoin,
   type RuleSource,
   ruleLabel,
+  ruleWithEntry,
+  ruleWithRoot,
+  ruleWithStep,
   SCOPES,
   scopeFunctions,
   SELF_INTERVAL,
@@ -32,7 +33,12 @@ import {
   type Strategy,
   type StrategyRule,
   stepsBelow,
-  withInterval
+  withInterval,
+  withoutRule,
+  withoutSource,
+  withRuleAdded,
+  withRuleCopied,
+  withSourceAdded
 } from './model'
 
 // GLUE (DOM). The Strategy Lab's editor: a strategy (model.ts) as its RULES first -- the long ones,
@@ -48,7 +54,10 @@ import {
 // It edits the strategy it is handed IN PLACE and calls `onChange` after every edit; the page
 // decides what an edit means (a draft that differs from the saved strategy, and a re-run). A
 // structural edit re-renders the form; a typed expression or number moves the model as it is
-// typed and is checked on the spot, so a keystroke never takes the focus away.
+// typed and is checked on the spot, so a keystroke never takes the focus away. An edit that is
+// more than setting one field -- a new root, a step, a rule added, copied or removed, a signal
+// added or removed -- is model.ts's, pure, and its result is written back into the strategy (or
+// the rule) it was made from.
 //
 // An expression slot shows the problem with it as it is typed, and -- behind "Fields" -- every
 // name and function that slot can read (model.ts `SCOPES`); a click on one writes it into the
@@ -117,6 +126,12 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
   const restructure = (): void => {
     render()
     onChange()
+  }
+  /** A pure edit of the strategy (model.ts) written back into it -- the page holds it by
+   * reference -- and the form rebuilt from it. */
+  const commit = (next: Strategy): void => {
+    Object.assign(strategy, next)
+    restructure()
   }
 
   function render(): void {
@@ -612,15 +627,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       for (const rule of mine) box.appendChild(ruleCard(rule))
       const actions = el('div', 'wd-lab-actions')
       actions.appendChild(
-        button('kc-button kc-button-outline', `+ ${direction === 'long' ? 'Long' : 'Short'} rule`, () => {
-          const source = strategy.sources[0]
-          const offered = offeredFor(source)
-          const used = new Set(mine.map((r) => r.root))
-          const root = ROOT_TIMEFRAMES.find((tf) => !used.has(tf) && offered.includes(tf)) ?? offered[offered.length - 1] ?? '1h'
-          const graphless = source?.kind === 'rule'
-          strategy.rules.push(defaultRule(direction, root, graphless ? [] : offered, source?.id ?? 'rank85', newRuleId(strategy, direction, root)))
-          restructure()
-        })
+        button('kc-button kc-button-outline', `+ ${direction === 'long' ? 'Long' : 'Short'} rule`, () => commit(withRuleAdded(strategy, direction, offeredFor(strategy.sources[0]))))
       )
       box.appendChild(actions)
     })
@@ -645,15 +652,8 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     })
     const title = el('span', 'wd-lab-rule-name')
     title.textContent = name
-    const copy = iconButton('⧉', 'Copy this rule', () => {
-      const twin: StrategyRule = { ...structuredClone(rule), id: newRuleId(strategy, rule.direction, rule.root) }
-      strategy.rules.splice(strategy.rules.indexOf(rule) + 1, 0, twin)
-      restructure()
-    })
-    const remove = iconButton('×', 'Remove this rule', () => {
-      strategy.rules.splice(strategy.rules.indexOf(rule), 1)
-      restructure()
-    })
+    const copy = iconButton('⧉', 'Copy this rule', () => commit(withRuleCopied(strategy, rule)))
+    const remove = iconButton('×', 'Remove this rule', () => commit(withoutRule(strategy, rule)))
     head.append(toggle, title, copy, remove)
     card.appendChild(head)
     if (!rule.enabled) return card
@@ -664,13 +664,8 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
       roots.map((c) => ({ value: c, label: c })),
       rule.root,
       (value) => {
-        rule.root = value
         // Keep the steps still under the new root; with none left, all of them.
-        const under = stepsBelow(value, offered)
-        const kept = rule.steps.filter((tf) => under.includes(tf))
-        rule.steps = rule.steps.length === 0 ? [] : kept.length > 0 ? kept : under
-        const entries = rule.entryOn.filter((tf) => (rule.steps.length > 0 ? rule.steps : [value]).includes(tf))
-        rule.entryOn = entries.length > 0 ? entries : defaultEntryOn(value, rule.steps)
+        Object.assign(rule, ruleWithRoot(rule, value, offered))
         restructure()
       }
     )
@@ -715,11 +710,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
             chips(
               under,
               rule.steps,
-              (code, on) => {
-                rule.steps = on ? byLength([...rule.steps, code]) : rule.steps.filter((c) => c !== code)
-                const entries = rule.entryOn.filter((tf) => (rule.steps.length > 0 ? rule.steps : [rule.root]).includes(tf))
-                rule.entryOn = entries.length > 0 ? entries : defaultEntryOn(rule.root, rule.steps)
-              },
+              (code, on) => Object.assign(rule, ruleWithStep(rule, code, on)),
               countOf
             )
           )
@@ -735,9 +726,7 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
           `${name} · entries`,
           row(
             verb,
-            chips(rule.steps, rule.entryOn, (code, on) => {
-              rule.entryOn = on ? byLength([...rule.entryOn, code]) : rule.entryOn.filter((c) => c !== code)
-            })
+            chips(rule.steps, rule.entryOn, (code, on) => Object.assign(rule, ruleWithEntry(rule, code, on)))
           )
         )
       )
@@ -849,31 +838,15 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
         })
         const actions = el('div', 'wd-lab-actions')
         actions.append(
-          button('kc-button kc-button-outline', '+ Published signal', () => {
-            strategy.sources.push(publishedFromFamily(context.catalogue?.signals[0] ?? null, freshId('sig')))
-            restructure()
-          }),
-          button('kc-button kc-button-outline', '+ Rule event', () => {
-            strategy.sources.push({
-              kind: 'rule',
-              id: freshId('rule'),
-              title: 'Rule event',
-              top: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_below', right: { value: 70 } },
-              bottom: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_above', right: { value: 30 } },
-              price: 'close'
-            })
-            restructure()
-          })
+          button('kc-button kc-button-outline', '+ Published signal', () =>
+            commit(withSourceAdded(strategy, publishedFromFamily(context.catalogue?.signals[0] ?? null, freshSourceId(strategy, 'sig'))))
+          ),
+          button('kc-button kc-button-outline', '+ Rule event', () => commit(withSourceAdded(strategy, defaultRuleSource(freshSourceId(strategy, 'rule')))))
         )
         box.appendChild(actions)
       },
       false
     )
-  }
-
-  function freshId(prefix: string): string {
-    const used = new Set(strategy.sources.map((s) => s.id))
-    for (let k = 1; ; k++) if (!used.has(`${prefix}${k}`)) return `${prefix}${k}`
   }
 
   function sourceCard(source: SignalSource, index: number): HTMLElement {
@@ -887,10 +860,9 @@ export function createStrategyEditor(initial: Strategy, context: EditorContext, 
     title.classList.add('wd-lab-title-input')
     title.setAttribute('aria-label', 'Source title')
     const users = strategy.rules.filter((r) => r.source === source.id)
-    const remove = iconButton('×', users.length > 0 ? `Remove this signal (${users.length} rule${users.length === 1 ? ' follows' : 's follow'} it)` : 'Remove this signal', () => {
-      strategy.sources.splice(index, 1)
-      restructure()
-    })
+    const remove = iconButton('×', users.length > 0 ? `Remove this signal (${users.length} rule${users.length === 1 ? ' follows' : 's follow'} it)` : 'Remove this signal', () =>
+      commit(withoutSource(strategy, index))
+    )
     const kind = el('span', 'wd-lab-badge')
     kind.textContent = source.kind === 'published' ? 'signal' : 'rule'
     head.append(kind, title, remove)

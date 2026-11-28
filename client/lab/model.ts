@@ -591,6 +591,148 @@ export function ruleStrategy(now = Date.now()): Strategy {
   }
 }
 
+/** A new rule event: RSI(14) leaving 70 downward is a top, leaving 30 upward a bottom, each read
+ * on the timeframe a rule follows it on. */
+export function defaultRuleSource(id: string): RuleSource {
+  return {
+    kind: 'rule',
+    id,
+    title: 'Rule event',
+    top: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_below', right: { value: 70 } },
+    bottom: { left: { kind: 'indicator', interval: SELF_INTERVAL, name: 'RSI', params: [14], output: 'rsi1' }, op: 'crosses_above', right: { value: 30 } },
+    price: 'close'
+  }
+}
+
+// -- edits ----------------------------------------------------------------------------------------
+//
+// The edits the page and the editor make that are more than setting one field, as pure functions:
+// a strategy (or one of its rules) in, a new one out, sharing every part the edit leaves alone.
+// The draft they edit is held BY REFERENCE -- by the page, and by the editor, whose fields hold
+// its parts -- so a caller writes the result back into the draft (`Object.assign`) rather than
+// putting a new object in its place.
+
+const DAY_MS = 86_400_000
+
+/** A `yyyy-mm-dd` day of a range window, which counts in UTC days, the last one included. */
+export function utcDay(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10)
+}
+
+/** The instant a `yyyy-mm-dd` UTC day starts; null for one that does not read. */
+export function utcDayStart(day: string): number | null {
+  const ms = Date.parse(`${day}T00:00:00Z`)
+  return Number.isFinite(ms) ? ms : null
+}
+
+/** An instrument as the header takes it -- `vendor:TICKER`, or a bare ticker for OANDA -- as the
+ * lab names it: the vendor in lower case, the ticker in upper. */
+export function normalInstrument(raw: string): string {
+  const text = raw.trim()
+  const at = text.indexOf(':')
+  return at > 0 ? `${text.slice(0, at).toLowerCase()}:${text.slice(at + 1).toUpperCase()}` : `oanda:${text.toUpperCase()}`
+}
+
+/** `strategy` with its window as the last N days or as a range of UTC days, over the same span:
+ * N days as the dates from N - 1 days ago through today, a range as its length in days. A window
+ * already of that kind is left as it is. */
+export function withWindowKind(strategy: Strategy, kind: string, now: number): Strategy {
+  const w = strategy.window
+  if (kind === 'range' && w.kind === 'days') {
+    const today = utcDayStart(utcDay(now)) as number
+    return { ...strategy, window: { kind: 'range', from: today - (w.days - 1) * DAY_MS, to: today + DAY_MS } }
+  }
+  if (kind === 'days' && w.kind === 'range') return { ...strategy, window: { kind: 'days', days: Math.max(1, Math.round((w.to - w.from) / DAY_MS)) } }
+  return strategy
+}
+
+/** `strategy` holding out the end of its window -- the last 30% (`percent`), or from the UTC day
+ * 30% of the way back from its end (`from`) -- or, for any other `kind`, nothing. `window` is the
+ * run's, absolute (runner.ts `runWindow`). */
+export function withHoldoutKind(strategy: Strategy, kind: string, window: { from: number; to: number }): Strategy {
+  if (kind === 'percent') return { ...strategy, holdout: { kind: 'percent', percent: 30 } }
+  if (kind === 'from') return { ...strategy, holdout: { kind: 'from', at: utcDayStart(utcDay(window.to - (window.to - window.from) * 0.3)) as number } }
+  return { ...strategy, holdout: null }
+}
+
+/** A copy of `strategy` as a new draft: an id of its own, "… copy", made `now`. */
+export function strategyCopy(strategy: Strategy, now: number): Strategy {
+  return { ...structuredClone(strategy), id: newStrategyId(now), name: `${strategy.name} copy`, createdAt: now, updatedAt: now }
+}
+
+/** Of `entryOn`, the timeframes still a step (or, with no steps, the root); with none left, the
+ * default entries for those steps. */
+function entriesAmong(entryOn: readonly string[], root: string, steps: readonly string[]): string[] {
+  const entries = entryOn.filter((tf) => (steps.length > 0 ? steps : [root]).includes(tf))
+  return entries.length > 0 ? entries : defaultEntryOn(root, steps)
+}
+
+/** `rule` on a new root: the steps still under it kept -- with none left, every timeframe
+ * `offered` under it, and a rule with no steps keeps none -- and the entries still among them. */
+export function ruleWithRoot(rule: StrategyRule, root: string, offered: readonly string[]): StrategyRule {
+  const under = stepsBelow(root, offered)
+  const kept = rule.steps.filter((tf) => under.includes(tf))
+  const steps = rule.steps.length === 0 ? [] : kept.length > 0 ? kept : under
+  return { ...rule, root, steps, entryOn: entriesAmong(rule.entryOn, root, steps) }
+}
+
+/** `rule` stepping through `code` too, or no longer; an entry that is no longer a step goes. */
+export function ruleWithStep(rule: StrategyRule, code: string, on: boolean): StrategyRule {
+  const steps = on ? byLength([...rule.steps, code]) : rule.steps.filter((c) => c !== code)
+  return { ...rule, steps, entryOn: entriesAmong(rule.entryOn, rule.root, steps) }
+}
+
+/** `rule` entering on `code` too, or no longer. */
+export function ruleWithEntry(rule: StrategyRule, code: string, on: boolean): StrategyRule {
+  return { ...rule, entryOn: on ? byLength([...rule.entryOn, code]) : rule.entryOn.filter((c) => c !== code) }
+}
+
+/** `strategy` with a new rule of `direction` after the others: on the overlay's next root it has
+ * no rule of that way on, among those `offered` (else the longest offered), following its first
+ * signal -- stepping through every shorter timeframe offered, or through none when that signal is
+ * a rule event. */
+export function withRuleAdded(strategy: Strategy, direction: Direction, offered: readonly string[]): Strategy {
+  const source = strategy.sources[0]
+  const used = new Set(strategy.rules.filter((r) => r.direction === direction).map((r) => r.root))
+  const root = ROOT_TIMEFRAMES.find((tf) => !used.has(tf) && offered.includes(tf)) ?? offered[offered.length - 1] ?? '1h'
+  const graphless = source?.kind === 'rule'
+  return { ...strategy, rules: [...strategy.rules, defaultRule(direction, root, graphless ? [] : offered, source?.id ?? 'rank85', newRuleId(strategy, direction, root))] }
+}
+
+/** `strategy` with a copy of `rule` (one of its own) right after it, under an id of its own. */
+export function withRuleCopied(strategy: Strategy, rule: StrategyRule): Strategy {
+  const twin: StrategyRule = { ...structuredClone(rule), id: newRuleId(strategy, rule.direction, rule.root) }
+  const rules = [...strategy.rules]
+  rules.splice(rules.indexOf(rule) + 1, 0, twin)
+  return { ...strategy, rules }
+}
+
+/** `strategy` without `rule` (one of its own). */
+export function withoutRule(strategy: Strategy, rule: StrategyRule): Strategy {
+  const rules = [...strategy.rules]
+  rules.splice(rules.indexOf(rule), 1)
+  return { ...strategy, rules }
+}
+
+/** A source id `strategy` does not use yet: `prefix` and the first number free. */
+export function freshSourceId(strategy: Pick<Strategy, 'sources'>, prefix: string): string {
+  const used = new Set(strategy.sources.map((s) => s.id))
+  for (let k = 1; ; k++) if (!used.has(`${prefix}${k}`)) return `${prefix}${k}`
+}
+
+/** `strategy` with `source` after its other signals. */
+export function withSourceAdded(strategy: Strategy, source: SignalSource): Strategy {
+  return { ...strategy, sources: [...strategy.sources, source] }
+}
+
+/** `strategy` without its signal at `index`. The rules that follow it still name it, which
+ * `strategyProblems` reports. */
+export function withoutSource(strategy: Strategy, index: number): Strategy {
+  const sources = [...strategy.sources]
+  sources.splice(index, 1)
+  return { ...strategy, sources }
+}
+
 // -- reading a rule on a timeframe ----------------------------------------------------------
 
 /** `rule` with every operand on `SELF_INTERVAL` moved to `interval`. */
