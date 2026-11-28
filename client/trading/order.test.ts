@@ -97,6 +97,9 @@ describe('planOrder', () => {
     expect(ok.entry).toBe(1.099)
     expect(ok.stop).toBe(1.098)
     expect(ok.problem).toBeNull()
+    expect(plan({ type: 'limit', price: '1.0990', takeProfit: '1.0980' }, { protectMode: 'price' }).problems.target).toBe(
+      "A buy order's target must be above its price (1.09900)"
+    )
   })
 
   test('without a quote the general problem says why, and it comes first', () => {
@@ -108,7 +111,7 @@ describe('planOrder', () => {
 
   test('a stop on the wrong side of the entry is refused under the stop', () => {
     const p = plan({ stopLoss: '1.1010', takeProfit: '1.1050' }, { protectMode: 'price' })
-    expect(p.problems.stop).toBe('The stop loss must be below the ask')
+    expect(p.problems.stop).toBe("A buy order's stop must be below the ask (1.10020)")
     expect(p.problem).toBe(p.problems.stop ?? null)
     expect(problemSlot(p.problems)).toBe('stop')
   })

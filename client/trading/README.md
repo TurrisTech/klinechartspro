@@ -56,9 +56,16 @@ mode only for its title.
   `FigureList`, `ConfirmBar`, `TradeActions`, `Arming` (two presses) and `armKey`.
 - `exits.ts` — PURE (tested): exit management as the surfaces state it — a trailing stop, an
   auto-breakeven and the "Notify at" milestones, each in pips / price / % of price / × ATR / R,
-  parsed to the engine's price distances, read out, worded; Wilder's ATR; a position's R.
+  parsed to the engine's price distances, read out, worded; Wilder's ATR; a position's R; and
+  `closeReasonWords`, the one naming of why a trade closed ("Stop loss", "Trailing stop", "Take
+  profit", "Flattened", "Closed by hand"; "Stop loss hit" as the card announces it), which History,
+  the popup and the card all use.
 - `levels.ts` — PURE (tested): how a level is stated in pips / price / % of balance and read back,
-  stepped, and read out; the resting-price rules and default; fractional close; the reverse order.
+  stepped, and read out; the resting-price rules and default; fractional close; the reverse order;
+  and the ONE wording of an order refusal, whichever surface it comes from — a stop or target on
+  the wrong side (`levelRefusal`: "A long's stop must be below the bid (1.10000)", "A buy order's
+  target must be above its price (1.09500)") and a resting price through the market
+  (`restingRefusal`: "A buy limit must be below the ask (1.10020)").
 - `manage.ts` — what each `TradeActions` button may do now, partial close and the two-step reverse,
   shared by the card and the popup.
 - `inspector.ts` + `stats.ts` — the **position popup** (below): the window, and the PURE rows it
@@ -67,7 +74,7 @@ mode only for its title.
   card is rolled up, one-click trading), and the channel that keeps every pane, the ticket and other tabs in step.
 - `metrics.ts` — PURE forex figures, risk sizing, the engine's refusal rules, label placement.
 - `amend.ts` — PURE: a waiting stop/target/price change in words, and why the engine would refuse
-  it; shared by the chart and the tables.
+  it (in `levels.ts`'s words); shared by the chart and the tables.
 - `instrument.ts` — per-instrument precision + pip size (`forexPipLocation`), cached from
   `GET /instrument`. Forex prices in pips; non-forex falls back to price-only.
 - `format.ts` — pure price / pip / P&L helpers; `formatInstant` (to the second) and `formatShare`

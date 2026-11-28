@@ -226,13 +226,13 @@ export function planOrder(fields: OrderFields, market: OrderMarket): OrderPlan {
   const target = level('target', units)
 
   if (entry !== null) {
-    const where = type === 'market' ? `the ${side === 'buy' ? 'ask' : 'bid'}` : 'the order price'
+    const owner = type === 'market' ? 'market' : 'order'
     if (stop !== undefined) {
-      const refusal = levelRefusal(side, 'stop', stop, entry, where)
+      const refusal = levelRefusal(owner, side, 'stop', stop, entry, info.precision)
       if (refusal) fail('stop', refusal)
     }
     if (target !== undefined) {
-      const refusal = levelRefusal(side, 'target', target, entry, where)
+      const refusal = levelRefusal(owner, side, 'target', target, entry, info.precision)
       if (refusal) fail('target', refusal)
     }
   }

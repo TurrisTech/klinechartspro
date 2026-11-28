@@ -4,7 +4,7 @@ import { gridFor } from '../time/timeframes'
 import type { SimSide, SimSnapshot, SimTrade } from './api'
 import { formatMoney, formatShare, formatPips, formatPrice, formatUnitsShort, moveText, symbolKey } from './format'
 import type { InstrumentInfo } from './instrument'
-import { distanceWords } from './exits'
+import { closeReasonWords, distanceWords } from './exits'
 import { balancesBefore, closedMove, closedShareOfBalance } from './ledger'
 import {
   type Amendment,
@@ -616,16 +616,7 @@ export class TradingOverlays {
               : trade.entryPrice - trade.closePrice
         const pips = move !== null && info.pipSize ? `${formatPips(move / info.pipSize)}p ` : ''
         const pnl = trade.realizedPnl ?? 0
-        const reason =
-          trade.closeReason === 'stop_loss'
-            ? trade.stopMovedBy === 'trail'
-              ? 'Trailing stop hit'
-              : trade.stopMovedBy === 'breakeven'
-                ? 'Breakeven stop hit'
-                : 'Stop hit'
-            : trade.closeReason === 'take_profit'
-              ? 'Target hit'
-              : 'Closed'
+        const reason = closeReasonWords(trade, true)
         const share = closedShareOfBalance(trade, before.get(trade.id), next.account)
         messages.push({
           key: trade.symbol,

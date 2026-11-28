@@ -7,6 +7,7 @@ import type { InstrumentInfo } from './instrument'
 installWindow()
 const {
   breakevenReadout,
+  closeReasonWords,
   exitText,
   exitUnitRefusal,
   labelValue,
@@ -200,6 +201,23 @@ describe('readouts', () => {
     expect(body).toBe('At 1.10420 (entry 1.10020) · +40.0p · +40.00')
     const unlabelled = milestoneNotice(trade({ side: 'sell', entryPrice: 1.1 }), { ...event, price: 1.101, reason: null }, EURUSD)
     expect(unlabelled.title).toBe('EURUSD short 10K reached −10.0p')
+  })
+})
+
+describe('close reasons', () => {
+  test('one naming everywhere: the reason in History and the popup, the event on the card', () => {
+    const cases: Array<[Pick<SimTrade, 'closeReason' | 'stopMovedBy'>, string, string]> = [
+      [{ closeReason: 'stop_loss', stopMovedBy: null }, 'Stop loss', 'Stop loss hit'],
+      [{ closeReason: 'stop_loss', stopMovedBy: 'trail' }, 'Trailing stop', 'Trailing stop hit'],
+      [{ closeReason: 'stop_loss', stopMovedBy: 'breakeven' }, 'Breakeven stop', 'Breakeven stop hit'],
+      [{ closeReason: 'take_profit', stopMovedBy: 'trail' }, 'Take profit', 'Take profit hit'],
+      [{ closeReason: 'flatten' }, 'Flattened', 'Flattened'],
+      [{ closeReason: 'manual' }, 'Closed by hand', 'Closed by hand']
+    ]
+    for (const [trade, reason, event] of cases) {
+      expect(closeReasonWords(trade)).toBe(reason)
+      expect(closeReasonWords(trade, true)).toBe(event)
+    }
   })
 })
 

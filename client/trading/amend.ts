@@ -3,7 +3,8 @@ import { breakevenWords, distanceWords, trailWords } from './exits'
 import { formatMoney, formatPercent, formatPrice, formatUnitsShort, moveText } from './format'
 import type { InstrumentInfo } from './instrument'
 import type { Amendment } from './lines'
-import { closingPrice, fillingPrice, outcome, pricingContext, protectionValid, restingPriceValid } from './metrics'
+import { levelRefusal, restingRefusal } from './levels'
+import { closingPrice, fillingPrice, outcome, pricingContext, protectionValid } from './metrics'
 
 // A change to a working stop, target or pending price, put to the user before it is sent -- in
 // words, and checked against what the engine would refuse. PURE, and shared: the chart's labels and
@@ -14,7 +15,8 @@ export type ProposedChange = Omit<Amendment, 'from'>
 
 /** Why the engine would refuse the change, in words -- or null when it would accept it. Mirrors
  * `_check_protection` (a long's stop below its closing side, an order's levels around its price)
- * and `_check_resting_price` (a limit on the far side of the market, a stop beyond it). */
+ * and `_check_resting_price` (a limit on the far side of the market, a stop beyond it), worded as
+ * the trade box words them (levels.ts `levelRefusal`, `restingRefusal`). */
 export function amendmentRefusal(change: ProposedChange, snapshot: SimSnapshot, info: InstrumentInfo): string | null {
   const { owner, id, role, price } = change
   const precision = info.precision
@@ -30,24 +32,17 @@ export function amendmentRefusal(change: ProposedChange, snapshot: SimSnapshot, 
     const trade = snapshot.trades.find((t) => t.id === id)
     if (!trade || trade.closedAt !== null) return 'This trade has closed'
     if (price === null || role === 'order') return null
-    const mark = closingPrice(trade.side, snapshot.quotes[trade.symbol])
-    if (mark === null || protectionValid(trade.side, role, price, mark)) return null
-    const below = role === 'stop' ? trade.side === 'buy' : trade.side === 'sell'
-    return `A ${trade.side === 'buy' ? 'long' : 'short'}'s ${role} must be ${below ? 'below' : 'above'} the ${
-      trade.side === 'buy' ? 'bid' : 'ask'
-    } (${formatPrice(mark, precision)})`
+    return levelRefusal('trade', trade.side, role, price, closingPrice(trade.side, snapshot.quotes[trade.symbol]), precision)
   }
   const order = snapshot.orders.find((o) => o.id === id)
   if (!order || order.status !== 'pending' || order.price === null) return 'This order is no longer working'
   if (price === null) return role === 'order' ? 'An order must keep a price' : null
   if (role === 'order') {
     const quote = snapshot.quotes[order.symbol]
-    if (!restingPriceValid(order.side, order.type, price, quote)) {
-      const fill = fillingPrice(order.side, quote)
-      if (fill === null) return null
-      const below = (order.type === 'limit') === (order.side === 'buy')
-      return `A ${order.side} ${order.type} must be ${below ? 'below' : 'above'} the ${order.side === 'buy' ? 'ask' : 'bid'} (${formatPrice(fill, precision)})`
-    }
+    // Without a quote there is nothing to judge the price against, and so nothing is refused.
+    if (!quote) return null
+    const resting = restingRefusal(order.side, order.type, price, quote, precision)
+    if (resting) return resting
     if (order.stopLoss !== null && !protectionValid(order.side, 'stop', order.stopLoss, price)) {
       return 'The order would pass its own stop loss'
     }
@@ -56,9 +51,7 @@ export function amendmentRefusal(change: ProposedChange, snapshot: SimSnapshot, 
     }
     return null
   }
-  if (protectionValid(order.side, role, price, order.price)) return null
-  const below = role === 'stop' ? order.side === 'buy' : order.side === 'sell'
-  return `A ${order.side} order's ${role} must be ${below ? 'below' : 'above'} its price (${formatPrice(order.price, precision)})`
+  return levelRefusal('order', order.side, role, price, order.price, precision)
 }
 
 /** The question: what changes, on which position, and what the new level would realise. Null when

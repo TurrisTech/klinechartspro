@@ -35,6 +35,7 @@ import {
 import { amendmentRefusal, describeAmendment } from './amend'
 import { type AtrReading, atrReading, initialRisk, stopName, trailWords } from './exits'
 import { armKey } from './kit'
+import { levelRefusal } from './levels'
 import { closeFraction, reverseTrade } from './manage'
 import { type CardAction, h, moveText, OrderCard } from './ordercard'
 import { setTradePrefs, tradePrefs } from './prefs'
@@ -924,12 +925,11 @@ export class OnChartLayer {
     if (!snapshot) return null
     if (line.owner === 'draft') {
       // Nothing is sent from a drag, so nothing is refused; a level on the wrong side is flagged,
-      // and the ticket says the same thing where Place would be.
+      // in the words the ticket says it in where Place would be.
       const draft = this.draft
       if (!draft || (line.role !== 'stop' && line.role !== 'target')) return null
-      if (protectionValid(draft.side, line.role, price, draft.entry)) return null
-      const below = line.role === 'stop' ? draft.side === 'buy' : draft.side === 'sell'
-      return `The draft's ${line.role === 'stop' ? 'stop' : 'target'} must be ${below ? 'below' : 'above'} its entry`
+      const owner = draft.type === 'market' ? 'market' : 'order'
+      return levelRefusal(owner, draft.side, line.role, price, draft.entry, this.host.instrumentFor(this.key).precision)
     }
     if (line.role === 'entry') return null
     // Checked against the real snapshot: the change is judged against what is working now.
