@@ -1,9 +1,9 @@
 import { getReadClock } from '../config'
 import { dayGeometryOf } from '../time/daygeometry'
 import { instrumentConfig } from '../instrumentconfig'
-import { answerableTo, knownThrough } from '../plugins/horizon'
-import type { Page, Range } from '../plugins/types'
+import { answerableTo, knownThrough } from '../time/horizon'
 import { gridFor } from '../time/timeframes'
+import type { Page, Range } from '../paging'
 
 // The one read every tile family makes: the tiles for what they hold of a window, the API for
 // the rest. Tiles hold every CLOSED partition, so they answer the historical part of any window
@@ -31,7 +31,7 @@ export interface Tiled<T> {
 /** Under a bar replay's read clock, how far one series can be read (`readHorizon`), on the
  * clock `date` reads. */
 export interface ReadHorizon {
-  /** The date of the bar forming at the clock (`plugins/horizon.ts` `knownThrough`): the tiles
+  /** The date of the bar forming at the clock (`time/horizon.ts` `knownThrough`): the tiles
    * stop here, because they hold that bar whole. */
   at: number
   /** Exclusive: nothing dated here or later can be answered at all (`answerableTo`) -- `at`
@@ -73,7 +73,7 @@ export async function readTiled<T>(read: TiledRead<T>): Promise<Page<T>> {
 
   // Under a bar replay the tiles stop at the bar forming at the clock: the API, clamped by the
   // server to what had closed (`services/asof.py`) and rebuilding the forming bar from the rows
-  // that had, answers from there. The horizon is the host's own (`plugins/horizon.ts`): the
+  // that had, answers from there. The horizon is the host's own (`time/horizon.ts`): the
   // bar forming at the clock, a bar early inside a market-closed window -- which costs only that
   // the API serves one bar the tiles hold.
   //

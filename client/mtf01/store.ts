@@ -1,6 +1,7 @@
 import { mergeRange, missingRanges, truncate } from '../plugins/store'
-import type { Phase, Range, SourceStore } from '../plugins/types'
+import type { Phase, SourceStore } from '../plugins/types'
 import type { Mtf01Event, Mtf01Trade } from './api'
+import type { Range } from '../paging'
 
 // What the client holds for one (instrument, interval), plus which windows have been
 // fetched, so panning never re-requests a window it already has. plugins/store.ts's WindowStore with two
@@ -70,7 +71,7 @@ export class Mtf01Store implements SourceStore<Mtf01Event> {
 
   /** Drop coverage at or after `from`, and both kinds of row held there -- the replay's
    * cursor moved, so a window fetched under the old clock held nothing for bars that had
-   * not closed yet (`WindowStore.forgetAfter`, and `plugins/horizon.ts` for what `from` is).
+   * not closed yet (`WindowStore.forgetAfter`, and `time/horizon.ts` for what `from` is).
    *
    * The dedup set has to be pruned WITH the rows, and it is the only part of this that is
    * not mechanical: `seen` is keyed by a row's OWN candle (`stage|interval|barDate`), not by

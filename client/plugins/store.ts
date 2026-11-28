@@ -1,4 +1,5 @@
-import type { Phase, Range, SourceStore } from './types'
+import type { Phase, SourceStore } from './types'
+import type { Range } from '../paging'
 
 // The one window store. Values the client holds for one source (keyed by whatever the
 // plugin declares as the source key), plus which time windows have been fetched, so
@@ -55,7 +56,7 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
   /** Drop coverage at or after `from`, and the values held there. The replay's cursor
    * moved forward: a window fetched under the old clock held no values for bars that had
    * not closed yet, and those bars must be fetched again under the new clock. `from` is the
-   * source's own knowability horizon under that clock (`horizon.ts`) -- the bar it had
+   * source's own knowability horizon under that clock (`time/horizon.ts`) -- the bar it had
    * forming, on the wire clock its points are dated on -- and NOT the cursor, which for
    * anything coarser than the cursor's own grid sits after the bar that needs refetching. */
   forgetAfter(from: number): void {

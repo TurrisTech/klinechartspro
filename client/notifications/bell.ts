@@ -12,7 +12,7 @@ import type { Notification } from './types'
 //           Clear all beneath them and a dismiss on each row.
 //
 // Plain DOM in the house style (`kc-*` tokens, `wd-*` classes), like every other control in
-// client/ -- see the note at the top of client/chartlayers/settings.ts for why this is not
+// client/ -- see the note at the top of client/plugins/settings/settings.ts for why this is not
 // Svelte. It reads a NotificationCenter and writes nothing else: no producer is imported
 // here, and the panel re-renders from `subscribe`, never from a local copy of the list.
 
@@ -91,7 +91,7 @@ export function createNotificationBell(center: NotificationCenter, actions: Bell
 
   function open(): void {
     // Appended into the themed chart root rather than the slot itself, for the reason
-    // client/chartlayers/settings.ts documents: `.klinecharts-pro` clips its overflow, and
+    // client/plugins/settings/settings.ts documents: `.klinecharts-pro` clips its overflow, and
     // the `--popover`/`--border` tokens are defined on it.
     const host = group.closest('.klinecharts-pro') ?? document.body
     panel = el('div', 'kc-popover wd-notify-panel')

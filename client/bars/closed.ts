@@ -2,14 +2,18 @@ import type { KLineData } from 'klinecharts'
 import { fetchBars } from '../history'
 import { barsFromTiles } from '../tiles'
 import { readHorizon } from '../tiles/join'
-import type { Range } from './types'
 import { nominalMs } from '../time/intervals'
+import type { Range } from '../paging'
 
 // The bars a plugin reads for ITSELF -- TradeTalk's daily candles, the AREV lab's prior, the MTF
 // overlays' bar grid, the volume profile's finer bars -- as opposed to the bars a pane draws,
 // which come through its datafeed. Both go through `fetchBars` (`history.ts`), which joins tiles
 // and `/getbars` and under a bar replay stops the tiles at the clock (`tiles/join.ts`). What is
 // left here is the paging, and that a plugin reads CLOSED bars only.
+//
+// A helper for the features, not part of the plugin framework, which never reads bars: so it is
+// here beside the bar stack (until 2026-11-28 it was client/plugins/bars.ts), and the trading
+// dock reads its closed bars through it too.
 
 /** `/getbars` is bounded by range and 413s past the server's per-request cap, so a page is at
  * most this many NOMINAL bars -- which overcounts (the market is shut about a third of the

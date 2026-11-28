@@ -47,7 +47,7 @@ import { formatInstant } from '../time/format'
 // its instrument (overlays.ts), one preference for every pane and tab. PERFORMANCE, beside it, is
 // the balance or equity per period over a chosen range (perfview.ts).
 //
-// Hand-built plain DOM, the house style for app-side chrome (client/chartlayers/settings.ts):
+// Hand-built plain DOM, the house style for app-side chrome (client/plugins/settings/settings.ts):
 // the library owns Svelte, the app owns the chrome around it.
 
 interface PanelContext {

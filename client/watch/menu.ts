@@ -3,7 +3,7 @@
 // that knows how a menu is placed, dismissed and keyboard-closed.
 //
 // Positioned `position: fixed` at the pointer and appended into the themed chart root, for
-// the reason client/chartlayers/settings.ts documents: `.klinecharts-pro` clips its overflow
+// the reason client/plugins/settings/settings.ts documents: `.klinecharts-pro` clips its overflow
 // and is where the `kc-*` tokens are defined.
 
 export interface MenuItem {

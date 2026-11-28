@@ -5,7 +5,7 @@ installWindow()
 const { createPaneSettings } = await import('./panesettings')
 const { paneConfig } = await import('./paneconfig')
 const { fakeChart, fakePane } = await import('./testing')
-import type { SettingsPanelOptions } from '../chartlayers/settings'
+import type { SettingsPanelOptions } from './settings/settings'
 import type { PaneConfig, PaneDoc } from './paneconfig'
 import type { SettingsPane } from './panesettings'
 import type { IndicatorPlugin } from './types'

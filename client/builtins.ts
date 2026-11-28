@@ -1,16 +1,26 @@
-import { createArev21DivergencePlugin } from '../arev21div/plugin'
-import { createArevLabPlugin } from '../arevlab/plugin'
-import { createBidAskPlugin } from '../bidask/plugin'
-import { DEV_BOOKS } from '../books/api'
-import { createLabPlugin } from '../lab/plugin'
-import { createBooksPlugin } from '../books/plugin'
-import { createMtf01Plugin } from '../mtf01/plugin'
-import { createMtfPlugin } from '../mtf/plugin'
-import { MTF_OVERLAYS } from '../mtf/overlays'
-import { createRegistryPlugin } from '../tsregistry/plugin'
-import { createTradeTalkPlugin } from '../tradetalk/plugin'
-import { createVolumeProfilePlugin } from '../volprofile/plugin'
-import type { IndicatorPlugin } from './types'
+import { createArev21DivergencePlugin } from './arev21div/plugin'
+import { createArevLabPlugin } from './arevlab/plugin'
+import { createBidAskPlugin } from './bidask/plugin'
+import { DEV_BOOKS } from './books/api'
+import { createLabPlugin } from './lab/plugin'
+import { createBooksPlugin } from './books/plugin'
+import { createMtf01Plugin } from './mtf01/plugin'
+import { createMtfPlugin } from './mtf/plugin'
+import { MTF_OVERLAYS } from './mtf/overlays'
+import { createRegistryPlugin } from './tsregistry/plugin'
+import { createTradeTalkPlugin } from './tradetalk/plugin'
+import { createVolumeProfilePlugin } from './volprofile/plugin'
+import { provideStrategies } from './alerts/strategies'
+import { labStrategies } from './lab/alertsource'
+import type { IndicatorPlugin } from './plugins/types'
+
+// WHAT THE APP BUILDS ON ITS FRAMEWORKS: the indicator plugins it mounts on the plugin host
+// (client/plugins), and the Strategy Lab as the alerts' strategy source (alerts/strategies.ts).
+// Neither framework imports a feature built on it, so the one place that names them all is here,
+// at the root, beside the entry point that calls it.
+//
+// Until 2026-11-28 the plugin list was client/plugins/registry.ts, inside the framework it
+// extends, and the Lab was registered with the alerts in client/index.ts.
 
 // The built-in indicator plugins, in the order their picker groups appear. Built per mount
 // (each holds per-pane state), which is why this is a factory and not a constant.
@@ -49,4 +59,10 @@ export function builtinPlugins(levels: IndicatorPlugin): IndicatorPlugin[] {
     createVolumeProfilePlugin(),
     createLabPlugin()
   ]
+}
+
+/** Register the Lab's saved strategies as what an alert on a strategy's entries reads. Called on
+ * every wall mount; the alerts hold one source, so a second call changes nothing. */
+export function registerBuiltinStrategies(): void {
+  provideStrategies(labStrategies)
 }

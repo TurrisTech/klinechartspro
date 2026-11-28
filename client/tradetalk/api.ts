@@ -1,5 +1,6 @@
-import { closedBarPage } from '../plugins/bars'
-import type { Page, Range, SourceSpec } from '../plugins/types'
+import { closedBarPage } from '../bars/closed'
+import type { SourceSpec } from '../plugins/types'
+import type { Page, Range } from '../paging'
 
 // The one thing TradeTalk reads that the chart does not already hold: DAILY bars.
 //
@@ -11,7 +12,7 @@ import type { Page, Range, SourceSpec } from '../plugins/types'
 // Nothing new on the server: `/getbars` has always served daily bars, and the closed part of
 // the window is read straight from the chart tiles, so a pane that pans through history costs
 // no extra request. Under a bar replay only the sessions the replay has seen close are read
-// (plugins/bars.ts), and the source declares its resolution so the host knows how far a reply
+// (bars/closed.ts), and the source declares its resolution so the host knows how far a reply
 // taken at a cursor was final.
 
 export interface DailyPoint {

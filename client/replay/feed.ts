@@ -2,13 +2,13 @@ import type { KLineData } from 'klinecharts'
 import type { ChartProPane, Datafeed, DatafeedSubscribeCallback, Period, SymbolInfo } from '../../src'
 import { baseIntervalsFor } from '../capabilities'
 import { fetchBarsWidened } from '../history'
-import { answerableTo } from '../plugins/horizon'
-import type { PluginStream, Range } from '../plugins/types'
+import { answerableTo } from '../time/horizon'
 import { fetchSymbols, symbolVendor } from '../symbols'
 import { foldsIntradayRows } from '../tiles/derive'
 import { BarCache, type BarSource, type ComposeSpan, type ReplayBar, composeForming, composeLadder, composeSpans, nonWeekendGaps } from '../bars/cache'
 import { type CandleGrid, gridFor } from '../time/timeframes'
 import { isIntraday, nominalMs, periodToResolution } from '../time/intervals'
+import type { Range } from '../paging'
 
 // GLUE (chart-facing). The replay wall's datafeed and the hub that pushes stepped bars into
 // every pane. No stream: only this client moves the clock.
@@ -69,7 +69,7 @@ class ReplayDatafeed implements Datafeed {
     // forming from Tuesday 17:00 is dated Wednesday 00:00, AFTER the cursor, so a window ending
     // at the cursor left it out -- a 1D pane reloaded between 17:00 and midnight drew no forming
     // candle (prod EURGBP, 2023-10-24 19:00 New York: Tuesday's bar last). The end is the date
-    // after the bar forming at the cursor (`plugins/horizon.ts` `answerableTo`), which holds it
+    // after the bar forming at the cursor (`time/horizon.ts` `answerableTo`), which holds it
     // and nothing later; with no schedule to find it on, the cursor.
     const reach = answerableTo(interval, this.hub.cursor, gridFor(symbol))
     const end = Number.isFinite(reach) ? reach : this.hub.cursor
@@ -440,15 +440,4 @@ export class ReplayFeedHub {
 
 function toKLine(bar: ReplayBar): KLineData {
   return { timestamp: bar.date, open: bar.o, high: bar.h, low: bar.l, close: bar.c, volume: bar.v }
-}
-
-/** The stream a replay wall hands the plugins: nothing live ever arrives. Only this client
- * moves the clock, and a live point would be a value from the future. */
-export const inertStream: PluginStream = {
-  subscribe() {},
-  unsubscribe() {},
-  subscribeIndicator() {},
-  unsubscribeIndicator() {},
-  subscribePlugin() {},
-  unsubscribePlugin() {}
 }

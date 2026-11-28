@@ -1,5 +1,5 @@
 import { permuteByIndex } from '../../src/state/paneOrder'
-import type { SettingsField } from '../chartlayers/settings'
+import type { SettingsField } from './settings/settings'
 
 // Settings a plugin keeps PER WALL PANE -- which timeframes an MTF overlay draws, the AREV lab's
 // rules, a layer's line styles -- and everything that follows from having them: the legend

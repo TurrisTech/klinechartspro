@@ -1,6 +1,6 @@
 import type { Chart } from 'klinecharts'
 import type { ChartProPane, IndicatorSettingsModel } from '../../src'
-import { openSettingsPanel as openPanel, setByPath, type SettingsPanelHandle } from '../chartlayers/settings'
+import { openSettingsPanel as openPanel, setByPath, type SettingsPanelHandle } from './settings/settings'
 import { type PaneConfig, PaneConfigStore, type PaneDoc } from './paneconfig'
 import type { BindContext, IndicatorPlugin, PluginFacilities, SettingsRequest } from './types'
 

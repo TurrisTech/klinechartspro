@@ -1,5 +1,5 @@
 import { WindowStore } from '../plugins/store'
-import type { Range } from '../plugins/types'
+import type { Range } from '../paging'
 
 // THE store class for every registry-driven source, and deliberately the only one.
 //
@@ -20,7 +20,7 @@ import type { Range } from '../plugins/types'
 // reference and cannot diverge.
 //
 // Two specs sharing a key must also agree on `resolution` -- both say the source interval --
-// or a replay step would forget different amounts of the one store (`plugins/horizon.ts`).
+// or a replay step would forget different amounts of the one store (`time/horizon.ts`).
 
 /** The auxiliary array a source ships a bar grid in (the MTF overlay's, for placing a vote
  * one source bar forward). */

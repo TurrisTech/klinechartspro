@@ -1,10 +1,10 @@
 import type { Chart, OverlayCreate } from 'klinecharts'
 import { instrumentZone } from '../../trading/instrument'
 import { flash } from '../../watch/menu'
-import { getByPath } from '../settings'
+import { getByPath } from '../../plugins/settings/settings'
 import { DEFAULT_WATCH_COLORS } from '../../watch/overlays'
 import { instrumentTarget, type Watch, type WatchRepeat } from '../../watch/types'
-import type { AlertTarget, LayerAlerts, LayerContext } from '../types'
+import type { AlertTarget, ChartLayer, LayerAlerts, LayerContext, LayerDecorator } from '../types'
 import { openPriceAlertEditor, type PriceAlertBulk, type PriceAlertEditor } from './editor'
 import {
   bellStyles,
@@ -19,11 +19,12 @@ import { describeZone, type Zone, zoneAround, zonePips, zoneUnit } from './zone'
 import { formatInstant } from '../../time/format'
 
 // Price alerts ON A LAYER'S PANE: what a click, a hover and an enabled line look like, for any
-// chart layer that offers its data (types.ts `LayerAlerts`). The controller hands this every
-// set of overlays it is about to paint (`decorate`), so the handlers and the bells are painted
-// -- and left alone when nothing changed -- exactly as the layer's own lines are (paint.ts).
-// The zone band is the one thing drawn outside that path: it follows the pointer, in a group
-// of its own.
+// chart layer that offers its data (types.ts `LayerAlerts`). This is the layer's DECORATOR
+// (types.ts `LayerDecorator`, `priceAlertDecorator` below), handed to the controller by whoever
+// builds it: the controller hands it every set of overlays it is about to paint (`decorate`), so
+// the handlers and the bells are painted -- and left alone when nothing changed -- exactly as the
+// layer's own lines are (paint.ts). The zone band is the one thing drawn outside that path: it
+// follows the pointer, in a group of its own.
 //
 //   click a line          one step round a cycle (user, 2026-11-24: "a click on one level turns
 //                         it to alert ... always. a second click, turns it to arm only once. a
@@ -110,7 +111,17 @@ function statusOf(watch: Watch): string {
   return 'Waiting for price to reach the zone'
 }
 
-export class LayerAlertView<TDatum, TConfig> {
+/** The price alerts' decoration of `layer` on every pane it draws on, over the wall's `alerts`;
+ * undefined for a layer that offers its data to none (`ChartLayer.alerts`), which is then painted
+ * undecorated. */
+export function priceAlertDecorator<TDatum, TConfig>(
+  layer: ChartLayer<TDatum, TConfig>,
+  alerts: PriceAlerts
+): LayerDecorator<TConfig> | undefined {
+  return layer.alerts ? new LayerAlertView(layer.id, layer.label, alerts, layer.alerts) : undefined
+}
+
+export class LayerAlertView<TDatum, TConfig> implements LayerDecorator<TConfig> {
   private readonly panes = new Map<Chart, PaneState<TConfig>>()
   private editor: { chart: Chart; handle: PriceAlertEditor } | null = null
   /** The lines whose last click is still landing (`cycle`). */
@@ -161,6 +172,12 @@ export class LayerAlertView<TDatum, TConfig> {
     })
     out.push(...this.icons(ctx))
     return out
+  }
+
+  /** An alert made, edited, removed or fired -- here, on another pane, or by its firing -- changes
+   * which bells a pane draws. */
+  subscribe(repaint: () => void): () => void {
+    return this.alerts.subscribe(repaint)
   }
 
   /** The layer is no longer drawing on `chart`: nothing of this may stay on it. */

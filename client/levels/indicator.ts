@@ -1,4 +1,5 @@
 import { PriceAlerts } from '../chartlayers/alerts/hub'
+import { priceAlertDecorator } from '../chartlayers/alerts/view'
 import { createLayerController, type LayerController } from '../chartlayers/controller'
 import { createLayerPlugin } from '../chartlayers/plugin'
 import { levels2Layer } from '../levels2/layer'
@@ -6,8 +7,8 @@ import type { IndicatorPlugin } from '../plugins/types'
 import { levelsLayer } from './layer'
 
 // Levels and Zones, the two chart layers, as indicators in the picker's "Levels" group on the
-// price pane (chartlayers/plugin.ts). Built by the caller rather than inside the plugin
-// registry because the replay drives the Levels controller directly (a day boundary
+// price pane (chartlayers/plugin.ts). Built by the caller rather than inside `builtinPlugins`
+// (client/builtins.ts) because the replay drives the Levels controller directly (a day boundary
 // invalidates it).
 
 /** Saved walls name their indicators by template, so these names are a compatibility surface:
@@ -28,7 +29,8 @@ interface LevelsIndicators {
 
 export function createLevelsIndicators(): LevelsIndicators {
   const alerts = new PriceAlerts()
-  const levels = createLayerController(levelsLayer, LEVELS_TEMPLATE, alerts)
+  // Levels offers its levels to the price alerts, which decorate what it paints; Zones offers none.
+  const levels = createLayerController(levelsLayer, LEVELS_TEMPLATE, priceAlertDecorator(levelsLayer, alerts))
   const zones = createLayerController(levels2Layer, ZONES_TEMPLATE)
   const plugin = createLayerPlugin({
     id: 'levels',

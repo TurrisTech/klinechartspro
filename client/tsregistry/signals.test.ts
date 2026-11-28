@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { installWindow } from './testing'
+import { installWindow } from '../plugins/testing'
 
 // The published-signals contract as the client consumes it: the AREV pane reads the server's
 // label rather than restating its rule. (The MTF overlays read the label off `GET /mtf/graph`,
 // where the server put it: client/mtf/values.test.ts.)
 installWindow()
-const { matches } = await import('../tsregistry/api')
+const { matches } = await import('./api')
 
 import type { ArevPoint } from '../arev/api'
 

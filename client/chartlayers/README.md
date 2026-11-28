@@ -17,8 +17,8 @@ shown -- so the picker, the legend's eye and ×, and the indicator manager turn 
 pane like anything else, and a settings edit, a symbol change or the pane moving on the wall is a
 rebind. Settings are per pane and kept by the host (`client/plugins/paneconfig.ts`): the legend's
 gear opens the panel, the indicator manager edits the same fields inline, and the wall document
-keeps each pane's differences from the defaults under `ly.<layer id>` (`persist.ts` is the codec,
-and validates them on the way back in). A pane never configured draws with the defaults.
+keeps each pane's differences from the defaults under `ly.<layer id>` (`client/plugins/settings/persist.ts`
+is the codec, and validates them on the way back in). A pane never configured draws with the defaults.
 The legend names the timeframes drawn, or why nothing is (`none for <ticker>`, `not served here`
 for Zones while no server advertises `levels2`).
 
@@ -29,15 +29,19 @@ samples only its own pane, and only while its binding lives.
 
 | file | what it is |
 |---|---|
-| `types.ts` | `ChartLayer`, `LayerWindow`, `LayerContext` — the contract |
+| `types.ts` | `ChartLayer`, `LayerWindow`, `LayerContext` — the contract; `LayerDecorator`, what a controller is given to add to everything a layer paints (the price alerts) |
 | `controller.ts` | a layer's view of one pane, attached by a binding: drawn while the indicator is shown, debounced redraw, what the pane holds kept across the bindings that follow one another |
 | `plugin.ts` | the layers as one indicator plugin: templates, picker group, legend, the settings each layer declares (`paneConfigs`), the binding's `attach` |
-| `persist.ts` | a layer config's stored form (diff from defaults, flat by path) and its validation against the fields |
 | `window.ts` | **pure**: what a pane has covered and what it still needs |
 | `paint.ts` | **pure**: whether a redraw would change the picture |
-| `settings.ts` | the declarative field schema and its plain-DOM renderer |
 | `encoding.ts`, `color.ts` | metrics → line width/opacity/colour |
-| `alerts/` | price alerts on a layer's lines -- see below |
+| `alerts/` | price alerts on a layer's lines, the one `LayerDecorator` -- see below |
+
+A layer's settings fields and their stored form are the plugin framework's
+(`client/plugins/settings/`: `settings.ts`, the declarative field schema and its plain-DOM
+renderer; `persist.ts`, a config's difference from its defaults, flat by path, and its
+validation against the fields). They were here until 2026-11-28, which had the framework
+importing this folder.
 
 ## Price alerts on a layer's lines (`alerts/`)
 
@@ -68,8 +72,12 @@ give it, fainter. Levels is the one layer that offers it so far: a live level, b
 timeframe, with the pane's default buffer under the gear's "Alerts" (3 pips each side).
 
 The layer only says what is alertable (`target(datum)` -> price + label, or null) and which of its
-settings holds the default buffer (`zonePipsSetting`, a dotted key); everything else is here, and
-the controller applies it to every layer that opts in. It finds a datum through the layer's own
+settings holds the default buffer (`zonePipsSetting`, a dotted key); everything else is here. It
+reaches the chart as the controller's **decorator** (types.ts `LayerDecorator`): whoever builds a
+controller hands it `priceAlertDecorator(layer, alerts)` (`client/levels/indicator.ts`, for
+Levels), which is nothing for a layer that offers no alerts, and the controller adds what it
+returns to every paint and repaints when the alerts change. So `controller.ts` imports none of
+this, nor the watch and trading code it reaches. It finds a datum through the layer's own
 overlays, by their `extendData` -- so a layer that offers alerts puts its datum there, and
 nothing else. **Make default** writes that setting through the binding's
 `BindContext.editConfig` (client/plugins) -- the same path as the gear and the indicator manager:
@@ -79,7 +87,7 @@ kept for the pane, the wall saved, the pane rebound; the dialog stays open acros
 |---|---|
 | `zone.ts` | **pure**: the alert's shape -- `any(price crosses_above low, price crosses_below high)`, entering the zone from either side -- its pips, its name |
 | `hub.ts` | `PriceAlerts`: one wall's view of a watch backend, narrowed to the alerts; enable / new buffer / remove |
-| `view.ts` | a layer's pane: the click (toggle) and hover handlers, the bells, the zone band, opening the dialog |
+| `view.ts` | a layer's pane, as the controller's decorator (`priceAlertDecorator`, `LayerAlertView`): the click (toggle) and hover handlers, the bells, the zone band, opening the dialog |
 | `figures.ts` | the registered overlays: the bell (`wdPriceAlert`) and the band (`wdPriceAlertZone`) |
 | `editor.ts` | the dialog beside a bell |
 
@@ -188,8 +196,8 @@ through the real controller in happy-dom: click, bell, hover, editor, remove, re
 and across panes -- a bell on every pane of the instrument, one editor at a time, an edit or a
 removal on one pane reaching the others),
 `indicator.test.ts` (drawn only on panes carrying the template, off when
-hidden or removed, settings per pane, the wall document's shape, the legend), `persist.test.ts`
-(what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
+hidden or removed, settings per pane, the wall document's shape, the legend, and what a
+decorator adds), `../levels/persist.test.ts` (what is stored and what is let back in), `window.test.ts` (the rectangles tile exactly; a long pan stays bounded),
 `paint.test.ts` (the signature is blind to nothing visible and to everything invisible),
 `../levels/freshness.test.ts` (the horizon in all three states, both DST directions, and that
 a dead feed is still bounded), `../levels/levels.test.ts` (what identifies a request, what is

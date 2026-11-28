@@ -1,8 +1,8 @@
 import type { IndicatorGroup } from '../../src'
 import { AREV_GENERATIONS, type ArevGeneration } from '../arev/api'
-import { closedBarPage } from '../plugins/bars'
+import { closedBarPage } from '../bars/closed'
 import { paneConfig } from '../plugins/paneconfig'
-import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, Range, SourceSpec } from '../plugins/types'
+import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import { loadRegistry, type RegistryIndicator } from '../tsregistry/api'
 import { storedSource } from '../tsregistry/plugin'
 import {
@@ -19,6 +19,7 @@ import { spanMs, windowBars } from './compute'
 import { AREV22_HORIZON, type LabBar } from './labels'
 import { BARS_SOURCE_ID, LAB_TEMPLATE_NAME, isLabIndicator, labFigures, registerLabIndicator } from './templates'
 import { phaseLabel } from '../plugins/legend'
+import type { Range } from '../paging'
 
 // The AREV lab as a client plugin: one sub-pane reading the prediction line of any AREV
 // generation, several at once, with each generation's arrows placed by the published rule or

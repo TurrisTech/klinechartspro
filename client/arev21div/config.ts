@@ -1,5 +1,5 @@
-import { layerConfigCodec } from '../chartlayers/persist'
-import type { SettingsField } from '../chartlayers/settings'
+import { layerConfigCodec } from '../plugins/settings/persist'
+import type { SettingsField } from '../plugins/settings/settings'
 import { AREV21_LOOKBACK, type Rule } from './divergence'
 
 // The divergence's settings for one chart pane: the swing rule and how its lines are drawn.
@@ -84,7 +84,7 @@ export const DIV_FIELDS: SettingsField[] = [
 ]
 
 // The stored form and its validation are derived from the defaults and the fields
-// (chartlayers/persist.ts), plus the one rule across fields: an inverted gap window is widened
+// (plugins/settings/persist.ts), plus the one rule across fields: an inverted gap window is widened
 // rather than left to match nothing.
 const CODEC = layerConfigCodec(DIV_DEFAULTS, DIV_FIELDS, (config) => {
   config.rule.maxGap = Math.max(config.rule.maxGap, config.rule.minGap)

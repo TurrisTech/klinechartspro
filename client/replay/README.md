@@ -30,7 +30,7 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `sessions.ts` | PURE. The Sessions list: `summarizeSessions` (this owner's replays out of `GET /sim/sessions`, most recently played first, each scored from its OWN blob's engine), `snapshotOf` (the one engine-to-snapshot the running session and the list share), `sessionFacts`, `resumable`. |
 | `follow.ts` | PURE. Following the chart to another instrument: what keeps the replay where it is (`FollowBlockers`), which pane change is a request (`followRequest`), the target resolved as a mount resolves it (`followTarget`), the base it walks there (`followBase`) and the blob moved to it (`movedState`). |
 | — glue — | |
-| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). Also `inertStream`. |
+| `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). The plugins' stream on a replay wall, `inertStream`, is `client/facilities.ts`'s. |
 | `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Plans every advance -- where it stops; whether it walks, skims or seeks; what a run that found nothing puts back; why it stopped -- and owns the follow (`follow`: one attempt at a time, for the newest request). |
 | `walk.ts` | The walk itself: `ReplayWalker` takes the cursor forward over stored bars for the session -- `walk`, the base bars a page at a time, and `skim`, the coarsest stored candles nothing can happen on (`summaryIntervals`) -- handing every bar over the one way: to the engine (refined onto the finer stored bars inside it where it reaches something working), then the observer (`WalkObserver`), then the cursor to its close. |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`) and their keys (plain DOM, `kc-*`/`wd-replay-*`). |
@@ -358,7 +358,7 @@ levels, signals — in one place. The server (`services/asof.py`) answers only w
 by then, plus the forming bar rebuilt from finer stored rows. After a step, `index.ts` moves
 the clock, pushes bars, then `pluginHost.invalidateFrom(oldCursor)` so every plugin store
 forgets the coverage that clock made incomplete. **Each source forgets from its own interval's
-horizon, not from the cursor** (`plugins/horizon.ts`): the answer it got was final only through
+horizon, not from the cursor** (`time/horizon.ts`): the answer it got was final only through
 the bar IT had forming, so a stop at 11:15 leaves a 15m source whole and a 1h source one bar
 short. Forgetting from the cursor instead left every coarser pane's forming bar filed as
 fetched-and-empty for good — a permanent blank column in its sub-pane, one per stop.
@@ -371,7 +371,7 @@ the same task, and `levels/api.ts` sends one read of the union of their windows 
 EURUSD or EURGBP at 2023 clocks: 6 reads and 1.4-2.3 s before, 1 read and 0.44-0.79 s after).
 
 **A pane's own history read ends just past the bar forming at the cursor** (`feed.ts`,
-`plugins/horizon.ts` `answerableTo`), on the wire clock its bars are dated by. That is the cursor
+`time/horizon.ts` `answerableTo`), on the wire clock its bars are dated by. That is the cursor
 itself for an intraday pane, but a forex day forming from Tuesday 17:00 is dated Wednesday 00:00:
 ending the window at the cursor left a 1D pane reloaded between 17:00 and midnight without its
 forming candle (prod EURGBP, 2023-10-24 19:00 New York). The read through the tiles

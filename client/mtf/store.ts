@@ -1,13 +1,14 @@
 import { mergeRange, missingRanges, truncate } from '../plugins/store'
-import type { Phase, Range, SourceStore } from '../plugins/types'
+import type { Phase, SourceStore } from '../plugins/types'
 import type { MtfNodeRow, MtfSignalRow } from './api'
+import type { Range } from '../paging'
 
 // What one multi-timeframe overlay binding holds: the server's markers and graph nodes
 // (`GET /mtf/graph`), keyed by the instant each became knowable rather than by a bar -- they come
 // from several timeframes at once, and an instant is the one clock they share.
 //
 // Windows are absolute instants, so the host's read clock needs no conversion: a source that
-// declares no `resolution` is forgotten from the replay cursor itself (plugins/horizon.ts), and
+// declares no `resolution` is forgotten from the replay cursor itself (time/horizon.ts), and
 // a row exists from its `knownAt` on. Every page REPLACES what was held over its own span rather
 // than adding to it: a re-read of the tail after a new bar can take a node OUT of a graph (a
 // lagging timeframe's signal arriving late resets one), and a merge would keep it.

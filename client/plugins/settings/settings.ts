@@ -1,4 +1,4 @@
-import type { IndicatorSettingField } from '../../src'
+import type { IndicatorSettingField } from '../../../src'
 
 // A declarative settings field schema and a plain-DOM renderer for it — deliberately the
 // same shape as the library's own src/config/settings.ts (dotted `key` path + a component

@@ -1,27 +1,35 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { fakeChart, fakeFacilities, fakeIndicator, fakePane, installWindow } from './testing'
-import type { IndicatorPlugin } from './types'
+import { fakeChart, fakeFacilities, fakeIndicator, fakePane, installWindow } from './plugins/testing'
+import type { IndicatorPlugin } from './plugins/types'
 
 installWindow()
 
-// The indicator manager edits the AREV21 MTF overlay's, the AREV21 divergence's and the AREV
-// lab's settings inline (IndicatorPlugin.paneConfigs, through the host). What it writes has to
-// land exactly where the plugin's own panel writes: the same per-pane config, persisted, and
-// only that pane redrawn.
+// The built-ins as the app mounts them (builtins.ts): the plugins in the picker's order, and the
+// Lab registered as the alerts' strategies.
+//
+// Then their settings through a real host. The indicator manager edits the AREV21 MTF overlay's,
+// the AREV21 divergence's and the AREV lab's settings inline (IndicatorPlugin.paneConfigs,
+// through the host). What it writes has to land exactly where the plugin's own panel writes: the
+// same per-pane config, persisted, and only that pane redrawn. (Until 2026-11-28 this half was
+// client/plugins/settings.test.ts, which had the framework's folder importing its features.)
 
-const { createPluginHost } = await import('./host')
-const { createMtfPlugin } = await import('../mtf/plugin')
-const { AREV21_MTF, AREV21_OUTLIER_RANK_85_MTF } = await import('../mtf/overlays')
-const { MTF_DEFAULTS } = await import('../mtf/config')
-const { createArev21DivergencePlugin } = await import('../arev21div/plugin')
-const { PRICE_TEMPLATE, SUB_TEMPLATE } = await import('../arev21div/templates')
-const { DIV_DEFAULTS } = await import('../arev21div/config')
-const { createArevLabPlugin } = await import('../arevlab/plugin')
-const { LAB_DEFAULTS, LAB_FIELDS } = await import('../arevlab/config')
-const { LAB_TEMPLATE_NAME } = await import('../arevlab/templates')
-const { lineApplies, settingLines } = await import('../../src/state/indicatorMatrix')
-import type { LabConfig } from '../arevlab/config'
-import type { RegistryIndicator } from '../tsregistry/api'
+const { builtinPlugins, registerBuiltinStrategies } = await import('./builtins')
+const { createLevelsIndicators } = await import('./levels/indicator')
+const { provideStrategies, strategies } = await import('./alerts/strategies')
+const { labStrategies } = await import('./lab/alertsource')
+const { createPluginHost } = await import('./plugins/host')
+const { createMtfPlugin } = await import('./mtf/plugin')
+const { AREV21_MTF, AREV21_OUTLIER_RANK_85_MTF } = await import('./mtf/overlays')
+const { MTF_DEFAULTS } = await import('./mtf/config')
+const { createArev21DivergencePlugin } = await import('./arev21div/plugin')
+const { PRICE_TEMPLATE, SUB_TEMPLATE } = await import('./arev21div/templates')
+const { DIV_DEFAULTS } = await import('./arev21div/config')
+const { createArevLabPlugin } = await import('./arevlab/plugin')
+const { LAB_DEFAULTS, LAB_FIELDS } = await import('./arevlab/config')
+const { LAB_TEMPLATE_NAME } = await import('./arevlab/templates')
+const { lineApplies, settingLines } = await import('../src/state/indicatorMatrix')
+import type { LabConfig } from './arevlab/config'
+import type { RegistryIndicator } from './tsregistry/api'
 
 const ROW = {
   name: 'arev21',
@@ -32,6 +40,40 @@ const ROW = {
   source: { kind: 'table', fold_by: null },
   wire: { plugin: 'arev', variant: 'arev21' }
 } as unknown as RegistryIndicator
+
+describe('the built-ins', () => {
+  test("Levels and Zones first, then every other plugin once, in the picker's order", () => {
+    const levels = createLevelsIndicators()
+    const plugins = builtinPlugins(levels.plugin)
+    expect(plugins[0]).toBe(levels.plugin)
+    expect(plugins.map((plugin) => plugin.id)).toEqual([
+      'levels',
+      'registry',
+      'arevlab',
+      'arev21div',
+      'mtf',
+      'mtf_arev21_outlier_rank_90',
+      'mtf_arev21_outlier_rank_85',
+      'mtf01',
+      'books',
+      'books_dev',
+      'bidask',
+      'tradetalk',
+      'volprofile',
+      'lab'
+    ])
+  })
+
+  test("registering them makes the Lab's saved strategies what an alert on a strategy reads", () => {
+    const none = strategies()
+    try {
+      registerBuiltinStrategies()
+      expect(strategies()).toBe(labStrategies)
+    } finally {
+      provideStrategies(none)
+    }
+  })
+})
 
 const hosts: Array<{ teardown(): void }> = []
 afterEach(() => {
