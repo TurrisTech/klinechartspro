@@ -8,7 +8,7 @@ import { PRICE_DIRECTIONS, type PriceDirection } from './types'
 //
 // Modal, `position: fixed` over the page, carrying the chart's theme class: the `kc-*` design
 // tokens are defined on `.klinecharts-pro.dark`, and a card appended to <body> resolves them
-// only if it carries that class itself (client/replay/controls.ts's start dialog has the same
+// only if it carries that class itself (client/replay/startdialog.ts's start dialog has the same
 // note). Plain DOM, like every control in client/.
 
 interface WatchDialogResult {

@@ -569,7 +569,7 @@ export async function mountBarReplay(
   session.warmAlerts()
   await session.primeQuote()
   // The wall reads as history at a glance: a thin edge in the replay's orange round the chart,
-  // however far away or rolled up the controls are (client/style.css `.wd-replay-wall`).
+  // however far away or rolled up the controls are (client/styles/replay.css `.wd-replay-wall`).
   container.classList.add(REPLAY_WALL_CLASS)
 
   // FOLLOWING THE CHART (follow.ts). What a follow reads to know it can walk the instrument the

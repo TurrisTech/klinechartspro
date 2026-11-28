@@ -276,7 +276,7 @@ const SUMMARY_SLACK = 2e-5
  * Whether the condition is CERTAINLY not true at any reading taken inside a span that `summary`
  * summarises -- a coarser candle over the same instants, so every finer reading's value and band
  * lie inside its band -- with `previous` the reading before the span. True lets a replay hand the
- * evaluator that one summary instead of every bar inside it (client/replay/session.ts): nothing
+ * evaluator that one summary instead of every bar inside it (client/replay/walk.ts): nothing
  * could have fired on any of them, and the summary leaves the same baseline the last of them would
  * (its close is theirs). False whenever that cannot be shown -- which costs only the finer walk.
  *

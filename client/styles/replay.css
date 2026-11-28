@@ -599,7 +599,7 @@
   gap: 0.5rem;
 }
 
-/* Its two tabs, New replay and Sessions (client/replay/controls.ts `mountSessionsTab`): the
+/* Its two tabs, New replay and Sessions (client/replay/startdialog.ts `mountSessionsTab`): the
    replay window's own footer toggles, so the two read as one family. */
 .wd-replay-dialog-tabs {
   display: flex;
