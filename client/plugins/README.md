@@ -69,8 +69,9 @@ nothing this binding reads rebinds it anyway.
 
 Then add it to `registry.ts`. `PluginFacilities` is the whole of what a plugin may depend on:
 the API (`api.get`), the stream, `hasFeature`, the unified `points` fetch, the period/symbol
-helpers and the server's values cap. Everything a plugin used to reach for to keep its
-settings -- the panel, `paneInfo`, `requestReconcile`, `requestPersist` -- is the host's now.
+helpers, the server's values and bars caps, and the read clock (a replay's cursor). Everything
+a plugin used to reach for to keep its settings -- the panel, `paneInfo`, `requestReconcile`,
+`requestPersist` -- is the host's now.
 
 A template's `calc` reads its store back: `peekStore<WindowStore<P, V>>(indicator.extendData.seriesKey)`
 (`seriesKeys[id]` for a multi-source binding). The host replaces `extendData` on every store

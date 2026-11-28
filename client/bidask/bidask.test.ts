@@ -7,7 +7,7 @@ const { bandOpacity, DEFAULT_BAND, quoteValue } = await import('./templates')
 const { OhlcvApiError } = await import('../config')
 const { WindowStore } = await import('../plugins/store')
 import type { OHLCVBar } from '../ohlcv'
-import type { PluginFacilities, SourceStore } from '../plugins/types'
+import type { BindContext, PluginFacilities, SourceStore } from '../plugins/types'
 import type { StreamListener } from '../stream'
 import type { QuotePoint } from './api'
 
@@ -203,5 +203,31 @@ describe('quoteSource', () => {
     ;(spec.subscribe as NonNullable<typeof spec.subscribe>)(store as SourceStore<QuotePoint>, { changed: () => {}, refetch: () => {} })
     listeners[0].listener.onBar({ ...COINBASE, date: 4 * HOUR }, true)
     expect(store.missing({ from: 0, to: 5 * HOUR })).toEqual([{ from: 4 * HOUR, to: 5 * HOUR }])
+  })
+})
+
+describe('the plugin', () => {
+  test("pages by the server's bars cap, read off its facilities", async () => {
+    const { createBidAskPlugin } = await import('./plugin')
+    const { fakeFacilities } = await import('../plugins/testing')
+    const calls: Array<Record<string, unknown>> = []
+    const plugin = createBidAskPlugin()
+    plugin.register(
+      fakeFacilities({
+        maxBarsPerRequest: 10,
+        api: {
+          get: async (_path: string, params?: Record<string, unknown>) => {
+            calls.push(params ?? {})
+            return [] as never
+          }
+        }
+      })
+    )
+    const ctx = { indicator: { name: 'QUOTE:bidask', calcParams: [] }, symbol: { ticker: 'EURUSD', pricePrecision: 5 }, vendor: 'oanda', ticker: 'EURUSD', interval: '1h' }
+    const spec = plugin.bind(ctx as unknown as BindContext)
+    // 10 bars per request -> 8 per page, as quoteSource pages under any cap.
+    const page = await spec?.sources[0].fetch({ from: 0, to: 20 * HOUR }, 5000)
+    expect(calls).toEqual([{ symbol: 'oanda:EURUSD', resolution: '1h', from: 0, to: 8 * HOUR, columns: 'all' }])
+    expect(page?.nextFrom).toBe(8 * HOUR)
   })
 })

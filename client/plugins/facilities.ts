@@ -1,5 +1,5 @@
-import { hasFeature } from '../capabilities'
-import { apiGet } from '../config'
+import { capabilities, hasFeature } from '../capabilities'
+import { apiGet, getReadClock } from '../config'
 import { stream } from '../stream'
 import { symbolVendor } from '../symbols'
 import { fetchPoints } from './api'
@@ -25,6 +25,12 @@ export function createFacilities(options: {
     periodToResolution,
     resolutionDurationMs,
     symbolVendor,
-    maxValuesPerRequest: MAX_VALUES_PER_REQUEST
+    maxValuesPerRequest: MAX_VALUES_PER_REQUEST,
+    // A getter, so the cap is read off the page's discovery when a plugin asks for it rather than
+    // copied when the facilities are built: what capabilities() says then is what it gets.
+    get maxBarsPerRequest(): number {
+      return capabilities().limits.maxBarsPerRequest
+    },
+    readClock: getReadClock
   }
 }

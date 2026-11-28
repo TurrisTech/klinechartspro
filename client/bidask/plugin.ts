@@ -1,5 +1,4 @@
 import type { IndicatorGroup } from '../../src'
-import { capabilities } from '../capabilities'
 import type { BindContext, BindingSpec, BindingState, IndicatorPlugin, PluginFacilities, SourceSpec } from '../plugins/types'
 import { quoteSource } from './api'
 import { registerSpreadIndicator, SPREAD_TEMPLATE_NAME, spreadPrecision, spreadUnit, spreadUnitLabel } from './spread'
@@ -35,7 +34,7 @@ export function createBidAskPlugin(): IndicatorPlugin {
     matches: (name) => NAMES.has(name),
     bind(ctx: BindContext): BindingSpec | null {
       if (!facilities || !NAMES.has(ctx.indicator.name)) return null
-      const source = quoteSource(facilities, ctx.vendor, ctx.ticker, ctx.interval, capabilities().limits.maxBarsPerRequest)
+      const source = quoteSource(facilities, ctx.vendor, ctx.ticker, ctx.interval, facilities.maxBarsPerRequest)
       const precision = ctx.symbol.pricePrecision
       if (ctx.indicator.name === SPREAD_TEMPLATE_NAME) {
         // The unit is a calcParam, and calcParams are part of a binding's identity, so a unit
