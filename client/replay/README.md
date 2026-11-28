@@ -31,7 +31,8 @@ Everything below the glue line is testable with no chart, no network and no DOM.
 | `follow.ts` | PURE. Following the chart to another instrument: what keeps the replay where it is (`FollowBlockers`), which pane change is a request (`followRequest`), the target resolved as a mount resolves it (`followTarget`), the base it walks there (`followBase`) and the blob moved to it (`movedState`). |
 | — glue — | |
 | `feed.ts` | `ReplayDatafeed` (the pane datafeed: history clamped by the read clock, windows re-anchored to end just past the bar forming at the cursor, no stream) and `ReplayFeedHub` (pushes stepped bars into every pane — see "the v1 bug" below — and says what each pane will hold at a landing, `landingRange`). Also `inertStream`. |
-| `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Owns the walk, and the follow (`follow`: one attempt at a time, for the newest request). |
+| `session.ts` | `ReplayTradingSession implements TradingSession` over the engine and the caches, and the `ReplayController` the controls drive. Plans every advance -- where it stops; whether it walks, skims or seeks; what a run that found nothing puts back; why it stopped -- and owns the follow (`follow`: one attempt at a time, for the newest request). |
+| `walk.ts` | The walk itself: `ReplayWalker` takes the cursor forward over stored bars for the session -- `walk`, the base bars a page at a time, and `skim`, the coarsest stored candles nothing can happen on (`summaryIntervals`) -- handing every bar over the one way: to the engine (refined onto the finer stored bars inside it where it reaches something working), then the observer (`WalkObserver`), then the cursor to its close. |
 | `controls.ts` | The controls that fill the window (`../chrome/window.ts`) and their keys (plain DOM, `kc-*`/`wd-replay-*`). |
 | `startdialog.ts` | The start dialog: its New replay tab (the start form, or why this instrument cannot start one) and its Sessions tab. |
 | `sessionlist.ts` | The list of past replays the dialog's Sessions tab and the window's Sessions panel both show: each row's facts and score, Stats, Delete, Resume. |
@@ -88,7 +89,7 @@ reads the hours. Per browser (`wd.replay.quiet`), like the pace. `quiet.ts` says
   (user, 2026-11-26: "levels alerts on quiet hours shouldn't alert when quiet hours end");
 - a trade's "Notify at" is an alert too (user, 2026-11-26: "align notify at to be an alert, it
   stays silent during quiet hours and doesn't alert at the end"): the engine records it reached,
-  at the instant it was, but the session does not hear it (`session.ts` `heard`) -- it ends no
+  at the instant it was, but the session does not hear it (`walk.ts` `heard`) -- it ends no
   run, rings nothing, opens no panel, and being spent it is not told when the hours end;
 - NOT the account ("fills and exits should alert even during quiet hours"): fills, stop losses,
   take profits, trail and breakeven stops still stop a run at night, as they would on a real
@@ -170,7 +171,7 @@ that instrument.
 these will stop at Next alert on bar replay"). The replay's engine (`engine.ts`) carries the trade
 box's exit management (`client/trading/exits.ts`, `client/trading/README.md`):
 - a trade reaching a milestone ends the run where it happens, like a fill (`stopsARun` in
-  `session.ts`), and the controls say "Reached +2R"; the milestone is also raised in the bell,
+  `walk.ts`), and the controls say "Reached +2R"; the milestone is also raised in the bell,
   tagged `replay`, with the replay instant in its body (`index.ts`). Step and Play stop on one only
   with Pause on fill set, as for fills;
 - a stop the trail or the breakeven placed is a stop: its hit is a close, so it ends the run, and
@@ -388,7 +389,7 @@ geometry, resolved by the server from Postgres and carried on `SymbolInfo` (`tim
 `dayGeometry`). A `CandleGrid` (`timeframes.ts`) answers every boundary question on it, and every
 module that floors, steps, labels or dates a bar takes one:
 
-- the **session** -- advance targets, its base and refinement caches -- for the walked instrument;
+- the **session** -- advance targets, its base and the walk's refinement caches -- for the walked instrument;
 - the **feed hub** -- each pane on the grid of the instrument *it* shows (a replay wall can mix
   them), so a coinbase pane's forming day is labelled at UTC midnight, the label `/getbars`
   gives the whole bar, while an FX pane beside it forms from 17:00 New York;
@@ -548,8 +549,8 @@ resting limit/stop, or an open trade carrying a stop loss or take profit. When i
 the account cannot change however the price moves, so the advance **seeks**: the cursor lands
 on the same instant, `quoteAt` takes the closing quote there, and `AdvanceResult.walked` is
 false. (A months-long jump used to feed ~10⁵ bars to the engine for nothing —
-measured at 5s per 20 market days at a 1m base.) When it is true the advance **walks** base
-bars from the cache, feeding each to the engine — or, when a candle's band intersects a working order or
+measured at 5s per 20 market days at a 1m base.) When it is true the advance **walks** (`walk.ts`)
+base bars from the cache, feeding each to the engine — or, when a candle's band intersects a working order or
 an open trade's stop/target, the finer stored bars inside it instead (recursively; a per-span
 refinement that never lowers the base). "Pause on fill" stops at the filling bar, and **any
 advance — Step or Next alert — stops at the first bar a price watch fires on** (stop reason
@@ -817,8 +818,8 @@ the current mid, because the `price` field is the mid of bid and ask -- what the
 **The skim** is what makes it quick. An armed watch used to make every advance walk every base
 bar (the seek shortcut would step over it), so a stop a month away at a 1m base was a month of
 1m bars fetched a page at a time and handed over one by one. Now, when nothing could fill
-(`canFill` false) and only the watches need the bars, `session.skim` reads the stored intervals
-coarser than the base that tile it (`summaryIntervals`: 1D then 1h over 1m), coarsest first,
+(`canFill` false) and only the watches need the bars, the skim (`walk.ts` `skim`) reads the
+stored intervals coarser than the base that tile it (`summaryIntervals`: 1D then 1h over 1m), coarsest first,
 and asks the observer about each whole candle: **quiet** (`quietOver`) -- no watch could fire on
 any bar inside it -- and the candle is handed over as one bar and the cursor moves past it;
 otherwise it descends a level, down to the base bars, which are handed over exactly as the walk
@@ -943,7 +944,13 @@ from the blob and not the server's account, Stats, Delete's two presses and a re
 Resume, an unreadable blob, the remembered tab, Enter kept from Start, and a Stats that keeps
 the scroll box; a refused dialog (opens on Sessions, says why, nothing to start, not remembered).
 The two share the stored replays they list and the gestures they drive (`testing.ts`, imported
-by tests only). `sessions.test.ts` pins
+by tests only). `walk.test.ts` pins the walk on its own -- a real engine and caches over a fake
+store, the session reduced to the cursor it moves and the Stop it hears: every bar handed over in
+order to the engine (only when something can fill), the observer and the cursor; a stop where the
+observer raises; a Stop between two whole bars, or before the first; a bar whose range reaches a
+resting order fed as the finer stored bars inside it (the fill on its minute, where with nothing
+finer stored it is the hour's open); a quiet candle handed over whole and a loud one descended
+into; and `summaryIntervals`. `sessions.test.ts` pins
 the list's order and its score against the running session's; `mount.test.ts` resumes from a wall
 showing the instrument and from one on another instrument (the mount must not follow it away),
 and checks every save is stamped; it also switches from inside a replay: the panel lists only the
