@@ -1,5 +1,5 @@
-import { mergeRange, missingRanges, truncate } from '../plugins/store'
-import type { Phase, SourceStore } from '../plugins/types'
+import { mergeRange, missingRanges, StoreStatus, truncate } from '../plugins/store'
+import type { SourceStore } from '../plugins/types'
 import type { Mtf01Event, Mtf01Trade } from './api'
 import type { Range } from '../paging'
 
@@ -14,20 +14,16 @@ import type { Range } from '../paging'
 const eventKey = (e: Mtf01Event): string => `${e.stage}|${e.interval}|${e.barDate}`
 const tradeKey = (t: Mtf01Trade): string => `${t.ltfInterval}|${t.barDate}`
 
-export class Mtf01Store implements SourceStore<Mtf01Event> {
+export class Mtf01Store extends StoreStatus implements SourceStore<Mtf01Event> {
   /** Events by the chart bar they draw on, in arrival (time) order. */
   readonly events = new Map<number, Mtf01Event[]>()
   readonly trades = new Map<number, Mtf01Trade[]>()
   private readonly seen = new Set<string>()
   private ranges: Range[] = []
-  phase: Phase = 'idle'
-  error: string | null = null
-  /** Bumped on every change; the klinecharts template's shouldUpdate compares it. */
-  rev = 0
 
-  progress: number | null = null
-
-  constructor(readonly key: string) {}
+  constructor(readonly key: string) {
+    super()
+  }
 
   /** Both kinds: the host's one gap loop covers them together. */
   get size(): number {
@@ -91,14 +87,6 @@ export class Mtf01Store implements SourceStore<Mtf01Event> {
       for (const t of rows) this.seen.delete(tradeKey(t))
       this.trades.delete(date)
     }
-    this.rev++
-  }
-
-  setPhase(phase: Phase, progress: number | null = null, error: string | null = null): void {
-    this.progress = progress
-    if (this.phase === phase && this.error === error) return
-    this.phase = phase
-    this.error = error
     this.rev++
   }
 }

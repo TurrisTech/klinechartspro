@@ -1,5 +1,5 @@
-import { mergeRange, missingRanges, truncate } from '../plugins/store'
-import type { Phase, SourceStore } from '../plugins/types'
+import { mergeRange, missingRanges, StoreStatus, truncate } from '../plugins/store'
+import type { SourceStore } from '../plugins/types'
 import type { MtfNodeRow, MtfSignalRow } from './api'
 import type { Range } from '../paging'
 
@@ -25,19 +25,16 @@ function nodeKey(row: MtfNodeRow): string {
 
 export const NODES_ARRAY = 'nodes'
 
-export class MtfGraphStore implements SourceStore<MtfSignalRow> {
+export class MtfGraphStore extends StoreStatus implements SourceStore<MtfSignalRow> {
   private readonly marks = new Map<string, MtfSignalRow>()
   private readonly nodeRows = new Map<string, MtfNodeRow>()
   private ranges: Range[] = []
   private sortedMarks: MtfSignalRow[] | null = null
   private sortedNodes: MtfNodeRow[] | null = null
-  phase: Phase = 'idle'
-  progress: number | null = null
-  error: string | null = null
-  problem: string | null = null
-  rev = 0
 
-  constructor(readonly key: string) {}
+  constructor(readonly key: string) {
+    super()
+  }
 
   get size(): number {
     return this.marks.size
@@ -82,20 +79,6 @@ export class MtfGraphStore implements SourceStore<MtfSignalRow> {
   nodes(): readonly MtfNodeRow[] {
     this.sortedNodes ??= [...this.nodeRows.values()].sort((a, b) => a.knownAt - b.knownAt)
     return this.sortedNodes
-  }
-
-  setPhase(phase: Phase, progress: number | null = null, error: string | null = null): void {
-    if (this.phase === phase && this.progress === progress && this.error === error) return
-    this.phase = phase
-    this.progress = progress
-    this.error = error
-    this.rev++
-  }
-
-  setProblem(problem: string | null): void {
-    if (this.problem === problem) return
-    this.problem = problem
-    this.rev++
   }
 
   private dropBetween(from: number, to: number): void {

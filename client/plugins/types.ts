@@ -23,7 +23,9 @@ import type { PaneConfig } from './paneconfig'
 export type Phase = 'idle' | 'loading' | 'queued' | 'replaying' | 'ready' | 'error'
 
 /** What the host needs from a store. `WindowStore` (store.ts) is the implementation
- * every plugin uses unless it holds something beside points (mtf's bar grid). */
+ * every plugin uses unless it holds something beside points (mtf's bar grid). A store of its
+ * own extends `StoreStatus` (store.ts) for everything here but its data: the phase, progress,
+ * error, problem and `rev`, and the two setters that change them. */
 export interface SourceStore<P = unknown> {
   readonly key: string
   /** Bumped on every change; the template's shouldUpdate compares it. */
@@ -44,10 +46,12 @@ export interface SourceStore<P = unknown> {
    * whatever it fetched. */
   forgetAfter?(from: number): void
   setPhase(phase: Phase, progress?: number | null, error?: string | null): void
-  /** Why what is held is incomplete though it loaded (`Page.problem`), or null. Optional: a
-   * store without it never says so. */
-  problem?: string | null
-  setProblem?(problem: string | null): void
+  /** Why what is held is incomplete though it loaded (`Page.problem`), or null: what the
+   * legend's warning says (apply.ts `problemOf`). Required, as `setProblem` is: until
+   * 2026-11-28 both were optional, and the host's `setProblem?.()` dropped the problem of a
+   * page read into a store without them, so its legend never warned. */
+  problem: string | null
+  setProblem(problem: string | null): void
 }
 
 export interface SourceNotify {
