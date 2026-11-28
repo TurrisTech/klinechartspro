@@ -1,6 +1,6 @@
 import { closedBarPage } from '../bars/closed'
-import { missingRanges, mergeRange, truncate } from '../plugins/store'
-import type { Phase, PluginStream, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
+import { missingRanges, mergeRange, StoreStatus, truncate } from '../plugins/store'
+import type { PluginStream, SourceNotify, SourceSpec, SourceStore } from '../plugins/types'
 import { type DayGeometry, scheduleWireShift, sessionDated } from '../time/timeframes'
 import type { StreamListener } from '../stream'
 import { lowerBound, type SourceBar } from './atoms'
@@ -80,18 +80,16 @@ export function wireShift(interval: string, schedule: Schedule | null): number |
  * chart bar rather than the whole history. `changedSince` answers the second from a short log
  * of the earliest date each edit touched; a reader too far behind the log rebuilds everything.
  */
-export class BarStore implements SourceStore<SourceBar> {
+export class BarStore extends StoreStatus implements SourceStore<SourceBar> {
   readonly bars: SourceBar[] = []
   private ranges: Range[] = []
-  phase: Phase = 'idle'
-  progress: number | null = null
-  error: string | null = null
-  rev = 0
   private log: Array<{ rev: number; from: number }> = []
   /** Every edit at or before this rev has left the log. */
   private floor = 0
 
-  constructor(readonly key: string) {}
+  constructor(readonly key: string) {
+    super()
+  }
 
   get size(): number {
     return this.bars.length
@@ -124,14 +122,6 @@ export class BarStore implements SourceStore<SourceBar> {
     this.ranges = truncate(this.ranges, from)
     this.bars.length = lowerBound(this.bars.length, from, (j) => this.bars[j].date)
     this.touch(from)
-  }
-
-  setPhase(phase: Phase, progress: number | null = null, error: string | null = null): void {
-    if (this.phase === phase && this.progress === progress && this.error === error) return
-    this.phase = phase
-    this.progress = progress
-    this.error = error
-    this.rev++
   }
 
   /** The earliest bar date changed since `rev`: null for none, -Infinity when the log no

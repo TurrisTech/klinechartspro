@@ -12,6 +12,7 @@ import { createTradeTalkPlugin } from './tradetalk/plugin'
 import { createVolumeProfilePlugin } from './volprofile/plugin'
 import { provideStrategies } from './alerts/strategies'
 import { labStrategies } from './lab/alertsource'
+import type { StrategyStore } from './lab/store'
 import type { IndicatorPlugin } from './plugins/types'
 
 // WHAT THE APP BUILDS ON ITS FRAMEWORKS: the indicator plugins it mounts on the plugin host
@@ -43,7 +44,16 @@ import type { IndicatorPlugin } from './plugins/types'
 // toolbar until 2026-10-03 -- and are built by the caller, which also hands
 // their controllers the wall's panes and the replay (client/levels/indicator.ts).
 
-export function builtinPlugins(levels: IndicatorPlugin): IndicatorPlugin[] {
+/** What a mount hands the built-ins beside Levels and Zones. */
+export interface BuiltinOptions {
+  /** The saved strategies the Lab's "Saved strategy" overlay reads: the page's shared store by
+   * default (lab/store.ts `sharedStrategyStore`). The Strategy Lab page passes the store its
+   * session edits, so the page holds ONE -- until 2026-11-28 it held two, which read the saved
+   * set twice, and each Save sent the overlay's to read it again before the save was written. */
+  strategies?: () => Promise<StrategyStore>
+}
+
+export function builtinPlugins(levels: IndicatorPlugin, options: BuiltinOptions = {}): IndicatorPlugin[] {
   return [
     levels,
     createRegistryPlugin(),
@@ -57,7 +67,7 @@ export function builtinPlugins(levels: IndicatorPlugin): IndicatorPlugin[] {
     createBidAskPlugin(),
     createTradeTalkPlugin(),
     createVolumeProfilePlugin(),
-    createLabPlugin()
+    createLabPlugin({ store: options.strategies })
   ]
 }
 

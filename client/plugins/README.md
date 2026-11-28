@@ -59,6 +59,15 @@ read a timeframe): its points are drawn and counted as fetched, but the host kee
 without a problem, which clears the store's problem and the warning. `phaseLabel` no longer adds
 "· error" to the name: the ⚠ says it, where a narrow pane cannot cut it off.
 
+**Every store keeps that status the same way** (`store.ts` `StoreStatus`): the phase, progress,
+error, problem and `rev`, `setPhase` and `setProblem`, and the rule that a change to any of them
+bumps `rev` and setting one to what it already is does not. A store of its own (`Mtf01Store`,
+`MtfGraphStore`, the volume profile's `BarStore`, the Lab's `RunStore`) extends it and keeps only
+its data; `SourceStore` requires `problem` and `setProblem`, so a store cannot lack them. Until
+2026-11-28 each kept its own copy, and three had no `setProblem`: the host's optional call dropped
+the problem of a page read into them, and their legend never warned (`client/sourcestores.test.ts`
+holds every store class to it, through the host).
+
 **`follows`** is for a binding that depends on another indicator on the same chart: TradeTalk
 entries trades the zones of the Heath levels indicator beside it. The host asks it on every
 reconcile and adds the answer to the binding's identity, beside its own `calcParams`. So an edit
@@ -216,7 +225,7 @@ store's keys and windows use.
 A **custom store** must implement `forgetAfter` (the interface makes it optional, and a store
 without one simply keeps whatever it fetched — `Mtf01Store` did, and never revisited a window).
 `plugins/store.ts` exports `missingRanges`/`mergeRange`/`truncate` so a custom store shares the
-coverage arithmetic instead of copying it. If it dedups rows, **prune the dedup keys with the
+coverage arithmetic instead of copying it, and `StoreStatus` so it shares the status. If it dedups rows, **prune the dedup keys with the
 rows it drops** — otherwise the refetch is deduplicated away and the row never comes back,
 which is worse than the hole.
 

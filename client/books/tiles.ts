@@ -133,17 +133,85 @@ async function columns(url: string, names: string[]): Promise<Record<string, num
 
 // -- decoding one tile into points ---------------------------------------------------------
 
-const decoded = new Map<string, unknown[]>()
+/** How much decoded book a page holds, in values: a row, and each bucket a profile row carries. A
+ * profile tile is 370-730 served snapshots of ~80 buckets (30-60k values; a totals tile under a
+ * thousand), and a pane's 500-bar window spans one to three tiles of its interval, so this holds
+ * two tiles of profile for each of eight panes at once -- at ~70 bytes a value, the same order as
+ * the bar tiles' bound (tiles/cache.ts). What goes is decoded again from the Cache API's bytes,
+ * never fetched again; and what a pane shows of a tile held costs little more, as its store holds
+ * the same point objects. */
+const MAX_DECODED_VALUES = 1_000_000
+
+interface HeldTile {
+  rows: unknown[]
+  weight: number
+}
+
+/** Decoded tiles by URL, under a budget of values, least recently used out first -- the bar
+ * tiles' `DecodedTiles` (tiles/cache.ts), counted by what a book row carries rather than by rows,
+ * as a profile row holds ~80 buckets and a totals row none. Until 2026-11-28 this was a plain map
+ * nothing ever cleared, so every tile a page read stayed decoded until reload. Exported for its
+ * test. */
+export class DecodedBookTiles {
+  // Insertion order is recency: a hit is moved to the end, and eviction takes from the front.
+  private readonly tiles = new Map<string, HeldTile>()
+  private held = 0
+
+  constructor(readonly maxValues: number) {}
+
+  /** The values held. */
+  get values(): number {
+    return this.held
+  }
+
+  get(url: string): unknown[] | undefined {
+    const hit = this.tiles.get(url)
+    if (hit === undefined) return undefined
+    this.tiles.delete(url)
+    this.tiles.set(url, hit)
+    return hit.rows
+  }
+
+  /** Hold `rows`, counted as `weight` values. */
+  set(url: string, rows: unknown[], weight: number): void {
+    const previous = this.tiles.get(url)
+    if (previous !== undefined) {
+      this.tiles.delete(url)
+      this.held -= previous.weight
+    }
+    this.tiles.set(url, { rows, weight })
+    this.held += weight
+    // Never the tile just held: one larger than the budget is still worth keeping while it is the
+    // one in use.
+    while (this.held > this.maxValues && this.tiles.size > 1) {
+      const [oldest, evicted] = this.tiles.entries().next().value as [string, HeldTile]
+      this.tiles.delete(oldest)
+      this.held -= evicted.weight
+    }
+  }
+
+  clear(): void {
+    this.tiles.clear()
+    this.held = 0
+  }
+}
+
+const decoded = new DecodedBookTiles(MAX_DECODED_VALUES)
 const inflight = new Map<string, Promise<unknown[] | null>>()
 
-function once<T>(url: string, load: () => Promise<T[] | null>): Promise<T[] | null> {
+/** A tile's rows, decoded once and held while the budget allows; `weigh` counts their values. */
+function once<T>(
+  url: string,
+  load: () => Promise<T[] | null>,
+  weigh: (rows: T[]) => number
+): Promise<T[] | null> {
   const hit = decoded.get(url)
   if (hit !== undefined) return Promise.resolve(hit as T[])
   let pending = inflight.get(url)
   if (pending === undefined) {
     pending = load()
       .then((rows) => {
-        if (rows !== null) decoded.set(url, rows)
+        if (rows !== null) decoded.set(url, rows, weigh(rows))
         return rows as unknown[] | null
       })
       .finally(() => inflight.delete(url))
@@ -167,7 +235,7 @@ async function totalsOf(
       long: cols.l[i] / pct,
       short: cols.s[i] / pct
     }))
-  })
+  }, (rows) => rows.length)
 }
 
 async function profilesOf(
@@ -205,7 +273,7 @@ async function profilesOf(
       width: head.w[i] / price,
       buckets: buckets.get(head.ts[i]) ?? []
     }))
-  })
+  }, (rows) => rows.reduce((values, row) => values + 1 + row.buckets.length, 0))
 }
 
 // -- the public read -------------------------------------------------------------------------
@@ -256,7 +324,8 @@ export async function pointsFromTiles<P extends BookTotalsPoint | BookProfilePoi
   return { items: points, coveredTo: span.coveredTo }
 }
 
-/** Test seam: the manifest and decoded-tile caches are per page load by design. */
+/** Test seam: the manifests and the decoded tiles are held per page load by design (the decoded
+ * ones under `MAX_DECODED_VALUES`). */
 export function resetBookTileCaches(): void {
   manifests.clear()
   decoded.clear()

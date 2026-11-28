@@ -10,6 +10,7 @@ const { StrategyEntryEngine, lastClosedOpen, LATE_MS } = await import('./alerten
 const { compile, describeRule } = await import('../alerts/rules')
 const { FX_GRID } = await import('../time/timeframes')
 const { operandKey } = await import('../alerts/operands')
+const { FakeData, NOW, D, withRules } = await import('./testdata')
 
 import type { StrategyPersistence } from './store'
 
@@ -142,6 +143,62 @@ describe('a strategy’s entries as an alert operand', () => {
       async () => store
     )
     expect(await engine.entries('oanda:EURUSD', { kind: 'strategy', interval: '5m', strategy: 'gone' }, 0, 1)).toEqual({ points: [], through: null })
+    store.dispose()
+  })
+
+  // Two alerts on one strategy and instrument, evaluated at one bar close, ask for one window at
+  // once -- and a run does not depend on which timeframe's entries are asked.
+  test('reads of one saved strategy over one window at once are one run', async () => {
+    const store = new StrategyStore(memory())
+    await store.load()
+    const saved = store.save(withRules(rank85Strategy(NOW), ['4h', '1h'], ['3m', '5m', '15m', '1h', '4h']), NOW)
+    const on = (interval: string) => ({ kind: 'strategy' as const, interval, strategy: saved.id })
+    const from = NOW - 4 * D
+    const data = new FakeData()
+    // A run asks for the instrument's pip once; the engine itself never does.
+    let runs = 0
+    data.pip = async () => {
+      runs++
+      return 0.0001
+    }
+    // Every bar read waits on the gate, open unless a test step holds it.
+    let gate: Promise<void> = Promise.resolve()
+    const bars = data.bars.bind(data)
+    data.bars = async (...args: Parameters<typeof bars>) => {
+      await gate
+      return bars(...args)
+    }
+    const engine = new StrategyEntryEngine(data, async () => store, () => NOW)
+    const entries = (interval: string, start = from) => engine.entries('oanda:EURUSD', on(interval), start, NOW)
+
+    const single = await entries('5m')
+    expect(single.points.length).toBeGreaterThan(0)
+    expect(runs).toBe(1)
+    const [a, b, c] = await Promise.all([entries('5m'), entries('5m'), entries('3m')])
+    expect(runs).toBe(2)
+    expect(a).toEqual(single)
+    expect(b).toEqual(single)
+    expect(c.points.length).toBeGreaterThan(0)
+    expect(c.points).not.toEqual(a.points)
+
+    // Settled, the same read runs again.
+    await entries('5m')
+    expect(runs).toBe(3)
+
+    // A version saved while a run of the one before is going runs on its own, never answered by
+    // the older run; so does a read of another window.
+    let open = (): void => {}
+    gate = new Promise((resolve) => {
+      open = resolve
+    })
+    const older = entries('5m')
+    while (runs < 4) await new Promise((resolve) => setTimeout(resolve, 1))
+    store.save(saved, NOW + 1)
+    const newer = Promise.all([entries('5m'), entries('5m'), entries('5m', from + D)])
+    while (runs < 6) await new Promise((resolve) => setTimeout(resolve, 1))
+    open()
+    await Promise.all([older, newer])
+    expect(runs).toBe(6)
     store.dispose()
   })
 })

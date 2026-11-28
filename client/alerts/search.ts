@@ -32,8 +32,10 @@ export const SEARCH_CHUNK_BARS = 3000
  * however long it is, so the doubling is what keeps a long search to a handful of rounds. */
 const SEARCH_CHUNK_GROWTH = 3
 
-/** Rows held per series before a search trims what it has walked past. */
-const MAX_HELD_ROWS = 60_000
+/** Rows held per series before a search trims what it has walked past -- and the bound on the data
+ * layer of the strategy engine an alert on a saved strategy runs (the Lab's, registered through
+ * ./strategies.ts), which walks forward with the search. */
+export const MAX_HELD_ROWS = 60_000
 
 /** Days added to every lead-in: a span measured in nominal bar lengths crosses weekends and
  * holidays that hold no bars, so it is padded rather than trusted. */

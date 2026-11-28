@@ -115,13 +115,13 @@ its plugin wrote (`child.raw.p` is arev's P(up)); `dir` is +1 in a top graph, �
 | `runs.ts` | this session's runs, the baseline, and the Runs panel | history yes |
 | `figtable.ts` | rows of figures as a table, each change under its value | — |
 | `export.ts` | entries and trades as CSV, a strategy to and from a JSON file | but `download` |
-| `data.ts` | `LabData` / `HttpLabData`: bars through the tiled path (bid/ask through `/getbars?columns=all`), `GET /plugins/{id}/signals`, points; held per page (`TailCache`) | — |
+| `data.ts` | `LabData` / `HttpLabData`: bars through the tiled path (bid/ask through `/getbars?columns=all`), `GET /plugins/{id}/signals`, points; held per page (`TailCache`, one read at a time), and for an alert's engine bounded at the alert search's 60,000 rows a series | — |
 | `store.ts` | saved strategies under `/preferences` (localStorage without it), one key each plus an index; saves announced on a BroadcastChannel | — |
 | `catalogue.ts` | signal families with their registry params, the indicators a rule may compute, timeframes | — |
 | `session.ts` | `LabSession`, the page's state and actions: which strategy is open, the drafts and which are touched or unsaved, Save / Revert / Delete / New / a file read back, the header's instrument, window and holdout, running the draft (a newer run or Stop abandons the one before) and this session's runs -- given the store, the data layers, the catalogue and the clock | logic yes |
 | `editor.ts`, `results.ts`, `page.ts`, `overlay.ts` | the page (DOM); `page.ts` draws what the session holds after each action | — |
 | `plugin.ts` | a saved strategy on a dashboard pane | — |
-| `alertentries.ts` | a saved strategy's entries as an alert operand | — |
+| `alertentries.ts` | a saved strategy's entries as an alert operand; reads of one saved version over one window at once are one run | — |
 
 ## Using the page
 
@@ -209,6 +209,13 @@ The user chose all of these when asked what the lab lacked:
 - **Saving is explicit**, as a workspace's is; a dashboard pane and an alert read the SAVED
   strategy, so an experiment in the lab changes nothing else until it is kept. The page asks before
   closing only for a draft the user changed.
+- **One store of saved strategies per page.** The Lab page's session and its chart's "Saved
+  strategy" overlay read the same `StrategyStore`: the page hands its own to `builtinPlugins`
+  (`BuiltinOptions.strategies`), where the wall's overlay and alerts read `sharedStrategyStore`. A
+  store hears every OTHER store's save on the channel, in the same page too, so until 2026-11-28
+  the overlay's store re-read `/preferences` at each Save -- before the debounced write had gone
+  out -- and held the set as it stood before the save. A save on the page re-runs the panes
+  showing that strategy through the store's `onChange`; one in another tab, through the channel.
 - **A span's tail is read again** whenever the data layer extends it forward: a span read up to now
   ends on a bar still forming, which a closed-bars read leaves out (`TailCache`).
 - **A lab rule offers no graph entries and no strategy entries**: the graph is the lab's own job,

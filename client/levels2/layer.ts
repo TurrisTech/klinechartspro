@@ -3,7 +3,9 @@ import { hasFeature, levels2CoverageFor } from '../capabilities'
 import { withAlpha } from '../chartlayers/color'
 import { applyEncodings, type LineAppearance } from '../chartlayers/encoding'
 import type { ChartLayer, LayerContext } from '../chartlayers/types'
+import { gridFor } from '../time/timeframes'
 import { fetchZones, type Zone } from './api'
+import { zonesClockToken } from './freshness'
 import {
   DEFAULT_LEVELS2_CONFIG,
   LEVELS2_FIELDS,
@@ -140,6 +142,14 @@ export const levels2Layer: ChartLayer<Zone, Levels2Config> = {
   // key is (timestamp_bar, center)).
   datumKey(zone) {
     return `${zone.interval}|${zone.bornAt}|${zone.center}`
+  },
+
+  // Under a replay the server answers each zone as it stood at the read clock, so the answer
+  // changes when a bar of an interval the pane draws closes, and only then (freshness.ts). Live
+  // the documents change only when someone re-runs the writer, which nothing on the wire says:
+  // that half is still the controller's fallback timer.
+  readClockToken(clock, ctx, config) {
+    return zonesClockToken(clock, requestedIntervals(config), gridFor(ctx.symbol))
   },
 
   fetch(ctx, config, window) {

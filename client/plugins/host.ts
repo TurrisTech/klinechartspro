@@ -257,7 +257,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
     const held = degraded.get(source.key)
     if (problem) {
       degraded.set(source.key, { ranges: mergeRange(held?.ranges ?? [], range), due: Date.now() + partialRetryMs })
-      source.store.setProblem?.(problem)
+      source.store.setProblem(problem)
       scheduleRetry(entry, b, partialRetryMs)
       return
     }
@@ -267,7 +267,7 @@ export async function createPluginHost(options: CreateHostOptions): Promise<Plug
       degraded.set(source.key, { ...held, ranges })
     } else {
       degraded.delete(source.key)
-      source.store.setProblem?.(null)
+      source.store.setProblem(null)
     }
   }
 

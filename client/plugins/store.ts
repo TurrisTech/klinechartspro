@@ -1,6 +1,38 @@
 import type { Phase, SourceStore } from './types'
 import type { Range } from '../paging'
 
+/** The status every source store keeps beside what it holds, and the one rule for when it has
+ * changed: the phase of the host's reads (`setPhase`, with a server's build `progress` and why a
+ * read failed), why what loaded is incomplete (`setProblem`, a page's `problem`, which the
+ * legend's warning shows), and `rev`, bumped by every change to either and by nothing that
+ * leaves them as they were. Every store extends it, so none can lack a part of it or count a
+ * change differently. Until 2026-11-28 each store kept its own copy: three had no `setProblem`,
+ * so a page's problem the host handed them was dropped without a word, one did not count a new
+ * progress as a change, and one counted a status set again as one. A store's DATA is its own;
+ * it bumps `rev` itself when that changes. */
+export class StoreStatus {
+  phase: Phase = 'idle'
+  progress: number | null = null
+  error: string | null = null
+  problem: string | null = null
+  /** Bumped on every change; the template's shouldUpdate compares it. */
+  rev = 0
+
+  setPhase(phase: Phase, progress: number | null = null, error: string | null = null): void {
+    if (this.phase === phase && this.progress === progress && this.error === error) return
+    this.phase = phase
+    this.progress = progress
+    this.error = error
+    this.rev++
+  }
+
+  setProblem(problem: string | null): void {
+    if (this.problem === problem) return
+    this.problem = problem
+    this.rev++
+  }
+}
+
 // The one window store. Values the client holds for one source (keyed by whatever the
 // plugin declares as the source key), plus which time windows have been fetched, so
 // panning never re-requests a window it already has. Lives for as long as some binding on
@@ -11,20 +43,17 @@ import type { Range } from '../paging'
 
 type IndexFn<P, V> = (point: P, existing: V | undefined) => V
 
-export class WindowStore<P extends { date: number }, V = P> implements SourceStore<P> {
+export class WindowStore<P extends { date: number }, V = P> extends StoreStatus implements SourceStore<P> {
   readonly values = new Map<number, V>()
   /** Fetched windows, merged, ascending. */
   private ranges: Range[] = []
-  phase: Phase = 'idle'
-  progress: number | null = null
-  error: string | null = null
-  problem: string | null = null
-  rev = 0
 
   constructor(
     readonly key: string,
     private readonly index: IndexFn<P, V> = ((p: P) => p as unknown as V) as IndexFn<P, V>
-  ) {}
+  ) {
+    super()
+  }
 
   get size(): number {
     return this.values.size
@@ -70,20 +99,6 @@ export class WindowStore<P extends { date: number }, V = P> implements SourceSto
     let max: number | null = null
     for (const t of this.values.keys()) if (max === null || t > max) max = t
     return max
-  }
-
-  setPhase(phase: Phase, progress: number | null = null, error: string | null = null): void {
-    if (this.phase === phase && this.progress === progress && this.error === error) return
-    this.phase = phase
-    this.progress = progress
-    this.error = error
-    this.rev++
-  }
-
-  setProblem(problem: string | null): void {
-    if (this.problem === problem) return
-    this.problem = problem
-    this.rev++
   }
 }
 

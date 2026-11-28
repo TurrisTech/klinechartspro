@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { dropStore, mergeRange, missingRanges, peekStore, storeFor, WindowStore } from './store'
+import { dropStore, mergeRange, missingRanges, peekStore, StoreStatus, storeFor, WindowStore } from './store'
 
 describe('missingRanges / mergeRange', () => {
   test('an uncovered window is missing whole', () => {
@@ -20,6 +20,35 @@ describe('missingRanges / mergeRange', () => {
       { from: 0, to: 5 },
       { from: 10, to: 20 }
     ])
+  })
+})
+
+describe('StoreStatus', () => {
+  // The status every store extends (client/sourcestores.test.ts holds each store class to it).
+  test('starts idle, with nothing wrong, at rev 0', () => {
+    const s = new StoreStatus()
+    expect([s.phase, s.progress, s.error, s.problem, s.rev]).toEqual(['idle', null, null, null, 0])
+  })
+  test('a phase, a progress or an error that changes bumps rev; the same status again does not', () => {
+    const s = new StoreStatus()
+    s.setPhase('replaying', 0.2)
+    s.setPhase('replaying', 0.2)
+    expect(s.rev).toBe(1)
+    s.setPhase('replaying', 0.4)
+    expect(s.rev).toBe(2)
+    s.setPhase('error', null, 'timed out')
+    s.setPhase('error', null, 'refused')
+    expect([s.phase, s.progress, s.error, s.rev]).toEqual(['error', null, 'refused', 4])
+    s.setPhase('ready')
+    expect([s.phase, s.error, s.rev]).toEqual(['ready', null, 5])
+  })
+  test('a problem bumps rev when it changes, cleared too', () => {
+    const s = new StoreStatus()
+    s.setProblem('4h could not be read')
+    s.setProblem('4h could not be read')
+    expect(s.rev).toBe(1)
+    s.setProblem(null)
+    expect([s.problem, s.rev]).toEqual([null, 2])
   })
 })
 
