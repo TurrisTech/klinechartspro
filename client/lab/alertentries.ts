@@ -13,13 +13,19 @@
 // closes (and the outlier rows are computed per read from arev21's), so a bar closed just now may
 // still gain an entry; the alert monitor waits on a bar after `through`, bounded, as it does for
 // every server value (notes/architecture/freshness-horizons.md).
+//
+// Reads of one saved version over one window at once are ONE run, whichever timeframe's entries
+// each asks for: two alerts on one strategy and instrument evaluate at the same bar close, and a run
+// costs every timeframe the strategy reads.
 
 import { loadServerCatalogue } from '../alerts/catalogue'
 import type { Point } from '../alerts/data'
+import { MAX_HELD_ROWS } from '../alerts/search'
 import type { StrategyEntries, StrategyEntryReader, StrategyOperand } from '../alerts/strategies'
 import type { CandleGrid } from '../time/timeframes'
 import { HttpLabData, type LabData } from './data'
-import { runStrategy } from './runner'
+import type { Strategy } from './model'
+import { type LabRun, runStrategy } from './runner'
 import { sharedStrategyStore, type StrategyStore } from './store'
 
 
@@ -33,8 +39,13 @@ export function lastClosedOpen(grid: CandleGrid, interval: string, at: number): 
 }
 
 export class StrategyEntryEngine implements StrategyEntryReader {
+  /** The runs going, by strategy, instrument and window, each with the saved version it runs. */
+  private readonly running = new Map<string, { strategy: Strategy; run: Promise<LabRun> }>()
+
   constructor(
-    private readonly data: LabData = new HttpLabData(),
+    // Bounded as the alert search bounds its own caches: this layer reads on for as long as a
+    // replay's search walks forward, or a live tab stays open.
+    private readonly data: LabData = new HttpLabData(MAX_HELD_ROWS),
     private readonly store: () => Promise<StrategyStore> = sharedStrategyStore,
     private readonly now: () => number = () => Date.now()
   ) {}
@@ -47,10 +58,28 @@ export class StrategyEntryEngine implements StrategyEntryReader {
     if (!strategy || !grid) return { points: [], through: null }
     const end = Math.min(to, this.now())
     if (end <= from) return { points: [], through: null }
-    const catalogue = await loadServerCatalogue().catch(() => null)
-    const run = await runStrategy(strategy, this.data, { symbol, from, to: end, catalogue, simulate: false })
+    const run = await this.run(strategy, symbol, from, end)
     const points: Point[] = run.entries.filter((e) => e.signal.interval === operand.interval).map((e) => ({ date: e.signal.sourceDate, signal: e.direction }))
     const final = lastClosedOpen(grid, operand.interval, end - LATE_MS)
     return { points, through: final >= from ? grid.toWire(operand.interval, final) : null }
+  }
+
+  /** The run of `strategy` over `[from, end]`: the one going, or a new one. Joined only by the same
+   * saved version -- a save makes a new object, and a run of the one before never answers for it. */
+  private run(strategy: Strategy, symbol: string, from: number, end: number): Promise<LabRun> {
+    const key = `${strategy.id}|${symbol}|${from}|${end}`
+    const going = this.running.get(key)
+    if (going?.strategy === strategy) return going.run
+    const run = (async () => {
+      const catalogue = await loadServerCatalogue().catch(() => null)
+      return runStrategy(strategy, this.data, { symbol, from, to: end, catalogue, simulate: false })
+    })()
+    const held = { strategy, run }
+    this.running.set(key, held)
+    const done = (): void => {
+      if (this.running.get(key) === held) this.running.delete(key)
+    }
+    run.then(done, done)
+    return run
   }
 }
